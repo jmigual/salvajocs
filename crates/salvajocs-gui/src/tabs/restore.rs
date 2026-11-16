@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
 use eframe::egui::{self, Color32, TextEdit, Ui};
-use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
+use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::manifest::{GameEntry, Manifest, Pair, merge_custom};
 use salvajocs_core::prefix;
@@ -23,6 +23,10 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State};
+
+mod mapping;
+
+use mapping::{Dialog, DialogAction};
 
 /// A UTC time as `YYYY-MM-DD HH:MM UTC`.
 fn format_time(time: SystemTime) -> String {
@@ -186,6 +190,8 @@ impl Fetched {
 /// What a preview job hands back.
 struct Prepared {
     fetched: Arc<Fetched>,
+    /// The dialog's choices this plan was prepared with; empty for the first try.
+    choices: Vec<(SnapshotRoot, Choice)>,
     plan: Result<RestorePlan, PrepareError>,
 }
 
@@ -220,6 +226,7 @@ pub struct RestoreTab {
     pick: Option<TargetPick>,
     picking: Option<Job<Option<PathBuf>>>,
     preparing: Option<Job<Prepared>>,
+    mapping: Option<(Arc<Fetched>, Dialog)>,
     preview: Option<Preview>,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
@@ -227,8 +234,8 @@ pub struct RestoreTab {
 }
 
 impl RestoreTab {
-    /// Draws the tab. Listing, fetching, planning and restoring run in jobs. `manifest_loading` is
-    /// whether the manifest job runs.
+    /// Draws the tab. Listing, fetching, planning and restoring run in jobs; the mapping dialog's
+    /// choices are saved to the config. `manifest_loading` is whether the manifest job runs.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
         self.poll(ui.ctx(), state);
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -250,6 +257,7 @@ impl RestoreTab {
             self.preview_ui(ui, state);
             self.restored_ui(ui);
         });
+        self.mapping_ui(ui.ctx(), state);
     }
 
     fn busy(&self) -> bool {
@@ -260,9 +268,10 @@ impl RestoreTab {
             || self.restoring.is_some()
     }
 
-    /// Drops the plan, which no longer matches the chosen game or targets.
+    /// Drops the plan and the dialog, which no longer match the chosen game or targets.
     fn forget_plan(&mut self) {
         self.preview = None;
+        self.mapping = None;
     }
 
     fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
@@ -299,7 +308,7 @@ impl RestoreTab {
         {
             self.preparing = None;
             match result {
-                Ok(prepared) => self.prepared(prepared),
+                Ok(prepared) => self.prepared(prepared, ctx, state),
                 Err(err) => self.error = Some(format!("The preview failed: {err:#}")),
             }
         }
@@ -320,11 +329,21 @@ impl RestoreTab {
         }
     }
 
-    /// Shows the plan.
-    fn prepared(&mut self, prepared: Prepared) {
-        let Prepared { fetched, plan } = prepared;
+    /// Shows the plan, or the mapping dialog while a root needs a choice (ADR-0011). Choices
+    /// that produced a plan are saved on the game's custom entry.
+    fn prepared(&mut self, prepared: Prepared, ctx: &egui::Context, state: &mut State) {
+        let Prepared {
+            fetched,
+            choices,
+            plan,
+        } = prepared;
         match plan {
             Ok(plan) => {
+                if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
+                    crossbuild::apply_choices(config, &fetched.title, &choices);
+                    state.save_config(ctx);
+                }
+                self.mapping = None;
                 self.preview = Some(Preview {
                     overrides: vec![String::new(); plan.writes.len()],
                     fetched,
@@ -332,6 +351,17 @@ impl RestoreTab {
                     override_error: None,
                 });
             }
+            Err(PrepareError::NeedsMapping(entries)) => {
+                self.mapping = Some((fetched, Dialog::new(entries)));
+            }
+            Err(PrepareError::Unclassifiable { root, template }) => match &mut self.mapping {
+                Some((_, dialog)) => dialog.reject(&root, &template),
+                None => {
+                    self.error = Some(format!(
+                        "The saved target {template} is not a placeholder template of this OS"
+                    ));
+                }
+            },
             Err(err) => self.error = Some(format!("The preview failed: {err}")),
         }
     }
@@ -484,8 +514,36 @@ impl RestoreTab {
             Ok(Prepared {
                 plan: fetched.prepare(&[]),
                 fetched: Arc::new(fetched),
+                choices: Vec::new(),
             })
         }));
+    }
+
+    fn mapping_ui(&mut self, ctx: &egui::Context, state: &State) {
+        let busy = self.busy();
+        let Some((fetched, dialog)) = &mut self.mapping else {
+            return;
+        };
+        let action = egui::Modal::new(egui::Id::unique("restore_mapping"))
+            .show(ctx, |ui| {
+                ui.set_width(720.0);
+                dialog.ui(ui, &fetched.title, busy)
+            })
+            .inner;
+        match action {
+            Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
+                let fetched = fetched.clone();
+                self.preparing = Some(Job::spawn(ctx, move || {
+                    Ok(Prepared {
+                        plan: fetched.prepare(&choices),
+                        fetched,
+                        choices,
+                    })
+                }));
+            }
+            Some(DialogAction::Cancel) => self.mapping = None,
+            Some(DialogAction::Confirm(_)) | None => {}
+        }
     }
 
     fn preview_ui(&mut self, ui: &mut Ui, state: &State) {

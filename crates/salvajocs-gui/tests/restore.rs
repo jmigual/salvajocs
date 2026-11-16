@@ -12,6 +12,7 @@ use common::{
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
+use salvajocs_core::config::AppConfig;
 use salvajocs_core::layout::{Base, Context, LinuxFolders};
 use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, Pair, parse_yaml};
 use salvajocs_core::scan::{Environment, FoundFile, GameScan};
@@ -157,9 +158,33 @@ fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
 
+fn value(harness: &Harness<'static, App>, label: &str) -> String {
+    let node = harness.get_by_label(label);
+    node.accesskit_node().value().unwrap_or_default()
+}
+
 fn click(harness: &mut Harness<'static, App>, label: &str) {
     harness.get_by_label(label).click();
     run_settled(harness);
+}
+
+/// The custom games in the saved config, once `ready` holds; saving is a background job.
+fn run_until_saved(
+    harness: &mut Harness<'static, App>,
+    env: &Env,
+    ready: impl Fn(&[CustomGame]) -> bool,
+) -> Vec<CustomGame> {
+    let config_dir = env.config_dir.clone();
+    run_until(harness, "the config to be saved", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| ready(&config.custom_games))
+    });
+    AppConfig::load(&env.config_dir)
+        .unwrap()
+        .unwrap()
+        .custom_games
 }
 
 fn pair(linux: &str, windows: &str) -> Pair {
@@ -198,6 +223,34 @@ fn unity(tmp: &TempDir, prefix: Option<&Path>) -> Harness<'static, App> {
         &[(Base::WinLocalAppDataLow, "Co/Uni")],
     );
     open_tab(tmp, vec![game], &[snapshot]).0
+}
+
+/// Mix, backed up from its Windows build: a Unity root and a root no rule knows. Two Linux saves
+/// leave no auto-pair and are the candidates.
+fn mix(tmp: &TempDir) -> (Harness<'static, App>, Env) {
+    let files = [
+        "<winLocalAppDataLow>/Co/Mix",
+        "<winAppData>/Mix",
+        "<xdgData>/Mix",
+        "<xdgConfig>/MixCfg",
+    ];
+    let game = custom("Mix", &files, None, Vec::new());
+    let snapshot = scan(
+        tmp,
+        "Mix",
+        &[
+            (Base::WinLocalAppDataLow, "Co/Mix/b.sav"),
+            (Base::WinAppData, "Mix/a.sav"),
+        ],
+        &[
+            (Base::WinLocalAppDataLow, "Co/Mix"),
+            (Base::WinAppData, "Mix"),
+        ],
+    );
+    let (mut harness, env) = open_tab(tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Mix");
+    preview(&mut harness);
+    (harness, env)
 }
 
 #[test]
@@ -383,4 +436,100 @@ fn restore_cross_build_warning_shown() {
         "drive_c/users/steamuser/AppData/Roaming/Pairy/save.dat",
     );
     assert!(shows(&harness, &format!("-> {}", target.display())));
+}
+
+#[test]
+fn restore_mapping_dialog_prefills_known_roots_and_blocks_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env) = mix(&tmp);
+
+    assert!(shows(&harness, "Where should the saves of Mix go?"));
+    assert!(shows(&harness, "<winLocalAppDataLow>/Co/Mix (1 files)"));
+    assert!(shows(&harness, "<winAppData>/Mix (1 files)"));
+    assert_eq!(value(&harness, "Target 1"), "<xdgConfig>/unity3d/Co/Mix");
+    assert_eq!(value(&harness, "Target 2"), "");
+    assert!(
+        disabled(&harness, "Confirm"),
+        "the unknown root has no choice"
+    );
+    assert!(disabled(&harness, "Restore files"));
+
+    replace_text(&mut harness, "Target 1", "<xdgData>/Other");
+    assert_eq!(value(&harness, "Target 1"), "<xdgData>/Other");
+    assert!(disabled(&harness, "Confirm"));
+
+    click(&mut harness, "Skip 2");
+    assert!(!disabled(&harness, "Confirm"));
+    click(&mut harness, "Skip 2");
+    assert!(disabled(&harness, "Confirm"));
+    // The manifest's Linux saves are offered for the unknown root.
+    click(&mut harness, "Candidates 2");
+    click(&mut harness, "<xdgConfig>/MixCfg");
+    assert_eq!(value(&harness, "Target 2"), "<xdgConfig>/MixCfg");
+    assert!(!disabled(&harness, "Confirm"));
+}
+
+#[test]
+fn restore_dialog_confirm_saves_all_roots_as_pairs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env) = mix(&tmp);
+    replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
+
+    harness.get_by_label("Confirm").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
+
+    assert!(!shows(&harness, "Where should the saves"));
+    let target = under(&home(&tmp), ".local/share/Mix/a.sav");
+    assert!(shows(&harness, &format!("-> {}", target.display())));
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.pairs.is_empty())
+    });
+    assert_eq!(
+        games[0].pairs,
+        [
+            pair("<xdgConfig>/unity3d/Co/Mix", "<winLocalAppDataLow>/Co/Mix"),
+            pair("<xdgData>/Mix", "<winAppData>/Mix"),
+        ]
+    );
+}
+
+#[test]
+fn restore_dialog_skip_is_saved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env) = mix(&tmp);
+    click(&mut harness, "Skip 2");
+
+    harness.get_by_label("Confirm").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write (1)"));
+
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.skips.is_empty())
+    });
+    assert_eq!(games[0].skips, ["<winAppData>/Mix"]);
+}
+
+#[test]
+fn restore_typed_template_that_does_not_classify_shows_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env) = mix(&tmp);
+    // A real path, and a template of the snapshot's own OS: neither is a Linux template.
+    for typed in ["/home/me/Mix", "<winAppData>/Mix"] {
+        replace_text(&mut harness, "Target 2", typed);
+        harness.get_by_label("Confirm").click();
+        run_until(&mut harness, "the refusal", |h| {
+            shows(h, "is not a placeholder template of this OS")
+        });
+
+        assert!(shows(&harness, "Where should the saves of Mix go?"));
+        assert!(!shows(&harness, "Files to write"));
+    }
+    let games = AppConfig::load(&env.config_dir)
+        .unwrap()
+        .unwrap()
+        .custom_games;
+    assert!(games[0].pairs.is_empty(), "nothing is saved: {games:?}");
+
+    // Editing the row clears its error.
+    replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
+    assert!(!shows(&harness, "is not a placeholder template"));
 }
