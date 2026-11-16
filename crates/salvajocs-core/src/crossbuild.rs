@@ -200,7 +200,8 @@ pub struct PairError {
 }
 
 /// Checks that `pair` has the same form [`resolve`] demands of a typed target: each side a
-/// glob-free placeholder template of its own family, not a real path.
+/// glob-free placeholder template of its own family, not a real path. A side on an
+/// install-relative base (`<base>`, `<root>`) passes but never matches a root.
 ///
 /// # Errors
 /// [`PairError`] for the first side that does not classify, Linux before Windows.
@@ -225,7 +226,8 @@ pub struct SkipError {
 }
 
 /// Checks that `skip` has the form of a pair side: a glob-free placeholder template of either
-/// OS family, not a real path.
+/// OS family, not a real path. A skip has no family: `<home>/Foo` also matches the Windows root
+/// `<home>/Foo`. One on an install-relative base (`<base>`, `<root>`) passes but never matches.
 ///
 /// # Errors
 /// [`SkipError`] when it classifies in neither family.
@@ -467,8 +469,8 @@ pub fn propose(
 }
 
 /// Applies `choices` to `entries`: a choice for a root replaces its proposal whatever the
-/// confidence, and `Skip` drops the root; a saved skip drops it too. Every target is classified in the family opposite the
-/// root's.
+/// confidence, and `Skip` drops the root; a saved skip drops it too. Every target is classified
+/// in the family opposite the root's.
 ///
 /// # Errors
 /// [`ResolveError::Unclassifiable`] for a chosen template that is not a glob-free placeholder

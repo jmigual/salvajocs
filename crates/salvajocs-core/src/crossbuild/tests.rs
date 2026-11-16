@@ -538,6 +538,54 @@ fn saved_skip_needs_no_dialog() {
 }
 
 #[test]
+fn saved_skip_beats_engine_rule() {
+    let unity = linux_root("<xdgConfig>/unity3d/C/P");
+    let skips = ["<xdgConfig>/unity3d/C/P".to_owned()];
+    let mapped = one(propose(
+        &meta(vec![unity]),
+        None,
+        &[],
+        &skips,
+        Family::Windows,
+    ));
+    assert_eq!(
+        (mapped.confidence, mapped.proposed),
+        (Confidence::Saved, None)
+    );
+}
+
+#[test]
+fn home_skip_applies_in_both_directions() {
+    let mut config = config();
+    apply_choices(
+        &mut config,
+        "Game",
+        &[(linux_root("<home>/Foo"), Choice::Skip)],
+    );
+    let skips = &config.custom_games[0].skips;
+    assert_eq!(*skips, ["<home>/Foo"]);
+    let back = one(propose(
+        &meta(vec![win_root("<home>/Foo/x")]),
+        None,
+        &[],
+        skips,
+        Family::Linux,
+    ));
+    assert_eq!((back.confidence, back.proposed), (Confidence::Saved, None));
+
+    // Choosing a target for the Windows root removes the Linux-side skip.
+    apply_choices(
+        &mut config,
+        "Game",
+        &[(
+            win_root("<home>/Foo"),
+            Choice::Template("<xdgData>/Foo".into()),
+        )],
+    );
+    assert!(config.custom_games[0].skips.is_empty());
+}
+
+#[test]
 fn skip_template_is_validated() {
     assert_eq!(validate_skip("<xdgData>/Foo"), Ok(()));
     assert_eq!(validate_skip("<winAppData>/Foo"), Ok(()));

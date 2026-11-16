@@ -129,7 +129,8 @@ impl Form {
     ///
     /// # Errors
     /// [`FormError`] for an empty or taken name, a pair side or skipped folder that
-    /// `crossbuild::validate_pair` or `validate_skip` rejects, and a game that is no longer the one the form was opened on.
+    /// `crossbuild::validate_pair` or `validate_skip` rejects, and a game that is no longer the
+    /// one the form was opened on.
     fn build(&self, games: &[CustomGame]) -> Result<CustomGame, FormError> {
         if let Some(index) = self.index
             && games.get(index) != self.snapshot.as_ref()
