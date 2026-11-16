@@ -11,21 +11,30 @@ const SAMPLE: &str = include_str!("../../../tests/fixtures/manifest-sample.yaml"
 const ETAG_VALUE: &str = "\"v1\"";
 
 /// Serves `connections` requests: 304 when `If-None-Match` equals [`ETAG_VALUE`], otherwise
-/// `status` with `body` and the `ETag`. Returns the URL.
-fn serve(connections: usize, status: &'static str, body: &'static str) -> String {
+/// `status` with `body` and, if `with_etag`, the `ETag`. Returns the URL.
+fn serve(connections: usize, status: &'static str, body: &'static str, with_etag: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/manifest.yaml", listener.local_addr().unwrap());
     thread::spawn(move || {
         for _ in 0..connections {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0; 4096];
-            let n = stream.read(&mut buf).unwrap();
-            let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+            let mut head = Vec::new();
+            let mut buf = [0; 1024];
+            while !head.ends_with(b"\r\n\r\n") {
+                let n = stream.read(&mut buf).unwrap();
+                head.extend_from_slice(&buf[..n]);
+            }
+            let request = String::from_utf8_lossy(&head).to_lowercase();
+            let etag_header = if with_etag {
+                format!("ETag: {ETAG_VALUE}\r\n")
+            } else {
+                String::new()
+            };
             let reply = if request.contains(&format!("if-none-match: {ETAG_VALUE}")) {
                 "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_owned()
             } else {
                 format!(
-                    "HTTP/1.1 {status}\r\nETag: {ETAG_VALUE}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\n{etag_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
             };
@@ -55,7 +64,7 @@ fn load_cached_rejects_corrupt_json() {
 fn refresh_caches_then_revalidates_with_etag() {
     let dir = tempfile::tempdir().unwrap();
     let cache = dir.path().join("nested");
-    let url = serve(2, "200 OK", SAMPLE);
+    let url = serve(2, "200 OK", SAMPLE, true);
 
     assert_eq!(refresh_from(&url, &cache).unwrap(), Freshness::Updated);
     assert_eq!(
@@ -73,15 +82,25 @@ fn refresh_caches_then_revalidates_with_etag() {
 fn etag_without_json_is_not_sent() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join(ETAG_FILE), ETAG_VALUE).unwrap();
-    let url = serve(1, "200 OK", SAMPLE);
+    let url = serve(1, "200 OK", SAMPLE, true);
     assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
     assert!(load_cached(dir.path()).unwrap().is_some());
 }
 
 #[test]
+fn update_without_etag_drops_stale_etag() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(JSON_FILE), "{\"games\":{}}").unwrap();
+    fs::write(dir.path().join(ETAG_FILE), "\"old\"").unwrap();
+    let url = serve(1, "200 OK", SAMPLE, false);
+    assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
+    assert!(!dir.path().join(ETAG_FILE).exists());
+}
+
+#[test]
 fn error_status_leaves_cache_untouched() {
     let dir = tempfile::tempdir().unwrap();
-    let url = serve(1, "500 Internal Server Error", "");
+    let url = serve(1, "500 Internal Server Error", "", true);
     assert!(matches!(
         refresh_from(&url, dir.path()),
         Err(FetchError::Http(_))
@@ -92,7 +111,7 @@ fn error_status_leaves_cache_untouched() {
 #[test]
 fn invalid_yaml_leaves_cache_untouched() {
     let dir = tempfile::tempdir().unwrap();
-    let url = serve(1, "200 OK", "a: [");
+    let url = serve(1, "200 OK", "a: [", true);
     assert!(matches!(
         refresh_from(&url, dir.path()),
         Err(FetchError::Manifest(ManifestError::Yaml(_)))

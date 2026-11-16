@@ -1,8 +1,10 @@
 //! Downloads the ludusavi manifest with `ETag` revalidation and keeps a JSON cache (ADR-0008).
 
 use std::{
-    fs, io,
-    path::{Path, PathBuf},
+    fs::{self, File},
+    io::{self, Write},
+    path::Path,
+    time::Duration,
 };
 
 use reqwest::{
@@ -18,6 +20,8 @@ pub const MANIFEST_URL: &str = "https://raw.githubusercontent.com/mtkennerly/lud
 
 const JSON_FILE: &str = "manifest.json";
 const ETAG_FILE: &str = "manifest.etag";
+// The default 30 s total timeout is too short for 2.4 MB on a slow link.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Failure to refresh or read the manifest cache.
 #[derive(Debug, thiserror::Error)]
@@ -58,7 +62,8 @@ pub fn load_cached(cache_dir: &Path) -> Result<Option<Manifest>, FetchError> {
 }
 
 fn refresh_from(url: &str, cache_dir: &Path) -> Result<Freshness, FetchError> {
-    let mut request = Client::new().get(url);
+    let client = Client::builder().timeout(REQUEST_TIMEOUT).build()?;
+    let mut request = client.get(url);
     // An ETag without its JSON would make a 304 leave us with no manifest.
     if cache_dir.join(JSON_FILE).is_file()
         && let Ok(etag) = fs::read_to_string(cache_dir.join(ETAG_FILE))
@@ -94,10 +99,13 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Writes via a sibling temp file so a crash never leaves a truncated cache.
+/// Writes via a synced sibling temp file so a crash never leaves a truncated cache.
 fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let tmp: PathBuf = path.with_extension("tmp");
-    fs::write(&tmp, contents)?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let mut file = File::create(&tmp)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
     fs::rename(&tmp, path)
 }
 
