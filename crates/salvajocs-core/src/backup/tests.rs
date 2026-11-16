@@ -357,3 +357,29 @@ fn failed_game_does_not_stop_the_others() {
     assert!(matches!(outcomes[0].result, Err(BackupError::Io { .. })));
     assert!(matches!(outcomes[1].result, Ok(Some(_))));
 }
+
+/// One reindex plus 20 per-game backups on a local repo, first new and then unchanged
+/// (ADR-0010): `cargo test --release -p salvajocs-core time_twenty_game_backup -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "timing"]
+fn time_twenty_game_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games: Vec<GameScan> = (0..20)
+        .map(|i| {
+            game_with_save(
+                tmp.path(),
+                &format!("Game {i}"),
+                &i.to_string().repeat(100_000),
+            )
+        })
+        .collect();
+    let stage_root = tmp.path().join("stage");
+    for run in ["new", "unchanged"] {
+        let started = std::time::Instant::now();
+        let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+        let count = written(&outcomes).iter().flatten().count();
+        println!("{run}: {count} snapshots in {:?}", started.elapsed());
+    }
+}
