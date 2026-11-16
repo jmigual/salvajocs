@@ -26,7 +26,7 @@ Dependency graph:
   - `.gitignore`: `/target`. The repo is already initialised (branch `main`, remote `origin` =
     github.com/jmigual/salvajocs).
   - Root `Cargo.toml`: virtual workspace, `resolver = "3"`, `[workspace.package] edition =
-    "2024"`, `rust-version = "1.91"` (rustic's MSRV). `[workspace.dependencies]` has the crates
+    "2024"`, `rust-version = "1.95"` (the MSRV of eframe/egui 0.37). `[workspace.dependencies]` has the crates
     the ADRs name: serde, serde_json, serde-saphyr, thiserror, anyhow, reqwest, dirs, glob,
     `rustic_core = "=0.13.0"`, `rustic_backend = "=0.7.0"`, eframe, egui, egui_kittest, rfd,
     tempfile. `[workspace.lints.rust] unsafe_code = "forbid"`.
