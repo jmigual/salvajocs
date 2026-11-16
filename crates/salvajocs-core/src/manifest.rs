@@ -173,7 +173,7 @@ pub struct CustomGame {
     pub pairs: Vec<Pair>,
 }
 
-/// Parse budget limit; the real manifest is far below it (ADR-0008).
+/// Parse budget limit; serde-saphyr's default is too small for the real manifest (ADR-0008).
 const BUDGET_LIMIT: usize = 64 * 1024 * 1024;
 
 /// A manifest entry, or the nickname of another title.
@@ -184,13 +184,11 @@ struct RawEntry {
     entry: GameEntry,
 }
 
-/// Parses manifest YAML, skipping alias entries. The default serde-saphyr budget is too small
-/// for the real manifest, so its size limits are raised.
+/// Parses manifest YAML, skipping alias entries.
 pub fn parse_yaml(yaml: &str) -> Result<Manifest, ManifestError> {
     let mut budget = Budget::default();
     budget.max_events = BUDGET_LIMIT;
     budget.max_nodes = BUDGET_LIMIT;
-    budget.max_total_scalar_bytes = BUDGET_LIMIT;
     let mut options = Options::default();
     options.budget = Some(budget);
     let raw: BTreeMap<String, RawEntry> = serde_saphyr::from_str_with_options(yaml, options)?;
@@ -213,8 +211,9 @@ pub fn from_json(json: &str) -> Result<Manifest, ManifestError> {
 }
 
 /// Applies custom games in order: `Override` replaces the manifest entry of the same title,
-/// `Extend` adds its files, keys and install dirs to it. A title the manifest lacks is inserted
-/// either way.
+/// `Extend` adds its files, registry keys and install dirs to it (same key: custom wins) and
+/// takes the custom `steam` only when the manifest entry has none. A title the manifest lacks
+/// is inserted either way.
 pub fn merge_custom(manifest: &mut Manifest, custom: &[CustomGame]) {
     for game in custom {
         match (game.integration, manifest.games.get_mut(&game.name)) {

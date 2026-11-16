@@ -132,15 +132,34 @@ fn override_replaces_the_entry() {
 fn extend_appends_to_the_entry() {
     let mut manifest = sample();
     let before = manifest.games["Hollow Knight"].clone();
-    merge_custom(
-        &mut manifest,
-        &[custom("Hollow Knight", Integration::Extend, "<base>/mine")],
-    );
+    let mut game = custom("Hollow Knight", Integration::Extend, "<base>/mine");
+    game.entry
+        .install_dir
+        .insert("Hollow Knight Alt".into(), InstallDir {});
+    game.entry.steam = Some(Steam { id: Some(1) });
+    merge_custom(&mut manifest, &[game]);
     let after = &manifest.games["Hollow Knight"];
     assert_eq!(after.files.len(), before.files.len() + 1);
     assert!(after.files.contains_key("<base>/mine"));
+    assert_eq!(after.install_dir.len(), before.install_dir.len() + 1);
+    assert!(after.install_dir.contains_key("Hollow Knight Alt"));
     assert_eq!(after.registry, before.registry);
-    assert_eq!(after.steam, before.steam);
+    assert_eq!(after.steam, before.steam, "manifest steam wins");
+}
+
+#[test]
+fn extend_takes_custom_steam_when_manifest_has_none() {
+    let mut manifest = Manifest::default();
+    manifest
+        .games
+        .insert("Homebrew".into(), GameEntry::default());
+    let mut game = custom("Homebrew", Integration::Extend, "<base>/mine");
+    game.entry.steam = Some(Steam { id: Some(7) });
+    merge_custom(&mut manifest, &[game]);
+    assert_eq!(
+        manifest.games["Homebrew"].steam,
+        Some(Steam { id: Some(7) })
+    );
 }
 
 #[test]
