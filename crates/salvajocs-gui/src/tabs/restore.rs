@@ -12,11 +12,11 @@ use anyhow::anyhow;
 use eframe::egui::{self, Color32, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
-use salvajocs_core::manifest::{GameEntry, Manifest, Pair, merge_custom};
+use salvajocs_core::manifest::{GameEntry, Pair};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
-    self, GameBackups, PRE_RESTORE_TAG, PrepareError, RestorePlan, RunError, SafetyBackup,
-    SkippedItem, StagedGame, Targets,
+    self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RunError,
+    SafetyBackup, SkippedItem, StagedGame, Targets,
 };
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
@@ -500,24 +500,20 @@ impl RestoreTab {
             let targets = targets()?;
             remove_dir(&work_dir)?;
             let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
-            let mut merged = Manifest {
-                games: (manifest.games.get(&title).cloned())
-                    .map(|entry| (title.clone(), entry))
-                    .into_iter()
-                    .collect(),
-            };
-            merge_custom(&mut merged, &config.custom_games);
-            let entry = merged.games.remove(&title);
-            let custom = || (config.custom_games.iter()).filter(|game| game.name == title);
+            let GameInfo {
+                entry,
+                pairs,
+                skips,
+            } = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
                 vars: restore::game_vars(&title, entry.as_ref(), &config, &environment),
-                pairs: custom().flat_map(|game| game.pairs.clone()).collect(),
-                skips: custom().flat_map(|game| game.skips.clone()).collect(),
                 title,
                 staged,
                 targets,
                 entry,
+                pairs,
+                skips,
             };
             Ok(Prepared {
                 plan: fetched.prepare(&[]),
