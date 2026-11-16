@@ -172,8 +172,12 @@ fn family_context(family: Family) -> Context {
     }
 }
 
+/// `layout::classify` in `family`, rejecting a rest with a component that is not plain (`..`),
+/// since templates come from config, the user and snapshot roots.
 fn classify(template: &str, family: Family) -> Option<(Base, String)> {
-    layout::classify(template, &family_context(family))
+    let classified = layout::classify(template, &family_context(family))?;
+    let plain = components(&classified.1).all(layout::is_plain_component);
+    plain.then_some(classified)
 }
 
 /// Classifies a template typed by the user: a placeholder template without globs, not a real
@@ -206,8 +210,15 @@ struct Mapped {
 
 /// Maps `root` from the `from` template (in `source`) to the `to` template: the bases are equal,
 /// the root's rest starts with `from`'s rest on a component boundary (ASCII case ignored for
-/// Windows), and the remaining components follow `to`.
-fn map_root(root: &SnapshotRoot, from: &str, to: &str, source: Family) -> Option<Mapped> {
+/// Windows), and the remaining components follow `to`. Only engine rules (`captures_allowed`)
+/// treat `{name}` as a capture; elsewhere it is a literal name.
+fn map_root(
+    root: &SnapshotRoot,
+    from: &str,
+    to: &str,
+    source: Family,
+    captures_allowed: bool,
+) -> Option<Mapped> {
     let (base, rest) = classify(from, source)?;
     if base != root.0 {
         return None;
@@ -219,7 +230,10 @@ fn map_root(root: &SnapshotRoot, from: &str, to: &str, source: Family) -> Option
     }
     let mut captures = Vec::new();
     for (part, actual) in pattern.iter().zip(&tail) {
-        if let Some(name) = part.strip_prefix('{').and_then(|p| p.strip_suffix('}')) {
+        if let Some(name) = captures_allowed
+            .then(|| part.strip_prefix('{').and_then(|p| p.strip_suffix('}')))
+            .flatten()
+        {
             captures.push((name.to_owned(), (*actual).to_owned()));
         } else {
             let same = match source {
@@ -329,6 +343,7 @@ pub fn propose(
             pair_side(pair, source),
             pair_side(pair, target_family),
             source,
+            false,
         )
         .filter(usable)
     };
@@ -341,26 +356,32 @@ pub fn propose(
                 .filter_map(|pair| through_pair(root, pair))
                 .max_by_key(|mapped| mapped.depth);
             let engine = ENGINE_RULES.iter().find_map(|rule| {
-                let mapped = map_root(root, rule.side(source), rule.side(target_family), source)?;
+                let mapped = map_root(
+                    root,
+                    rule.side(source),
+                    rule.side(target_family),
+                    source,
+                    true,
+                )?;
                 usable(&mapped).then_some((rule, mapped))
             });
-            let mut notes = Vec::new();
-            let (proposed, confidence) = if let Some(mapped) = saved {
-                (Some(mapped.target), Confidence::Saved)
-            } else if let Some((rule, mapped)) = engine {
-                let prefs_key = rule.prefs_key.map(|key| {
-                    mapped
+            // The note describes the game, so it stays once the mapping is a saved pair.
+            let notes: Vec<String> = engine
+                .as_ref()
+                .and_then(|(rule, mapped)| {
+                    let key = mapped
                         .captures
                         .iter()
-                        .fold(key.to_owned(), |key, (name, value)| {
+                        .fold(rule.prefs_key?.to_owned(), |key, (name, value)| {
                             key.replace(&format!("{{{name}}}"), value)
-                        })
-                });
-                if let (Some(key), Some(entry)) = (prefs_key, entry)
-                    && has_registry_key(entry, &key)
-                {
-                    notes.push(PLAYER_PREFS_NOTE.to_owned());
-                }
+                        });
+                    has_registry_key(entry?, &key).then(|| PLAYER_PREFS_NOTE.to_owned())
+                })
+                .into_iter()
+                .collect();
+            let (proposed, confidence) = if let Some(mapped) = saved {
+                (Some(mapped.target), Confidence::Saved)
+            } else if let Some((_, mapped)) = engine {
                 (Some(mapped.target), Confidence::EngineRule)
             } else if let Some(mapped) = auto.as_ref().and_then(|pair| through_pair(root, pair)) {
                 (Some(mapped.target), Confidence::AutoPair)
@@ -460,7 +481,7 @@ fn root_template((base, rest): &SnapshotRoot) -> String {
 /// pair for the same root. `Skip` choices have no pair form and are not saved. Templates must
 /// have passed [`resolve`].
 pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRoot, Choice)]) {
-    let new_pairs: Vec<(Family, Pair)> = choices
+    let new_pairs: Vec<(Family, &SnapshotRoot, Pair)> = choices
         .iter()
         .filter_map(|(root, choice)| {
             let (Choice::Template(target), Some(family)) = (choice, base_family(root.0)) else {
@@ -471,6 +492,7 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
             Some(match family {
                 Family::Linux => (
                     family,
+                    root,
                     Pair {
                         linux: own,
                         windows: target,
@@ -478,6 +500,7 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
                 ),
                 Family::Windows => (
                     family,
+                    root,
                     Pair {
                         linux: target,
                         windows: own,
@@ -504,9 +527,9 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
             config.custom_games.len() - 1
         });
     let game = &mut config.custom_games[index];
-    for (family, pair) in new_pairs {
+    for (family, root, pair) in new_pairs {
         game.pairs
-            .retain(|saved| pair_side(saved, family) != pair_side(&pair, family));
+            .retain(|saved| classify(pair_side(saved, family), family).as_ref() != Some(root));
         game.pairs.push(pair);
     }
 }

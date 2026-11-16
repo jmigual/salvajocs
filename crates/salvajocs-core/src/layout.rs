@@ -544,7 +544,7 @@ pub fn tail_of(real_path: &Path, base_dir: &Path) -> Option<String> {
 }
 
 /// Whether `part` is a single plain path component (no `..`, separators or drive prefix).
-fn is_plain_component(part: &str) -> bool {
+pub(crate) fn is_plain_component(part: &str) -> bool {
     let mut components = Path::new(part).components();
     matches!(
         (components.next(), components.next()),
