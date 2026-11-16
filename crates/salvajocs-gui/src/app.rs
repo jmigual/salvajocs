@@ -12,7 +12,7 @@ use crate::job::Job;
 use crate::prompt::SecretPrompt;
 use crate::startup::{self, Credentials, ManifestLoad, Resolved};
 use crate::state::{Session, State};
-use crate::tabs::{Tab, settings::SettingsTab};
+use crate::tabs::{Tab, custom_games::CustomGamesTab, settings::SettingsTab};
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
 enum Stage {
@@ -42,6 +42,7 @@ pub struct App {
     stage: Stage,
     tab: Tab,
     settings: SettingsTab,
+    custom_games: CustomGamesTab,
     started: bool,
     manifest: Option<Job<ManifestLoad>>,
     manifest_error: Option<String>,
@@ -66,6 +67,7 @@ impl App {
             stage,
             tab: Tab::default(),
             settings: SettingsTab::default(),
+            custom_games: CustomGamesTab::default(),
             started: false,
             manifest: None,
             manifest_error: None,
@@ -301,8 +303,12 @@ impl eframe::App for App {
         let adopted = egui::CentralPanel::default()
             .show(ui, |ui| match (&self.stage, self.tab) {
                 (Stage::ConfigUnreadable(_), _) => false,
-                // Placeholders until steps 17 to 19.
-                (_, Tab::Backup | Tab::Restore | Tab::CustomGames) => false,
+                // Placeholders until steps 17 and 18.
+                (_, Tab::Backup | Tab::Restore) => false,
+                (_, Tab::CustomGames) => {
+                    self.custom_games.ui(ui, &mut self.state);
+                    false
+                }
                 (_, Tab::Settings) => self.settings.ui(ui, &mut self.state),
             })
             .inner;

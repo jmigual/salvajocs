@@ -1,0 +1,352 @@
+//! The Custom games tab: games the user adds to the manifest or overrides in it (ADR-0008), with
+//! the Linux/Windows path pairs cross-build restores use (ADR-0011).
+
+use std::path::PathBuf;
+
+use eframe::egui::{self, Color32, TextEdit, Ui};
+use salvajocs_core::crossbuild::{self, PairError};
+use salvajocs_core::manifest::{CustomGame, FileRule, GameEntry, Integration, Pair, Tag};
+
+use crate::state::State;
+use crate::widgets::labelled_edit;
+
+fn integration_label(integration: Integration) -> &'static str {
+    match integration {
+        Integration::Override => "Override the manifest entry",
+        Integration::Extend => "Extend the manifest entry",
+    }
+}
+
+/// Why a form cannot be saved.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FormError {
+    /// The name is empty.
+    #[error("The game needs a name")]
+    EmptyName,
+    /// Another custom game has the name; titles match the manifest exactly.
+    #[error("There is already a custom game named {0}")]
+    DuplicateName(String),
+    /// A pair side is not a placeholder template of its OS.
+    #[error(transparent)]
+    Pair(#[from] PairError),
+}
+
+/// One editable Linux/Windows pair; both fields empty means the row is unused.
+#[derive(Default)]
+struct PairRow {
+    linux: String,
+    windows: String,
+}
+
+/// The game being added or edited.
+struct Form {
+    /// Position in `custom_games` of the game being edited; `None` for a new one.
+    index: Option<usize>,
+    name: String,
+    integration: Integration,
+    /// One file template per line.
+    files: String,
+    /// One registry key per line.
+    registry: String,
+    wine_prefix: String,
+    pairs: Vec<PairRow>,
+    /// What the form does not edit (install dirs, Steam id, rules of kept lines) survives a save.
+    original: GameEntry,
+    error: Option<FormError>,
+}
+
+/// The non-blank lines of `text`, trimmed.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().map(str::trim).filter(|line| !line.is_empty())
+}
+
+impl Form {
+    fn new() -> Self {
+        Self {
+            index: None,
+            name: String::new(),
+            integration: Integration::Extend,
+            files: String::new(),
+            registry: String::new(),
+            wine_prefix: String::new(),
+            pairs: Vec::new(),
+            original: GameEntry::default(),
+            error: None,
+        }
+    }
+
+    fn edit(index: usize, game: &CustomGame) -> Self {
+        Self {
+            index: Some(index),
+            name: game.name.clone(),
+            integration: game.integration,
+            files: game
+                .entry
+                .files
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            registry: game
+                .entry
+                .registry
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            wine_prefix: game
+                .wine_prefix
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            pairs: game
+                .pairs
+                .iter()
+                .map(|pair| PairRow {
+                    linux: pair.linux.clone(),
+                    windows: pair.windows.clone(),
+                })
+                .collect(),
+            original: game.entry.clone(),
+            error: None,
+        }
+    }
+
+    /// The game the form describes. `games` are all custom games, including the one being edited.
+    ///
+    /// # Errors
+    /// [`FormError`] for an empty or taken name and for a pair side that
+    /// `crossbuild::validate_pair` rejects.
+    fn build(&self, games: &[CustomGame]) -> Result<CustomGame, FormError> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(FormError::EmptyName);
+        }
+        let taken = games
+            .iter()
+            .enumerate()
+            .any(|(index, game)| Some(index) != self.index && game.name == name);
+        if taken {
+            return Err(FormError::DuplicateName(name.to_owned()));
+        }
+        let pairs = self
+            .pairs
+            .iter()
+            .filter(|row| !(row.linux.trim().is_empty() && row.windows.trim().is_empty()))
+            .map(|row| {
+                let pair = Pair {
+                    linux: row.linux.trim().to_owned(),
+                    windows: row.windows.trim().to_owned(),
+                };
+                crossbuild::validate_pair(&pair).map(|()| pair)
+            })
+            .collect::<Result<_, _>>()?;
+        let mut entry = self.original.clone();
+        entry.files = lines(&self.files)
+            .map(|template| {
+                let rule = self.original.files.get(template).cloned();
+                let save = || FileRule {
+                    tags: vec![Tag::Save],
+                    when: Vec::new(),
+                };
+                (template.to_owned(), rule.unwrap_or_else(save))
+            })
+            .collect();
+        entry.registry = lines(&self.registry)
+            .map(|key| {
+                let rule = self.original.registry.get(key).cloned();
+                (key.to_owned(), rule.unwrap_or_default())
+            })
+            .collect();
+        let wine_prefix = self.wine_prefix.trim();
+        Ok(CustomGame {
+            name: name.to_owned(),
+            entry,
+            integration: self.integration,
+            wine_prefix: (!wine_prefix.is_empty()).then(|| PathBuf::from(wine_prefix)),
+            pairs,
+        })
+    }
+}
+
+/// What the user did with the form this frame.
+enum Action {
+    Save,
+    Cancel,
+}
+
+/// A label followed by a multi-line text field linked to it. Lays out two cells of a grid row.
+fn labelled_lines(ui: &mut Ui, label: &str, text: &mut String) {
+    let label = ui.label(label);
+    ui.add(TextEdit::multiline(text).desired_rows(3))
+        .labelled_by(label.id);
+}
+
+/// A label and a single-line field linked to it, side by side.
+fn inline_edit(ui: &mut Ui, label: String, text: &mut String, hint: &str) {
+    let label = ui.label(label);
+    ui.add(TextEdit::singleline(text).hint_text(hint))
+        .labelled_by(label.id);
+}
+
+/// How a custom game relates to the manifest, for the list. A title the manifest lacks is a
+/// plain custom game whatever its integration.
+fn relation(game: &CustomGame, in_manifest: bool) -> &'static str {
+    match (in_manifest, game.integration) {
+        (false, _) => "custom game",
+        (true, Integration::Override) => "overrides the manifest game",
+        (true, Integration::Extend) => "extends the manifest game",
+    }
+}
+
+impl Form {
+    /// The Linux/Windows pairs, each editable and removable, including those the restore
+    /// mapping dialog saved. Skipped roots get their own section next to it.
+    fn pairs_ui(&mut self, ui: &mut Ui) {
+        ui.label("Pairs: the same saves on a native Linux build and on a Windows build");
+        let mut remove = None;
+        for (index, row) in self.pairs.iter_mut().enumerate() {
+            let number = index + 1;
+            ui.horizontal(|ui| {
+                inline_edit(
+                    ui,
+                    format!("Linux {number}"),
+                    &mut row.linux,
+                    "<xdgData>/Game",
+                );
+                inline_edit(
+                    ui,
+                    format!("Windows {number}"),
+                    &mut row.windows,
+                    "<winAppData>/Game",
+                );
+                if ui.button("Remove pair").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            self.pairs.remove(index);
+        }
+        if ui.button("Add pair").clicked() {
+            self.pairs.push(PairRow::default());
+        }
+    }
+
+    fn ui(&mut self, ui: &mut Ui) -> Option<Action> {
+        ui.heading(if self.index.is_some() {
+            "Edit custom game"
+        } else {
+            "New custom game"
+        });
+        egui::Grid::new("custom_game_form")
+            .num_columns(2)
+            .show(ui, |ui| {
+                labelled_edit(ui, "Name", &mut self.name, false);
+                ui.end_row();
+                let label = ui.label("Integration");
+                egui::ComboBox::from_id_salt("custom_game_integration")
+                    .selected_text(integration_label(self.integration))
+                    .show_ui(ui, |ui| {
+                        for integration in [Integration::Extend, Integration::Override] {
+                            ui.selectable_value(
+                                &mut self.integration,
+                                integration,
+                                integration_label(integration),
+                            );
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                ui.end_row();
+                labelled_lines(ui, "Files", &mut self.files);
+                ui.end_row();
+                labelled_lines(ui, "Registry keys", &mut self.registry);
+                ui.end_row();
+                labelled_edit(ui, "Wine prefix", &mut self.wine_prefix, false);
+                ui.end_row();
+            });
+        ui.weak("One path template per line, such as <winDocuments>/My Game/*.sav");
+        self.pairs_ui(ui);
+        if let Some(error) = &self.error {
+            ui.colored_label(Color32::LIGHT_RED, error.to_string());
+        }
+        let mut action = None;
+        ui.horizontal(|ui| {
+            if ui.button("Save game").clicked() {
+                action = Some(Action::Save);
+            }
+            if ui.button("Cancel").clicked() {
+                action = Some(Action::Cancel);
+            }
+        });
+        action
+    }
+}
+
+/// The state of the Custom games tab.
+#[derive(Default)]
+pub struct CustomGamesTab {
+    form: Option<Form>,
+}
+
+impl CustomGamesTab {
+    /// Draws the tab. Saving or removing a game saves the config.
+    pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.heading("Custom games");
+            let manifest = state.manifest.as_ref();
+            let Some(config) = &mut state.config else {
+                ui.label("Choose a repository first.");
+                return;
+            };
+            let mut changed = false;
+            let (mut edit, mut remove) = (None, None);
+            for (index, game) in config.custom_games.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let in_manifest = manifest.is_some_and(|m| m.games.contains_key(&game.name));
+                    ui.label(format!("{} ({})", game.name, relation(game, in_manifest)));
+                    if ui.button("Edit").clicked() {
+                        edit = Some(index);
+                    }
+                    if ui.button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = edit {
+                self.form = Some(Form::edit(index, &config.custom_games[index]));
+            }
+            if let Some(index) = remove {
+                config.custom_games.remove(index);
+                // The form's position would point at another game now.
+                self.form = None;
+                changed = true;
+            }
+            if ui.button("Add game").clicked() {
+                self.form = Some(Form::new());
+            }
+            if let Some(form) = &mut self.form {
+                ui.separator();
+                match form.ui(ui) {
+                    Some(Action::Save) => match form.build(&config.custom_games) {
+                        Ok(game) => {
+                            match form.index {
+                                Some(index) => config.custom_games[index] = game,
+                                None => config.custom_games.push(game),
+                            }
+                            self.form = None;
+                            changed = true;
+                        }
+                        Err(error) => form.error = Some(error),
+                    },
+                    Some(Action::Cancel) => self.form = None,
+                    None => {}
+                }
+            }
+            if changed {
+                state.save_config(ui.ctx());
+            }
+        });
+    }
+}

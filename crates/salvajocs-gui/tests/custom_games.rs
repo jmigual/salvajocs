@@ -1,0 +1,269 @@
+//! Headless checks of the Custom games tab.
+
+mod common;
+
+use std::collections::BTreeMap;
+
+use common::{
+    env, harness, init_repo, local_config, replace_text, repo_dir, run_until, run_until_ready,
+    save_config, shows,
+};
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
+use salvajocs_core::config::AppConfig;
+use salvajocs_core::crossbuild::{self, Choice};
+use salvajocs_core::layout::Base;
+use salvajocs_core::manifest::{
+    self, CustomGame, FileRule, GameEntry, Integration, Manifest, Pair, RegistryRule, Steam, Tag,
+};
+use salvajocs_gui::tabs::Tab;
+use salvajocs_gui::{App, Env};
+use tempfile::TempDir;
+
+/// An app with the repository open and the Custom games tab in front, starting from `games`
+/// and a cached manifest that holds the titles `manifest_titles`.
+fn open_tab(
+    games: Vec<CustomGame>,
+    manifest_titles: &[&str],
+) -> (Harness<'static, App>, Env, TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let manifest = Manifest {
+        games: manifest_titles
+            .iter()
+            .map(|title| (title.to_string(), GameEntry::default()))
+            .collect(),
+    };
+    std::fs::create_dir_all(&env.cache_dir).unwrap();
+    std::fs::write(
+        env.cache_dir.join("manifest.json"),
+        manifest::to_json(&manifest).unwrap(),
+    )
+    .unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.custom_games = games;
+    save_config(&env, &config);
+    let mut harness = harness(env.clone());
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    harness.run();
+    (harness, env, tmp)
+}
+
+/// Waits until the saved config's custom games satisfy `ready`; saving is a background job.
+fn run_until_saved(
+    harness: &mut Harness<'static, App>,
+    env: &Env,
+    ready: impl Fn(&[CustomGame]) -> bool,
+) -> Vec<CustomGame> {
+    let config_dir = env.config_dir.clone();
+    run_until(harness, "the config to be saved", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| ready(&config.custom_games))
+    });
+    AppConfig::load(&env.config_dir)
+        .unwrap()
+        .unwrap()
+        .custom_games
+}
+
+fn save_rule() -> FileRule {
+    FileRule {
+        tags: vec![Tag::Save],
+        when: Vec::new(),
+    }
+}
+
+fn pair(linux: &str, windows: &str) -> Pair {
+    Pair {
+        linux: linux.into(),
+        windows: windows.into(),
+    }
+}
+
+#[test]
+fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
+
+    harness.get_by_label("Add game").click();
+    harness.run();
+    replace_text(&mut harness, "Name", "My Game");
+    replace_text(&mut harness, "Files", "<winDocuments>/My Game/*.sav");
+    replace_text(
+        &mut harness,
+        "Registry keys",
+        "HKEY_CURRENT_USER/Software/My Game",
+    );
+    replace_text(&mut harness, "Wine prefix", "/prefixes/mygame");
+    harness.get_by_label("Add pair").click();
+    harness.run();
+    replace_text(&mut harness, "Linux 1", "<xdgData>/mygame");
+    replace_text(&mut harness, "Windows 1", "<winDocuments>/My Game");
+    harness.get_by_label("Save game").click();
+    harness.run();
+
+    let saved = run_until_saved(&mut harness, &env, |games| games.len() == 1);
+    assert_eq!(
+        saved,
+        [CustomGame {
+            name: "My Game".into(),
+            entry: GameEntry {
+                files: BTreeMap::from([("<winDocuments>/My Game/*.sav".to_owned(), save_rule())]),
+                registry: BTreeMap::from([(
+                    "HKEY_CURRENT_USER/Software/My Game".to_owned(),
+                    RegistryRule::default(),
+                )]),
+                ..GameEntry::default()
+            },
+            integration: Integration::Extend,
+            wine_prefix: Some("/prefixes/mygame".into()),
+            pairs: vec![pair("<xdgData>/mygame", "<winDocuments>/My Game")],
+        }]
+    );
+    assert!(shows(&harness, "My Game (custom game)"));
+    assert!(
+        !shows(&harness, "Save game"),
+        "the form closes after saving"
+    );
+}
+
+#[test]
+fn custom_games_pair_that_does_not_classify_shows_error_and_is_not_saved() {
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
+
+    harness.get_by_label("Add game").click();
+    harness.run();
+    replace_text(&mut harness, "Name", "My Game");
+    harness.get_by_label("Add pair").click();
+    harness.run();
+    // A Windows template on the Linux side.
+    replace_text(&mut harness, "Linux 1", "<winAppData>/mygame");
+    replace_text(&mut harness, "Windows 1", "<winAppData>/mygame");
+    harness.get_by_label("Save game").click();
+    harness.run();
+
+    assert!(shows(&harness, "not a placeholder template"));
+    assert!(shows(&harness, "Save game"), "the form stays open");
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert!(saved.custom_games.is_empty());
+}
+
+#[test]
+fn custom_games_empty_and_duplicate_names_are_rejected() {
+    let existing = CustomGame {
+        name: "Taken".into(),
+        entry: GameEntry::default(),
+        integration: Integration::Override,
+        wine_prefix: None,
+        pairs: Vec::new(),
+    };
+    let (mut harness, _env, _tmp) = open_tab(vec![existing], &[]);
+
+    harness.get_by_label("Add game").click();
+    harness.run();
+    harness.get_by_label("Save game").click();
+    harness.run();
+    assert!(shows(&harness, "needs a name"));
+
+    replace_text(&mut harness, "Name", "Taken");
+    harness.get_by_label("Save game").click();
+    harness.run();
+    assert!(shows(&harness, "already a custom game named Taken"));
+}
+
+#[test]
+fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
+    let kept = FileRule {
+        tags: vec![Tag::Config],
+        when: Vec::new(),
+    };
+    let game = CustomGame {
+        name: "Game".into(),
+        entry: GameEntry {
+            files: BTreeMap::from([("<home>/.game/config".to_owned(), kept)]),
+            steam: Some(Steam { id: Some(42) }),
+            ..GameEntry::default()
+        },
+        integration: Integration::Override,
+        wine_prefix: None,
+        pairs: vec![pair("<xdgData>/game", "<winAppData>/game")],
+    };
+    let (mut harness, env, _tmp) = open_tab(vec![game.clone()], &[]);
+
+    harness.get_by_label("Edit").click();
+    harness.run();
+    assert!(shows(&harness, "Edit custom game"));
+    replace_text(&mut harness, "Name", "Renamed");
+    harness.get_by_label("Remove pair").click();
+    harness.run();
+    harness.get_by_label("Save game").click();
+    harness.run();
+
+    let saved = run_until_saved(&mut harness, &env, |games| {
+        games.first().is_some_and(|game| game.name == "Renamed")
+    });
+    assert_eq!(
+        saved,
+        [CustomGame {
+            name: "Renamed".into(),
+            pairs: Vec::new(),
+            ..game
+        }]
+    );
+
+    harness.get_by_label("Remove").click();
+    harness.run();
+    run_until_saved(&mut harness, &env, |games| games.is_empty());
+}
+
+#[test]
+fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
+    // What the mapping dialog leaves behind for a manifest game the user never added.
+    let mut dialog = local_config("unused");
+    crossbuild::apply_choices(
+        &mut dialog,
+        "Manifest Game",
+        &[(
+            (Base::XdgData, "Foo".to_owned()),
+            Choice::Template("<winAppData>/Foo".to_owned()),
+        )],
+    );
+    let (mut harness, env, _tmp) = open_tab(dialog.custom_games, &["Manifest Game"]);
+
+    assert!(shows(&harness, "Manifest Game (extends the manifest game)"));
+    harness.get_by_label("Edit").click();
+    harness.run();
+    assert_eq!(
+        harness.get_by_label("Linux 1").value().as_deref(),
+        Some("<xdgData>/Foo")
+    );
+    replace_text(&mut harness, "Windows 1", "<winLocalAppData>/Foo");
+    harness.get_by_label("Save game").click();
+    harness.run();
+
+    let saved = run_until_saved(&mut harness, &env, |games| {
+        games
+            .first()
+            .is_some_and(|game| game.pairs == [pair("<xdgData>/Foo", "<winLocalAppData>/Foo")])
+    });
+    assert_eq!(saved[0].integration, Integration::Extend);
+
+    harness.get_by_label("Edit").click();
+    harness.run();
+    harness.get_by_label("Remove pair").click();
+    harness.run();
+    harness.get_by_label("Save game").click();
+    harness.run();
+    run_until_saved(&mut harness, &env, |games| {
+        games.first().is_some_and(|game| game.pairs.is_empty())
+    });
+
+    harness.get_by_label("Remove").click();
+    harness.run();
+    run_until_saved(&mut harness, &env, |games| games.is_empty());
+    assert!(!shows(&harness, "Manifest Game"));
+}
