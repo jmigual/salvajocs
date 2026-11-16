@@ -26,7 +26,7 @@ the same save on both.
   folders and the keys into the prefix's `user.reg`.
 
 No mapping is needed and no dialog appears. See the full walkthrough in the
-[main README](../../README.md).
+[main README](../../README.md#restore-a-save-from-linux-on-windows).
 
 Things to know:
 
