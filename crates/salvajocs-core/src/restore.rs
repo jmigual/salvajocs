@@ -45,7 +45,7 @@ pub struct Write {
     /// `target` as `(base, tail)`, for the safety backup; `None` once overridden.
     pub target_file: Option<(Base, String)>,
     /// The raw (unsubstituted) root `target_file` lies under, for the safety backup's `roots`;
-    /// `None` when it lies under none or once overridden.
+    /// `None` once overridden.
     pub target_root: Option<SnapshotRoot>,
 }
 
@@ -60,6 +60,8 @@ pub enum SkipReason {
     SkippedByUser,
     /// The tail would leave its base directory.
     UnsafePath,
+    /// The file lies under none of the snapshot's recorded roots.
+    OutsideRoots,
     /// `registry.json` with no Windows target.
     NoWindowsTarget,
 }
@@ -71,6 +73,7 @@ impl fmt::Display for SkipReason {
             SkipReason::NotInstalled => "game not found under any root",
             SkipReason::SkippedByUser => "skipped by choice",
             SkipReason::UnsafePath => "path leaves its base directory",
+            SkipReason::OutsideRoots => "outside the game's save roots",
             SkipReason::NoWindowsTarget => "registry: no Windows target",
         })
     }
@@ -147,16 +150,13 @@ fn components(path: &str) -> impl Iterator<Item = &str> {
     path.split('/').filter(|part| !part.is_empty())
 }
 
-/// `rest` with the literal values of `<game>`, `<osUserName>` and `<storeGameId>`; `None` when
-/// it needs a value `vars` lacks.
-fn substitute(rest: &str, vars: &GameVars, game: Option<&str>) -> Option<String> {
-    let mut rest = rest.replace("<osUserName>", &vars.os_user_name);
-    for (placeholder, value) in [
-        ("<game>", game),
-        ("<storeGameId>", vars.store_game_id.as_deref()),
-    ] {
+/// `rest` with each `(placeholder, value)` replaced literally; `None` when it holds a
+/// placeholder whose value is missing or empty.
+fn substitute(rest: &str, values: &[(&str, Option<&str>)]) -> Option<String> {
+    let mut rest = rest.to_owned();
+    for &(placeholder, value) in values {
         if rest.contains(placeholder) {
-            rest = rest.replace(placeholder, value?);
+            rest = rest.replace(placeholder, value.filter(|value| !value.is_empty())?);
         }
     }
     Some(rest)
@@ -171,8 +171,48 @@ struct Covering<'a> {
     below: String,
 }
 
-/// The deepest of `roots` that `(base, tail)` lies under, once `vars` is substituted into the
-/// root. Windows roots compare ASCII case-insensitively, as a prefix scan does (ADR-0011).
+impl Covering<'_> {
+    /// The file's tail under `rest`, a raw root or mapping target, for a target whose user is
+    /// `user`; `None` when `rest` needs a value `vars` lacks.
+    fn tail(&self, rest: &str, vars: &GameVars, user: &str) -> Option<String> {
+        let rest = substitute(
+            rest,
+            &[
+                ("<game>", self.game),
+                ("<storeGameId>", vars.store_game_id.as_deref()),
+                ("<osUserName>", Some(user)),
+            ],
+        )?;
+        let parts: Vec<&str> = components(&rest).chain(components(&self.below)).collect();
+        Some(parts.join("/"))
+    }
+}
+
+/// Whether the disk component `got` matches the root component `want`. `<osUserName>` stands
+/// for the source machine's user, so it matches any non-empty text within the component.
+fn component_matches(want: &str, got: &str, windows: bool) -> bool {
+    let same = |a: &str, b: &str| {
+        if windows {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    match want.split_once("<osUserName>") {
+        Some((pre, post)) => {
+            got.len() > pre.len() + post.len()
+                && got.get(..pre.len()).is_some_and(|got| same(got, pre))
+                && got
+                    .get(got.len() - post.len()..)
+                    .is_some_and(|got| same(got, post))
+        }
+        None => same(want, got),
+    }
+}
+
+/// The deepest of `roots` that `(base, tail)` lies under, once `<game>` and `<storeGameId>` are
+/// substituted into the root. Windows roots compare ASCII case-insensitively, as a prefix scan
+/// does (ADR-0011).
 fn covering_root<'a>(
     roots: &'a [SnapshotRoot],
     base: Base,
@@ -190,17 +230,15 @@ fn covering_root<'a>(
         .filter(|root| root.0 == base)
         .flat_map(|root| games.iter().map(move |&game| (root, game)))
         .filter_map(|(root, game)| {
-            let rest = substitute(&root.1, vars, game)?;
+            let values = [
+                ("<game>", game),
+                ("<storeGameId>", vars.store_game_id.as_deref()),
+            ];
+            let rest = substitute(&root.1, &values)?;
             let mut parts = components(tail);
             let mut depth = 0;
             for want in components(&rest) {
-                let got = parts.next()?;
-                let same = if windows {
-                    got.eq_ignore_ascii_case(want)
-                } else {
-                    got == want
-                };
-                if !same {
+                if !component_matches(want, parts.next()?, windows) {
                     return None;
                 }
                 depth += 1;
@@ -218,10 +256,9 @@ fn covering_root<'a>(
 fn resolve_path(
     base: Base,
     tail: &str,
-    ctx: Option<&Context>,
+    ctx: &Context,
     vars: &GameVars,
 ) -> Result<PathBuf, SkipReason> {
-    let ctx = ctx.ok_or(SkipReason::NoTarget)?;
     if base == Base::WinAbsolute {
         return match ctx {
             Context::WindowsNative(_) => {
@@ -242,9 +279,11 @@ fn resolve_path(
 
 /// Maps every staged file to a target path or a skip reason. A base resolves against its own
 /// family's target; a file whose family has none goes through the `mappings` entry of its root
-/// (ADR-0011). `Absolute`/`WinAbsolute` restore to the same OS only (ADR-0005). `GameVars` is
-/// substituted into the raw roots and mapping targets. `_roots` is unused: `vars` already holds
-/// the install dirs found through them.
+/// (ADR-0011). `Absolute`/`WinAbsolute` restore to the same OS only (ADR-0005). A file must lie
+/// under a recorded root. Its tail below the root is kept, and the root's raw rest (or the
+/// mapping target's) is substituted with `vars` and the target context's user, so
+/// `<osUserName>` becomes this machine's user. `_roots` is unused: `vars` already holds the
+/// install dirs found through them.
 ///
 /// # Errors
 /// [`PlanError::Unmapped`] when a file of a family without a target lies under a root that has
@@ -274,47 +313,41 @@ pub fn plan(
         let family = crossbuild::base_family(*base);
         let covering = covering_root(&staged.meta.roots, *base, tail, vars);
         let mapped = family.is_some() && target(family).is_none();
-        let placed = if !mapped {
-            Ok(((*base, tail.clone()), covering.map(|c| c.root.clone())))
-        } else if matches!(base, Base::Absolute | Base::WinAbsolute)
-            || target(family.map(Family::other)).is_none()
-        {
-            Err(SkipReason::NoTarget)
-        } else if let Some(covering) = covering {
-            let mapping = mappings
-                .iter()
-                .find(|mapping| mapping.root == *covering.root)
-                .ok_or_else(|| PlanError::Unmapped {
-                    root: covering.root.clone(),
-                })?;
-            match &mapping.target {
-                None => Err(SkipReason::SkippedByUser),
-                Some((target_base, target_rest)) => substitute(target_rest, vars, covering.game)
-                    .map(|rest| {
-                        let tail = components(&rest)
-                            .chain(components(&covering.below))
-                            .collect::<Vec<_>>()
-                            .join("/");
-                        (
-                            (*target_base, tail),
-                            Some((*target_base, target_rest.clone())),
-                        )
-                    })
-                    .ok_or(SkipReason::NoTarget),
+        let placed = match covering {
+            None => Err(SkipReason::OutsideRoots),
+            Some(covering) if !mapped => Ok((covering.root, covering)),
+            Some(_)
+                if matches!(base, Base::Absolute | Base::WinAbsolute)
+                    || target(family.map(Family::other)).is_none() =>
+            {
+                Err(SkipReason::NoTarget)
             }
-        } else {
-            Err(SkipReason::NoTarget)
+            Some(covering) => {
+                let mapping = mappings
+                    .iter()
+                    .find(|mapping| mapping.root == *covering.root)
+                    .ok_or_else(|| PlanError::Unmapped {
+                        root: covering.root.clone(),
+                    })?;
+                match &mapping.target {
+                    None => Err(SkipReason::SkippedByUser),
+                    Some(target_root) => Ok((target_root, covering)),
+                }
+            }
         };
-        let write = placed.and_then(|(file, root)| {
-            let ctx = target(crossbuild::base_family(file.0));
-            let target = resolve_path(file.0, &file.1, ctx, vars)?;
+        let write = placed.and_then(|((target_base, target_rest), covering)| {
+            let ctx = target(crossbuild::base_family(*target_base)).ok_or(SkipReason::NoTarget)?;
+            let target_tail = covering
+                .tail(target_rest, vars, ctx.user())
+                .ok_or(SkipReason::NoTarget)?;
+            let target = resolve_path(*target_base, &target_tail, ctx, vars)?;
             let source = layout::target_path(&files_dir.join(base.dir_name()), tail, false)
                 .ok_or(SkipReason::UnsafePath)?;
             Ok(Write {
                 source,
                 target,
-                target_file: Some(file),
-                target_root: root,
+                target_file: Some((*target_base, target_tail)),
+                target_root: Some((*target_base, target_rest.clone())),
             })
         });
         match write {

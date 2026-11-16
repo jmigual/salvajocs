@@ -42,11 +42,11 @@ fn wine_root(path: &Path) -> Root {
 fn linux_env(home: &Path) -> Environment {
     Environment {
         native: Some(Context::Linux(LinuxFolders {
+            user: "me".into(),
             home: home.to_path_buf(),
             xdg_data: home.join(".local/share"),
             xdg_config: home.join(".config"),
         })),
-        user: "me".into(),
         steam_roots: Vec::new(),
     }
 }
@@ -54,7 +54,6 @@ fn linux_env(home: &Path) -> Environment {
 fn no_native_env(steam_roots: Vec<PathBuf>) -> Environment {
     Environment {
         native: None,
-        user: String::new(),
         steam_roots,
     }
 }

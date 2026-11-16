@@ -26,6 +26,7 @@ fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
 
 fn linux_folders() -> LinuxFolders {
     LinuxFolders {
+        user: "me".into(),
         home: "/home/me".into(),
         xdg_data: "/home/me/.local/share".into(),
         xdg_config: "/home/me/.config".into(),
@@ -52,7 +53,7 @@ fn win_only(win: Context) -> Targets {
 }
 
 fn vars() -> GameVars {
-    GameVars::new("Game", vec![], &[], None, "me".into())
+    GameVars::new("Game", vec![], &[], None)
 }
 
 fn file(base: Base, tail: &str) -> Option<(Base, String)> {
@@ -100,7 +101,10 @@ fn windows_save_plans_into_prefix_user() {
     let folders = WinFolders::for_prefix(prefix.path(), "steamuser");
     fs::create_dir_all(folders.local_app_data_low.join("co")).unwrap();
     let staged = staged(
-        &[(Base::WinLocalAppDataLow, "Co/Game")],
+        &[
+            (Base::WinLocalAppDataLow, "Co/Game"),
+            (Base::WinAbsolute, "C/Games/Foo"),
+        ],
         &[
             // Scanned case-insensitively, so the disk case can differ from the root's.
             (Base::WinLocalAppDataLow, "CO/Game/save.dat"),
@@ -172,13 +176,7 @@ fn game_dir_resolves_through_install_dir() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("Install Dir")).unwrap();
     let roots = other_root(root.path());
-    let vars = GameVars::new(
-        "Title",
-        vec!["Install Dir".into()],
-        &roots,
-        None,
-        "me".into(),
-    );
+    let vars = GameVars::new("Title", vec!["Install Dir".into()], &roots, None);
     let staged = staged(
         &[(Base::GameDir, "saves")],
         &[(Base::GameDir, "saves/a.sav")],
@@ -195,13 +193,7 @@ fn game_dir_resolves_through_install_dir() {
 fn game_dir_skipped_when_not_installed() {
     let root = tempfile::tempdir().unwrap();
     let roots = other_root(root.path());
-    let vars = GameVars::new(
-        "Title",
-        vec!["Install Dir".into()],
-        &roots,
-        None,
-        "me".into(),
-    );
+    let vars = GameVars::new("Title", vec!["Install Dir".into()], &roots, None);
     let staged = staged(
         &[(Base::GameDir, "saves")],
         &[(Base::GameDir, "saves/a.sav")],
@@ -274,20 +266,14 @@ fn override_target_rejects_relative_path() {
 fn tail_leaving_its_base_is_skipped() {
     let staged = staged(
         &[(Base::XdgData, "Game")],
-        &[
-            (Base::XdgData, "../escape"),
-            (Base::XdgData, "Game/../../x"),
-        ],
+        &[(Base::XdgData, "Game/../../x")],
     );
     let direct = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
     assert!(direct.writes.is_empty());
-    assert!(
-        direct
-            .skipped
-            .iter()
-            .all(|s| s.reason == SkipReason::UnsafePath)
+    assert_eq!(
+        direct.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UnsafePath]
     );
-    assert_eq!(direct.skipped.len(), 2);
 
     // Through a mapping, the tail below the root is checked against the target base.
     let mapping = ResolvedMapping {
@@ -298,7 +284,79 @@ fn tail_leaving_its_base_is_skipped() {
     assert!(mapped.writes.is_empty());
     assert_eq!(
         mapped.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
-        [SkipReason::NoTarget, SkipReason::UnsafePath]
+        [SkipReason::UnsafePath]
+    );
+}
+
+#[test]
+fn file_outside_recorded_roots_skipped() {
+    let staged = staged(
+        &[(Base::XdgData, "Game")],
+        &[
+            (Base::XdgData, "Game/a.sav"),
+            (Base::XdgData, "Other/b.sav"),
+            (Base::XdgData, "../escape"),
+            (Base::XdgConfig, "Game/c.sav"),
+        ],
+    );
+    let plan = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/home/me/.local/share/Game/a.sav")]
+    );
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::OutsideRoots; 3]
+    );
+}
+
+#[test]
+fn os_user_name_in_tail_is_swapped_proton_to_windows() {
+    let staged = staged(
+        &[(Base::WinDocuments, "<osUserName>/Game")],
+        &[(Base::WinDocuments, "steamuser/Game/s.sav")],
+    );
+    let plan = plan(&staged, &win_only(native_win()), &[], &vars(), &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/users/Alice/Documents/Alice/Game/s.sav"
+        )]
+    );
+    let write = &plan.writes[0];
+    assert_eq!(
+        write.target_file,
+        file(Base::WinDocuments, "Alice/Game/s.sav")
+    );
+    assert_eq!(
+        write.target_root,
+        file(Base::WinDocuments, "<osUserName>/Game")
+    );
+}
+
+#[test]
+fn mixed_restore_uses_each_family_user() {
+    let staged = staged(
+        &[
+            (Base::XdgData, "saves_<osUserName>"),
+            (Base::WinDocuments, "<osUserName>/Game"),
+        ],
+        &[
+            (Base::XdgData, "saves_olduser/a.sav"),
+            (Base::WinDocuments, "steamuser/Game/b.sav"),
+        ],
+    );
+    let targets = Targets {
+        linux: Some(linux_folders()),
+        win: Some(native_win()),
+    };
+    let plan = plan(&staged, &targets, &[], &vars(), &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [
+            Path::new("/home/me/.local/share/saves_me/a.sav"),
+            Path::new("/win/drive_c/users/Alice/Documents/Alice/Game/b.sav"),
+        ]
     );
 }
 
@@ -481,7 +539,7 @@ fn prepare_engine_rule_returns_plan_without_choices() {
 fn linux_save_maps_onto_windows_via_pair() {
     // Raw roots and pair sides keep `<game>`; the target uses the candidate the root matched.
     let dirs = vec!["Missing".into(), "Real Name".into()];
-    let vars = GameVars::new("Title", dirs, &[], None, "me".into());
+    let vars = GameVars::new("Title", dirs, &[], None);
     let staged = staged(
         &[(Base::XdgData, "<game>")],
         &[(Base::XdgData, "Real Name/save.dat")],
@@ -567,5 +625,28 @@ fn absolute_root_restores_to_its_own_os_only() {
             file: file(Base::Absolute, "opt/game/save.dat"),
             reason: SkipReason::NoTarget,
         }]
+    );
+}
+
+#[test]
+fn mapped_root_with_os_user_name_covers_file() {
+    let staged = staged(
+        &[(Base::WinDocuments, "<osUserName>/Game")],
+        &[(Base::WinDocuments, "steamuser/Game/s.sav")],
+    );
+    let result = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &[]);
+    let Err(PrepareError::NeedsMapping(entries)) = result else {
+        panic!("expected NeedsMapping, got {result:?}");
+    };
+    assert_eq!(entries.iter().map(|e| e.files).collect::<Vec<_>>(), [1]);
+
+    let choices = [(
+        root(Base::WinDocuments, "<osUserName>/Game"),
+        Choice::Template("<xdgData>/<osUserName>/Game".into()),
+    )];
+    let plan = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &choices).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/home/me/.local/share/me/Game/s.sav")]
     );
 }

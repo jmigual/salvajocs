@@ -25,26 +25,19 @@ pub struct Environment {
     /// The native context: `WindowsNative` on Windows, `Linux` elsewhere. `None` when its
     /// folders cannot be determined.
     pub native: Option<Context>,
-    /// The OS user name of the native context, for `<osUserName>`.
-    pub user: String,
     /// Detected Steam roots; Proton prefixes are looked up under them.
     pub steam_roots: Vec<PathBuf>,
 }
 
 impl Environment {
-    /// Detects the native context, the user and the default Steam roots of this machine.
+    /// Detects the native context and the default Steam roots of this machine.
     pub fn detect() -> Self {
         #[cfg(windows)]
         let native = WinFolders::native().map(Context::WindowsNative);
         #[cfg(not(windows))]
         let native = LinuxFolders::native().map(Context::Linux);
-        let user = ["USER", "USERNAME"]
-            .iter()
-            .find_map(|name| std::env::var(name).ok())
-            .unwrap_or_default();
         Self {
             native,
-            user,
             steam_roots: steam_roots(),
         }
     }
@@ -142,7 +135,7 @@ pub struct ScanReport {
 #[derive(Default)]
 struct Cache {
     /// Resolved prefixes by path; `None` when unusable (reported once).
-    prefixes: RefCell<HashMap<PathBuf, Option<(Context, String)>>>,
+    prefixes: RefCell<HashMap<PathBuf, Option<Context>>>,
     /// Parsed `user.reg` by prefix path: `Ok(None)` when missing, `Err` when unreadable (reported once).
     registries: RefCell<HashMap<PathBuf, Result<Option<RegFile>, ()>>>,
     /// How many `user.reg` files were read.
@@ -159,8 +152,9 @@ impl Cache {
         }
     }
 
-    /// The context and Wine user of the prefix at `prefix`; `None` and a problem when unusable.
-    fn prefix(&self, prefix: &Path) -> Option<(Context, String)> {
+    /// The context of the prefix at `prefix`, for its Wine user; `None` and a problem when
+    /// unusable.
+    fn prefix(&self, prefix: &Path) -> Option<Context> {
         if let Some(hit) = self.prefixes.borrow().get(prefix) {
             return hit.clone();
         }
@@ -168,7 +162,7 @@ impl Cache {
             Ok(user) => {
                 let folders = WinFolders::for_prefix(prefix, &user);
                 let prefix = prefix.to_path_buf();
-                Some((Context::WinePrefix { prefix, folders }, user))
+                Some(Context::WinePrefix { prefix, folders })
             }
             Err(err) => {
                 let problem = ScanProblem::from(err);
@@ -345,8 +339,8 @@ fn matches(pattern: &str, issues: &mut Vec<Issue>) -> Vec<(PathBuf, u64)> {
 }
 
 /// The contexts a game is evaluated in, best first (ADR-0007): its own prefixes (Proton, then
-/// the custom `wine_prefix`), the `WinePrefix` roots, then the native context. Each carries its
-/// own `GameVars`, built for that context's user.
+/// the custom `wine_prefix`), the `WinePrefix` roots, then the native context, each with the
+/// game's `GameVars`. The context supplies `<osUserName>`.
 fn contexts(
     title: &str,
     entry: &GameEntry,
@@ -369,22 +363,19 @@ fn contexts(
         }
     }
     let install_dirs: Vec<String> = entry.install_dir.keys().cloned().collect();
-    let vars = |user: String| {
-        GameVars::new(
-            title,
-            install_dirs.clone(),
-            &shared.roots,
-            steam_id.map(|id| id.to_string()),
-            user,
-        )
-    };
+    let vars = GameVars::new(
+        title,
+        install_dirs,
+        &shared.roots,
+        steam_id.map(|id| id.to_string()),
+    );
     let mut out: Vec<_> = prefixes
         .iter()
         .filter_map(|prefix| shared.cache.prefix(prefix))
-        .map(|(ctx, user)| (ctx, vars(user)))
+        .map(|ctx| (ctx, vars.clone()))
         .collect();
     if let Some(native) = &shared.env.native {
-        out.push((native.clone(), vars(shared.env.user.clone())));
+        out.push((native.clone(), vars));
     }
     out
 }

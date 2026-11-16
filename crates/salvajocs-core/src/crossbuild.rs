@@ -164,6 +164,7 @@ pub(crate) fn base_family(base: Base) -> Option<Family> {
 fn family_context(family: Family) -> Context {
     match family {
         Family::Linux => Context::Linux(LinuxFolders {
+            user: String::new(),
             home: PathBuf::new(),
             xdg_data: PathBuf::new(),
             xdg_config: PathBuf::new(),

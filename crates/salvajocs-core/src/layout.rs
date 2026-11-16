@@ -77,6 +77,8 @@ impl Base {
 /// The folders of a Windows user, native or inside a Wine prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WinFolders {
+    /// The user name, for `<osUserName>`: the Wine user in a prefix.
+    pub user: String,
     /// User home.
     pub home: PathBuf,
     /// `Documents`.
@@ -111,6 +113,7 @@ impl WinFolders {
             program_data: env("PROGRAMDATA")?,
             windows: env("WINDIR")?,
             home,
+            user: os_user(),
         })
     }
 
@@ -127,6 +130,7 @@ impl WinFolders {
             program_data: drive_c.join("ProgramData"),
             windows: drive_c.join("windows"),
             home,
+            user: user.to_owned(),
         }
     }
 }
@@ -134,6 +138,8 @@ impl WinFolders {
 /// The folders of a native Linux user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinuxFolders {
+    /// The user name, for `<osUserName>`.
+    pub user: String,
     /// Home directory.
     pub home: PathBuf,
     /// `$XDG_DATA_HOME`.
@@ -147,11 +153,20 @@ impl LinuxFolders {
     #[cfg(unix)]
     pub fn native() -> Option<Self> {
         Some(Self {
+            user: os_user(),
             home: dirs::home_dir()?,
             xdg_data: dirs::data_dir()?,
             xdg_config: dirs::config_dir()?,
         })
     }
+}
+
+/// The OS user name from `USER` or `USERNAME`; empty when neither is set.
+fn os_user() -> String {
+    ["USER", "USERNAME"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok())
+        .unwrap_or_default()
 }
 
 /// What a configured root is used for.
@@ -204,6 +219,14 @@ impl Context {
         }
     }
 
+    /// The context's user name, for `<osUserName>`.
+    pub fn user(&self) -> &str {
+        match self {
+            Context::WindowsNative(folders) | Context::WinePrefix { folders, .. } => &folders.user,
+            Context::Linux(folders) => &folders.user,
+        }
+    }
+
     fn linux(&self) -> Option<&LinuxFolders> {
         match self {
             Context::Linux(folders) => Some(folders),
@@ -222,7 +245,6 @@ pub struct GameVars {
     /// `<root>` candidates.
     root: Vec<PathBuf>,
     pub(crate) store_game_id: Option<String>,
-    pub(crate) os_user_name: String,
 }
 
 impl GameVars {
@@ -230,14 +252,12 @@ impl GameVars {
     /// names that are not a single plain path component (manifest input) are dropped.
     /// `<base>` is `<root>/steamapps/common/<game>` for Steam roots and `<root>/<game>` for
     /// others. `<root>` is a Steam root only; `WinePrefix` roots contribute neither.
-    /// `os_user_name` is the user of the context the game is evaluated in (the Wine user for a
-    /// prefix), so build one `GameVars` per context.
+    /// `<osUserName>` comes from the context, not from here.
     pub fn new(
         title: &str,
         install_dirs: Vec<String>,
         roots: &[Root],
         store_game_id: Option<String>,
-        os_user_name: String,
     ) -> Self {
         let mut game = if install_dirs.is_empty() {
             vec![title.to_owned()]
@@ -263,7 +283,6 @@ impl GameVars {
             base,
             root,
             store_game_id,
-            os_user_name,
         }
     }
 }
@@ -463,13 +482,13 @@ pub fn glob_pattern(base_dir: &Path, rest: &str, case_insensitive: bool) -> Stri
     format!("{base}/{rest}")
 }
 
-/// Replaces the value placeholders in `rest`, one result per `<game>` candidate. Substituted
-/// values are glob-escaped; `<storeUserId>` becomes `*`.
-fn substitute(rest: &str, vars: &GameVars) -> Vec<String> {
+/// Replaces the value placeholders in `rest`, one result per `<game>` candidate, with `user`
+/// for `<osUserName>`. Substituted values are glob-escaped; `<storeUserId>` becomes `*`.
+fn substitute(rest: &str, vars: &GameVars, user: &str) -> Vec<String> {
     let escape = |value: &str| glob::Pattern::escape(value);
     let rest = rest
         .replace("<storeUserId>", "*")
-        .replace("<osUserName>", &escape(&vars.os_user_name));
+        .replace("<osUserName>", &escape(user));
     let rest = match (&vars.store_game_id, rest.contains("<storeGameId>")) {
         (Some(id), _) => rest.replace("<storeGameId>", &escape(id)),
         (None, true) => return Vec::new(),
@@ -493,7 +512,7 @@ pub fn expand(template: &str, ctx: &Context, vars: &GameVars) -> Vec<(PathBuf, S
     };
     // Absolute holds a host path, which stays case-sensitive (ADR-0008).
     let case_insensitive = ctx.case_insensitive() && base != Base::Absolute;
-    let rests = substitute(&rest, vars);
+    let rests = substitute(&rest, vars, ctx.user());
     if base == Base::WinAbsolute {
         if !matches!(ctx, Context::WindowsNative(_)) {
             return Vec::new();

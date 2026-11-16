@@ -14,6 +14,7 @@ fn native_win_ctx() -> Context {
 
 fn linux_ctx() -> Context {
     Context::Linux(LinuxFolders {
+        user: "me".into(),
         home: "/home/me".into(),
         xdg_data: "/home/me/.local/share".into(),
         xdg_config: "/home/me/.config".into(),
@@ -21,7 +22,7 @@ fn linux_ctx() -> Context {
 }
 
 fn no_roots_vars() -> GameVars {
-    GameVars::new("Game", vec![], &[], None, "me".into())
+    GameVars::new("Game", vec![], &[], None)
 }
 
 fn patterns(expanded: Vec<(PathBuf, String)>) -> Vec<String> {
@@ -207,7 +208,6 @@ fn game_dir_resolves_through_roots_and_install_dirs() {
         vec!["Missing".into(), "Real Dir".into()],
         &roots,
         None,
-        "me".into(),
     );
     let found = base_dir(Base::GameDir, &linux_ctx(), &vars);
     assert_eq!(found, Some(steam.path().join("steamapps/common/Real Dir")));
@@ -217,7 +217,7 @@ fn game_dir_resolves_through_roots_and_install_dirs() {
         Some(steam.path().into())
     );
 
-    let not_installed = GameVars::new("Title", vec![], &roots, None, "me".into());
+    let not_installed = GameVars::new("Title", vec![], &roots, None);
     assert_eq!(base_dir(Base::GameDir, &linux_ctx(), &not_installed), None);
 }
 
@@ -231,7 +231,7 @@ fn install_dirs_that_are_not_plain_names_are_dropped() {
     let dirs = ["/etc", "../x", "a/b", "..", "", "ok"]
         .map(String::from)
         .to_vec();
-    let vars = GameVars::new("Title", dirs, &roots, None, "me".into());
+    let vars = GameVars::new("Title", dirs, &roots, None);
     assert_eq!(vars.base, [root.path().join("ok")]);
     assert_eq!(vars.game, ["ok"]);
 }
@@ -243,7 +243,7 @@ fn install_dir_falls_back_to_title() {
         path: root.path().into(),
         kind: RootKind::Other,
     }];
-    let vars = GameVars::new("Title", vec![], &roots, None, "me".into());
+    let vars = GameVars::new("Title", vec![], &roots, None);
     assert_eq!(vars.base, [root.path().join("Title")]);
 }
 
@@ -290,7 +290,7 @@ fn escaped_value_survives_case_folding_in_prefix() {
         prefix: prefix.path().into(),
         folders: WinFolders::for_prefix(prefix.path(), "steamuser"),
     };
-    let vars = GameVars::new("Game [GOTY]", vec![], &[], None, "me".into());
+    let vars = GameVars::new("Game [GOTY]", vec![], &[], None);
     let saved = prefix.path().join("drive_c/users/steamuser/game [goty]");
     fs::create_dir_all(&saved).unwrap();
     fs::write(saved.join("a.sav"), b"x").unwrap();
@@ -350,7 +350,6 @@ fn expand_substitutes_and_escapes_values() {
         vec!["Game [GOTY]".into(), "Game".into()],
         &roots,
         Some("42".into()),
-        "me".into(),
     );
     let ctx = linux_ctx();
 
@@ -400,7 +399,7 @@ fn expand_names_the_base_dir_each_pattern_came_from() {
         path: path.into(),
         kind: RootKind::Other,
     });
-    let vars = GameVars::new("G", vec![], &roots, None, "me".into());
+    let vars = GameVars::new("G", vec![], &roots, None);
     let dirs: Vec<_> = expand("<base>/s/*.sav", &linux_ctx(), &vars)
         .into_iter()
         .map(|(dir, _)| dir)
