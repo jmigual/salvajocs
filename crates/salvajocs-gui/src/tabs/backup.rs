@@ -4,11 +4,12 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::anyhow;
 use eframe::egui::{self, Color32, Ui};
 use salvajocs_core::backup::{self, GameBackup};
+use salvajocs_core::manifest::Manifest;
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 
 use crate::job::Job;
@@ -105,10 +106,21 @@ fn describe_problem(problem: &ScanProblem) -> String {
     }
 }
 
-/// A backup in flight.
-struct Run {
-    job: Job<()>,
+/// How far the running backup is, shared with its job.
+#[derive(Default)]
+struct Progress {
+    /// The games the backup goes through, known once its scan is done.
     total: usize,
+    /// The outcome of each game finished so far.
+    done: Vec<GameResult>,
+}
+
+/// What a finished backup job hands back.
+struct Backed {
+    /// The scan the backup went by, which replaces the shown list.
+    report: ScanReport,
+    /// Why the run stopped early, if it did.
+    error: Option<String>,
 }
 
 /// The state of the Backup tab.
@@ -119,15 +131,15 @@ pub struct BackupTab {
     scan_error: Option<String>,
     /// Titles of the games to back up.
     selected: BTreeSet<String>,
-    run: Option<Run>,
-    /// The outcomes of the current or last backup, filled in as each game finishes.
-    results: Arc<Mutex<Vec<GameResult>>>,
+    running: Option<Job<Backed>>,
+    progress: Arc<Mutex<Progress>>,
     run_error: Option<String>,
 }
 
 impl BackupTab {
     /// Draws the tab. The scan and the backup run in jobs; `state` is only read.
-    pub fn ui(&mut self, ui: &mut Ui, state: &State) {
+    /// `manifest_loading` is whether the manifest job is still running.
+    pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         self.poll();
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Backup");
@@ -135,11 +147,11 @@ impl BackupTab {
                 ui.label("Choose a repository first.");
                 return;
             }
-            self.scan_ui(ui, state);
+            self.scan_ui(ui, state, manifest_loading);
             if let Some(error) = &self.scan_error {
                 ui.colored_label(Color32::LIGHT_RED, format!("The scan failed: {error}"));
             }
-            self.games_ui(ui, state);
+            self.games_ui(ui, state, manifest_loading);
             self.results_ui(ui);
         });
     }
@@ -151,38 +163,63 @@ impl BackupTab {
             self.scanning = None;
             match result {
                 Ok(report) => {
-                    self.selected = report.games.iter().map(|g| g.title.clone()).collect();
-                    self.report = Some(report);
+                    self.adopt(report);
                     self.scan_error = None;
                 }
                 Err(err) => self.scan_error = Some(format!("{err:#}")),
             }
         }
-        if let Some(run) = &mut self.run
-            && let Some(result) = run.job.take_result()
+        if let Some(job) = &mut self.running
+            && let Some(result) = job.take_result()
         {
-            self.run = None;
-            self.run_error = result.err().map(|err| format!("{err:#}"));
+            self.running = None;
+            match result {
+                Ok(Backed { report, error }) => {
+                    self.adopt(report);
+                    self.run_error = error;
+                }
+                Err(err) => self.run_error = Some(format!("{err:#}")),
+            }
         }
     }
 
-    fn busy(&self) -> bool {
-        self.scanning.is_some() || self.run.is_some()
+    /// Shows `report`. The user's choice stays for the games already listed; a game new to the
+    /// list starts selected.
+    fn adopt(&mut self, report: ScanReport) {
+        let known: BTreeSet<&str> = self
+            .report
+            .iter()
+            .flat_map(|old| old.games.iter().map(|game| game.title.as_str()))
+            .collect();
+        self.selected = report
+            .games
+            .iter()
+            .filter(|game| {
+                self.selected.contains(&game.title) || !known.contains(game.title.as_str())
+            })
+            .map(|game| game.title.clone())
+            .collect();
+        self.report = Some(report);
     }
 
-    fn scan_ui(&mut self, ui: &mut Ui, state: &State) {
-        let manifest = state.manifest.as_ref();
-        let enabled = manifest.is_some() && !self.busy();
+    fn busy(&self) -> bool {
+        self.scanning.is_some() || self.running.is_some()
+    }
+
+    fn scan_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        let enabled = !manifest_loading && !self.busy();
         let button = ui.add_enabled(enabled, egui::Button::new("Scan for games"));
-        if let (true, Some(manifest), Some(config)) = (button.clicked(), manifest, &state.config) {
-            let (manifest, config) = (manifest.clone(), config.clone());
+        if let (true, Some(config)) = (button.clicked(), &state.config) {
+            let (manifest, config) = (manifest(state), config.clone());
             self.scan_error = None;
             self.scanning = Some(Job::spawn(ui.ctx(), move || {
                 Ok(scan::scan(&manifest, &config, &Environment::detect()))
             }));
         }
-        if manifest.is_none() {
-            ui.weak("The game manifest is not available yet.");
+        if manifest_loading {
+            ui.weak("The game manifest is loading.");
+        } else if state.manifest.is_none() {
+            ui.weak("The game manifest is not available; only custom games are scanned.");
         }
         if self.scanning.is_some() {
             ui.horizontal(|ui| {
@@ -192,7 +229,7 @@ impl BackupTab {
         }
     }
 
-    fn games_ui(&mut self, ui: &mut Ui, state: &State) {
+    fn games_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         let Some(report) = &self.report else {
             return;
         };
@@ -229,69 +266,75 @@ impl BackupTab {
         }
         ui.separator();
         let selected = self.selected.len();
-        let ready = state.session.is_some() && selected > 0 && !self.busy();
+        let ready = state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
         let button = egui::Button::new(format!("Back up selected ({selected})"));
         let clicked = ui.add_enabled(ready, button).clicked();
         if state.session.is_none() {
             ui.weak("The repository is not open.");
         }
-        if let (true, Some(session)) = (clicked, &state.session) {
-            let games: Vec<GameScan> = report
-                .games
-                .iter()
-                .filter(|game| self.selected.contains(&game.title))
-                .cloned()
-                .collect();
-            self.start_backup(ui.ctx(), games, &session.storage, &state.env.cache_dir);
+        if clicked {
+            self.start_backup(ui.ctx(), state);
         }
     }
 
-    /// Backs up `games` in a job, with the staging mirrors under `cache_dir` (ADR-0004).
-    fn start_backup(
-        &mut self,
-        ctx: &egui::Context,
-        games: Vec<GameScan>,
-        storage: &SharedStorage,
-        cache_dir: &Path,
-    ) {
-        let results = Arc::new(Mutex::new(Vec::new()));
-        self.results = results.clone();
+    /// Backs up the selected games in a job, with the staging mirrors under the cache dir
+    /// (ADR-0004). The job scans again first, so a save made since the last scan is included.
+    fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
+        let (Some(session), Some(config)) = (&state.session, &state.config) else {
+            return;
+        };
+        let progress = Arc::new(Mutex::new(Progress {
+            total: self.selected.len(),
+            done: Vec::new(),
+        }));
+        self.progress = progress.clone();
         self.run_error = None;
-        let total = games.len();
-        let (storage, stage_root, waker) = (storage.clone(), cache_dir.join("stage"), ctx.clone());
-        let job = Job::spawn(ctx, move || {
-            let mut storage = storage
-                .lock()
-                .map_err(|_| anyhow!("the repository lock is poisoned"))?;
-            backup::backup_games(&mut storage, &games, &stage_root, &[], |backup| {
-                results
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(summarize(backup));
+        let (manifest, config, titles) = (manifest(state), config.clone(), self.selected.clone());
+        let (storage, stage_root, waker) = (
+            session.storage.clone(),
+            state.env.cache_dir.join("stage"),
+            ctx.clone(),
+        );
+        self.running = Some(Job::spawn(ctx, move || {
+            let report = scan::scan(&manifest, &config, &Environment::detect());
+            let games: Vec<GameScan> = report
+                .games
+                .iter()
+                .filter(|game| titles.contains(&game.title))
+                .cloned()
+                .collect();
+            lock(&progress).total = games.len();
+            let error = back_up(&storage, &games, &stage_root, |backup| {
+                lock(&progress).done.push(summarize(backup));
                 waker.request_repaint();
-            })?;
-            Ok(())
-        });
-        self.run = Some(Run { job, total });
+            })
+            .err()
+            .map(|err| format!("{err:#}"));
+            Ok(Backed { report, error })
+        }));
     }
 
     fn results_ui(&self, ui: &mut Ui) {
-        let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(run) = &self.run {
+        let progress = lock(&self.progress);
+        if self.running.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(format!("Backing up: {} of {}", results.len(), run.total));
+                ui.label(format!(
+                    "Backing up: {} of {}",
+                    progress.done.len(),
+                    progress.total
+                ));
             });
         }
         if let Some(error) = &self.run_error {
             ui.colored_label(Color32::LIGHT_RED, format!("The backup failed: {error}"));
         }
-        if results.is_empty() {
+        if progress.done.is_empty() {
             return;
         }
         ui.separator();
         ui.heading("Results");
-        for GameResult { title, outcome } in results.iter() {
+        for GameResult { title, outcome } in &progress.done {
             match outcome {
                 Outcome::Saved => ui.label(format!("{title}: new snapshot")),
                 Outcome::Unchanged => ui.label(format!("{title}: unchanged")),
@@ -301,6 +344,29 @@ impl BackupTab {
             };
         }
     }
+}
+
+/// The manifest to scan with: the loaded one, or an empty one so that custom games still scan.
+fn manifest(state: &State) -> Arc<Manifest> {
+    state.manifest.clone().unwrap_or_default()
+}
+
+fn lock(progress: &Mutex<Progress>) -> MutexGuard<'_, Progress> {
+    progress.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Backs up `games` into `storage`, calling `progress` as each game is done.
+fn back_up(
+    storage: &SharedStorage,
+    games: &[GameScan],
+    stage_root: &Path,
+    progress: impl FnMut(&GameBackup),
+) -> anyhow::Result<()> {
+    let mut storage = storage
+        .lock()
+        .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))?;
+    backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
+    Ok(())
 }
 
 /// What the scan found for one game, with the file list folded away.

@@ -64,7 +64,7 @@ pub struct State {
     /// The open repository, once startup got that far.
     pub session: Option<Session>,
     /// The loaded manifest.
-    pub manifest: Option<Manifest>,
+    pub manifest: Option<Arc<Manifest>>,
     /// Keyring entries of the previous repository, waiting for the user's decision.
     pub stale: Option<StaleCredentials>,
     /// Messages for the banner, until dismissed.

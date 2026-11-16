@@ -143,7 +143,7 @@ impl SettingsTab {
             self.compression_job = Some(Job::spawn(ui.ctx(), move || {
                 let mut storage = storage
                     .lock()
-                    .map_err(|_| anyhow!("the repository lock is poisoned"))?;
+                    .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))?;
                 storage.set_compression(new)?;
                 Ok(storage.compression())
             }));

@@ -3,6 +3,7 @@
 mod common;
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use common::{
@@ -11,8 +12,10 @@ use common::{
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use salvajocs_core::layout::{Root, RootKind};
+use salvajocs_core::layout::{Base, Root, RootKind};
+use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, parse_yaml};
+use salvajocs_core::slug::slug;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
 
@@ -52,17 +55,36 @@ fn write_save(prefix: &Path, name: &str, content: &str) {
     fs::write(dir.join("save.dat"), content).unwrap();
 }
 
+/// A manifest download that fails, as it does without a network.
+fn unreachable(_cache_dir: &Path) -> Result<Freshness, FetchError> {
+    Err(FetchError::Io(io::Error::other("offline")))
+}
+
 /// An app with the repository open and the Backup tab in front, over an empty manifest, with
 /// `roots` and `games` in the config.
 fn open_tab(roots: Vec<Root>, games: Vec<CustomGame>) -> (Harness<'static, App>, Env, TempDir) {
+    open_tab_with(roots, games, true)
+}
+
+/// Like [`open_tab`]; without `cached_manifest` there is no manifest cache and the download
+/// fails.
+fn open_tab_with(
+    roots: Vec<Root>,
+    games: Vec<CustomGame>,
+    cached_manifest: bool,
+) -> (Harness<'static, App>, Env, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let env = env(&tmp);
-    fs::create_dir_all(&env.cache_dir).unwrap();
-    fs::write(
-        env.cache_dir.join("manifest.json"),
-        manifest::to_json(&Manifest::default()).unwrap(),
-    )
-    .unwrap();
+    let mut env = env(&tmp);
+    if cached_manifest {
+        fs::create_dir_all(&env.cache_dir).unwrap();
+        fs::write(
+            env.cache_dir.join("manifest.json"),
+            manifest::to_json(&Manifest::default()).unwrap(),
+        )
+        .unwrap();
+    } else {
+        env.refresh_manifest = unreachable;
+    }
     let repository = repo_dir(&tmp);
     init_repo(&repository);
     let mut config = local_config(&repository);
@@ -161,11 +183,12 @@ fn backup_reports_new_then_unchanged_per_game() {
 #[test]
 fn backup_failing_game_does_not_stop_the_others() {
     let scratch = tempfile::tempdir().unwrap();
-    let (prefix, games) = alpha_beta(&scratch);
-    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
     scan(&mut harness, "2 games found");
-    // Alpha's registry export reads the prefix's `user.reg`, which is gone now.
-    fs::remove_file(prefix.join("user.reg")).unwrap();
+    // A file where Alpha's staging dir belongs makes staging it fail.
+    fs::create_dir_all(env.cache_dir.join("stage")).unwrap();
+    fs::write(env.cache_dir.join("stage").join(slug("Alpha")), "").unwrap();
 
     harness.get_by_label("Back up selected (2)").click();
     run_until(&mut harness, "the backup to finish", |h| {
@@ -173,4 +196,60 @@ fn backup_failing_game_does_not_stop_the_others() {
     });
 
     assert!(shows(&harness, "Alpha: failed:"));
+}
+
+#[test]
+fn backup_selection_survives_a_rescan() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    harness.get_by_label("Beta").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Back up selected (1)"));
+
+    harness.get_by_label("Scan for games").click();
+    harness.step();
+    run_until(&mut harness, "the rescan to finish", |h| {
+        !shows(h, "Scanning")
+    });
+
+    assert!(
+        shows(&harness, "Back up selected (1)"),
+        "Beta stays deselected"
+    );
+}
+
+#[test]
+fn backup_without_a_manifest_still_scans_custom_games() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), games, false);
+    assert!(shows(&harness, "only custom games are scanned"));
+
+    scan(&mut harness, "2 games found");
+}
+
+#[test]
+fn backup_includes_a_save_made_since_the_scan() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = alpha_beta(&scratch);
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    let saves = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
+    fs::write(saves.join("later.dat"), "xy").unwrap();
+
+    harness.get_by_label("Back up selected (2)").click();
+    run_until(&mut harness, "the list to follow the backup", |h| {
+        shows(h, "2 files, 5 B, registry: yes")
+    });
+
+    let staged = env
+        .cache_dir
+        .join("stage")
+        .join(slug("Alpha"))
+        .join("files")
+        .join(Base::WinAppData.dir_name())
+        .join("Alpha/later.dat");
+    assert!(staged.exists(), "{}", staged.display());
 }

@@ -1,6 +1,7 @@
 //! The window: startup stages, the tab strip and the dialogs in front of the tabs.
 
 use std::mem;
+use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
@@ -124,7 +125,7 @@ impl App {
         self.manifest = None;
         match result {
             Ok(load) => {
-                self.state.manifest = load.manifest;
+                self.state.manifest = load.manifest.map(Arc::new);
                 self.manifest_error = load.error;
             }
             Err(err) => self.manifest_error = Some(format!("{err:#}")),
@@ -200,7 +201,7 @@ impl App {
                     }
                     self.state.session = Some(Session {
                         compression: storage.compression(),
-                        storage: std::sync::Arc::new(std::sync::Mutex::new(*storage)),
+                        storage: Arc::new(std::sync::Mutex::new(*storage)),
                     });
                     self.settings.reset();
                     Stage::Ready
@@ -306,7 +307,7 @@ impl eframe::App for App {
             .show(ui, |ui| match (&self.stage, self.tab) {
                 (Stage::ConfigUnreadable(_), _) => false,
                 (_, Tab::Backup) => {
-                    self.backup.ui(ui, &self.state);
+                    self.backup.ui(ui, &self.state, self.manifest.is_some());
                     false
                 }
                 // Placeholder until step 18.
