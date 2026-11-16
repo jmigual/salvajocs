@@ -246,12 +246,22 @@ impl RestoreTab {
     /// Draws the tab. Listing, fetching, planning and restoring run in jobs; the mapping dialog's
     /// choices are saved to the config. `manifest_loading` is whether the manifest job runs.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
-        // The list and plan of a repository Settings replaced are dropped, jobs included.
+        // The list, plan and dialog of a repository Settings replaced are dropped. A running
+        // preview or restore is kept, so its report still shows and no new fetch reuses its work
+        // dir while it runs; the generation bump drops the preview's result.
         let current = state.session.as_ref().map(|session| &session.storage);
         if (self.repository.as_ref())
             .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
         {
-            *self = Self::default();
+            self.forget_plan();
+            self.repository = None;
+            self.listing = None;
+            self.games.clear();
+            self.selected = None;
+            self.snapshot = None;
+            self.detecting = None;
+            self.pick = None;
+            self.error = None;
         }
         self.poll(ui.ctx(), state);
         egui::ScrollArea::vertical().show(ui, |ui| {

@@ -269,6 +269,55 @@ fn a_new_repository_clears_the_list_and_the_plan() {
     assert!(tab.mapping.is_none());
 }
 
+#[test]
+fn a_repository_switch_keeps_a_running_restore_and_drops_a_running_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        repository: Some(storage.clone()),
+        ..RestoreTab::default()
+    });
+    let ctx = harness.ctx.clone();
+    let (release_preview, hold) = mpsc::channel();
+    let preview = confirm_job(&ctx, hold, &storage(&harness));
+    let (release_restore, hold) = mpsc::channel::<()>();
+    let restore = Job::spawn(&ctx, move || {
+        let _ = hold.recv();
+        Ok(Restored {
+            title: "Mix".into(),
+            safety_backup: "Safety backup: snapshot 12345678 created".into(),
+            lines: vec![("/target: failed: disk full".into(), true)],
+        })
+    });
+    let tab = &mut harness.state_mut().0;
+    tab.preparing = Some((tab.generation, preview));
+    tab.restoring = Some(restore);
+    harness.step();
+
+    let other = tempfile::tempdir().unwrap();
+    harness.state_mut().1.session = state(other.path()).session;
+    harness.step();
+    assert!(is_disabled(&harness, "Load backups"), "the jobs still run");
+    drop((release_preview, release_restore));
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.busy() {
+        assert!(std::time::Instant::now() < deadline, "the jobs never ended");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.step();
+
+    assert!(
+        harness.state().0.preview.is_none(),
+        "the old preview is dropped"
+    );
+    assert!(harness.query_by_label("Restored Mix").is_some());
+    assert!(
+        harness
+            .query_by_label("/target: failed: disk full")
+            .is_some()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
