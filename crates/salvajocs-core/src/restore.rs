@@ -305,57 +305,112 @@ fn resolve_path(
     layout::target_path(&dir, tail, case_insensitive).ok_or(SkipReason::UnsafePath)
 }
 
+/// A root prefix the game declares.
+struct Declared {
+    prefix: SnapshotRoot,
+    /// For an empty-rest prefix from a globbed template (`<base>/*.sav`): the template's rest,
+    /// which a file's tail must match, since the prefix alone would trust the whole base.
+    glob: Option<String>,
+}
+
 /// The roots a snapshot of this game may hold (ADR-0005): the classified glob-free prefix of each
 /// file template of `entry` (in either family), each side of `pairs`, and the engine-rule
 /// targets of those.
-fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<SnapshotRoot> {
-    let mut roots = Vec::new();
+fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
+    let mut declared = Vec::new();
     for family in [Family::Linux, Family::Windows] {
-        let templates = (entry.into_iter())
-            .flat_map(|entry| entry.files.keys().map(String::as_str))
-            .map(layout::glob_free_prefix)
-            .chain(pairs.iter().map(|pair| match family {
-                Family::Linux => pair.linux.as_str(),
-                Family::Windows => pair.windows.as_str(),
-            }));
-        roots.extend(templates.filter_map(|template| crossbuild::classify(template, family)));
+        let templates = entry.into_iter().flat_map(|entry| entry.files.keys());
+        for template in templates {
+            let Some(prefix) = crossbuild::classify(layout::glob_free_prefix(template), family)
+            else {
+                continue;
+            };
+            let glob = if prefix.1.is_empty() {
+                // A template that does not classify whole declares nothing.
+                let Some((_, rest)) = crossbuild::classify(template, family) else {
+                    continue;
+                };
+                Some(rest).filter(|rest| !rest.is_empty())
+            } else {
+                None
+            };
+            declared.push(Declared { prefix, glob });
+        }
+        let sides = pairs.iter().map(|pair| match family {
+            Family::Linux => pair.linux.as_str(),
+            Family::Windows => pair.windows.as_str(),
+        });
+        declared.extend(
+            sides
+                .filter_map(|side| crossbuild::classify(side, family))
+                .map(|prefix| Declared { prefix, glob: None }),
+        );
     }
     let meta = SnapshotMeta {
         format: layout::SNAPSHOT_FORMAT,
         title: String::new(),
-        roots: roots.clone(),
+        roots: declared.iter().map(|d| d.prefix.clone()).collect(),
     };
     for family in [Family::Linux, Family::Windows] {
         let engine = crossbuild::propose(&meta, None, &[], family)
             .into_iter()
             .filter(|mapping| mapping.confidence == Confidence::EngineRule)
-            .filter_map(|mapping| crossbuild::classify(&mapping.proposed?, family));
-        roots.extend(engine);
+            .filter_map(|mapping| crossbuild::classify(&mapping.proposed?, family))
+            .map(|prefix| Declared { prefix, glob: None });
+        declared.extend(engine);
     }
-    roots
+    declared
 }
 
-/// Whether `root` equals or lies below one of `declared` (ASCII case ignored for Windows bases),
-/// so a pre-restore snapshot of a mapped root deeper than its pair side stays restorable; a root
-/// with a component that is not plain (`..`) never is.
-fn is_declared(root: &SnapshotRoot, declared: &[SnapshotRoot]) -> bool {
+/// The entries of `declared` that `root` equals or lies below (ASCII case ignored for Windows
+/// bases), so a pre-restore snapshot of a mapped root deeper than its pair side stays
+/// restorable; none for a root with a component that is not plain (`..`).
+fn declaring<'a>(
+    root: &'a SnapshotRoot,
+    declared: &'a [Declared],
+) -> impl Iterator<Item = &'a Declared> {
     let windows = crossbuild::base_family(root.0) == Some(Family::Windows);
-    components(&root.1).all(layout::is_plain_component)
-        && declared
-            .iter()
-            .filter(|prefix| prefix.0 == root.0)
-            .any(|prefix| {
-                let mut parts = components(&root.1);
-                components(&prefix.1).all(|want| {
-                    parts.next().is_some_and(|got| {
-                        if windows {
-                            got.eq_ignore_ascii_case(want)
-                        } else {
-                            got == want
-                        }
-                    })
+    let plain = components(&root.1).all(layout::is_plain_component);
+    declared
+        .iter()
+        .filter(move |d| plain && d.prefix.0 == root.0)
+        .filter(move |d| {
+            let mut parts = components(&root.1);
+            components(&d.prefix.1).all(|want| {
+                parts.next().is_some_and(|got| {
+                    if windows {
+                        got.eq_ignore_ascii_case(want)
+                    } else {
+                        got == want
+                    }
                 })
             })
+        })
+}
+
+/// Whether the file `tail` under `root` is declared: `root` lies at or below a declared prefix
+/// and, for an empty-rest prefix from a globbed template, the tail or one of its parent dirs
+/// (a matched dir's files are saved too) matches that template.
+fn file_declared(root: &SnapshotRoot, tail: &str, declared: &[Declared], vars: &GameVars) -> bool {
+    let parts: Vec<&str> = components(tail).collect();
+    // Prefix scans and native Windows ignore case; only native Linux bases keep it.
+    let options = glob::MatchOptions {
+        case_sensitive: crossbuild::base_family(root.0) == Some(Family::Linux),
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    declaring(root, declared).any(|d| {
+        let Some(glob) = &d.glob else {
+            return true;
+        };
+        // The source machine's user is unknown here, so `<osUserName>` matches any component.
+        layout::substitute(&glob.replace("<osUserName>", "*"), vars, "")
+            .iter()
+            .filter_map(|pattern| glob::Pattern::new(pattern).ok())
+            .any(|pattern| {
+                (1..=parts.len()).any(|n| pattern.matches_with(&parts[..n].join("/"), options))
+            })
+    })
 }
 
 /// Whether the registry `key` lies at or below a key `entry` declares, ignoring ASCII case, with
@@ -416,7 +471,7 @@ pub fn plan(
         let mapped = family.is_some() && target(family).is_none();
         let placed = match covering {
             None => Err(SkipReason::OutsideRoots),
-            Some(covering) if !is_declared(covering.root, &declared_roots) => {
+            Some(covering) if !file_declared(covering.root, tail, &declared_roots, vars) => {
                 Err(SkipReason::UndeclaredRoot)
             }
             Some(covering) if !mapped => Ok((covering.root, covering)),
@@ -540,7 +595,7 @@ pub fn prepare(
         let declared = declared_roots(entry, pairs);
         let meta = SnapshotMeta {
             roots: (staged.meta.roots.iter())
-                .filter(|root| is_declared(root, &declared))
+                .filter(|root| declaring(root, &declared).next().is_some())
                 .cloned()
                 .collect(),
             ..staged.meta.clone()

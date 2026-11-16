@@ -484,7 +484,7 @@ pub fn glob_pattern(base_dir: &Path, rest: &str, case_insensitive: bool) -> Stri
 
 /// Replaces the value placeholders in `rest`, one result per `<game>` candidate, with `user`
 /// for `<osUserName>`. Substituted values are glob-escaped; `<storeUserId>` becomes `*`.
-fn substitute(rest: &str, vars: &GameVars, user: &str) -> Vec<String> {
+pub(crate) fn substitute(rest: &str, vars: &GameVars, user: &str) -> Vec<String> {
     let escape = |value: &str| glob::Pattern::escape(value);
     let rest = rest
         .replace("<storeUserId>", "*")

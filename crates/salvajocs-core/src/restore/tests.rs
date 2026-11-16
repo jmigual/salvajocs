@@ -1241,3 +1241,80 @@ fn root_below_a_pair_side_is_trusted() {
         SkipReason::UndeclaredRoot
     );
 }
+
+#[test]
+fn empty_rest_prefix_only_trusts_files_matching_the_template() {
+    let install = tempfile::tempdir().unwrap();
+    fs::create_dir(install.path().join("Game")).unwrap();
+    let roots = other_root(install.path());
+    let vars = GameVars::new("Game", vec![], &roots, None);
+    let game = staged(
+        &[(Base::GameDir, "")],
+        &[
+            (Base::GameDir, "a.sav"),
+            (Base::GameDir, "game.exe"),
+            (Base::GameDir, "bin/steam_api64.dll"),
+        ],
+    );
+    let entry = templates(&["<base>/*.sav"]);
+    let plan = plan(&game, &linux_only(), &vars, Some(&entry), &[], &[]).unwrap();
+    assert_eq!(targets_of(&plan), [install.path().join("Game/a.sav")]);
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UndeclaredRoot; 2]
+    );
+}
+
+#[test]
+fn empty_rest_user_folder_prefix_only_trusts_matching_files() {
+    let home = staged(
+        &[(Base::Home, "")],
+        &[
+            (Base::Home, "ACH_1.DAT"),
+            (Base::Home, ".ssh/authorized_keys"),
+        ],
+    );
+    let plan_home = plan_of(&home, Some(&templates(&["<home>/ACH_*.DAT"])), &[]);
+    assert_eq!(targets_of(&plan_home), [Path::new("/home/me/ACH_1.DAT")]);
+    assert_eq!(
+        plan_home
+            .skipped
+            .iter()
+            .map(|s| s.reason)
+            .collect::<Vec<_>>(),
+        [SkipReason::UndeclaredRoot]
+    );
+
+    // A matched directory's files are saved too; Windows bases ignore case.
+    let app_data = staged(
+        &[(Base::WinAppData, "")],
+        &[
+            (Base::WinAppData, "COM.X.game/save.dat"),
+            (Base::WinAppData, "Microsoft/Windows/Start Menu/x.lnk"),
+        ],
+    );
+    let entry = templates(&["<winAppData>/com.x.*"]);
+    let plan_win = plan(
+        &app_data,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan_win),
+        [Path::new(
+            "/win/drive_c/users/Alice/AppData/Roaming/COM.X.game/save.dat"
+        )]
+    );
+    assert_eq!(
+        plan_win
+            .skipped
+            .iter()
+            .map(|s| s.reason)
+            .collect::<Vec<_>>(),
+        [SkipReason::UndeclaredRoot]
+    );
+}
