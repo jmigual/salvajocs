@@ -5,6 +5,7 @@ pub mod first_run;
 pub mod job;
 pub mod prompt;
 pub mod startup;
+pub mod state;
 pub mod widgets;
 
 /// Opens the main window and blocks until it is closed.

@@ -1,0 +1,146 @@
+//! What every screen shares: the config, the open repository and the notices to show.
+
+use std::sync::{Arc, Mutex};
+
+use eframe::egui;
+use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::manifest::Manifest;
+use salvajocs_core::secret::SecretKey;
+use salvajocs_core::storage::{Compression, Storage};
+
+use crate::env::Env;
+use crate::first_run::Connected;
+use crate::job::Job;
+use crate::startup::Credentials;
+
+/// The open repository, shared with the jobs that work on it.
+pub type SharedStorage = Arc<Mutex<Storage>>;
+
+/// An open repository and what the screens show about it without locking it.
+pub struct Session {
+    /// The repository itself.
+    pub storage: SharedStorage,
+    /// Its compression as last read.
+    pub compression: Compression,
+}
+
+/// Keyring entries of a repository location the app no longer uses (ADR-0009).
+#[derive(Debug, PartialEq, Eq)]
+pub struct StaleCredentials {
+    /// The scope of the old location (`AppConfig::secret_scope`).
+    pub scope: String,
+    /// The secrets that may be stored under it.
+    pub keys: Vec<SecretKey>,
+}
+
+/// The keyring entries `old` may have left behind when the config becomes `new`; `None` when the
+/// location is unchanged or nothing could have been stored.
+pub fn stale_credentials(old: &AppConfig, new: &AppConfig) -> Option<StaleCredentials> {
+    let scope = old.secret_scope();
+    if scope == new.secret_scope() {
+        return None;
+    }
+    let keys: Vec<_> = (old.password == PasswordMode::Keyring)
+        .then_some(SecretKey::Password)
+        .into_iter()
+        .chain(
+            old.repository_options
+                .iter()
+                .filter(|option| option.secret)
+                .map(|option| SecretKey::Option(option.key.clone())),
+        )
+        .collect();
+    (!keys.is_empty()).then_some(StaleCredentials { scope, keys })
+}
+
+/// The data the tabs read and change.
+pub struct State {
+    /// Where the app finds its directories, keyring and manifest.
+    pub env: Env,
+    /// The saved config; `None` until the first run completed.
+    pub config: Option<AppConfig>,
+    /// The secrets of the open repository.
+    pub credentials: Credentials,
+    /// The open repository, once startup got that far.
+    pub session: Option<Session>,
+    /// The loaded manifest.
+    pub manifest: Option<Manifest>,
+    /// Keyring entries of the previous repository, waiting for the user's decision.
+    pub stale: Option<StaleCredentials>,
+    /// Messages for the banner, until dismissed.
+    pub notices: Vec<String>,
+    saving: Option<Job<()>>,
+    save_again: bool,
+}
+
+impl State {
+    /// State with nothing loaded yet.
+    pub fn new(env: Env) -> Self {
+        Self {
+            env,
+            config: None,
+            credentials: Credentials::default(),
+            session: None,
+            manifest: None,
+            stale: None,
+            notices: Vec::new(),
+            saving: None,
+            save_again: false,
+        }
+    }
+
+    /// Makes a repository the user just connected the current one.
+    pub fn adopt(&mut self, connected: Connected) {
+        let Connected {
+            config,
+            credentials,
+            storage,
+            warnings,
+        } = connected;
+        if let Some(old) = &self.config {
+            self.stale = stale_credentials(old, &config).or(self.stale.take());
+        }
+        self.session = Some(Session {
+            compression: storage.compression(),
+            storage: Arc::new(Mutex::new(*storage)),
+        });
+        self.config = Some(config);
+        self.credentials = credentials;
+        self.notices.extend(warnings);
+    }
+
+    /// Writes the config in the background. A save already running is followed by another, so
+    /// the file ends up with the latest config.
+    pub fn save_config(&mut self, ctx: &egui::Context) {
+        if self.saving.is_some() {
+            self.save_again = true;
+            return;
+        }
+        let Some(config) = self.config.clone() else {
+            return;
+        };
+        let dir = self.env.config_dir.clone();
+        self.saving = Some(Job::spawn(ctx, move || Ok(config.save(&dir)?)));
+    }
+
+    /// Collects a finished save, reporting its failure.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.saving else {
+            return;
+        };
+        let Some(result) = job.take_result() else {
+            return;
+        };
+        self.saving = None;
+        if let Err(err) = result {
+            self.notices
+                .push(format!("Could not save the config: {err:#}"));
+        }
+        if std::mem::take(&mut self.save_again) {
+            self.save_config(ctx);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
