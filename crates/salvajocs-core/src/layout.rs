@@ -2,7 +2,7 @@
 //! snapshot format (ADR-0004, ADR-0005, ADR-0008).
 
 use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use serde::{Deserialize, Serialize};
 
@@ -44,8 +44,11 @@ pub enum Base {
     GameDir,
     /// A games root (for example the Steam root); the tail is relative to it.
     StoreRoot,
-    /// A custom absolute path; the tail is the full path. Restores to the same OS only.
+    /// A custom Unix absolute path; the tail is the path without its leading `/`. Unix only.
     Absolute,
+    /// A custom Windows drive-letter path; the first tail component is the drive letter without
+    /// the colon (`C/Games/Foo`), since `C:` is not a valid directory name. Native Windows only.
+    WinAbsolute,
 }
 
 impl Base {
@@ -66,6 +69,7 @@ impl Base {
             Base::GameDir => "GameDir",
             Base::StoreRoot => "StoreRoot",
             Base::Absolute => "Absolute",
+            Base::WinAbsolute => "WinAbsolute",
         }
     }
 }
@@ -281,8 +285,9 @@ fn base_dirs(base: Base, ctx: &Context, vars: &GameVars) -> Vec<PathBuf> {
         Base::XdgConfig => fixed(ctx.linux().map(|l| &l.xdg_config)),
         Base::GameDir => vars.base.clone(),
         Base::StoreRoot => vars.root.clone(),
-        // Drive-letter paths are not rooted anywhere we can resolve on Windows.
         Base::Absolute => cfg!(unix).then(|| PathBuf::from("/")).into_iter().collect(),
+        // The drive comes from the tail, see `win_absolute_target`.
+        Base::WinAbsolute => Vec::new(),
     }
 }
 
@@ -322,6 +327,41 @@ const LINUX_HOME_SUBDIRS: [(&str, Base); 2] = [
     (".local/share", Base::XdgData),
 ];
 
+/// The `WinAbsolute` tail of a Windows drive-letter template (`C:\Games\Foo` -> `C/Games/Foo`).
+/// `None` for anything else, including UNC paths and drive-relative `C:foo`.
+fn drive_absolute_tail(template: &str) -> Option<String> {
+    let mut chars = template.chars();
+    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
+    if chars.next() != Some(':') || !matches!(chars.next(), Some('/' | '\\')) {
+        return None;
+    }
+    let below = template[3..].replace('\\', "/");
+    Some(format!("{drive}/{below}").trim_end_matches('/').to_owned())
+}
+
+/// Splits a `WinAbsolute` tail into its drive root (`C:\`) and the rest. `None` unless the
+/// first component is exactly one ASCII letter.
+fn split_drive(tail: &str) -> Option<(PathBuf, &str)> {
+    let (drive, rest) = tail.split_once('/').unwrap_or((tail, ""));
+    let mut chars = drive.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) if letter.is_ascii_alphabetic() => {
+            Some((PathBuf::from(format!("{letter}:\\")), rest))
+        }
+        _ => None,
+    }
+}
+
+/// The path a `WinAbsolute` tail restores to. Only a native Windows context has drives, so any
+/// other context, or a tail without a drive letter, gives `None`.
+pub fn win_absolute_target(tail: &str, ctx: &Context) -> Option<PathBuf> {
+    if !matches!(ctx, Context::WindowsNative(_)) {
+        return None;
+    }
+    let (root, rest) = split_drive(tail)?;
+    target_path(&root, rest, false)
+}
+
 /// What follows `dir` in `path`, when `dir` ends on a component boundary; `dir` may be empty.
 fn below<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
     let after = path.strip_prefix(dir)?;
@@ -348,9 +388,13 @@ pub fn classify(template: &str, ctx: &Context) -> Option<(Base, String)> {
             below(template.strip_prefix(placeholder)?, "").map(|rest| (base, rest))
         });
     let Some((base, rest)) = found else {
-        return Path::new(template)
-            .is_absolute()
-            .then(|| (Base::Absolute, template.trim_start_matches('/').to_owned()));
+        return if cfg!(windows) {
+            drive_absolute_tail(template).map(|tail| (Base::WinAbsolute, tail))
+        } else if template.starts_with('/') {
+            Some((Base::Absolute, template.trim_start_matches('/').to_owned()))
+        } else {
+            None
+        };
     };
     if matches!(base, Base::WinHome | Base::Home)
         && let Some((base, rest)) = home_subdirs
@@ -449,6 +493,23 @@ pub fn expand(template: &str, ctx: &Context, vars: &GameVars) -> Vec<(PathBuf, S
     // Absolute holds a host path, which stays case-sensitive (ADR-0008).
     let case_insensitive = ctx.case_insensitive() && base != Base::Absolute;
     let rests = substitute(&rest, vars);
+    if base == Base::WinAbsolute {
+        if !matches!(ctx, Context::WindowsNative(_)) {
+            return Vec::new();
+        }
+        // The empty base dir makes `tail_of` keep the drive letter as the first component.
+        return rests
+            .iter()
+            .filter_map(|rest| split_drive(rest))
+            .map(|(root, below)| {
+                let root = root.to_string_lossy();
+                (
+                    PathBuf::new(),
+                    format!("{}/{below}", root.trim_end_matches('\\')),
+                )
+            })
+            .collect();
+    }
     base_dirs(base, ctx, vars)
         .into_iter()
         .flat_map(|dir| {
@@ -461,14 +522,20 @@ pub fn expand(template: &str, ctx: &Context, vars: &GameVars) -> Vec<(PathBuf, S
 }
 
 /// The path of `real_path` below `base_dir`, with `/` separators. `None` if it is not below it
-/// or contains anything but plain components (such as `..`).
+/// or contains anything but plain components (such as `..`). With an empty `base_dir` a drive
+/// path keeps its drive letter as the first component (the `WinAbsolute` tail).
 pub fn tail_of(real_path: &Path, base_dir: &Path) -> Option<String> {
     let parts: Option<Vec<_>> = real_path
         .strip_prefix(base_dir)
         .ok()?
         .components()
+        .filter(|c| !matches!(c, Component::RootDir))
         .map(|c| match c {
-            Component::Normal(name) => Some(name.to_string_lossy()),
+            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(letter) => Some(char::from(letter).to_string()),
+                _ => None,
+            },
             _ => None,
         })
         .collect();

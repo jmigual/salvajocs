@@ -108,11 +108,14 @@ fn leading_placeholders_pick_their_base() {
 
 #[cfg(unix)]
 #[test]
-fn absolute_template_is_classified_absolute() {
+fn classify_unix_absolute_template() {
     assert_eq!(
-        classified("/opt/saves/a", &linux_ctx()),
-        (Base::Absolute, "opt/saves/a".into())
+        classified("/opt/game/save.dat", &linux_ctx()),
+        (Base::Absolute, "opt/game/save.dat".into())
     );
+    // A Windows path is not absolute on a Unix host.
+    assert_eq!(classify("C:\\Games\\Foo", &linux_ctx()), None);
+    assert_eq!(classify("C:/Games/Foo", &prefix_ctx()), None);
 }
 
 #[test]
@@ -508,4 +511,112 @@ fn native_win_folders_exist() {
         assert!(dir.is_dir(), "{}", dir.display());
     }
     assert_eq!(f.local_app_data_low, f.home.join("AppData/LocalLow"));
+}
+
+#[test]
+fn win_absolute_tail_parsing() {
+    assert_eq!(split_drive("C/x"), Some((PathBuf::from("C:\\"), "x")));
+    assert_eq!(
+        split_drive("d/Games/Foo"),
+        Some((PathBuf::from("d:\\"), "Games/Foo"))
+    );
+    assert_eq!(split_drive("C"), Some((PathBuf::from("C:\\"), "")));
+    for tail in ["CD/x", "1/x", ""] {
+        assert_eq!(split_drive(tail), None, "{tail:?}");
+    }
+}
+
+#[test]
+fn drive_template_becomes_drive_letter_tail() {
+    let tail = drive_absolute_tail;
+    assert_eq!(
+        tail("C:\\Games\\Foo\\save.dat").as_deref(),
+        Some("C/Games/Foo/save.dat")
+    );
+    assert_eq!(tail("C:/Games/*.sav").as_deref(), Some("C/Games/*.sav"));
+    assert_eq!(tail("C:\\").as_deref(), Some("C"));
+    for template in [
+        "C:",
+        "C:Games",
+        "\\\\server\\share\\x",
+        "//server/share/x",
+        "/opt/x",
+        "1:/x",
+    ] {
+        assert_eq!(tail(template), None, "{template}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn win_absolute_has_no_target_on_unix() {
+    let vars = no_roots_vars();
+    for ctx in [linux_ctx(), prefix_ctx(), native_win_ctx()] {
+        assert_eq!(base_dir(Base::WinAbsolute, &ctx, &vars), None);
+        assert!(expand("C:/Games/*.sav", &ctx, &vars).is_empty());
+    }
+    for ctx in [linux_ctx(), prefix_ctx()] {
+        assert_eq!(win_absolute_target("C/Games/x", &ctx), None);
+    }
+}
+
+#[cfg(windows)]
+mod windows_absolute {
+    use super::*;
+
+    fn native() -> Context {
+        Context::WindowsNative(WinFolders::native().unwrap())
+    }
+
+    #[test]
+    fn classify_windows_absolute_template_uses_drive_letter_component() {
+        assert_eq!(
+            classified("C:\\Games\\Foo\\save.dat", &native()),
+            (Base::WinAbsolute, "C/Games/Foo/save.dat".into())
+        );
+        assert_eq!(
+            classified("C:/Games/Foo", &native()),
+            (Base::WinAbsolute, "C/Games/Foo".into())
+        );
+    }
+
+    #[test]
+    fn unc_path_is_not_classified() {
+        assert_eq!(classify("\\\\server\\share\\x", &native()), None);
+        assert_eq!(classify("//server/share/x", &native()), None);
+        assert_eq!(classify("/opt/x", &native()), None);
+    }
+
+    #[test]
+    fn tail_of_windows_absolute_path() {
+        assert_eq!(
+            tail_of(Path::new("C:\\Games\\Foo\\save.dat"), Path::new("")),
+            Some("C/Games/Foo/save.dat".into())
+        );
+        assert_eq!(
+            tail_of(Path::new("\\\\server\\share\\x"), Path::new("")),
+            None
+        );
+    }
+
+    #[test]
+    fn win_absolute_target_rebuilds_drive() {
+        assert_eq!(
+            win_absolute_target("C/Games/Foo/save.dat", &native()),
+            Some(PathBuf::from("C:\\Games\\Foo\\save.dat"))
+        );
+        assert_eq!(win_absolute_target("CD/x", &native()), None);
+        assert_eq!(win_absolute_target("C/../x", &native()), None);
+    }
+
+    #[test]
+    fn expand_win_absolute_keeps_drive_in_tail() {
+        let expanded = expand("C:\\Games\\*.sav", &native(), &no_roots_vars());
+        assert_eq!(expanded, [(PathBuf::new(), "C:/Games/*.sav".to_owned())]);
+    }
+
+    #[test]
+    fn absolute_has_no_target_on_windows() {
+        assert_eq!(base_dir(Base::Absolute, &native(), &no_roots_vars()), None);
+    }
 }
