@@ -6,5 +6,6 @@ pub mod layout;
 pub mod manifest;
 pub mod prefix;
 pub mod registry;
+pub mod scan;
 pub mod secret;
 pub mod storage;
