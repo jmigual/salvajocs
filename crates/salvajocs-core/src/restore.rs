@@ -268,8 +268,14 @@ fn covering_root<'a>(
             let below = parts.collect::<Vec<_>>().join("/");
             Some((depth, Covering { root, game, below }))
         })
-        // `min_by_key` keeps the first of equals, so the first `<game>` candidate wins a tie.
-        .min_by_key(|(depth, _)| std::cmp::Reverse(*depth))
+        // On equal depth a literal component beats `<osUserName>`; `min_by_key` then keeps the
+        // first of equals, so the first `<game>` candidate wins a tie.
+        .min_by_key(|(depth, covering)| {
+            let users = components(&covering.root.1)
+                .filter(|part| part.contains("<osUserName>"))
+                .count();
+            (std::cmp::Reverse(*depth), users)
+        })
         .map(|(_, covering)| covering)
 }
 

@@ -1179,3 +1179,29 @@ fn pair_side_root_is_trusted() {
         [Path::new("/home/me/.local/share/Foo/x.sav")]
     );
 }
+
+#[test]
+fn os_user_name_root_loses_a_tie_to_a_literal_root() {
+    let staged = staged(
+        &[
+            (Base::WinDocuments, "Game/<osUserName>"),
+            (Base::WinDocuments, "Game/Shared"),
+        ],
+        &[(Base::WinDocuments, "Game/Shared/x.sav")],
+    );
+    let plan = plan(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/users/Alice/Documents/Game/Shared/x.sav"
+        )]
+    );
+}
