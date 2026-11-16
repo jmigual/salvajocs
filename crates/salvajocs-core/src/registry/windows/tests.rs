@@ -141,7 +141,7 @@ fn export_of_a_subkey_excludes_its_siblings() {
 }
 
 #[test]
-fn keys_are_matched_case_insensitively() {
+fn keys_are_matched_case_insensitively_and_spelled_as_stored() {
     let key = TestKey::new();
     replace_subtrees(&export_of(vec![(
         key.path("Mixed"),
@@ -151,34 +151,79 @@ fn keys_are_matched_case_insensitively() {
 
     let found = export(&[key.path("mixed").to_uppercase()]).unwrap();
 
-    assert_eq!(found.keys.len(), 1);
+    assert_eq!(found.keys.keys().collect::<Vec<_>>(), [&key.path("Mixed")]);
 }
 
 #[test]
-fn non_canonical_strings_are_kept_as_other() {
+fn replace_leaves_siblings_and_prefix_sharing_keys_alone() {
+    let key = TestKey::new();
+    let sibling = |name: &str| (key.path(name), vec![value(name, RegData::Dword(9))]);
+    replace_subtrees(&export_of(vec![
+        sibling("A"),
+        sibling("B"),
+        sibling("AB"),
+        (key.path("A\\Child"), vec![]),
+    ]))
+    .unwrap();
+
+    let new_a = export_of(vec![(key.path("A"), vec![value("new", RegData::Dword(1))])]);
+    replace_subtrees(&new_a).unwrap();
+
+    let all = key.export();
+    assert_eq!(all.keys[&key.path("A")], new_a.keys[&key.path("A")]);
+    assert!(!all.keys.contains_key(&key.path("A\\Child")));
+    assert_eq!(all.keys[&key.path("B")], sibling("B").1);
+    assert_eq!(all.keys[&key.path("AB")], sibling("AB").1);
+}
+
+#[test]
+fn values_written_by_the_library_export_typed() {
     let key = TestKey::new();
     let target = CURRENT_USER.create(&key.relative).unwrap();
-    // No terminating NUL, an interior NUL, odd length, and multi-string data after its end.
-    let cases: [(&str, Type, &[u8]); 4] = [
-        ("unterminated", Type::String, &[b'a', 0]),
-        (
-            "interior",
-            Type::ExpandString,
-            &[b'a', 0, 0, 0, b'b', 0, 0, 0],
-        ),
-        ("odd", Type::String, &[b'a', 0, 0, 0, 7]),
-        (
-            "trailing",
-            Type::MultiString,
-            &[b'a', 0, 0, 0, b'b', 0, 0, 0, 0, 0],
-        ),
+    target.set_u32("dword", 7).unwrap();
+    target.set_u64("qword", 1 << 40).unwrap();
+    target.set_string("sz", "caf\u{e9}").unwrap();
+    target.set_expand_string("expand", "%TEMP%").unwrap();
+    target.set_multi_string("multi", &["a", "b"]).unwrap();
+    target.set_multi_string("empty multi", &[]).unwrap();
+
+    let values = key.export().keys.remove(&key.path("")).unwrap();
+
+    assert_eq!(
+        values,
+        [
+            value("dword", RegData::Dword(7)),
+            value("empty multi", RegData::MultiSz(vec![])),
+            value("expand", RegData::ExpandSz("%TEMP%".into())),
+            value("multi", RegData::MultiSz(vec!["a".into(), "b".into()])),
+            value("qword", RegData::Qword(1 << 40)),
+            value("sz", RegData::Sz("caf\u{e9}".into())),
+        ]
+    );
+}
+
+#[test]
+fn non_canonical_values_are_kept_as_other() {
+    let key = TestKey::new();
+    let target = CURRENT_USER.create(&key.relative).unwrap();
+    // Type code and bytes. The string types have no terminating NUL, an interior NUL, an odd
+    // length, no data at all, or multi-string data after its end; the last is a code above 11.
+    let cases: [(&str, u32, &[u8]); 7] = [
+        ("unterminated", 1, &[b'a', 0]),
+        ("interior", 2, &[b'a', 0, 0, 0, b'b', 0, 0, 0]),
+        ("odd", 1, &[b'a', 0, 0, 0, 7]),
+        ("empty", 1, &[]),
+        ("one byte", 2, &[0]),
+        ("trailing", 7, &[b'a', 0, 0, 0, b'b', 0, 0, 0, 0, 0]),
+        ("high type", 100, &[1, 2, 3]),
     ];
-    for (name, ty, bytes) in cases {
-        target.set_bytes(name, ty, bytes).unwrap();
+    for (name, code, bytes) in cases {
+        // `Type::Other` bypasses the crate's debug assertion on terminated string data.
+        target.set_bytes(name, Type::Other(code), bytes).unwrap();
     }
 
     let exported = key.export();
-    for (name, ty, bytes) in cases {
+    for (name, code, bytes) in cases {
         let data = &exported.keys[&key.path("")]
             .iter()
             .find(|v| v.name == name)
@@ -187,7 +232,7 @@ fn non_canonical_strings_are_kept_as_other() {
         assert_eq!(
             data,
             &RegData::Other {
-                code: ty.into(),
+                code,
                 bytes: bytes.to_vec()
             }
         );
@@ -195,11 +240,7 @@ fn non_canonical_strings_are_kept_as_other() {
 
     // Writing the export back leaves the bytes unchanged.
     replace_subtrees(&exported).unwrap();
-    let rewritten = CURRENT_USER.open(&key.relative).unwrap();
-    for (name, ty, bytes) in cases {
-        let value = rewritten.get_value(name).unwrap();
-        assert_eq!((value.ty(), &*value), (ty, bytes));
-    }
+    assert_eq!(key.export(), exported);
 }
 
 #[test]

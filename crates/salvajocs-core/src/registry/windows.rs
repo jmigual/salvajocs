@@ -32,14 +32,13 @@ pub enum WindowsRegistryError {
 
 /// Collects each of `keys` (`HKEY_CURRENT_USER\...`) and everything below it.
 ///
-/// Absent keys add nothing. The root of each key keeps the spelling given; keys below it use the
-/// registry's. The HKCU root itself and paths with empty elements are refused.
+/// Absent keys add nothing. Every key is spelled as the registry stores it. The HKCU root itself
+/// and paths with empty elements are refused.
 pub fn export<S: AsRef<str>>(keys: &[S]) -> Result<RegistryExport, WindowsRegistryError> {
     let mut export = RegistryExport::default();
     for key in keys {
         let relative = hkcu_relative(key.as_ref())?;
-        let path = format!("{HKCU}\\{relative}");
-        if let Some(root) = found(&path, CURRENT_USER.open(relative))? {
+        if let Some((path, root)) = open_stored(relative)? {
             collect(&root, &path, &mut export)?;
         }
     }
@@ -48,7 +47,9 @@ pub fn export<S: AsRef<str>>(keys: &[S]) -> Result<RegistryExport, WindowsRegist
 
 /// Deletes the subtree of every key in `export`, then writes the exported keys and values.
 ///
-/// All key paths are validated before anything is deleted. An empty export changes nothing.
+/// All key paths are validated before anything is deleted. An empty export changes nothing. Not
+/// atomic: a failure after the deletes leaves the keys deleted or partly written, so callers
+/// back up the current state first.
 pub fn replace_subtrees(export: &RegistryExport) -> Result<(), WindowsRegistryError> {
     let keys = export
         .keys
@@ -81,12 +82,32 @@ fn collect(key: &Key, path: &str, export: &mut RegistryExport) -> Result<(), Win
     values.sort_by(|a, b| a.name.cmp(&b.name));
     export.keys.insert(path.to_owned(), values);
     for name in os(path, key.keys())? {
-        // A subkey deleted since the listing is skipped.
-        if let Some(child) = found(path, key.open(&name))? {
-            collect(&child, &format!("{path}\\{name}"), export)?;
-        }
+        // A listed name that cannot be reopened (e.g. lossy UTF-16) must fail, not be skipped:
+        // a later replace would delete the subtree this export silently left out.
+        let child = os(path, key.open(&name))?;
+        collect(&child, &format!("{path}\\{name}"), export)?;
     }
     Ok(())
+}
+
+/// Opens `relative` below HKCU, returning its full path spelled as the registry stores each
+/// element, or `None` if the key is absent.
+fn open_stored(relative: &str) -> Result<Option<(String, Key)>, WindowsRegistryError> {
+    let mut path = HKCU.to_owned();
+    let mut current: Option<Key> = None;
+    for element in relative.split('\\') {
+        let parent = current.as_ref().unwrap_or(CURRENT_USER);
+        let wanted = element.to_lowercase();
+        let name = os(&path, parent.keys())?
+            .find(|name| name.to_lowercase() == wanted)
+            .unwrap_or_else(|| element.to_owned());
+        path = format!("{path}\\{name}");
+        match found(&path, parent.open(&name))? {
+            Some(key) => current = Some(key),
+            None => return Ok(None),
+        }
+    }
+    Ok(current.map(|key| (path, key)))
 }
 
 fn os<T>(key: &str, result: windows_registry::Result<T>) -> Result<T, WindowsRegistryError> {
@@ -132,6 +153,8 @@ fn from_raw(value: &Value) -> RegData {
     })
 }
 
+/// `Other` is written as `Type::Other` even for codes 1, 2 and 7: the crate's typed string paths
+/// debug-assert terminated data, which `Other` (e.g. an empty `REG_SZ`) need not have.
 fn to_raw(data: &RegData) -> (Type, Vec<u8>) {
     match data {
         RegData::Sz(text) => (Type::String, string_bytes(text)),
@@ -140,7 +163,7 @@ fn to_raw(data: &RegData) -> (Type, Vec<u8>) {
         RegData::Dword(n) => (Type::U32, n.to_le_bytes().to_vec()),
         RegData::Qword(n) => (Type::U64, n.to_le_bytes().to_vec()),
         RegData::Binary(bytes) => (Type::Bytes, bytes.clone()),
-        RegData::Other { code, bytes } => (Type::from(*code), bytes.clone()),
+        RegData::Other { code, bytes } => (Type::Other(*code), bytes.clone()),
     }
 }
 
@@ -162,10 +185,11 @@ fn multi_bytes(list: &[String]) -> Vec<u8> {
 }
 
 fn wide(bytes: &[u8]) -> Option<String> {
-    let chunks = bytes.chunks_exact(2);
-    let units = chunks.remainder().is_empty().then(|| {
+    let (chunks, rest) = bytes.as_chunks::<2>();
+    let units = rest.is_empty().then(|| {
         chunks
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect::<Vec<_>>()
     })?;
     String::from_utf16(&units).ok()
