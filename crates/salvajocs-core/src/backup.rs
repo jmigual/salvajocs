@@ -3,8 +3,9 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -68,7 +69,8 @@ fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
 
 /// Syncs `stage_dir` with `game` and `registry` (ADR-0004): each found file is copied to
 /// `files/<Base>/<tail>` when its size or mtime differs, and gets the source's mtime. Staged
-/// files no longer found are removed, with the directories they leave empty. `salvajocs.json`
+/// files no longer found, or deleted since the scan, are removed with the directories they
+/// leave empty. `salvajocs.json`
 /// and `registry.json` are written only when their bytes change; an empty `registry` means no
 /// `registry.json`.
 ///
@@ -89,13 +91,20 @@ pub fn stage(
         staged.push((file.real.as_path(), dest));
     }
     let keep_all = !game.unreadable.is_empty();
+    let mut keep: HashSet<&Path> = staged.iter().map(|(_, dest)| dest.as_path()).collect();
     if !keep_all {
         // Removing first lets a file replace a directory of the same name, or a case change.
-        let keep: HashSet<&Path> = staged.iter().map(|(_, dest)| dest.as_path()).collect();
         remove_stale(&files_dir, &keep)?;
     }
+    let mut vanished = false;
     for (real, dest) in &staged {
-        sync_file(real, dest)?;
+        if !sync_file(real, dest)? {
+            vanished = true;
+            keep.remove(dest.as_path());
+        }
+    }
+    if vanished && !keep_all {
+        remove_stale(&files_dir, &keep)?;
     }
 
     let meta_file = stage_dir.join(META_FILE);
@@ -117,14 +126,16 @@ pub fn stage(
     if !registry.keys.is_empty() {
         write_if_changed(&registry_file, &json(registry))?;
     } else if !keep_all {
-        match fs::remove_file(&registry_file) {
-            Err(err) if err.kind() != io::ErrorKind::NotFound => {
-                return Err(io_error(&registry_file)(err));
-            }
-            _ => {}
-        }
+        remove_if_exists(&registry_file)?;
     }
     Ok(())
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), BackupError> {
+    match fs::remove_file(path) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(io_error(path)(err)),
+        _ => Ok(()),
+    }
 }
 
 /// The roots of the staged `salvajocs.json`, none when there is none yet.
@@ -174,16 +185,21 @@ fn remove_stale(dir: &Path, keep: &HashSet<&Path>) -> Result<bool, BackupError> 
     Ok(empty)
 }
 
-/// Copies `real` to `dest` unless both have the same size and mtime, then gives `dest` the
-/// source's mtime. Size and mtime are read before copying, so a save written during the copy
-/// differs again on the next run and is copied once more.
-fn sync_file(real: &Path, dest: &Path) -> Result<(), BackupError> {
-    let mut source = File::open(real).map_err(io_error(real))?;
+/// Copies `real` to `dest` unless both have the same size and mtime, and gives the copy the
+/// source's mtime. Returns `false`, copying nothing, when `real` no longer exists. Size and
+/// mtime are read before copying, so a save written during the copy differs again on the next
+/// run and is copied once more.
+fn sync_file(real: &Path, dest: &Path) -> Result<bool, BackupError> {
+    let mut source = match File::open(real) {
+        Ok(source) => source,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(io_error(real)(err)),
+    };
     let meta = source.metadata().map_err(io_error(real))?;
     let modified = meta.modified().map_err(io_error(real))?;
-    match fs::metadata(dest) {
+    match fs::symlink_metadata(dest) {
         Ok(staged) if staged.len() == meta.len() && staged.modified().ok() == Some(modified) => {
-            return Ok(());
+            return Ok(true);
         }
         Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(io_error(dest)(err)),
         _ => {}
@@ -191,10 +207,49 @@ fn sync_file(real: &Path, dest: &Path) -> Result<(), BackupError> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(io_error(parent))?;
     }
-    // A fresh writable copy rather than `fs::copy`, which would carry a read-only permission
-    // over and make the next copy fail.
-    let mut copy = File::create(dest).map_err(io_error(dest))?;
-    io::copy(&mut source, &mut copy).map_err(io_error(real))?;
+    // Copied beside `dest` and renamed over it: a failed copy leaves no partial file, and a
+    // link at `dest` is replaced rather than written through.
+    let mut tmp = dest.as_os_str().to_owned();
+    tmp.push(".salvajocs-tmp");
+    let tmp = PathBuf::from(tmp);
+    remove_if_exists(&tmp)?;
+    let copied = copy_to(&mut source, real, &tmp, dest, modified);
+    if copied.is_err() {
+        // Best effort: the copy's own error is the one to report.
+        let _ = fs::remove_file(&tmp);
+    }
+    copied?;
+    fs::rename(&tmp, dest).map_err(io_error(dest))?;
+    Ok(true)
+}
+
+/// Writes `source` (opened from `real`) into the new file `tmp` and gives it mtime `modified`.
+/// A read error names `real`, a write error `dest`.
+fn copy_to(
+    source: &mut File,
+    real: &Path,
+    tmp: &Path,
+    dest: &Path,
+    modified: SystemTime,
+) -> Result<(), BackupError> {
+    // A fresh writable file rather than `fs::copy`, which would carry a read-only permission
+    // over; `create_new` does not follow a link at `tmp`.
+    let mut copy = File::options()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .map_err(io_error(dest))?;
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        let read = match source.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(io_error(real)(err)),
+        };
+        copy.write_all(&buf[..read]).map_err(io_error(dest))?;
+    }
+    // The handle closes on return, before the rename: Windows cannot rename an open file.
     copy.set_modified(modified).map_err(io_error(dest))
 }
 

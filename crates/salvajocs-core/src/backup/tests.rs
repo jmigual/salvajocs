@@ -226,6 +226,60 @@ fn restage_keeps_copies_when_source_unreadable() {
     assert!(!stage_dir.join(REGISTRY_FILE).exists());
 }
 
+#[test]
+fn restage_skips_file_deleted_since_scan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kept = write(&tmp.path().join("src/a.sav"), "a");
+    let gone = write(&tmp.path().join("src/sub/b.sav"), "b");
+    let mut scan = game(
+        "Foo",
+        vec![
+            found(Base::WinAppData, "Foo/a.sav", &kept),
+            found(Base::WinAppData, "Foo/sub/b.sav", &gone),
+        ],
+    );
+    let stage_dir = tmp.path().join("stage");
+    let foo = stage_dir.join("files/WinAppData/Foo");
+    fs::remove_file(&gone).unwrap();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert!(foo.join("a.sav").is_file());
+    assert!(!foo.join("sub").exists());
+
+    // With a read error the copy staged earlier is kept.
+    write(&gone, "b");
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    fs::remove_file(&gone).unwrap();
+    scan.unreadable = vec![tmp.path().join("other")];
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(fs::read_to_string(foo.join("sub/b.sav")).unwrap(), "b");
+
+    // Without one it is removed like any source that is gone.
+    scan.unreadable.clear();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert!(!foo.join("sub").exists());
+    assert_eq!(fs::read_to_string(foo.join("a.sav")).unwrap(), "a");
+}
+
+#[cfg(unix)]
+#[test]
+fn restage_replaces_a_link_at_the_destination() {
+    let tmp = tempfile::tempdir().unwrap();
+    let save = write(&tmp.path().join("src/save.dat"), "save");
+    let scan = game("Foo", vec![found(Base::WinAppData, "Foo/save.dat", &save)]);
+    let stage_dir = tmp.path().join("stage");
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    let staged = stage_dir.join("files/WinAppData/Foo/save.dat");
+    let outside = write(&tmp.path().join("outside.txt"), "outside");
+    fs::remove_file(&staged).unwrap();
+    std::os::unix::fs::symlink(&outside, &staged).unwrap();
+
+    write(&save, "changed");
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+    assert!(fs::symlink_metadata(&staged).unwrap().is_file());
+    assert_eq!(fs::read_to_string(&staged).unwrap(), "changed");
+}
+
 fn staged_meta(stage_dir: &Path) -> SnapshotMeta {
     serde_json::from_slice(&fs::read(stage_dir.join(META_FILE)).unwrap()).unwrap()
 }
