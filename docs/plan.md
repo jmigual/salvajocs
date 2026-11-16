@@ -514,9 +514,23 @@ Dependency graph:
 ## 17. GUI Backup tab (depends on 12, 16)
 
 - **Goal:** list scanned games, select, preview files, back up with progress.
-- **Files:** `gui/src/tabs/backup.rs`, `gui/tests/backup.rs`.
+- **Files:** `gui/src/tabs/backup.rs` (+ `backup/tests.rs`), `gui/tests/backup.rs`.
+- **Content:**
+  - "Scan for games" runs `scan::scan` in a `Job` (manual, never on start); it is disabled while the
+    manifest loads or a job runs. Without a manifest only custom games are scanned, and the tab says
+    so. `State.manifest` is an `Arc<Manifest>` so a job clones the pointer.
+  - The list shows per game its file count and size, registry yes/no, unreadable paths and a
+    foldable file list; scan problems are listed above it. A rescan keeps the user's selection and
+    selects only new titles.
+  - "Back up selected" runs one job that scans again (a save made since the last scan is
+    included), then `backup_games` with staging in `<cache>/salvajocs/stage`. Per-game progress and
+    outcomes (new snapshot, unchanged, failed with the error chain) show as each game ends, and the
+    list is refreshed from the job's scan.
 - **Accept:** `cargo test -p salvajocs-gui backup`: with a fixture environment, the scan `Job`
-  completes (`Harness::step` loop) and the game rows and file counts are shown.
+  completes (`Harness::step` loop) and the game rows and file counts are shown; scan problems are
+  shown; a backup reports new, then unchanged, per game and leaves deselected games out; a failing
+  game does not stop the others; the selection survives a rescan; scan and back up wait while a job
+  runs; a save made after the scan is staged; custom games scan without a manifest.
 
 ## 18. GUI Restore tab and mapping dialog (depends on 15, 16)
 
