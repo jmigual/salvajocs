@@ -43,6 +43,7 @@ fn custom_game(name: &str, registry: bool, prefix: &Path) -> CustomGame {
         integration: Integration::Override,
         wine_prefix: Some(prefix.to_path_buf()),
         pairs: Vec::new(),
+        skips: Vec::new(),
     }
 }
 

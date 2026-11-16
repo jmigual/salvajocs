@@ -77,6 +77,7 @@ fn auto_pairs_single_linux_and_windows_save_dir() {
         &meta(vec![linux_root("<home>/.config/Co/Game/slot1")]),
         Some(&entry),
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(to_windows.confidence, Confidence::AutoPair);
@@ -87,6 +88,7 @@ fn auto_pairs_single_linux_and_windows_save_dir() {
     let to_linux = one(propose(
         &meta(vec![win_root("<winAppData>/Co/Game")]),
         Some(&entry),
+        &[],
         &[],
         Family::Linux,
     ));
@@ -105,6 +107,7 @@ fn no_auto_pair_when_ambiguous() {
         &meta(vec![linux_root("<home>/.config/Co/Game")]),
         Some(&entry),
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::Unknown);
@@ -118,6 +121,7 @@ fn custom_pair_maps_tail() {
         &meta(vec![linux_root("<xdgData>/Foo/saves")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::Saved);
@@ -130,6 +134,7 @@ fn custom_pair_maps_tail() {
         &meta(vec![win_root("<winDocuments>/my games/foo/Saves")]),
         None,
         &pairs,
+        &[],
         Family::Linux,
     ));
     assert_eq!(back.proposed.as_deref(), Some("<xdgData>/Foo/Saves"));
@@ -138,6 +143,7 @@ fn custom_pair_maps_tail() {
         &meta(vec![linux_root("<xdgData>/Foobar")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(other.confidence, Confidence::Unknown);
@@ -149,6 +155,7 @@ fn unity_rule_pairs_persistent_data_path() {
         &meta(vec![linux_root("<xdgConfig>/unity3d/Co/Game/profile")]),
         None,
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(to_windows.confidence, Confidence::EngineRule);
@@ -159,6 +166,7 @@ fn unity_rule_pairs_persistent_data_path() {
     let to_linux = one(propose(
         &meta(vec![win_root("<home>/AppData/LocalLow/Co/Game")]),
         None,
+        &[],
         &[],
         Family::Linux,
     ));
@@ -172,6 +180,7 @@ fn unity_rule_pairs_persistent_data_path() {
         &meta(vec![linux_root("<xdgConfig>/unity3d/Co")]),
         None,
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(short.confidence, Confidence::Unknown);
@@ -181,13 +190,13 @@ fn unity_rule_pairs_persistent_data_path() {
 fn unity_playerprefs_registry_adds_note() {
     let roots = meta(vec![linux_root("<xdgConfig>/unity3d/Co/Game")]);
     let mut entry = entry(&[("<xdgConfig>/unity3d/Co/Game", Some(Os::Linux))]);
-    let without = one(propose(&roots, Some(&entry), &[], Family::Windows));
+    let without = one(propose(&roots, Some(&entry), &[], &[], Family::Windows));
     assert!(without.notes.is_empty());
     entry.registry.insert(
         "HKEY_CURRENT_USER\\Software\\co\\GAME".into(),
         RegistryRule::default(),
     );
-    let with = one(propose(&roots, Some(&entry), &[], Family::Windows));
+    let with = one(propose(&roots, Some(&entry), &[], &[], Family::Windows));
     assert_eq!(with.confidence, Confidence::EngineRule);
     assert_eq!(with.notes, [PLAYER_PREFS_NOTE]);
     // A key of another game does not trigger the note.
@@ -197,7 +206,7 @@ fn unity_playerprefs_registry_adds_note() {
         RegistryRule::default(),
     );
     assert!(
-        one(propose(&roots, Some(&entry), &[], Family::Windows))
+        one(propose(&roots, Some(&entry), &[], &[], Family::Windows))
             .notes
             .is_empty()
     );
@@ -211,6 +220,7 @@ fn godot_rule_pairs_app_userdata() {
         )]),
         None,
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(to_windows.confidence, Confidence::EngineRule);
@@ -221,6 +231,7 @@ fn godot_rule_pairs_app_userdata() {
     let to_linux = one(propose(
         &meta(vec![win_root("<winAppData>/Godot/app_userdata/Proj")]),
         None,
+        &[],
         &[],
         Family::Linux,
     ));
@@ -234,7 +245,13 @@ fn godot_rule_pairs_app_userdata() {
 fn unity_rule_matches_home_dot_config_spelling() {
     let spelled = linux_root("<home>/.config/unity3d/Co/Game");
     assert_eq!(spelled.0, Base::XdgConfig);
-    let mapped = one(propose(&meta(vec![spelled]), None, &[], Family::Windows));
+    let mapped = one(propose(
+        &meta(vec![spelled]),
+        None,
+        &[],
+        &[],
+        Family::Windows,
+    ));
     assert_eq!(mapped.confidence, Confidence::EngineRule);
     assert_eq!(
         mapped.proposed.as_deref(),
@@ -251,6 +268,7 @@ fn auto_pair_single_file_template_maps_with_empty_tail() {
     let mapped = one(propose(
         &meta(vec![linux_root("<home>/.config/_12ibt6/savedata.ini")]),
         Some(&entry),
+        &[],
         &[],
         Family::Windows,
     ));
@@ -271,6 +289,7 @@ fn auto_pair_file_glob_uses_parent_dir() {
         &meta(vec![linux_root("<home>/.config/1001Spikes")]),
         Some(&entry),
         &[],
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::AutoPair);
@@ -288,6 +307,7 @@ fn unknown_root_lists_target_os_candidates() {
     let mapped = one(propose(
         &meta(vec![linux_root("<xdgData>/Foo")]),
         Some(&entry),
+        &[],
         &[],
         Family::Windows,
     ));
@@ -308,12 +328,12 @@ fn only_roots_of_the_other_family_are_proposed() {
         (Base::Absolute, "opt/foo".into()),
         (Base::WinAbsolute, "C/Games/Foo".into()),
     ]);
-    let entries = propose(&roots, None, &[], Family::Windows);
+    let entries = propose(&roots, None, &[], &[], Family::Windows);
     assert_eq!(
         entries.iter().map(|e| e.root.clone()).collect::<Vec<_>>(),
         [linux_root("<xdgData>/Foo")]
     );
-    let entries = propose(&roots, None, &[], Family::Linux);
+    let entries = propose(&roots, None, &[], &[], Family::Linux);
     assert_eq!(
         entries.iter().map(|e| e.root.clone()).collect::<Vec<_>>(),
         [win_root("<winAppData>/Foo")]
@@ -348,6 +368,7 @@ fn user_choice_saved_as_pairing() {
         &meta(vec![linux_root("<xdgData>/Foo/slot")]),
         None,
         &game.pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::Saved);
@@ -374,6 +395,7 @@ fn apply_choices_keeps_existing_custom_game() {
         integration: Integration::Override,
         wine_prefix: None,
         pairs: vec![pair("<xdgData>/A", "<winAppData>/A")],
+        skips: Vec::new(),
     });
     apply_choices(
         &mut config,
@@ -391,7 +413,149 @@ fn apply_choices_keeps_existing_custom_game() {
         "Other",
         &[(linux_root("<xdgData>/B"), Choice::Skip)],
     );
-    assert_eq!(config.custom_games.len(), 1);
+    assert_eq!(config.custom_games.len(), 2);
+}
+
+#[test]
+fn skip_choice_is_remembered() {
+    let linux = linux_root("<xdgData>/Foo");
+    let mut config = config();
+    let choice = [(linux.clone(), Choice::Skip)];
+    apply_choices(&mut config, "Game", &choice);
+    apply_choices(&mut config, "Game", &choice);
+    let [game] = &config.custom_games[..] else {
+        panic!("one custom game expected");
+    };
+    assert_eq!(game.skips, ["<xdgData>/Foo"]);
+    assert!(game.pairs.is_empty());
+
+    // A pair for the same root gives way to the skip.
+    let mut with_pair = config.clone();
+    apply_choices(
+        &mut with_pair,
+        "Game",
+        &[(linux, Choice::Template("<winAppData>/Foo".into()))],
+    );
+    apply_choices(&mut with_pair, "Game", &choice);
+    assert_eq!(with_pair.custom_games[0].skips, ["<xdgData>/Foo"]);
+    assert!(with_pair.custom_games[0].pairs.is_empty());
+
+    // A Windows root stores its own template.
+    apply_choices(
+        &mut config,
+        "Game",
+        &[(win_root("<winDocuments>/Foo"), Choice::Skip)],
+    );
+    assert_eq!(
+        config.custom_games[0].skips,
+        ["<xdgData>/Foo", "<winDocuments>/Foo"]
+    );
+}
+
+#[test]
+fn template_choice_clears_skip() {
+    let linux = linux_root("<xdgData>/Foo");
+    let mut config = config();
+    apply_choices(&mut config, "Game", &[(linux.clone(), Choice::Skip)]);
+    apply_choices(
+        &mut config,
+        "Game",
+        &[(linux, Choice::Template("<winAppData>/Foo".into()))],
+    );
+    let game = &config.custom_games[0];
+    assert!(game.skips.is_empty());
+    assert_eq!(game.pairs, [pair("<xdgData>/Foo", "<winAppData>/Foo")]);
+}
+
+#[test]
+fn saved_skip_needs_no_dialog() {
+    let skips = ["<xdgData>/Foo".to_owned()];
+    let mapped = one(propose(
+        &meta(vec![linux_root("<xdgData>/Foo/slot")]),
+        None,
+        &[],
+        &skips,
+        Family::Windows,
+    ));
+    assert_eq!(mapped.confidence, Confidence::Saved);
+    assert_eq!(mapped.proposed, None);
+    let resolved = resolve(&[mapped], &[]).unwrap();
+    assert_eq!(resolved[0].target, None);
+
+    // Component boundary, and the root's own family.
+    for root in [
+        linux_root("<xdgData>/Foobar"),
+        linux_root("<xdgConfig>/Foo"),
+    ] {
+        let other = one(propose(
+            &meta(vec![root]),
+            None,
+            &[],
+            &skips,
+            Family::Windows,
+        ));
+        assert_eq!(other.confidence, Confidence::Unknown);
+    }
+    let back = one(propose(
+        &meta(vec![win_root("<winDocuments>/Mine/x")]),
+        None,
+        &[],
+        &["<winDocuments>/mine".to_owned()],
+        Family::Linux,
+    ));
+    assert_eq!((back.confidence, back.proposed), (Confidence::Saved, None));
+
+    // The deepest match wins; a pair beats a skip on a tie.
+    let deep = pair("<xdgData>/Foo/sub", "<winAppData>/Deep");
+    let root = linux_root("<xdgData>/Foo/sub/x");
+    let mapped = one(propose(
+        &meta(vec![root.clone()]),
+        None,
+        &[deep],
+        &skips,
+        Family::Windows,
+    ));
+    assert_eq!(mapped.proposed.as_deref(), Some("<winAppData>/Deep/x"));
+    let tie = pair("<xdgData>/Foo", "<winAppData>/Tie");
+    let mapped = one(propose(
+        &meta(vec![linux_root("<xdgData>/Foo/x")]),
+        None,
+        &[tie],
+        &skips,
+        Family::Windows,
+    ));
+    assert_eq!(mapped.proposed.as_deref(), Some("<winAppData>/Tie/x"));
+    let deep_skip = ["<xdgData>/Foo/sub".to_owned()];
+    let shallow = pair("<xdgData>/Foo", "<winAppData>/Shallow");
+    let mapped = one(propose(
+        &meta(vec![root]),
+        None,
+        &[shallow],
+        &deep_skip,
+        Family::Windows,
+    ));
+    assert_eq!(mapped.proposed, None);
+}
+
+#[test]
+fn skip_template_is_validated() {
+    assert_eq!(validate_skip("<xdgData>/Foo"), Ok(()));
+    assert_eq!(validate_skip("<winAppData>/Foo"), Ok(()));
+    for bad in [
+        "/opt/foo",
+        "C:/Games/Foo",
+        "<xdgData>/Foo/*.sav",
+        "<xdgData>/../x",
+        "Foo",
+    ] {
+        assert_eq!(
+            validate_skip(bad),
+            Err(SkipError {
+                template: bad.into()
+            }),
+            "{bad}"
+        );
+    }
 }
 
 #[test]
@@ -460,7 +624,7 @@ fn resolve_rejects_unclassifiable_template() {
 #[test]
 fn resolve_choice_overrides_engine_rule_proposal() {
     let unity = linux_root("<xdgConfig>/unity3d/Co/Game");
-    let entries = propose(&meta(vec![unity.clone()]), None, &[], Family::Windows);
+    let entries = propose(&meta(vec![unity.clone()]), None, &[], &[], Family::Windows);
     assert_eq!(entries[0].confidence, Confidence::EngineRule);
     let without_choice = resolve(&entries, &[]).unwrap();
     assert_eq!(
@@ -488,6 +652,7 @@ fn resolve_requires_every_unknown_root() {
     let entries = propose(
         &meta(vec![known, first.clone(), second.clone()]),
         None,
+        &[],
         &[],
         Family::Windows,
     );
@@ -520,12 +685,18 @@ fn parent_components_never_map() {
         ((Base::XdgData, "Foo/../x".into()), &good),
         ((Base::XdgConfig, "unity3d/../Game".into()), &good),
     ] {
-        let mapped = one(propose(&meta(vec![root]), None, pairs, Family::Windows));
+        let mapped = one(propose(
+            &meta(vec![root]),
+            None,
+            pairs,
+            &[],
+            Family::Windows,
+        ));
         assert_eq!(mapped.confidence, Confidence::Unknown);
     }
     let unity = (Base::XdgConfig, "unity3d/Co/Game/../../x".into());
     assert_eq!(
-        one(propose(&meta(vec![unity]), None, &[], Family::Windows)).confidence,
+        one(propose(&meta(vec![unity]), None, &[], &[], Family::Windows)).confidence,
         Confidence::Unknown
     );
 }
@@ -543,6 +714,7 @@ fn playerprefs_note_survives_saved_pair() {
         &meta(vec![unity]),
         Some(&entry),
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::Saved);
@@ -556,6 +728,7 @@ fn saved_pair_beats_engine_rule() {
         &meta(vec![linux_root("<xdgConfig>/unity3d/Co/Game")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(mapped.confidence, Confidence::Saved);
@@ -571,6 +744,7 @@ fn engine_rule_beats_auto_pair() {
     let mapped = one(propose(
         &meta(vec![linux_root("<xdgConfig>/unity3d/Co/Game")]),
         Some(&entry),
+        &[],
         &[],
         Family::Windows,
     ));
@@ -591,6 +765,7 @@ fn deepest_saved_pair_wins() {
             &meta(vec![root.clone()]),
             None,
             &pairs,
+            &[],
             Family::Windows,
         ));
         assert_eq!(mapped.proposed.as_deref(), Some("<winAppData>/Deep/x"));
@@ -604,6 +779,7 @@ fn braces_in_pairs_are_literal() {
         &meta(vec![linux_root("<xdgData>/abc")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(other.confidence, Confidence::Unknown);
@@ -611,6 +787,7 @@ fn braces_in_pairs_are_literal() {
         &meta(vec![linux_root("<xdgData>/{GUID}")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(literal.confidence, Confidence::Saved);
@@ -624,6 +801,7 @@ fn roots_keep_game_placeholder_unsubstituted() {
         &meta(vec![linux_root("<xdgData>/<game>/saves")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(
@@ -634,6 +812,7 @@ fn roots_keep_game_placeholder_unsubstituted() {
         &meta(vec![linux_root("<xdgData>/Foo/saves")]),
         None,
         &pairs,
+        &[],
         Family::Windows,
     ));
     assert_eq!(substituted.confidence, Confidence::Unknown);
@@ -648,6 +827,7 @@ fn apply_choices_replaces_pair_spelled_differently() {
         integration: Integration::Extend,
         wine_prefix: None,
         pairs: vec![pair("<home>/.config/Foo", "<winAppData>/Old")],
+        skips: Vec::new(),
     });
     apply_choices(
         &mut config,

@@ -11,6 +11,7 @@ fn game(name: &str) -> CustomGame {
             linux: "<xdgData>/Foo".into(),
             windows: "<winAppData>/Foo".into(),
         }],
+        skips: Vec::new(),
     }
 }
 

@@ -30,6 +30,7 @@ fn sample() -> AppConfig {
             integration: Integration::Extend,
             wine_prefix: None,
             pairs: Vec::new(),
+            skips: Vec::new(),
         }],
     }
 }
@@ -219,6 +220,23 @@ fn minimal_file_loads_with_empty_lists() {
     assert!(config.repository_options.is_empty());
     assert!(config.roots.is_empty());
     assert!(config.custom_games.is_empty());
+}
+
+#[test]
+fn custom_game_without_skips_loads_and_skips_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\ncustom_games:\n\
+         - name: Old\n  entry: {}\n  integration: extend\n",
+    )
+    .unwrap();
+    let mut config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert!(config.custom_games[0].skips.is_empty());
+
+    config.custom_games[0].skips = vec!["<xdgData>/Foo".into()];
+    config.save(tmp.path()).unwrap();
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
 }
 
 #[test]

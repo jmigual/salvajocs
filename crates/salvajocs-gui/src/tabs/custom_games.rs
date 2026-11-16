@@ -186,6 +186,7 @@ impl Form {
             wine_prefix: kept
                 .or_else(|| (!wine_prefix.is_empty()).then(|| PathBuf::from(wine_prefix))),
             pairs,
+            skips: original.map(|game| game.skips.clone()).unwrap_or_default(),
         })
     }
 }

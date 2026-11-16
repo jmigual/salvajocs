@@ -32,7 +32,7 @@ impl Family {
 /// How a proposed target was found, best first (ADR-0011).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confidence {
-    /// A pair the user saved.
+    /// A pair or skip the user saved; a skip has no `proposed` target.
     Saved,
     /// An [`ENGINE_RULES`] entry.
     EngineRule,
@@ -96,7 +96,7 @@ pub struct MappingEntry {
     /// Files staged under the root. [`propose`] sees only the metadata and leaves 0; the caller
     /// that knows the staged files fills it.
     pub files: usize,
-    /// The target placeholder template; `None` only for [`Confidence::Unknown`].
+    /// The target placeholder template; `None` for [`Confidence::Unknown`] and for a saved skip.
     pub proposed: Option<String>,
     /// How `proposed` was found.
     pub confidence: Confidence,
@@ -213,6 +213,29 @@ pub fn validate_pair(pair: &Pair) -> Result<(), PairError> {
                 side,
                 template: pair_side(pair, side).to_owned(),
             })
+        })
+}
+
+/// A skip that is not a glob-free placeholder template.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("not a placeholder template: {template}")]
+pub struct SkipError {
+    /// The rejected template.
+    pub template: String,
+}
+
+/// Checks that `skip` has the form of a pair side: a glob-free placeholder template of either
+/// OS family, not a real path.
+///
+/// # Errors
+/// [`SkipError`] when it classifies in neither family.
+pub fn validate_skip(skip: &str) -> Result<(), SkipError> {
+    [Family::Linux, Family::Windows]
+        .into_iter()
+        .any(|family| classify_choice(skip, family).is_some())
+        .then_some(())
+        .ok_or_else(|| SkipError {
+            template: skip.to_owned(),
         })
 }
 
@@ -347,11 +370,14 @@ fn has_registry_key(entry: &GameEntry, key: &str) -> bool {
 
 /// Proposes a target for every root of `meta` that belongs to the family opposite
 /// `target_family`; roots already in the target family and install-relative roots need no
-/// mapping, and `Absolute`/`WinAbsolute` roots restore to the same OS only (ADR-0005). Order of sources: saved `pairs`, [`ENGINE_RULES`], the manifest auto-pair, unknown.
+/// mapping, and `Absolute`/`WinAbsolute` roots restore to the same OS only (ADR-0005). Order of
+/// sources: saved `pairs` and `skips` (the deeper match wins, a pair on a tie; a skip proposes
+/// no target), [`ENGINE_RULES`], the manifest auto-pair, unknown.
 pub fn propose(
     meta: &SnapshotMeta,
     entry: Option<&GameEntry>,
     pairs: &[Pair],
+    skips: &[String],
     target_family: Family,
 ) -> Vec<MappingEntry> {
     let source = target_family.other();
@@ -386,6 +412,11 @@ pub fn propose(
                 .iter()
                 .filter_map(|pair| through_pair(root, pair))
                 .max_by_key(|mapped| mapped.depth);
+            let skipped = skips
+                .iter()
+                .filter_map(|skip| map_root(root, skip, skip, source, false))
+                .map(|mapped| mapped.depth)
+                .max();
             let engine = ENGINE_RULES.iter().find_map(|rule| {
                 let mapped = map_root(
                     root,
@@ -410,8 +441,12 @@ pub fn propose(
                 })
                 .into_iter()
                 .collect();
-            let (proposed, confidence) = if let Some(mapped) = saved {
+            let (proposed, confidence) = if let Some(mapped) =
+                saved.filter(|mapped| Some(mapped.depth) >= skipped)
+            {
                 (Some(mapped.target), Confidence::Saved)
+            } else if skipped.is_some() {
+                (None, Confidence::Saved)
             } else if let Some((_, mapped)) = engine {
                 (Some(mapped.target), Confidence::EngineRule)
             } else if let Some(mapped) = auto.as_ref().and_then(|pair| through_pair(root, pair)) {
@@ -432,7 +467,7 @@ pub fn propose(
 }
 
 /// Applies `choices` to `entries`: a choice for a root replaces its proposal whatever the
-/// confidence, and `Skip` drops the root. Every target is classified in the family opposite the
+/// confidence, and `Skip` drops the root; a saved skip drops it too. Every target is classified in the family opposite the
 /// root's.
 ///
 /// # Errors
@@ -467,6 +502,7 @@ pub fn resolve(
                         .and_then(|family| classify(template, family))
                         .ok_or_else(|| unclassifiable(template))?,
                 ),
+                (None, None) if entry.confidence == Confidence::Saved => None,
                 (None, None) => {
                     return Err(ResolveError::MissingChoice {
                         root: entry.root.clone(),
@@ -507,40 +543,16 @@ pub(crate) fn root_template((base, rest): &SnapshotRoot) -> String {
     format!("{leading}/{rest}")
 }
 
-/// Saves each `Template` choice as a [`Pair`] of the root and the chosen template on the custom
-/// game `title`, creating an `Extend` custom game when there is none, and replacing an earlier
-/// pair for the same root. `Skip` choices have no pair form and are not saved. Templates must
-/// have passed [`resolve`].
+/// Saves each choice on the custom game `title`, creating an `Extend` custom game when there is
+/// none: `Template` as a [`Pair`] of the root and the chosen template, `Skip` as the root's
+/// template in `skips`. A choice replaces any earlier pair or skip for the same root. Templates
+/// must have passed [`resolve`].
 pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRoot, Choice)]) {
-    let new_pairs: Vec<(Family, &SnapshotRoot, Pair)> = choices
+    let choices: Vec<_> = choices
         .iter()
-        .filter_map(|(root, choice)| {
-            let (Choice::Template(target), Some(family)) = (choice, base_family(root.0)) else {
-                return None;
-            };
-            let own = root_template(root);
-            let target = target.clone();
-            Some(match family {
-                Family::Linux => (
-                    family,
-                    root,
-                    Pair {
-                        linux: own,
-                        windows: target,
-                    },
-                ),
-                Family::Windows => (
-                    family,
-                    root,
-                    Pair {
-                        linux: target,
-                        windows: own,
-                    },
-                ),
-            })
-        })
+        .filter_map(|(root, choice)| Some((base_family(root.0)?, root, choice)))
         .collect();
-    if new_pairs.is_empty() {
+    if choices.is_empty() {
         return;
     }
     let index = config
@@ -554,14 +566,28 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
                 integration: Integration::Extend,
                 wine_prefix: None,
                 pairs: Vec::new(),
+                skips: Vec::new(),
             });
             config.custom_games.len() - 1
         });
     let game = &mut config.custom_games[index];
-    for (family, root, pair) in new_pairs {
+    for (family, root, choice) in choices {
         game.pairs
             .retain(|saved| classify(pair_side(saved, family), family).as_ref() != Some(root));
-        game.pairs.push(pair);
+        game.skips
+            .retain(|saved| classify(saved, family).as_ref() != Some(root));
+        let own = root_template(root);
+        match (choice, family) {
+            (Choice::Skip, _) => game.skips.push(own),
+            (Choice::Template(target), Family::Linux) => game.pairs.push(Pair {
+                linux: own,
+                windows: target.clone(),
+            }),
+            (Choice::Template(target), Family::Windows) => game.pairs.push(Pair {
+                linux: target.clone(),
+                windows: own,
+            }),
+        }
     }
 }
 

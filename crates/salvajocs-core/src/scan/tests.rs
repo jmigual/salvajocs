@@ -231,6 +231,7 @@ fn custom_game_with_wine_prefix_is_scanned() {
         integration: Integration::Override,
         wine_prefix: Some(pfx),
         pairs: Vec::new(),
+        skips: Vec::new(),
     };
     let found = game(
         &Manifest::default(),
@@ -261,6 +262,7 @@ fn custom_game(name: &str, files: &str, integration: Integration) -> CustomGame 
         integration,
         wine_prefix: None,
         pairs: Vec::new(),
+        skips: Vec::new(),
     }
 }
 

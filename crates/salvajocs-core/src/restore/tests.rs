@@ -613,6 +613,7 @@ fn native_linux_save_restores_without_prefix() {
         Some(&entry_of(&staged)),
         &[],
         &[],
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -645,6 +646,7 @@ fn cross_build_unknown_entry_blocks_restore() {
         &win_only(native_win()),
         &vars(),
         Some(&entry_of(&linux_unity_and_unknown())),
+        &[],
         &[],
         &[],
     );
@@ -686,6 +688,7 @@ fn nested_roots_count_files_under_the_deepest() {
         Some(&entry_of(&staged)),
         &[],
         &[],
+        &[],
     );
     let Err(PrepareError::NeedsMapping(entries)) = result else {
         panic!("expected NeedsMapping, got {result:?}");
@@ -704,6 +707,7 @@ fn prepare_with_choices_returns_plan() {
         &targets,
         &vars(),
         Some(&entry_of(&staged)),
+        &[],
         &[],
         &choices,
     )
@@ -732,12 +736,34 @@ fn prepare_with_choices_returns_plan() {
         &vars(),
         Some(&entry_of(&staged)),
         &[],
+        &[],
         &choose(Choice::Skip),
     )
     .unwrap();
     assert_eq!(skipped.writes.len(), 1);
     assert_eq!(
         skipped.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::SkippedByUser; 2]
+    );
+
+    // A saved skip needs no choice.
+    let remembered = prepare(
+        &staged,
+        &targets,
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &["<xdgData>/Game".to_owned()],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(remembered.writes.len(), 1);
+    assert_eq!(
+        remembered
+            .skipped
+            .iter()
+            .map(|s| s.reason)
+            .collect::<Vec<_>>(),
         [SkipReason::SkippedByUser; 2]
     );
 
@@ -748,6 +774,7 @@ fn prepare_with_choices_returns_plan() {
             &targets,
             &vars(),
             Some(&entry_of(&staged)),
+            &[],
             &[],
             &real_path
         ),
@@ -766,6 +793,7 @@ fn prepare_engine_rule_returns_plan_without_choices() {
         &win_only(native_win()),
         &vars(),
         Some(&entry_of(&staged)),
+        &[],
         &[],
         &[],
     )
@@ -798,6 +826,7 @@ fn linux_save_maps_onto_windows_via_pair() {
         &vars,
         Some(&entry_of(&staged)),
         &pairs,
+        &[],
         &[],
     )
     .unwrap();
@@ -836,6 +865,7 @@ fn prepare_adds_player_prefs_note_from_staged_registry() {
             Some(&entry_of(staged)),
             &[],
             &[],
+            &[],
         );
         let Err(PrepareError::NeedsMapping(entries)) = result else {
             panic!("expected NeedsMapping, got {result:?}");
@@ -863,6 +893,7 @@ fn absolute_root_restores_to_its_own_os_only() {
         &win_only(native_win()),
         &vars(),
         Some(&entry_of(&staged)),
+        &[],
         &[],
         &[],
     )
@@ -895,6 +926,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         Some(&entry_of(&staged)),
         &[],
         &[],
+        &[],
     );
     let Err(PrepareError::NeedsMapping(entries)) = result else {
         panic!("expected NeedsMapping, got {result:?}");
@@ -910,6 +942,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         &linux_only(),
         &vars(),
         Some(&entry_of(&staged)),
+        &[],
         &[],
         &choices,
     )
@@ -936,6 +969,7 @@ fn unity_note_kept_when_mapped_automatically() {
         &linux_only(),
         &vars(),
         Some(&entry_of(&staged)),
+        &[],
         &[],
         &[],
     )
@@ -1033,6 +1067,7 @@ fn linux_snapshot_restored_into_proton_build() {
         Some(&entry_of(&staged)),
         &[],
         &[],
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -1056,6 +1091,7 @@ fn snapshot_registry_keys_do_not_declare_themselves() {
         &win_only(native_win()),
         &vars(),
         Some(&entry),
+        &[],
         &[],
         &[],
     )
@@ -1173,7 +1209,7 @@ fn pair_side_root_is_trusted() {
         plan_of(&staged, None, &[]).skipped[0].reason,
         SkipReason::UndeclaredRoot
     );
-    let plan = prepare(&staged, &linux_only(), &vars(), None, &pairs, &[]).unwrap();
+    let plan = prepare(&staged, &linux_only(), &vars(), None, &pairs, &[], &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new("/home/me/.local/share/Foo/x.sav")]

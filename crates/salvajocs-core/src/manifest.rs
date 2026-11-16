@@ -173,6 +173,9 @@ pub struct CustomGame {
     /// Saved Linux/Windows root pairs for cross-build restores.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<Pair>,
+    /// Root templates a cross-build restore leaves out, glob-free like the sides of a pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skips: Vec<String>,
 }
 
 /// Parse budget limit; serde-saphyr's default is too small for the real manifest (ADR-0008).

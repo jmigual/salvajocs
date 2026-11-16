@@ -20,6 +20,7 @@ fn custom(name: &str, integration: Integration, template: &str) -> CustomGame {
         integration,
         wine_prefix: None,
         pairs: vec![],
+        skips: Vec::new(),
     }
 }
 

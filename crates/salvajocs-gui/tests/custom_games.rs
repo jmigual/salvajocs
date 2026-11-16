@@ -106,6 +106,7 @@ fn kept_rules_game() -> CustomGame {
         integration: Integration::Override,
         wine_prefix: None,
         pairs: vec![pair("<xdgData>/game", "<winAppData>/game")],
+        skips: Vec::new(),
     }
 }
 
@@ -174,6 +175,7 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
             integration: Integration::Extend,
             wine_prefix: Some("/prefixes/mygame".into()),
             pairs: vec![pair("<xdgData>/mygame", "<winDocuments>/My Game")],
+            skips: Vec::new(),
         }]
     );
     assert!(shows(&harness, "My Game (custom game)"));
@@ -212,6 +214,7 @@ fn custom_games_empty_and_duplicate_names_are_rejected() {
         integration: Integration::Override,
         wine_prefix: None,
         pairs: Vec::new(),
+        skips: Vec::new(),
     };
     let (mut harness, _env, _tmp) = open_tab(vec![existing], &[]);
 
@@ -248,6 +251,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     let renamed = CustomGame {
         name: "Renamed".into(),
         pairs: Vec::new(),
+        skips: Vec::new(),
         ..game
     };
     assert_eq!(saved, [renamed.clone(), other.clone()]);
