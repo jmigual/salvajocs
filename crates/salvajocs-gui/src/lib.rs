@@ -1,6 +1,7 @@
 //! egui front-end for salvajocs.
 
 pub mod env;
+pub mod first_run;
 pub mod job;
 pub mod prompt;
 pub mod startup;

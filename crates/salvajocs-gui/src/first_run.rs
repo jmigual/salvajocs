@@ -1,0 +1,301 @@
+//! Choosing a repository: the first-run dialog and the Settings form share this flow. It
+//! probes the location, asks before creating a repository, opens it, and only then saves the
+//! config (ADR-0003, ADR-0009).
+
+use std::mem;
+
+use anyhow::Result;
+use eframe::egui::{self, Color32, Ui};
+use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::layout::Root;
+use salvajocs_core::manifest::CustomGame;
+use salvajocs_core::secret::SecretKey;
+use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, probe};
+
+use crate::env::{Env, SecretStore};
+use crate::job::Job;
+use crate::startup::Credentials;
+use crate::widgets::backend::BackendForm;
+use crate::widgets::{compression, labelled_edit};
+
+/// A repository the user chose and that is now open, with its config already saved.
+pub struct Connected {
+    /// The saved config.
+    pub config: AppConfig,
+    /// The password and secret option values of this session.
+    pub credentials: Credentials,
+    /// The open repository; boxed because a [`Storage`] is large and travels through a job.
+    pub storage: Box<Storage>,
+    /// Keyring problems to show; the app still works, the secret is asked each session.
+    pub warnings: Vec<String>,
+}
+
+/// What the user submitted, kept while the repository is probed.
+struct Attempt {
+    config: AppConfig,
+    credentials: Credentials,
+    remember: bool,
+    compression: Compression,
+    location: RepoLocation,
+}
+
+enum Step {
+    /// Waiting for input; carries the last failure to show.
+    Editing(Option<String>),
+    Probing(Job<RepoState>, Attempt),
+    /// No repository there: waiting for the user to allow creating one.
+    Confirm(Attempt),
+    Finishing(Job<Connected>),
+}
+
+/// The repository form and the state of connecting to what it describes.
+pub struct Connect {
+    form: BackendForm,
+    compression: String,
+    password: String,
+    remember: bool,
+    roots: Vec<Root>,
+    custom_games: Vec<CustomGame>,
+    submit: &'static str,
+    step: Step,
+}
+
+impl Connect {
+    /// An empty form for the first run.
+    pub fn first_run() -> Self {
+        Self {
+            form: BackendForm::default(),
+            compression: String::new(),
+            password: String::new(),
+            remember: true,
+            roots: Vec::new(),
+            custom_games: Vec::new(),
+            submit: "Continue",
+            step: Step::Editing(None),
+        }
+    }
+
+    /// A form showing the current repository; roots and custom games carry over to the new config.
+    pub fn editing(config: &AppConfig, credentials: &Credentials) -> Self {
+        Self {
+            form: BackendForm::from_config(config, &credentials.options),
+            password: credentials.password.clone(),
+            remember: config.password == PasswordMode::Keyring,
+            roots: config.roots.clone(),
+            custom_games: config.custom_games.clone(),
+            submit: "Apply",
+            ..Self::first_run()
+        }
+    }
+
+    /// Draws the form and the current step. Returns the repository once it is open and saved.
+    pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
+        let editing = matches!(self.step, Step::Editing(_));
+        let mut parsed = None;
+        ui.add_enabled_ui(editing, |ui| {
+            egui::Grid::new("connect_form")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    self.form.ui(ui);
+                    labelled_edit(ui, "Password", &mut self.password, true);
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut self.remember, "Remember in the system keyring");
+                    ui.end_row();
+                    if self.password.is_empty() {
+                        ui.label("");
+                        ui.colored_label(
+                            Color32::YELLOW,
+                            "No password: the repository will not be encrypted.",
+                        );
+                        ui.end_row();
+                    }
+                    parsed = Some(compression::ui(
+                        ui,
+                        "Compression (new repository)",
+                        &mut self.compression,
+                    ));
+                });
+        });
+        let compression = parsed.and_then(Result::ok);
+
+        match mem::replace(&mut self.step, Step::Editing(None)) {
+            Step::Editing(error) => {
+                if let Some(error) = &error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+                let ready = self.form.has_location() && compression.is_some();
+                let go = ui
+                    .add_enabled(ready, egui::Button::new(self.submit))
+                    .clicked();
+                self.step = match compression {
+                    Some(compression) if go => self.begin(ui.ctx(), compression),
+                    _ => Step::Editing(error),
+                };
+                None
+            }
+            Step::Probing(mut job, attempt) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Checking the repository");
+                });
+                self.step = match job.take_result() {
+                    None => Step::Probing(job, attempt),
+                    Some(Err(err)) => Step::Editing(Some(format!("{err:#}"))),
+                    Some(Ok(state)) => next_after_probe(state, attempt, ui.ctx(), env),
+                };
+                None
+            }
+            Step::Confirm(attempt) => {
+                ui.label(format!(
+                    "Create a new repository at {}?",
+                    attempt.location.repository
+                ));
+                let mut choice = None;
+                ui.horizontal(|ui| {
+                    if ui.button("Create").clicked() {
+                        choice = Some(true);
+                    }
+                    if ui.button("Back").clicked() {
+                        choice = Some(false);
+                    }
+                });
+                self.step = match choice {
+                    Some(true) => finishing(ui.ctx(), env, attempt, true),
+                    Some(false) => Step::Editing(None),
+                    None => Step::Confirm(attempt),
+                };
+                None
+            }
+            Step::Finishing(mut job) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Opening the repository");
+                });
+                match job.take_result() {
+                    None => self.step = Step::Finishing(job),
+                    Some(Err(err)) => self.step = Step::Editing(Some(format!("{err:#}"))),
+                    Some(Ok(connected)) => return Some(connected),
+                }
+                None
+            }
+        }
+    }
+
+    /// Reads the form and starts probing its location.
+    fn begin(&self, ctx: &egui::Context, compression: Compression) -> Step {
+        let password = match (self.password.is_empty(), self.remember) {
+            (true, _) => PasswordMode::None,
+            (false, true) => PasswordMode::Keyring,
+            (false, false) => PasswordMode::Ask,
+        };
+        let config = AppConfig {
+            repository: self.form.repository(),
+            repository_options: self.form.options(),
+            password,
+            roots: self.roots.clone(),
+            custom_games: self.custom_games.clone(),
+        };
+        let credentials = Credentials {
+            password: self.password.clone(),
+            options: self.form.secrets(),
+        };
+        let location = match config.location(&credentials.options) {
+            Ok(location) => location,
+            Err(err) => return Step::Editing(Some(err.to_string())),
+        };
+        let (probe_location, probe_password) = (location.clone(), credentials.password.clone());
+        let job = Job::spawn(ctx, move || Ok(probe(&probe_location, &probe_password)));
+        Step::Probing(
+            job,
+            Attempt {
+                config,
+                credentials,
+                remember: self.remember,
+                compression,
+                location,
+            },
+        )
+    }
+}
+
+/// Decides what a probe result means for the form (ADR-0009): open it, ask before creating, or
+/// show why not.
+fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env: &Env) -> Step {
+    match state {
+        RepoState::Ready => finishing(ctx, env, attempt, false),
+        RepoState::Missing => Step::Confirm(attempt),
+        RepoState::WrongPassword => Step::Editing(Some("Wrong repository password.".to_string())),
+        RepoState::Error(message) => Step::Editing(Some(message)),
+    }
+}
+
+fn finishing(ctx: &egui::Context, env: &Env, attempt: Attempt, create: bool) -> Step {
+    let env = env.clone();
+    Step::Finishing(Job::spawn(ctx, move || finish(&env, attempt, create)))
+}
+
+/// Creates or opens the repository, then keeps its secrets and saves the config. The config is
+/// written last, so a failure leaves nothing that points at a repository that did not open.
+fn finish(env: &Env, attempt: Attempt, create: bool) -> Result<Connected> {
+    let Attempt {
+        mut config,
+        credentials,
+        remember,
+        compression,
+        location,
+    } = attempt;
+    let storage = Box::new(if create {
+        Storage::init(&location, &credentials.password, compression)?
+    } else {
+        Storage::open(&location, &credentials.password)?
+    });
+    let warnings = persist_secrets(env.secrets.as_ref(), &mut config, &credentials, remember);
+    config.save(&env.config_dir)?;
+    Ok(Connected {
+        config,
+        credentials,
+        storage,
+        warnings,
+    })
+}
+
+/// Stores the password and the secret options in the keyring when `remember` is set, or removes
+/// what an earlier "remember" left. A secret the store refuses is asked for each session, and a
+/// refused password turns the config's mode into `Ask`. Returns the warnings to show.
+fn persist_secrets(
+    store: &dyn SecretStore,
+    config: &mut AppConfig,
+    credentials: &Credentials,
+    remember: bool,
+) -> Vec<String> {
+    let scope = config.secret_scope();
+    let mut entries = vec![(SecretKey::Password, credentials.password.as_str())];
+    for option in config.repository_options.iter().filter(|o| o.secret) {
+        if let Some(value) = credentials.options.get(&option.key) {
+            entries.push((SecretKey::Option(option.key.clone()), value));
+        }
+    }
+    let mut warnings = Vec::new();
+    for (key, value) in entries {
+        let keep =
+            remember && (key != SecretKey::Password || config.password == PasswordMode::Keyring);
+        if keep {
+            if let Err(err) = store.set(&scope, &key, value) {
+                if key == SecretKey::Password {
+                    config.password = PasswordMode::Ask;
+                }
+                warnings.push(format!(
+                    "Could not store a secret in the keyring ({err}); it will be asked each session."
+                ));
+            }
+        } else {
+            // Best effort: a missing store has nothing to forget.
+            let _ = store.delete(&scope, &key);
+        }
+    }
+    warnings
+}
+
+#[cfg(test)]
+mod tests;
