@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Color32, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
@@ -516,10 +516,11 @@ impl RestoreTab {
             config.clone(),
         );
         let environment = state.env.environment.clone();
-        let work_dir = state.env.cache_dir.join("restore-work");
+        let work_dir = own_dir(&state.env.cache_dir, "restore-work");
         let job = Job::spawn(ctx, move || {
             let targets = targets()?;
-            remove_dir(&work_dir)?;
+            remove_dir(&work_dir)
+                .with_context(|| format!("cannot clear {}", work_dir.display()))?;
             let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
             let GameInfo {
                 entry,
@@ -676,7 +677,7 @@ impl RestoreTab {
         self.restored = None;
         let (storage, plan) = (preview.fetched.storage.clone(), preview.plan.clone());
         let title = preview.fetched.title.clone();
-        let stage_root = state.env.cache_dir.join("restore-stage");
+        let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         self.restoring = Some(Job::spawn(ctx, move || {
             let report = restore::run(
                 &mut *lock_storage(&storage)?,
@@ -753,12 +754,41 @@ fn describe_context(ctx: &Context) -> String {
     }
 }
 
-/// Removes `dir` and everything below it; a missing dir is fine.
+/// `<cache_dir>/<name>/<process id>`, so two running apps never clear each other's files.
+fn own_dir(cache_dir: &Path, name: &str) -> PathBuf {
+    cache_dir.join(name).join(std::process::id().to_string())
+}
+
+/// Removes `dir` and everything below it; a missing dir is fine. A restored dir can be
+/// read-only, which would block removing its entries, so every real dir is made writable first.
 fn remove_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    make_writable(dir)?;
     match fs::remove_dir_all(dir) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
         _ => Ok(()),
     }
+}
+
+/// Adds owner write and search to `path` and every dir below it, without following symlinks,
+/// so nothing outside `path` changes.
+#[cfg(unix)]
+fn make_writable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        metadata => metadata?,
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode() | 0o700;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    for entry in fs::read_dir(path)? {
+        make_writable(&entry?.path())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

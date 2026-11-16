@@ -268,3 +268,27 @@ fn a_new_repository_clears_the_list_and_the_plan() {
     assert!(tab.selected.is_none());
     assert!(tab.mapping.is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (work, outside) = (tmp.path().join("work"), tmp.path().join("outside"));
+    let locked = work.join("files/Home/save");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(locked.join("slot.sav"), "x").unwrap();
+    fs::create_dir(&outside).unwrap();
+    symlink(&outside, work.join("files/link")).unwrap();
+    for dir in [&locked, &outside] {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+
+    remove_dir(&work).unwrap();
+
+    assert!(!work.exists());
+    let mode = fs::metadata(&outside).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o555, "a linked dir is left alone");
+    remove_dir(&work).unwrap();
+}
