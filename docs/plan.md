@@ -367,7 +367,7 @@ Dependency graph:
     only public way to write:
     1. registry writes into a `WinePrefix` while `wineserver_running` → typed error;
     2. safety backup of the existing targets (tag `pre-restore`). Overridden targets are staged
-       under the `Absolute` base with their full path. It reindexes once and writes
+       under `Absolute`/`WinAbsolute` with their full path. It reindexes once and writes
        `SnapshotMeta` with `roots` for the target roots it covers. Any error → nothing
        written;
     3. apply files and registry.

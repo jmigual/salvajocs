@@ -42,8 +42,15 @@ machine and OS.
     `<xdgConfig>/...` 628 times (ADR-0011).
   - Any context: `<base>`→`GameDir` (tail relative to the install dir), `<root>`→`StoreRoot`
     (tail relative to the root).
-  - A template without a leading placeholder (custom absolute path) → `Absolute`, with the tail
-    being the full path. It restores only to the same OS.
+  - A template without a leading placeholder is a custom absolute path and restores to the same
+    OS only:
+    - Unix → `Absolute`, tail = the path without its leading `/`:
+      `/opt/game/save.dat` → `(Absolute, "opt/game/save.dat")`. It resolves on a Unix host only.
+    - Windows drive-letter path → `WinAbsolute`, tail = the drive letter without the colon, then
+      the path (`C:` is not a valid directory name on Windows, so `files/Absolute/C:/…` is
+      impossible): `C:\Games\Foo\save.dat` → `(WinAbsolute, "C/Games/Foo/save.dat")`, restored
+      to `C:\Games\Foo\save.dat`. It resolves in a native Windows context only. UNC paths are not
+      classified. A Windows path on a Linux host is not absolute, so it stays unclassified.
   This matters because the manifest uses `<home>` for Windows-only entries. Under Proton that is
   `users/<wineuser>`, not the Linux home.
 - `SnapshotMeta.roots` lists, for each template that produced files, its glob-free prefix as

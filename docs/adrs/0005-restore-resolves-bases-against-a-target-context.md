@@ -62,7 +62,7 @@ configured roots (research.md §2).
 - **Per-file override:** the plan preview lets the user change one write's target to another
   absolute path, for this restore only. `RestorePlan::override_target` validates it. Pairs
   (ADR-0011) stay per root. The safety backup stages an existing file at an overridden path
-  under the `Absolute` base with its full path. Nothing the restore overwrites goes unbacked.
+  under `Absolute`/`WinAbsolute` with its full path. Nothing the restore overwrites goes unbacked.
 - **No safety backup, no restore.** Restore runs as one entry point, `restore::run`, which does
   the safety backup and then applies. If the safety backup fails, nothing is written. "Nothing
   existed at the targets" counts as success.
@@ -79,7 +79,7 @@ Support matrix for v1:
 | Windows build, Wine/Proton prefix | native Windows / another prefix | yes |
 | Native Linux build | Linux | yes |
 | Native Linux build | Windows build (or reverse) | yes, through a cross-build mapping (ADR-0011): saved pair, engine rule or unambiguous manifest pair, otherwise the user maps each root in a dialog. Same path pair does not mean same file format; the restore warns |
-| `Absolute` custom paths | same OS | yes, same path only |
+| `Absolute`/`WinAbsolute` custom paths | same OS only | yes, same path |
 | macOS | — | not in v1 |
 
 ## Alternatives considered
