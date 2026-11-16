@@ -166,7 +166,7 @@ impl Block {
 
 /// `HKEY_CURRENT_USER\a\b` gives `a\b`. The root alone and empty elements are refused: a
 /// stray `\` would make restore miss the subtree it must delete.
-fn hkcu_relative(key: &str) -> Result<&str, RegistryError> {
+pub(crate) fn hkcu_relative(key: &str) -> Result<&str, RegistryError> {
     let (root, rest) = key.split_once('\\').unwrap_or((key, ""));
     if !root.eq_ignore_ascii_case(HKCU) {
         return Err(RegistryError::UnsupportedRoot { key: key.into() });

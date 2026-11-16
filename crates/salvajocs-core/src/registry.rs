@@ -1,5 +1,7 @@
 //! Registry keys as normalized data (ADR-0006), shared by the Wine and Windows backends.
 
+#[cfg(windows)]
+pub mod windows;
 pub mod wine;
 
 use std::collections::BTreeMap;
