@@ -482,11 +482,8 @@ fn scan_game(
     })
 }
 
-/// Scans every game of `manifest`, with the config's custom games applied. A game is listed when
-/// it has a file or a registry key on this machine; the first context in priority order wins per
-/// logical path and for the registry (ADR-0007). Prefixes and paths that cannot be used are
-/// returned as problems, never dropped.
-pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanReport {
+/// The detected Steam roots followed by the config's roots, without duplicates.
+pub(crate) fn roots(config: &AppConfig, env: &Environment) -> Vec<Root> {
     let mut roots: Vec<Root> = env
         .steam_roots
         .iter()
@@ -500,6 +497,15 @@ pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanR
             roots.push(root.clone());
         }
     }
+    roots
+}
+
+/// Scans every game of `manifest`, with the config's custom games applied. A game is listed when
+/// it has a file or a registry key on this machine; the first context in priority order wins per
+/// logical path and for the registry (ADR-0007). Prefixes and paths that cannot be used are
+/// returned as problems, never dropped.
+pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanReport {
+    let roots = roots(config, env);
     let wine_roots: Vec<PathBuf> = roots
         .iter()
         .filter(|root| root.kind == RootKind::WinePrefix)

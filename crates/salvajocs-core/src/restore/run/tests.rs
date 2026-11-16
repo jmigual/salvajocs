@@ -302,6 +302,34 @@ fn default_targets_linux_only_without_prefix() {
 }
 
 #[test]
+fn game_vars_finds_the_install_dir_under_steam_and_configured_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let steam = tmp.path().join("steam");
+    let other = tmp.path().join("games");
+    let manifest =
+        crate::manifest::parse_yaml("Foo:\n  steam: {id: 620}\n  installDir:\n    FooDir: {}\n")
+            .unwrap();
+    let entry = manifest.games.get("Foo");
+    let env = linux_env(&tmp.path().join("home"), vec![steam.clone()]);
+    let config = config(vec![Root {
+        path: other.clone(),
+        kind: RootKind::Other,
+    }]);
+    let ctx = Context::Linux(linux_folders(&tmp.path().join("home")));
+
+    fs::create_dir_all(other.join("FooDir")).unwrap();
+    let vars = game_vars("Foo", entry, &config, &env);
+    assert_eq!(vars.store_game_id.as_deref(), Some("620"));
+    let game_dir = layout::base_dir(Base::GameDir, &ctx, &vars);
+    assert_eq!(game_dir, Some(other.join("FooDir")));
+
+    // The detected Steam root comes first, as in the scan.
+    fs::create_dir_all(steam.join("steamapps/common/FooDir")).unwrap();
+    let game_dir = layout::base_dir(Base::GameDir, &ctx, &vars);
+    assert_eq!(game_dir, Some(steam.join("steamapps/common/FooDir")));
+}
+
+#[test]
 fn default_targets_on_windows_host_is_native_only() {
     let tmp = tempfile::tempdir().unwrap();
     let steam = tmp.path().join("steam");

@@ -520,7 +520,7 @@ pub fn resolve(
 }
 
 /// The placeholder template that classifies back to `root` in its own family.
-pub(crate) fn root_template((base, rest): &SnapshotRoot) -> String {
+pub fn root_template((base, rest): &SnapshotRoot) -> String {
     let leading = match base {
         Base::WinHome | Base::Home => "<home>",
         Base::WinDocuments => "<winDocuments>",

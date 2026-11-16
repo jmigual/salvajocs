@@ -14,9 +14,9 @@ use super::{RestorePlan, StagedGame, Targets, Write};
 use crate::backup::{BackupError, backup_games};
 use crate::config::AppConfig;
 use crate::layout::{
-    self, Base, Context, FILES_DIR, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
+    self, Base, Context, FILES_DIR, GameVars, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
 };
-use crate::manifest::{Manifest, merge_custom};
+use crate::manifest::{GameEntry, Manifest, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
@@ -124,6 +124,27 @@ pub fn default_targets(
             Targets { linux, win }
         }
     }
+}
+
+/// The template variables of `title` for a restore, built as the scan builds them: the install
+/// dirs and Steam id of `entry` (the manifest entry with its custom game applied, see
+/// `manifest::merge_custom`) and the roots of `env` and `config`.
+pub fn game_vars(
+    title: &str,
+    entry: Option<&GameEntry>,
+    config: &AppConfig,
+    env: &Environment,
+) -> GameVars {
+    let install_dirs = entry
+        .map(|entry| entry.install_dir.keys().cloned().collect())
+        .unwrap_or_default();
+    let steam_id = entry.and_then(|entry| entry.steam.as_ref()?.id);
+    GameVars::new(
+        title,
+        install_dirs,
+        &crate::scan::roots(config, env),
+        steam_id.map(|id| id.to_string()),
+    )
 }
 
 /// Why [`fetch`] failed.
