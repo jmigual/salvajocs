@@ -311,8 +311,14 @@ fn user_reg_parsed_once_per_prefix() {
     let pfx = make_prefix(dir.path());
     write_user_reg(&pfx, &["Software\\Foo"]);
     let cache = Cache::default();
-    assert!(cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Foo".into()]));
-    assert!(!cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Bar".into()]));
+    assert_eq!(
+        cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Foo".into()]),
+        Ok(true)
+    );
+    assert_eq!(
+        cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Bar".into()]),
+        Ok(false)
+    );
     assert_eq!(cache.user_reg_loads.get(), 1);
     assert_eq!(cache.problems.into_inner(), []);
 }
@@ -363,6 +369,40 @@ fn unreadable_dir_reported_not_dropped() {
     assert!(matches!(
         report.problems.as_slice(),
         [ScanProblem { path, kind: ProblemKind::Unreadable(_) }] if *path == locked
+    ));
+}
+
+#[test]
+fn unreadable_user_reg_stops_the_registry_walk() {
+    let dir = tempfile::tempdir().unwrap();
+    let broken = make_prefix(&dir.path().join("a"));
+    let good = make_prefix(&dir.path().join("b"));
+    write(
+        &broken.join("drive_c/users/steamuser/AppData/Roaming/Foo/s.dat"),
+        "a",
+    );
+    fs::write(broken.join("user.reg"), "not a registry").unwrap();
+    write_user_reg(&good, &["Software\\Foo"]);
+    let manifest = parse_yaml(
+        "Foo:\n  files:\n    <winAppData>/Foo: {}\n  registry:\n    \
+         HKEY_CURRENT_USER/Software/Foo: {}\n",
+    )
+    .unwrap();
+    let config = config(vec![wine_root(&broken), wine_root(&good)], vec![]);
+    let report = scan(&manifest, &config, &no_native_env(vec![]));
+    let [found] = report.games.as_slice() else {
+        panic!("{report:?}");
+    };
+    // The lower-priority prefix must not stand in for the one that could not be read.
+    assert_eq!(found.registry_source, None);
+    assert_eq!(found.unreadable, [broken.join("user.reg")]);
+    assert_eq!(found.files.len(), 1);
+    assert!(matches!(
+        report.problems.as_slice(),
+        [ScanProblem {
+            kind: ProblemKind::Unreadable(_),
+            ..
+        }]
     ));
 }
 

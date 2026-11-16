@@ -143,8 +143,8 @@ pub struct ScanReport {
 struct Cache {
     /// Resolved prefixes by path; `None` when unusable (reported once).
     prefixes: RefCell<HashMap<PathBuf, Option<(Context, String)>>>,
-    /// Parsed `user.reg` by prefix path; `None` when missing or unreadable (reported once).
-    registries: RefCell<HashMap<PathBuf, Option<RegFile>>>,
+    /// Parsed `user.reg` by prefix path: `Ok(None)` when missing, `Err` when unreadable (reported once).
+    registries: RefCell<HashMap<PathBuf, Result<Option<RegFile>, ()>>>,
     /// How many `user.reg` files were read.
     user_reg_loads: Cell<usize>,
     problems: RefCell<Vec<ScanProblem>>,
@@ -183,65 +183,69 @@ impl Cache {
     }
 
     /// Whether the `user.reg` of `prefix` holds any of `keys`. The file is parsed once per scan;
-    /// a missing file holds nothing.
-    fn prefix_has_keys(&self, prefix: &Path, keys: &[String]) -> bool {
+    /// a missing file holds nothing. A failure is reported and returns the failing path.
+    fn prefix_has_keys(&self, prefix: &Path, keys: &[String]) -> Result<bool, PathBuf> {
+        let path = prefix.join("user.reg");
         let mut registries = self.registries.borrow_mut();
-        let file = registries.entry(prefix.to_path_buf()).or_insert_with(|| {
+        let loaded = registries.entry(prefix.to_path_buf()).or_insert_with(|| {
             self.user_reg_loads.set(self.user_reg_loads.get() + 1);
-            let path = prefix.join("user.reg");
-            let loaded = match fs::read_to_string(&path) {
-                Ok(text) => RegFile::parse(&text).map_err(|err| err.to_string()),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => return None,
+            match fs::read_to_string(&path) {
+                Ok(text) => RegFile::parse(&text)
+                    .map(Some)
+                    .map_err(|err| err.to_string()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
                 Err(err) => Err(err.to_string()),
-            };
-            loaded
-                .map_err(|err| self.report(path, ProblemKind::Unreadable(err)))
-                .ok()
-        });
-        let Some(file) = file else {
-            return false;
-        };
-        match file.export(keys) {
-            Ok(export) => !export.keys.is_empty(),
-            Err(err) => {
-                let path = prefix.join("user.reg");
-                self.report(path, ProblemKind::Unreadable(err.to_string()));
-                false
             }
+            .map_err(|err| self.report(path.clone(), ProblemKind::Unreadable(err)))
+        });
+        match loaded {
+            Err(()) => Err(path),
+            Ok(None) => Ok(false),
+            Ok(Some(file)) => match file.export(keys) {
+                Ok(export) => Ok(!export.keys.is_empty()),
+                Err(err) => {
+                    self.report(path.clone(), ProblemKind::Unreadable(err.to_string()));
+                    Err(path)
+                }
+            },
         }
     }
 
-    /// Whether the live Windows registry holds any of `keys`.
+    /// Whether the live Windows registry holds any of `keys`. A failure is reported and returns
+    /// the HKCU root as the failing path.
     #[cfg(windows)]
-    fn windows_has_keys(&self, keys: &[String]) -> bool {
+    fn windows_has_keys(&self, keys: &[String]) -> Result<bool, PathBuf> {
         match crate::registry::windows::export(keys) {
-            Ok(export) => !export.keys.is_empty(),
+            Ok(export) => Ok(!export.keys.is_empty()),
             Err(err) => {
-                self.report(
-                    PathBuf::from(HKCU),
-                    ProblemKind::Unreadable(err.to_string()),
-                );
-                false
+                let path = PathBuf::from(HKCU);
+                self.report(path.clone(), ProblemKind::Unreadable(err.to_string()));
+                Err(path)
             }
         }
     }
 
     #[cfg(not(windows))]
-    fn windows_has_keys(&self, _keys: &[String]) -> bool {
-        false
+    fn windows_has_keys(&self, _keys: &[String]) -> Result<bool, PathBuf> {
+        Ok(false)
     }
 
-    /// The registry source of `ctx` when its registry holds any of `keys`.
-    fn registry_source(&self, ctx: &Context, keys: &[String]) -> Option<RegistrySource> {
-        match ctx {
+    /// The registry source of `ctx` when its registry holds any of `keys`; `Err` is the path
+    /// whose read failed.
+    fn registry_source(
+        &self,
+        ctx: &Context,
+        keys: &[String],
+    ) -> Result<Option<RegistrySource>, PathBuf> {
+        Ok(match ctx {
             Context::Linux(_) => None,
             Context::WindowsNative(_) => self
-                .windows_has_keys(keys)
+                .windows_has_keys(keys)?
                 .then_some(RegistrySource::Windows),
             Context::WinePrefix { prefix, .. } => self
-                .prefix_has_keys(prefix, keys)
+                .prefix_has_keys(prefix, keys)?
                 .then(|| RegistrySource::WinePrefix(prefix.clone())),
-        }
+        })
     }
 }
 
@@ -455,13 +459,25 @@ fn scan_game(
         .filter(|(_, rule)| applies(&rule.when, Os::Windows))
         .filter_map(|(key, _)| hkcu_key(key))
         .collect();
-    let registry_source = if registry_keys.is_empty() {
-        None
-    } else {
-        contexts
-            .iter()
-            .find_map(|(ctx, _)| shared.cache.registry_source(ctx, &registry_keys))
-    };
+    let mut registry_source = None;
+    if !registry_keys.is_empty() {
+        for (ctx, _) in &contexts {
+            match shared.cache.registry_source(ctx, &registry_keys) {
+                Ok(None) => {}
+                Ok(source) => {
+                    registry_source = source;
+                    break;
+                }
+                // A lower-priority source must not stand in for one that could not be read.
+                Err(path) => {
+                    if !unreadable.contains(&path) {
+                        unreadable.push(path);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if files.is_empty() && registry_source.is_none() {
         return None;
     }
