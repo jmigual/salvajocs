@@ -140,6 +140,7 @@ pub struct LinuxFolders {
 
 impl LinuxFolders {
     /// The current user's folders, honouring `XDG_*`. `None` if one cannot be determined.
+    #[cfg(unix)]
     pub fn native() -> Option<Self> {
         Some(Self {
             home: dirs::home_dir()?,
@@ -221,9 +222,12 @@ pub struct GameVars {
 }
 
 impl GameVars {
-    /// Builds the variables of a game. `install_dirs` falls back to `[title]` when empty.
+    /// Builds the variables of a game. `install_dirs` falls back to `[title]` when empty;
+    /// names that are not a single plain path component (manifest input) are dropped.
     /// `<base>` is `<root>/steamapps/common/<game>` for Steam roots and `<root>/<game>` for
-    /// others; `WinePrefix` roots contribute neither `<base>` nor `<root>`.
+    /// others. `<root>` is a Steam root only; `WinePrefix` roots contribute neither.
+    /// `os_user_name` is the user of the context the game is evaluated in (the Wine user for a
+    /// prefix), so build one `GameVars` per context.
     pub fn new(
         title: &str,
         install_dirs: Vec<String>,
@@ -231,21 +235,24 @@ impl GameVars {
         store_game_id: Option<String>,
         os_user_name: String,
     ) -> Self {
-        let game = if install_dirs.is_empty() {
+        let mut game = if install_dirs.is_empty() {
             vec![title.to_owned()]
         } else {
             install_dirs
         };
+        game.retain(|g| is_plain_component(g));
         let mut base = Vec::new();
         let mut root = Vec::new();
         for r in roots {
             let games_dir = match r.kind {
-                RootKind::Steam => r.path.join("steamapps/common"),
+                RootKind::Steam => {
+                    root.push(r.path.clone());
+                    r.path.join("steamapps/common")
+                }
                 RootKind::Other => r.path.clone(),
                 RootKind::WinePrefix => continue,
             };
             base.extend(game.iter().map(|g| games_dir.join(g)));
-            root.push(r.path.clone());
         }
         Self {
             game,
@@ -372,15 +379,21 @@ pub fn glob_free_prefix(template: &str) -> &str {
 fn fold_case(rest: &str) -> String {
     let mut out = String::with_capacity(rest.len() * 4);
     let mut in_class = false;
+    // True until the first member of a class; a `]` there is a member, not the end.
+    let mut first = false;
     for c in rest.chars() {
-        match c {
-            '[' => in_class = true,
-            ']' => in_class = false,
-            c if c.is_ascii_alphabetic() && !in_class => {
+        if !in_class {
+            if c == '[' {
+                in_class = true;
+                first = true;
+            } else if c.is_ascii_alphabetic() {
                 out.extend(['[', c.to_ascii_lowercase(), c.to_ascii_uppercase(), ']']);
                 continue;
             }
-            _ => {}
+        } else if c == ']' && !first {
+            in_class = false;
+        } else if c != '!' || !first {
+            first = false;
         }
         out.push(c);
     }
@@ -426,32 +439,40 @@ fn substitute(rest: &str, vars: &GameVars) -> Vec<String> {
         .collect()
 }
 
-/// Every glob pattern `template` yields in `ctx`: one per candidate base dir and `<game>`.
-/// Empty when the template does not classify or the context lacks its base.
-pub fn expand(template: &str, ctx: &Context, vars: &GameVars) -> Vec<String> {
+/// Every `(base dir, glob pattern)` `template` yields in `ctx`: one per candidate base dir and
+/// `<game>`. A match's tail is `tail_of(match, base dir)`. Empty when the template does not
+/// classify or the context lacks its base.
+pub fn expand(template: &str, ctx: &Context, vars: &GameVars) -> Vec<(PathBuf, String)> {
     let Some((base, rest)) = classify(template, ctx) else {
         return Vec::new();
     };
+    // Absolute holds a host path, which stays case-sensitive (ADR-0008).
+    let case_insensitive = ctx.case_insensitive() && base != Base::Absolute;
     let rests = substitute(&rest, vars);
     base_dirs(base, ctx, vars)
-        .iter()
+        .into_iter()
         .flat_map(|dir| {
             rests
                 .iter()
-                .map(|rest| glob_pattern(dir, rest, ctx.case_insensitive()))
+                .map(|rest| (dir.clone(), glob_pattern(&dir, rest, case_insensitive)))
+                .collect::<Vec<_>>()
         })
         .collect()
 }
 
-/// The path of `real_path` below `base_dir`, with `/` separators. `None` if it is not below it.
+/// The path of `real_path` below `base_dir`, with `/` separators. `None` if it is not below it
+/// or contains anything but plain components (such as `..`).
 pub fn tail_of(real_path: &Path, base_dir: &Path) -> Option<String> {
-    let parts: Vec<_> = real_path
+    let parts: Option<Vec<_>> = real_path
         .strip_prefix(base_dir)
         .ok()?
         .components()
-        .map(|c| c.as_os_str().to_string_lossy())
+        .map(|c| match c {
+            Component::Normal(name) => Some(name.to_string_lossy()),
+            _ => None,
+        })
         .collect();
-    Some(parts.join("/"))
+    Some(parts?.join("/"))
 }
 
 /// Whether `part` is a single plain path component (no `..`, separators or drive prefix).
@@ -477,7 +498,8 @@ pub fn target_path(base_dir: &Path, tail: &str, case_insensitive: bool) -> Optio
                 entries
                     .filter_map(Result::ok)
                     .map(|e| e.file_name())
-                    .find(|name| name.to_string_lossy().eq_ignore_ascii_case(part))
+                    .filter(|name| name.to_string_lossy().eq_ignore_ascii_case(part))
+                    .min()
             })
         } else {
             None

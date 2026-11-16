@@ -24,6 +24,10 @@ fn no_roots_vars() -> GameVars {
     GameVars::new("Game", vec![], &[], None, "me".into())
 }
 
+fn patterns(expanded: Vec<(PathBuf, String)>) -> Vec<String> {
+    expanded.into_iter().map(|(_, pattern)| pattern).collect()
+}
+
 fn classified(template: &str, ctx: &Context) -> (Base, String) {
     classify(template, ctx).unwrap()
 }
@@ -123,27 +127,36 @@ fn classify_rejects_what_the_context_cannot_resolve() {
 #[test]
 fn prefix_and_native_windows_map_same_base_to_same_tail() {
     let prefix = tempfile::tempdir().unwrap();
-    let folders = WinFolders::for_prefix(prefix.path(), "steamuser");
     let in_prefix = Context::WinePrefix {
         prefix: prefix.path().into(),
-        folders,
+        folders: WinFolders::for_prefix(prefix.path(), "steamuser"),
     };
     let native_dir = tempfile::tempdir().unwrap();
-    let native = Context::WindowsNative(WinFolders::for_prefix(native_dir.path(), "me"));
+    let native_folders = WinFolders::for_prefix(native_dir.path(), "me");
+    let native = Context::WindowsNative(native_folders.clone());
     let vars = no_roots_vars();
 
+    // The prefix has the save on disk under a differently cased directory.
+    let saved = prefix
+        .path()
+        .join("drive_c/users/steamuser/AppData/Roaming/foo");
+    fs::create_dir_all(&saved).unwrap();
+    fs::write(saved.join("slot1.sav"), b"x").unwrap();
+
     let template = "<home>/AppData/Roaming/Foo/slot1.sav";
-    let tails: Vec<_> = [&in_prefix, &native]
-        .into_iter()
-        .map(|ctx| {
-            let (base, rest) = classified(template, ctx);
-            let dir = base_dir(base, ctx, &vars).unwrap();
-            let real = dir.join(&rest);
-            (base, tail_of(&real, &dir).unwrap())
-        })
+    let (dir, pattern) = expand(template, &in_prefix, &vars).remove(0);
+    let found: Vec<_> = glob::glob(&pattern)
+        .unwrap()
+        .filter_map(Result::ok)
         .collect();
-    assert_eq!(tails[0], tails[1]);
-    assert_eq!(tails[0], (Base::WinAppData, "Foo/slot1.sav".to_owned()));
+    assert_eq!(found.len(), 1);
+    let tail = tail_of(&found[0], &dir).unwrap();
+    assert_eq!(tail, "foo/slot1.sav");
+
+    let (base, _) = classified(template, &native);
+    let target = target_path(&base_dir(base, &native, &vars).unwrap(), &tail, true).unwrap();
+    assert_eq!(base, Base::WinAppData);
+    assert_eq!(target, native_folders.app_data.join("foo/slot1.sav"));
 }
 
 #[test]
@@ -195,13 +208,29 @@ fn game_dir_resolves_through_roots_and_install_dirs() {
     );
     let found = base_dir(Base::GameDir, &linux_ctx(), &vars);
     assert_eq!(found, Some(steam.path().join("steamapps/common/Real Dir")));
+    // `<root>` is a Steam root only, even when an Other root is listed first.
     assert_eq!(
         base_dir(Base::StoreRoot, &linux_ctx(), &vars),
-        Some(other.path().into())
+        Some(steam.path().into())
     );
 
     let not_installed = GameVars::new("Title", vec![], &roots, None, "me".into());
     assert_eq!(base_dir(Base::GameDir, &linux_ctx(), &not_installed), None);
+}
+
+#[test]
+fn install_dirs_that_are_not_plain_names_are_dropped() {
+    let root = tempfile::tempdir().unwrap();
+    let roots = [Root {
+        path: root.path().into(),
+        kind: RootKind::Other,
+    }];
+    let dirs = ["/etc", "../x", "a/b", "..", "", "ok"]
+        .map(String::from)
+        .to_vec();
+    let vars = GameVars::new("Title", dirs, &roots, None, "me".into());
+    assert_eq!(vars.base, [root.path().join("ok")]);
+    assert_eq!(vars.game, ["ok"]);
 }
 
 #[test]
@@ -246,6 +275,29 @@ fn glob_pattern_matches_lowercase_dir() {
 fn glob_pattern_leaves_existing_classes_alone() {
     let pattern = glob_pattern(Path::new("/b"), "ab/[cd]e/*", true);
     assert_eq!(pattern, "/b/[aA][bB]/[cd][eE]/*");
+    // A `]` first in a class, or after `!`, is a member.
+    assert_eq!(fold_case("[]a]b"), "[]a][bB]");
+    assert_eq!(fold_case("[!]a]b"), "[!]a][bB]");
+}
+
+#[test]
+fn escaped_value_survives_case_folding_in_prefix() {
+    let prefix = tempfile::tempdir().unwrap();
+    let ctx = Context::WinePrefix {
+        prefix: prefix.path().into(),
+        folders: WinFolders::for_prefix(prefix.path(), "steamuser"),
+    };
+    let vars = GameVars::new("Game [GOTY]", vec![], &[], None, "me".into());
+    let saved = prefix.path().join("drive_c/users/steamuser/game [goty]");
+    fs::create_dir_all(&saved).unwrap();
+    fs::write(saved.join("a.sav"), b"x").unwrap();
+
+    let (_, pattern) = expand("<home>/<game>/a.sav", &ctx, &vars).remove(0);
+    let found: Vec<_> = glob::glob(&pattern)
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert_eq!(found, [saved.join("a.sav")]);
 }
 
 #[cfg(unix)]
@@ -273,11 +325,11 @@ fn expand_builds_case_insensitive_patterns_only_in_prefix() {
     let vars = no_roots_vars();
     let template = "<winAppData>/Foo/*.sav";
     assert_eq!(
-        expand(template, &prefix_ctx(), &vars),
+        patterns(expand(template, &prefix_ctx(), &vars)),
         ["/pfx/drive_c/users/steamuser/AppData/Roaming/[fF][oO][oO]/*.[sS][aA][vV]"]
     );
     assert_eq!(
-        expand(template, &native_win_ctx(), &vars),
+        patterns(expand(template, &native_win_ctx(), &vars)),
         ["/fake/drive_c/users/me/AppData/Roaming/Foo/*.sav"]
     );
     assert!(expand(template, &linux_ctx(), &vars).is_empty());
@@ -300,23 +352,23 @@ fn expand_substitutes_and_escapes_values() {
     let ctx = linux_ctx();
 
     assert_eq!(
-        expand(
+        patterns(expand(
             "<home>/<game>/<osUserName>/<storeGameId>/<storeUserId>/x",
             &ctx,
             &vars
-        ),
+        )),
         [
             "/home/me/Game [[]GOTY[]]/me/42/*/x",
             "/home/me/Game/me/42/*/x",
         ]
     );
     let base = steam.path().join("steamapps/common");
-    let patterns = expand("<base>/saves", &ctx, &vars);
+    let escaped = |dir: &str| glob::Pattern::escape(&base.join(dir).to_string_lossy());
     assert_eq!(
-        patterns,
+        patterns(expand("<base>/saves", &ctx, &vars)),
         [
-            format!("{}/Game [[]GOTY[]]/saves", base.display()),
-            format!("{}/Game/saves", base.display()),
+            format!("{}/saves", escaped("Game [GOTY]")),
+            format!("{}/saves", escaped("Game")),
         ]
     );
     assert!(expand("<home>/<storeGameId>", &ctx, &no_roots_vars()).is_empty());
@@ -326,10 +378,35 @@ fn expand_substitutes_and_escapes_values() {
 #[cfg(unix)]
 #[test]
 fn expand_absolute_has_single_slash() {
-    let patterns = expand("/opt/a/*.sav", &linux_ctx(), &no_roots_vars());
-    assert_eq!(patterns, ["/opt/a/*.sav"]);
+    let expanded = expand("/opt/a/*.sav", &linux_ctx(), &no_roots_vars());
+    assert_eq!(expanded, [("/".into(), "/opt/a/*.sav".to_owned())]);
 }
 
+#[cfg(unix)]
+#[test]
+fn absolute_host_path_is_not_case_folded_in_prefix() {
+    let expanded = expand("/opt/a/*.sav", &prefix_ctx(), &no_roots_vars());
+    assert_eq!(expanded, [("/".into(), "/opt/a/*.sav".to_owned())]);
+}
+
+#[test]
+fn expand_names_the_base_dir_each_pattern_came_from() {
+    let one = tempfile::tempdir().unwrap();
+    let two = tempfile::tempdir().unwrap();
+    let roots = [one.path(), two.path()].map(|path| Root {
+        path: path.into(),
+        kind: RootKind::Other,
+    });
+    let vars = GameVars::new("G", vec![], &roots, None, "me".into());
+    let dirs: Vec<_> = expand("<base>/s/*.sav", &linux_ctx(), &vars)
+        .into_iter()
+        .map(|(dir, _)| dir)
+        .collect();
+    assert_eq!(dirs, [one.path().join("G"), two.path().join("G")]);
+}
+
+// NTFS ignores case, so `my games` and `My Games` cannot both be created there.
+#[cfg(unix)]
 #[test]
 fn target_path_reuses_existing_dir_case_insensitively() {
     let dir = tempfile::tempdir().unwrap();
@@ -374,6 +451,25 @@ fn tail_of_requires_base_prefix() {
         Some("".into())
     );
     assert_eq!(tail_of(Path::new("/x/c"), Path::new("/a/b")), None);
+    assert_eq!(
+        tail_of(Path::new("/a/b/../../x/f.sav"), Path::new("/a/b")),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn target_path_picks_case_variant_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["SAVES", "Saves"] {
+        fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    for _ in 0..5 {
+        assert_eq!(
+            target_path(dir.path(), "saves/a", true),
+            Some(dir.path().join("SAVES/a"))
+        );
+    }
 }
 
 #[test]
