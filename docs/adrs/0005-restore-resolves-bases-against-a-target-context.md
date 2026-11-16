@@ -73,6 +73,8 @@ configured roots (research.md §2).
   `<Base>/<tail>` and backed up with an extra `pre-restore` tag. Its `SnapshotMeta` gets `roots`
   for the target roots it covers, so a pre-restore snapshot can itself be restored cross-build.
   This covers a prefix the user picked by hand, which a fresh default scan would miss.
+  Restoring it undoes what the restore overwrote, not what it added: files and registry keys
+  the restore newly created are in no snapshot of the old state and stay behind.
 - **Registry without a Windows target:** in a cross-build restore with no `win` target,
   `registry.json` is skipped with the reason "registry: no Windows target". It is never
   dropped silently.

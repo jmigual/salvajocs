@@ -453,23 +453,37 @@ Dependency graph:
 - **Goal:** ADR-0005, 0006, 0010 runtime side.
 - **Files:** `core/src/restore/run.rs`, `core/src/restore/run/tests.rs`.
 - **Content:**
-  - `list(&Storage) -> Vec<GameBackups>`, grouped by slug, titled by `label`. The default pick
-    is the newest snapshot without `pre-restore`.
-  - `default_targets(title, &Manifest, &[CustomGame], &Environment) -> Targets`.
-  - `fetch(&Storage, snapshot, work_dir) -> StagedGame` restores `/salvajocs/<slug>`.
-  - `run(&Storage, &RestorePlan, wineserver_running: bool) -> Result<RestoreReport>`. It is the
-    only public way to write:
+  - `list(&Storage) -> Result<Vec<GameBackups>, StorageError>`, grouped by slug, titled by
+    `label`, sorted by title. `GameBackups.default` is the newest snapshot without
+    `pre-restore` (`None` when every snapshot has it).
+  - `default_targets(title, &Manifest, &AppConfig, &Environment) -> Targets`: on a Windows host
+    the native folders; on Linux the native folders plus the game's own prefix when it exists
+    (custom `wine_prefix` first, then Proton under `env.steam_roots` and the config's `Steam`
+    roots, as the scan looks them up).
+  - `fetch(&mut Storage, &SnapshotInfo, work_dir) -> Result<StagedGame, FetchError>` restores
+    `/salvajocs/<slug>` into `work_dir`, which must be absent or empty. A symlinked `files/`,
+    `salvajocs.json` or `registry.json` is refused (`WrongKind`), so is an entry of `files/`
+    that is no base directory (`UnknownBase`); symlinks below are listed, never followed.
+  - `run(&mut Storage, title, &RestorePlan, stage_root, wineserver_running: bool) ->
+    Result<RestoreReport, RunError>`. It is the only public way to write. `title` puts the
+    safety backup under the game's `game:<slug>` and label; the caller passes
+    `prefix::wineserver_running()`.
     1. registry writes into a `WinePrefix` while `wineserver_running` → typed error;
     2. safety backup of the existing targets (tag `pre-restore`). Overridden targets are staged
        under `Absolute`/`WinAbsolute` with their full path. It reindexes once and writes
        `SnapshotMeta` with `roots` for the target roots it covers. Step 12's
        `backup_games(&mut Storage, games, stage_root, &["pre-restore"], progress)` does this
-       given a `stage_root` of its own (not the backup mirror's); a game's failure is in its
-       `GameBackup`, not in the outer `Result`. Any error → nothing written;
-    3. apply files and registry. A staged source is copied only when its `symlink_metadata`
-       is a regular file. A target whose final component is an existing symlink is refused
-       with "target is a symlink"; symlinked parent directories are allowed (Proton's legacy
-       dirs).
+       given a `stage_root` of its own (not the backup mirror's, since staging removes files);
+       a game's failure is in its `GameBackup`, not in the outer `Result`. Any error → nothing
+       written. `RestoreReport.safety_backup` is `Created`, `Unchanged` (the repository held
+       that state) or `NothingExisted` (no target file and none of the replaced keys exist;
+       no snapshot is made);
+    3. apply files and registry, each through a temp file renamed over the target. A staged
+       source is copied only when its `symlink_metadata` is a regular file. A target whose
+       final component is an existing symlink is refused with "target is a symlink";
+       symlinked parent directories are allowed (Proton's legacy dirs). Each write's and the
+       registry's outcome is in `RestoreReport.files` (aligned with `plan.writes`) and
+       `RestoreReport.registry`.
 - **Accept:** `cargo test -p salvajocs-core restore::run`:
   - `registry_restore_refused_while_wineserver_runs`;
   - `apply_aborts_when_safety_backup_fails` (the repository location is made unreachable;
@@ -484,7 +498,10 @@ Dependency graph:
   - `proton_backup_restores_into_windows_layout`;
   - `prefix_registry_restores_into_other_prefix`;
   - `staged_symlink_not_restored`;
-  - `symlinked_target_file_refused`.
+  - `symlinked_target_file_refused`;
+  - `default_targets_finds_proton_in_configured_steam_library`;
+  - `fetch_refuses_symlinked_files_dir_and_meta`;
+  - `no_safety_backup_when_no_planned_key_or_file_exists`.
 
 ## 16. GUI shell, jobs, first run, Settings (depends on 8, 9)
 
