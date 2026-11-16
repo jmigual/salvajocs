@@ -343,6 +343,44 @@ fn registry_exported_from_recorded_source() {
     assert!(!registry_file.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn registry_exported_from_recorded_windows_source() {
+    /// Deletes the test key on drop, also when the test fails.
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            // Best effort: a panic here would hide the test failure.
+            let _ = windows_registry::CURRENT_USER.remove_tree(&self.0);
+        }
+    }
+    // A sibling of the `registry::windows` test keys, never below one they replace.
+    let relative = format!("Software\\salvajocs-test-backup-{}", std::process::id());
+    let _cleanup = Cleanup(relative.clone());
+    let key = format!("{HKCU}\\{relative}");
+    let mut live = RegistryExport::default();
+    live.keys.insert(
+        key.clone(),
+        vec![RegValue {
+            name: "v".into(),
+            data: RegData::Sz("live".into()),
+        }],
+    );
+    crate::registry::windows::replace_subtrees(&live).unwrap();
+    let mut scan = game("Foo", vec![]);
+    scan.registry_keys = vec![key];
+    scan.registry_source = Some(RegistrySource::Windows);
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let stage_root = tmp.path().join("stage");
+
+    let outcomes = backup_games(&mut storage, &[scan], &stage_root, &[], |_| {}).unwrap();
+    assert!(written(&outcomes)[0].is_some());
+    let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
+    let staged: RegistryExport = serde_json::from_slice(&fs::read(registry_file).unwrap()).unwrap();
+    assert_eq!(staged, live);
+}
+
 #[test]
 fn failed_game_does_not_stop_the_others() {
     let tmp = tempfile::tempdir().unwrap();
@@ -356,6 +394,25 @@ fn failed_game_does_not_stop_the_others() {
         backup_games(&mut storage, &games, &tmp.path().join("stage"), &[], |_| {}).unwrap();
     assert!(matches!(outcomes[0].result, Err(BackupError::Io { .. })));
     assert!(matches!(outcomes[1].result, Ok(Some(_))));
+
+    // Off Windows a live-registry source cannot be read, which is an error, not an empty export.
+    #[cfg(not(windows))]
+    {
+        let mut windows = game("Windows", vec![]);
+        windows.registry_source = Some(RegistrySource::Windows);
+        let outcomes = backup_games(
+            &mut storage,
+            &[windows],
+            &tmp.path().join("stage"),
+            &[],
+            |_| {},
+        )
+        .unwrap();
+        assert!(matches!(
+            outcomes[0].result,
+            Err(BackupError::NoWindowsRegistry)
+        ));
+    }
 }
 
 /// One reindex plus 20 per-game backups on a local repo, first new and then unchanged
