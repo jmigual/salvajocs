@@ -34,6 +34,13 @@ impl SecretPrompt {
         }
     }
 
+    /// Whether the password is one of the secrets asked for.
+    pub fn asks_password(&self) -> bool {
+        self.answers
+            .iter()
+            .any(|(key, _)| *key == SecretKey::Password)
+    }
+
     /// Draws one field per missing secret. Returns all credentials once the user confirms.
     pub fn ui(&mut self, ui: &mut Ui) -> Option<Credentials> {
         if let Some(error) = self.error {

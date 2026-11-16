@@ -71,6 +71,7 @@ pub struct State {
     pub notices: Vec<String>,
     saving: Option<Job<()>>,
     save_again: bool,
+    remembering: Option<Job<()>>,
 }
 
 impl State {
@@ -86,6 +87,7 @@ impl State {
             notices: Vec::new(),
             saving: None,
             save_again: false,
+            remembering: None,
         }
     }
 
@@ -127,8 +129,33 @@ impl State {
         self.saving = Some(Job::spawn(ctx, move || Ok(config.save(&dir)?)));
     }
 
-    /// Collects a finished save, reporting its failure.
+    /// Stores the session's password in the keyring in the background. When the store refuses
+    /// it, the config falls back to asking each session.
+    pub fn remember_password(&mut self, ctx: &egui::Context) {
+        let Some(config) = &self.config else {
+            return;
+        };
+        let (store, scope) = (self.env.secrets.clone(), config.secret_scope());
+        let password = self.credentials.password.clone();
+        self.remembering = Some(Job::spawn(ctx, move || {
+            Ok(store.set(&scope, &SecretKey::Password, &password)?)
+        }));
+    }
+
+    /// Collects finished background work, reporting failures.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &mut self.remembering
+            && let Some(result) = job.take_result()
+        {
+            self.remembering = None;
+            if let (Err(err), Some(config)) = (result, &mut self.config) {
+                config.password = PasswordMode::Ask;
+                self.notices.push(format!(
+                    "Could not store the password in the keyring ({err:#}); it will be asked each session."
+                ));
+                self.save_config(ctx);
+            }
+        }
         let Some(job) = &mut self.saving else {
             return;
         };

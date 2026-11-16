@@ -199,9 +199,8 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
     init_repo_with(&repository, "right", Compression::Default);
     let mut config = local_config(&repository);
     config.password = PasswordMode::Keyring;
-    secrets
-        .set(&config.secret_scope(), &SecretKey::Password, "bad")
-        .unwrap();
+    let scope = config.secret_scope();
+    secrets.set(&scope, &SecretKey::Password, "bad").unwrap();
     save_config(&env, &config);
     let mut harness = harness(env);
 
@@ -215,6 +214,12 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
         !shows(h, "Repository secrets") && !shows(h, "Opening the repository")
     });
     assert!(!shows(&harness, "could not be opened"));
+    let store = secrets.clone();
+    run_until(
+        &mut harness,
+        "the keyring to hold the right password",
+        move |_| store.get(&scope, &SecretKey::Password).unwrap().as_deref() == Some("right"),
+    );
 }
 
 #[test]

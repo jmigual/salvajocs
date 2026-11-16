@@ -3,7 +3,7 @@
 use std::mem;
 
 use eframe::egui::{self, Color32, Ui};
-use salvajocs_core::config::AppConfig;
+use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
 use crate::env::Env;
@@ -27,8 +27,9 @@ enum Stage {
     Resolving(Job<Resolved>),
     /// Asking for the secrets the keyring did not hold.
     Prompt(SecretPrompt),
-    /// Opening the repository.
-    Opening(Job<Box<Storage>>, Credentials),
+    /// Opening the repository. The flag asks for the typed password to go to the keyring once it
+    /// worked.
+    Opening(Job<Box<Storage>>, Credentials, bool),
     /// The repository is open.
     Ready,
     /// The repository could not be opened; carries why.
@@ -99,14 +100,14 @@ impl App {
         }))
     }
 
-    fn open(&self, ctx: &egui::Context, credentials: Credentials) -> Stage {
+    fn open(&self, ctx: &egui::Context, credentials: Credentials, remember: bool) -> Stage {
         let config = self.state.config.clone();
         let opening = credentials.clone();
         let job = Job::spawn(ctx, move || {
             let config = config.ok_or_else(|| anyhow::anyhow!("no config to open"))?;
             startup::open(&config, &opening)
         });
-        Stage::Opening(job, credentials)
+        Stage::Opening(job, credentials, remember)
     }
 
     fn poll_manifest(&mut self) {
@@ -151,23 +152,34 @@ impl App {
                 None => Stage::Resolving(job),
                 Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
                 Some(Ok(Resolved { found, missing })) if missing.is_empty() => {
-                    self.open(&ctx, found)
+                    self.open(&ctx, found, false)
                 }
                 Some(Ok(Resolved { found, missing })) => {
                     Stage::Prompt(SecretPrompt::new(found, missing))
                 }
             },
             Stage::Prompt(mut prompt) => {
+                // Read before the prompt hands its answers over.
+                let asks_password = prompt.asks_password();
                 match dialog(&ctx, "secret_prompt", |ui| {
                     ui.heading("Repository secrets");
                     prompt.ui(ui)
                 }) {
-                    Some(credentials) => self.open(&ctx, credentials),
+                    Some(credentials) => {
+                        // A password the keyring lacked or had wrong belongs back in it.
+                        let remember = asks_password
+                            && self
+                                .state
+                                .config
+                                .as_ref()
+                                .is_some_and(|config| config.password == PasswordMode::Keyring);
+                        self.open(&ctx, credentials, remember)
+                    }
                     None => Stage::Prompt(prompt),
                 }
             }
-            Stage::Opening(mut job, credentials) => match job.take_result() {
-                None => Stage::Opening(job, credentials),
+            Stage::Opening(mut job, credentials, remember) => match job.take_result() {
+                None => Stage::Opening(job, credentials, remember),
                 Some(Err(err))
                     if matches!(
                         err.downcast_ref::<StorageError>(),
@@ -179,6 +191,9 @@ impl App {
                 Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
                 Some(Ok(storage)) => {
                     self.state.credentials = credentials;
+                    if remember {
+                        self.state.remember_password(&ctx);
+                    }
                     self.state.session = Some(Session {
                         compression: storage.compression(),
                         storage: std::sync::Arc::new(std::sync::Mutex::new(*storage)),
