@@ -15,7 +15,7 @@ use crate::registry::RegistryExport;
 
 mod run;
 
-pub use run::{GameBackups, PRE_RESTORE_TAG, default_targets, list};
+pub use run::{FetchError, GameBackups, PRE_RESTORE_TAG, default_targets, fetch, list};
 
 /// A snapshot of one game restored into a work dir (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -2,9 +2,15 @@
 //! and running a plan behind a safety backup (ADR-0005, ADR-0006, ADR-0010).
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
-use super::Targets;
-use crate::layout::{Context, WinFolders};
+use serde::Deserialize;
+use serde::de::{DeserializeOwned, IntoDeserializer, value};
+
+use super::{StagedGame, Targets};
+use crate::layout::{self, Base, Context, FILES_DIR, META_FILE, REGISTRY_FILE, WinFolders};
 use crate::manifest::{CustomGame, Manifest, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
 use crate::scan::Environment;
@@ -102,6 +108,135 @@ pub fn default_targets(
             Targets { linux, win }
         }
     }
+}
+
+/// Why [`fetch`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum FetchError {
+    /// The snapshot has no `game:<slug>` tag with a plain slug.
+    #[error("snapshot {0} is not a game backup")]
+    NotAGame(String),
+    /// The work dir holds files, which would be taken for staged files.
+    #[error("the work dir is not empty: {0}")]
+    WorkDirNotEmpty(PathBuf),
+    /// An entry of `files/` is not a base directory.
+    #[error("not a base directory in the snapshot: {0}")]
+    UnknownBase(String),
+    /// The restored game could not be read.
+    #[error("I/O failed on {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// `salvajocs.json` or `registry.json` cannot be parsed.
+    #[error("cannot parse {path}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The repository failed.
+    #[error("repository error")]
+    Storage(#[from] StorageError),
+}
+
+fn fetch_io(path: &Path) -> impl FnOnce(io::Error) -> FetchError + '_ {
+    move |source| FetchError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+/// Restores the staged game `/salvajocs/<slug>` of `snapshot` into `work_dir`, which must be
+/// absent or empty, and reads it back (ADR-0004). The result is untrusted until
+/// [`super::plan`] validates it. Files are sorted by base and tail.
+///
+/// # Errors
+/// [`FetchError::NotAGame`] without a `game:` tag, [`FetchError::WorkDirNotEmpty`],
+/// [`FetchError::UnknownBase`] for an entry of `files/` that is no base directory, and the
+/// repository, I/O or JSON error otherwise.
+pub fn fetch(
+    storage: &mut Storage,
+    snapshot: &SnapshotInfo,
+    work_dir: &Path,
+) -> Result<StagedGame, FetchError> {
+    let slug = (snapshot.tags.iter())
+        .find_map(|tag| tag.strip_prefix("game:"))
+        .filter(|slug| layout::is_plain_component(slug))
+        .ok_or_else(|| FetchError::NotAGame(snapshot.id.clone()))?;
+    match fs::read_dir(work_dir) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(FetchError::WorkDirNotEmpty(work_dir.to_path_buf()));
+            }
+        }
+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(fetch_io(work_dir)(err)),
+        Err(_) => {}
+    }
+    storage.restore_path(&snapshot.id, &format!("/salvajocs/{slug}"), work_dir)?;
+
+    let meta = read_json(&work_dir.join(META_FILE))?;
+    let registry_file = work_dir.join(REGISTRY_FILE);
+    let registry = if fs::exists(&registry_file).map_err(fetch_io(&registry_file))? {
+        Some(read_json(&registry_file)?)
+    } else {
+        None
+    };
+    let mut files = Vec::new();
+    let files_dir = work_dir.join(FILES_DIR);
+    if fs::exists(&files_dir).map_err(fetch_io(&files_dir))? {
+        for entry in fs::read_dir(&files_dir).map_err(fetch_io(&files_dir))? {
+            let entry = entry.map_err(fetch_io(&files_dir))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let is_dir = (entry.file_type())
+                .map_err(fetch_io(&entry.path()))?
+                .is_dir();
+            let deserializer = IntoDeserializer::<value::Error>::into_deserializer(name.as_str());
+            let base = Base::deserialize(deserializer)
+                .ok()
+                .filter(|_| is_dir)
+                .ok_or(FetchError::UnknownBase(name))?;
+            let mut tails = Vec::new();
+            collect_tails(&entry.path(), "", &mut tails)?;
+            files.extend(tails.into_iter().map(|tail| (base, tail)));
+        }
+    }
+    files.sort();
+    Ok(StagedGame {
+        root: work_dir.to_path_buf(),
+        meta,
+        files,
+        registry,
+    })
+}
+
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, FetchError> {
+    let bytes = fs::read(path).map_err(fetch_io(path))?;
+    serde_json::from_slice(&bytes).map_err(|source| FetchError::Json {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Pushes the `/`-separated tail of every non-directory below `dir`, after `prefix`. A symlink
+/// is listed, never followed, so the restore can refuse it.
+fn collect_tails(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), FetchError> {
+    for entry in fs::read_dir(dir).map_err(fetch_io(dir))? {
+        let entry = entry.map_err(fetch_io(dir))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let tail = match prefix {
+            "" => name.to_string_lossy().into_owned(),
+            _ => format!("{prefix}/{}", name.to_string_lossy()),
+        };
+        if entry.file_type().map_err(fetch_io(&path))?.is_dir() {
+            collect_tails(&path, &tail, out)?;
+        } else {
+            out.push(tail);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

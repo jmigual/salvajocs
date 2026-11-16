@@ -88,6 +88,28 @@ fn list_default_skips_pre_restore() {
     assert_eq!(list[1].default, None);
 }
 
+#[test]
+fn fetch_reads_back_the_staged_game_into_an_empty_work_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let game = game_with_save(tmp.path(), "Foo", "foo");
+    back_up(&mut storage, tmp.path(), std::slice::from_ref(&game), &[]);
+    let snapshot = &list(&storage).unwrap()[0].snapshots[0];
+    let work = tmp.path().join("work");
+
+    let staged = fetch(&mut storage, snapshot, &work).unwrap();
+    assert_eq!(staged.root, work);
+    assert_eq!(staged.meta.title, "Foo");
+    assert_eq!(staged.meta.roots, game.roots);
+    assert_eq!(staged.files, [(Base::WinAppData, "Game/save.sav".into())]);
+    assert_eq!(staged.registry, None);
+    // Leftovers of an earlier fetch would show up as staged files.
+    assert!(matches!(
+        fetch(&mut storage, snapshot, &work),
+        Err(FetchError::WorkDirNotEmpty(_))
+    ));
+}
+
 /// Creates a Wine prefix at `path` with one user and returns its path.
 fn make_prefix(path: &Path, user: &str) -> PathBuf {
     fs::create_dir_all(path.join("drive_c/users").join(user)).unwrap();
