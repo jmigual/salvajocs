@@ -35,6 +35,9 @@ fn root_and_public_dirs_are_not_users() {
     let prefix = make_prefix(dir.path(), &["root", "Public", "bob"]);
     assert_eq!(wine_user(&prefix).unwrap(), "bob");
 
+    let upper = make_prefix(&dir.path().join("upper"), &["PUBLIC", "Root", "Bob"]);
+    assert_eq!(wine_user(&upper).unwrap(), "Bob");
+
     let only_system = make_prefix(&dir.path().join("empty"), &["root", "Public"]);
     assert!(matches!(
         wine_user(&only_system),
@@ -110,4 +113,48 @@ fn wineserver_is_found_by_process_name() {
     fs::write(proc_dir.path().join("200/comm"), "wineserver\n").unwrap();
     assert!(wineserver_in(proc_dir.path()));
     assert!(!wineserver_in(&proc_dir.path().join("missing")));
+
+    let debian = tempfile::tempdir().unwrap();
+    fs::create_dir(debian.path().join("300")).unwrap();
+    fs::write(debian.path().join("300/comm"), "wineserver64\n").unwrap();
+    assert!(wineserver_in(debian.path()));
+}
+
+#[test]
+fn steamuser_match_is_case_insensitive() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(dir.path(), &["SteamUser", "deck"]);
+    assert_eq!(wine_user(&prefix).unwrap(), "SteamUser");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_user_dir_is_skipped() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(dir.path(), &["alice"]);
+    fs::create_dir(
+        prefix
+            .join("drive_c/users")
+            .join(OsStr::from_bytes(b"b\xffb")),
+    )
+    .unwrap();
+    assert_eq!(wine_user(&prefix).unwrap(), "alice");
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_prefix_is_an_io_error_not_a_missing_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(dir.path(), &["alice"]);
+    fs::set_permissions(&prefix, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = validate_prefix(&prefix);
+    // root ignores permission bits, so the check only applies to unprivileged runs
+    let denied = fs::read_dir(&prefix).is_err();
+    fs::set_permissions(&prefix, fs::Permissions::from_mode(0o755)).unwrap();
+    if denied {
+        assert!(matches!(result, Err(PrefixError::Io { .. })));
+    }
 }

@@ -35,14 +35,34 @@ pub enum PrefixError {
 /// Checks that `path` looks like a Wine prefix: `drive_c/users` exists and one of
 /// `system.reg`, `user.reg` or `dosdevices` does too. The user is not examined.
 pub fn validate_prefix(path: &Path) -> Result<(), PrefixError> {
-    let has_marker = ["system.reg", "user.reg"]
-        .iter()
-        .any(|m| path.join(m).is_file())
-        || path.join("dosdevices").is_dir();
-    if has_marker && path.join("drive_c/users").is_dir() {
+    let mut has_marker = false;
+    for marker in ["system.reg", "user.reg", "dosdevices"] {
+        has_marker |= exists(&path.join(marker))?;
+    }
+    if has_marker && exists(&path.join("drive_c/users"))? {
         Ok(())
     } else {
         Err(PrefixError::NotAPrefix(path.to_path_buf()))
+    }
+}
+
+/// Like `Path::try_exists`, but a missing path or a non-directory parent is `false`, and any
+/// other error (such as permission denied) is `PrefixError::Io`.
+fn exists(path: &Path) -> Result<bool, PrefixError> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(source) => Err(PrefixError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -58,7 +78,10 @@ pub fn wine_user(prefix: &Path) -> Result<String, PrefixError> {
     let mut users = Vec::new();
     for entry in fs::read_dir(&users_dir).map_err(io_err)? {
         let entry = entry.map_err(io_err)?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+        // A name that is not UTF-8 cannot be used in a path template, so it cannot be the user.
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
         let is_system = SYSTEM_USERS.iter().any(|s| s.eq_ignore_ascii_case(&name));
         if !is_system && entry.path().is_dir() {
             users.push(name);
@@ -133,7 +156,7 @@ pub fn proton_prefix(steam_root: &Path, app_id: u64) -> Option<PathBuf> {
     validate_prefix(&pfx).ok().map(|()| pfx)
 }
 
-/// Whether any process is named `wineserver`. Reads `/proc/*/comm`, so it is `false` where
+/// Whether any process is named `wineserver*` (Debian/Ubuntu use `wineserver64`). Reads `/proc/*/comm`, so it is `false` where
 /// there is no procfs (Windows).
 pub fn wineserver_running() -> bool {
     wineserver_in(Path::new("/proc"))
@@ -145,7 +168,7 @@ fn wineserver_in(proc_dir: &Path) -> bool {
     };
     entries.flatten().any(|entry| {
         fs::read_to_string(entry.path().join("comm"))
-            .is_ok_and(|comm| comm.trim_end() == "wineserver")
+            .is_ok_and(|comm| comm.starts_with("wineserver"))
     })
 }
 
