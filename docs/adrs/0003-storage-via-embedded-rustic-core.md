@@ -70,7 +70,9 @@ throwaway program built against them in the scratchpad:
 - Depend on `rustic_core = "=0.13.0"` and `rustic_backend = "=0.7.0"`, pinned exactly in
   `[workspace.dependencies]`. Upgrades are their own commit with the storage tests green.
 - All rustic calls live in `core::storage`, the only module that names rustic types. Everything
-  else uses our own types (`RepoState`, `SnapshotInfo`, `Compression`).
+  else uses our own types (`RepoState`, `SnapshotInfo`, `Compression`). The one exception is
+  test-only: `crates/salvajocs-gui/tests/appearance.rs` writes fixture snapshots with rustic to
+  set their host and time.
 - **Repository location:** a local folder (default), or any backend rustic_backend exposes,
   addressed by repository string plus options map (ADR-0009 stores them). rustic_backend's
   default features (`opendal`, `rest`, `rclone`) stay on.

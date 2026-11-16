@@ -22,8 +22,14 @@ salvajocs-core = { path = "../salvajocs-core" }
 thiserror.workspace = true
 
 [dev-dependencies]
-# No wgpu/snapshot features: the tests only inspect the widget tree, so no renderer is needed.
-egui_kittest.workspace = true
+# `tests/appearance.rs` renders screens to PNGs for the README: `wgpu` provides `Harness::render`,
+# `snapshot` the PNG encoding. An adapter is needed only when that ignored test runs with
+# SALVAJOCS_SCREENSHOTS set.
+egui_kittest = { workspace = true, features = ["snapshot", "wgpu"] }
+# Used by `tests/appearance.rs` alone, to give fixture snapshots a made-up host and time, which
+# `salvajocs_core::storage::Storage` cannot (it stamps this machine's host and the current time).
+rustic_backend.workspace = true
+rustic_core.workspace = true
 tempfile.workspace = true
 
 [lints]
