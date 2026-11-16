@@ -111,6 +111,84 @@ fn fetch_reads_back_the_staged_game_into_an_empty_work_dir() {
     ));
 }
 
+/// Backs `stage` up as a snapshot of the game `Foo`, as a crafted repository could hold it.
+fn crafted_snapshot(storage: &mut Storage, stage: &Path) -> SnapshotInfo {
+    let slug = crate::slug::slug("Foo");
+    let game_tag = format!("game:{slug}");
+    let as_path = format!("/salvajocs/{slug}");
+    let tags = ["salvajocs", game_tag.as_str()];
+    storage
+        .backup_dir(stage, &as_path, &tags, "Foo")
+        .unwrap()
+        .unwrap()
+}
+
+/// A staged game at `stage` with a valid `salvajocs.json`.
+fn crafted_stage(stage: PathBuf) -> PathBuf {
+    let meta = SnapshotMeta {
+        format: crate::layout::SNAPSHOT_FORMAT,
+        title: "Foo".into(),
+        roots: vec![],
+    };
+    write(
+        &stage.join(META_FILE),
+        &serde_json::to_string(&meta).unwrap(),
+    );
+    stage
+}
+
+#[test]
+fn fetch_refuses_an_entry_of_files_that_is_no_base_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let bogus = crafted_stage(tmp.path().join("bogus"));
+    write(&bogus.join("files/Bogus/x.sav"), "x");
+    let base_as_file = crafted_stage(tmp.path().join("file"));
+    write(&base_as_file.join("files/WinHome"), "x");
+
+    for (n, stage) in [&bogus, &base_as_file].into_iter().enumerate() {
+        let snapshot = crafted_snapshot(&mut storage, stage);
+        let work = tmp.path().join(format!("work{n}"));
+        assert!(
+            matches!(
+                fetch(&mut storage, &snapshot, &work),
+                Err(FetchError::UnknownBase(_))
+            ),
+            "{stage:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_refuses_symlinked_files_dir_and_meta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let outside = tmp.path().join("outside");
+    write(&outside.join("WinHome/secret.sav"), "host data");
+    let meta = write(
+        &outside.join("meta.json"),
+        r#"{"format":1,"title":"Foo","roots":[]}"#,
+    );
+    let linked_files = crafted_stage(tmp.path().join("files-link"));
+    std::os::unix::fs::symlink(&outside, linked_files.join(FILES_DIR)).unwrap();
+    let linked_meta = tmp.path().join("meta-link");
+    fs::create_dir_all(&linked_meta).unwrap();
+    std::os::unix::fs::symlink(&meta, linked_meta.join(META_FILE)).unwrap();
+
+    for (n, stage) in [&linked_files, &linked_meta].into_iter().enumerate() {
+        let snapshot = crafted_snapshot(&mut storage, stage);
+        let work = tmp.path().join(format!("work{n}"));
+        assert!(
+            matches!(
+                fetch(&mut storage, &snapshot, &work),
+                Err(FetchError::WrongKind(_))
+            ),
+            "{stage:?}"
+        );
+    }
+}
+
 /// Creates a Wine prefix at `path` with one user and returns its path.
 fn make_prefix(path: &Path, user: &str) -> PathBuf {
     fs::create_dir_all(path.join("drive_c/users").join(user)).unwrap();

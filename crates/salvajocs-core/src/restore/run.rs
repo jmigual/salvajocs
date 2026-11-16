@@ -128,6 +128,10 @@ pub enum FetchError {
     /// An entry of `files/` is not a base directory.
     #[error("not a base directory in the snapshot: {0}")]
     UnknownBase(String),
+    /// `files/` is not a real directory, or `salvajocs.json` or `registry.json` not a regular
+    /// file (a symlink, for instance).
+    #[error("unexpected file type in the snapshot: {0}")]
+    WrongKind(PathBuf),
     /// The restored game could not be read.
     #[error("I/O failed on {path}")]
     Io {
@@ -160,8 +164,9 @@ fn fetch_io(path: &Path) -> impl FnOnce(io::Error) -> FetchError + '_ {
 ///
 /// # Errors
 /// [`FetchError::NotAGame`] without a `game:` tag, [`FetchError::WorkDirNotEmpty`],
-/// [`FetchError::UnknownBase`] for an entry of `files/` that is no base directory, and the
-/// repository, I/O or JSON error otherwise.
+/// [`FetchError::UnknownBase`] for an entry of `files/` that is no base directory,
+/// [`FetchError::WrongKind`] for a symlinked `files/` or JSON file, and the repository, I/O or
+/// JSON error otherwise.
 pub fn fetch(
     storage: &mut Storage,
     snapshot: &SnapshotInfo,
@@ -182,16 +187,18 @@ pub fn fetch(
     }
     storage.restore_path(&snapshot.id, &format!("/salvajocs/{slug}"), work_dir)?;
 
-    let meta = read_json(&work_dir.join(META_FILE))?;
+    let meta_file = work_dir.join(META_FILE);
+    exists_as(&meta_file, false)?;
+    let meta = read_json(&meta_file)?;
     let registry_file = work_dir.join(REGISTRY_FILE);
-    let registry = if fs::exists(&registry_file).map_err(fetch_io(&registry_file))? {
+    let registry = if exists_as(&registry_file, false)? {
         Some(read_json(&registry_file)?)
     } else {
         None
     };
     let mut files = Vec::new();
     let files_dir = work_dir.join(FILES_DIR);
-    if fs::exists(&files_dir).map_err(fetch_io(&files_dir))? {
+    if exists_as(&files_dir, true)? {
         for entry in fs::read_dir(&files_dir).map_err(fetch_io(&files_dir))? {
             let entry = entry.map_err(fetch_io(&files_dir))?;
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -215,6 +222,17 @@ pub fn fetch(
         files,
         registry,
     })
+}
+
+/// Whether `path` exists, as a real directory with `dir` or a regular file without. A snapshot
+/// is untrusted, so a symlink here would read host data as staged.
+fn exists_as(path: &Path, dir: bool) -> Result<bool, FetchError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if (if dir { meta.is_dir() } else { meta.is_file() }) => Ok(true),
+        Ok(_) => Err(FetchError::WrongKind(path.to_path_buf())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(fetch_io(path)(err)),
+    }
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, FetchError> {
