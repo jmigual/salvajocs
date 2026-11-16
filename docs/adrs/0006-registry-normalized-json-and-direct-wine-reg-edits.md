@@ -28,8 +28,10 @@ for Proton, which cannot restore to Windows.
 - **Scope v1:** HKCU only. HKLM manifest keys are skipped with a warning (writing them needs admin
   on Windows).
 - **Windows:** `windows-registry` 0.6.1 reads and writes the subtree (`cfg(windows)` module).
-  Each exported key is spelled as the registry stores it. Replace deletes every subtree before
-  writing, so it is not atomic; restore backs up the current state first (plan step 15).
+  The exported root key keeps the caller's spelling and keys below it the registry's (Wine and
+  Windows JSON may differ in root case; replace matches case-insensitively). Replace deletes
+  every subtree before writing, so it is not atomic; restore backs up the current state first
+  (plan step 15).
   `winreg` 0.56 was rejected: its `RegType` is a closed enum and `get_raw_value` fails on type
   codes above 11, so `RegData::Other` could not round-trip. `windows-registry` 0.100 needs Rust
   1.95, above the workspace's 1.91, hence 0.6.1. Its `set_bytes` debug-asserts terminated data for
