@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 dirs.workspace = true
+glob.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
