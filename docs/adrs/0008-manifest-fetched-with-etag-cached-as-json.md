@@ -81,7 +81,7 @@ dependency yet; once added, the two builds unify.
   - `integration: override | extend`: `override` replaces the manifest entry of the same title;
     `extend` appends its files and keys.
   - `wine_prefix` (ADR-0007).
-  - `pairs: [{linux, windows}]` for cross-build restores (ADR-0011).
+  - `pairs: [{linux, windows}]` and `skips: [template]` for cross-build restores (ADR-0011).
 - The same crate (`serde-saphyr`) writes the YAML config, so there is one YAML dependency.
 
 ## Alternatives considered

@@ -47,7 +47,7 @@ Dependency graph:
 - **Content:**
   - `Manifest`, `GameEntry`, `FileRule`, `RegistryRule`, `When`, `Os`, `Store`, `Tag`.
   - `CustomGame { name, entry: GameEntry, integration: Integration, wine_prefix:
-    Option<PathBuf>, pairs: Vec<Pair> }`, `Integration::{Override, Extend}` and
+    Option<PathBuf>, pairs: Vec<Pair>, skips: Vec<String> }`, `Integration::{Override, Extend}` and
     `Pair { linux, windows }` (ADR-0011).
   - `parse_yaml(&str)` with raised serde-saphyr budget limits (ADR-0008), and
     `to_json`/`from_json`.
@@ -331,17 +331,21 @@ Dependency graph:
 - **Files:** `core/src/crossbuild.rs`, `core/src/crossbuild/tests.rs`.
 - **Content:**
   - `ENGINE_RULES`: Unity and Godot as data (ADR-0011).
-  - `propose(&SnapshotMeta, Option<&GameEntry>, &[Pair], target_family) -> Vec<MappingEntry>`.
+  - `propose(&SnapshotMeta, Option<&GameEntry>, &[Pair], &[String], target_family) ->
+    Vec<MappingEntry>` (the `&[String]` are the saved skips).
     `MappingEntry { root, files, proposed: Option<String>, confidence, candidates, notes }`.
-    Order: saved pair, engine rule, auto-pair, unknown. `Saved`, `EngineRule` and `AutoPair`
-    entries come back already resolved; only `Unknown` needs a choice (ADR-0011).
+    Order: saved pair or skip (deepest match wins, a pair on a tie), engine rule, auto-pair,
+    unknown. A saved skip is `Saved` with `proposed: None`. `Saved`, `EngineRule` and
+    `AutoPair` entries come back already resolved; only `Unknown` needs a choice (ADR-0011).
   - `Choice::{Template(String), Skip}`. A template must classify with `layout::classify` in the
     target family (ADR-0011); real paths are not accepted.
   - `resolve(&[MappingEntry], &[(root, Choice)]) -> Result<Vec<ResolvedMapping>, ResolveError>`.
     A choice for a root replaces its proposal, whatever the confidence. It errors on an
     unclassifiable template and on any unknown root without a choice.
-  - `apply_choices(&mut AppConfig, title, &[(root, Choice)])` stores choices as `Pair`s on the
-    game's custom entry, creating an `extend` custom game if needed.
+  - `apply_choices(&mut AppConfig, title, &[(root, Choice)])` stores `Template` choices as `Pair`s
+    and `Skip` choices as root templates in `skips` on the game's custom entry, creating an
+    `extend` custom game if needed; a choice replaces the root's earlier pair or skip.
+  - `validate_skip(&str)` checks a skip like a pair side.
 - **Accept:** `cargo test -p salvajocs-core crossbuild`:
   - `auto_pairs_single_linux_and_windows_save_dir`;
   - `no_auto_pair_when_ambiguous`;
@@ -354,6 +358,10 @@ Dependency graph:
   - `auto_pair_file_glob_uses_parent_dir` (the 1001 Spikes shape);
   - `unknown_root_lists_target_os_candidates`;
   - `user_choice_saved_as_pairing`;
+  - `skip_choice_is_remembered`;
+  - `template_choice_clears_skip`;
+  - `saved_skip_needs_no_dialog`;
+  - `skip_template_is_validated`;
   - `resolve_rejects_unclassifiable_template`;
   - `resolve_choice_overrides_engine_rule_proposal`;
   - `resolve_requires_every_unknown_root`.
@@ -388,7 +396,7 @@ Dependency graph:
       to the same depth, the one with fewer `<osUserName>` components wins.
     - A mapping whose target is `Absolute`/`WinAbsolute` is skipped as having no target.
     - `RestorePlan { writes, registry, skipped, cross_build: bool, notes }`.
-  - `prepare(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[Pair],
+  - `prepare(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[Pair], &[String],
     &[(root, Choice)]) -> Result<RestorePlan, PrepareError>`. This is the one call the GUI
     makes: it runs `crossbuild::propose`, `resolve` and `plan`, and returns
     `NeedsMapping(Vec<MappingEntry>)` while choices are missing (ADR-0011).
@@ -572,11 +580,14 @@ Dependency graph:
   - override/extend;
   - file templates and registry keys;
   - optional `wine_prefix`;
-  - `pairs` (Linux ↔ Windows template rows).
+  - `pairs` (Linux ↔ Windows template rows);
+  - `skips` ("Skipped folders": root templates a cross-build restore leaves out, including those
+    the mapping dialog saved), each editable and removable, validated inline.
   Saved to config.
 - **Files:** `gui/src/tabs/custom_games.rs`, `gui/tests/custom_games.rs`.
 - **Accept:** `cargo test -p salvajocs-gui custom_games`: adding a game with one pair through the
-  UI and saving produces the expected `AppConfig.custom_games` entry.
+  UI and saving produces the expected `AppConfig.custom_games` entry; a skip saved by
+  `apply_choices` shows in the editor and can be edited and deleted.
 
 ## Out of scope for v1
 

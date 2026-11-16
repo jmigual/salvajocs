@@ -56,12 +56,18 @@ Engine layouts, from primary sources:
 - **Pair:** `Pair { linux: String, windows: String }`, two glob-free path templates naming the
   same logical directory. A custom game (or an `extend` override of a manifest game, ADR-0008)
   carries `pairs: Vec<Pair>`. There is no general redirect engine.
+- **Skip:** a root the user skipped is stored as its placeholder template in
+  `skips: Vec<String>` on the same custom game, so the dialog does not return for it. A skip
+  matches like a pair side, and the deepest match among pairs and skips wins (a pair on a tie).
+  A skip passes the same validation as a pair side. Choosing a target for a root removes its
+  skip, and skipping a root removes its pair.
 - **Mapping a root:** `SnapshotMeta.roots` (ADR-0004) holds `(Base, rest)` per root. A pair
   side classifies the same way. A root matches a pair side when its base is equal and its `rest`
   starts with that side's rest, compared case-insensitively for Windows. Files under the root
   keep their remaining tail under the other side.
 - **Where a mapping comes from, in order:**
-  1. **Saved:** the game's `pairs`.
+  1. **Saved:** the game's `pairs`, or a skip (`Saved` with no target: the root is not
+     restored, no dialog).
   2. **Engine rule:** a small table in `core::crossbuild`, matched on the root alone, so it works
      for custom games too.
      - Unity: `<xdgConfig>/unity3d/{c}/{p}` ↔ `<winLocalAppDataLow>/{c}/{p}`.
@@ -74,7 +80,7 @@ Engine layouts, from primary sources:
      one Windows entry. Their glob-free prefixes form the pair.
   4. **Unknown:** no default. The dialog lists the manifest's save templates for the target OS
      as candidates; the user picks one, types a path, or skips the root.
-- **Who computes what:** `restore::prepare(staged, targets, vars, entry, pairs, choices)` is
+- **Who computes what:** `restore::prepare(staged, targets, vars, entry, pairs, skips, choices)` is
   the core entry point. It calls `crossbuild::propose`, then `crossbuild::resolve`
   (`MappingEntry`s + user `Choice`s → `ResolvedMapping`s; a choice for a root replaces its
   proposal, whatever the confidence), then `restore::plan`. Missing choices
@@ -103,8 +109,9 @@ Engine layouts, from primary sources:
   - **The dialog appears only when at least one root is `Unknown`.** `prepare` then returns
     `NeedsMapping` with every root of the game. The known roots are shown prefilled and
     editable; the unknown ones must be chosen or skipped.
-  - On confirm, all of that game's roots are written to its `pairs` (creating an `extend`
-    custom game if needed). The next restore of that game needs no dialog.
+  - On confirm, all of that game's roots are written to its `pairs`, or to its `skips` for a
+    skipped root (creating an `extend` custom game if needed). The next restore of that game
+    needs no dialog. Pairs and skips stay editable in the Custom games tab.
   - Rows are per root. The user asked "where to restore each file"; a single file can still be
     redirected in the plan preview (per-file override, ADR-0005). That override is not saved as
     a pair.
