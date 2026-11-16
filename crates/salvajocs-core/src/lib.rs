@@ -4,3 +4,4 @@ pub mod layout;
 pub mod manifest;
 pub mod prefix;
 pub mod registry;
+pub mod storage;

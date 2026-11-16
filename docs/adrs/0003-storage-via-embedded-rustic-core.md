@@ -78,13 +78,22 @@ throwaway program built against them in the scratchpad:
 - **Password:** `Credentials::password(p)`, with `""` meaning no password, shown with a warning.
   This is the same key restic derives with `--insecure-no-password`.
 - **Probe:**
-  - `config_id() == None` → `Missing`;
+  - `config_id() == None` → `Missing`, except for a local repository, where rustic reports
+    `None` for any failed `exists()` (such as an unreadable directory). There the probe confirms
+    with `fs::exists(<dir>/config)`; an `Err` there is `Error(message)`;
   - `open` failing with `is_incorrect_password()` → `WrongPassword`;
   - any other error → `Error(message)`, never treated as `Missing`.
 - **Index freshness:** the repository is reindexed once at the start of each backup run (a
   `backup_games` call, or a pre-restore safety backup). Within one run each game is backed up
   once, and its parent comes from an earlier run, which is already in that index. Reindexing
   per game would cost N index loads on remote backends for no gain.
+- **Indexed state:** `core::storage` holds one `Repository<IndexedFullStatus>` (`to_indexed`),
+  not the ids-only index used for backup in the spike. `Repository<OpenStatus>` is not `Clone`,
+  so one value cannot serve both states, and restore needs the full index. A snapshot written
+  in a session is not in that in-memory index, so `restore_path` reindexes first when the
+  session has written one. `reindex` reopens the repository (the key is derived again) rather
+  than using `drop_index().to_indexed()`: both consume the repository, and a failed `to_indexed`
+  would leave `Storage` without one.
 
 ## Alternatives considered
 
@@ -98,6 +107,9 @@ throwaway program built against them in the scratchpad:
 
 ## Consequences
 
+- For `rest:` and `rclone:`, any non-2xx answer to the HEAD on `config` (401, 403, 5xx) reaches
+  us as "no config", so `probe` reports `Missing`. The confirm-before-init dialog showing the
+  location is the guard against initializing over a repository that merely failed to answer.
 - One self-contained binary; no external restic.
 - Every rustic_core upgrade is a code change. The exact pin keeps `cargo update` from breaking
   the build.
