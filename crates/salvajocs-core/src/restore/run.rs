@@ -2,18 +2,24 @@
 //! and running a plan behind a safety backup (ADR-0005, ADR-0006, ADR-0010).
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::slice;
 
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
-use super::{StagedGame, Targets};
+use super::{RestorePlan, StagedGame, Targets, Write};
+use crate::backup::{BackupError, backup_games};
 use crate::layout::{self, Base, Context, FILES_DIR, META_FILE, REGISTRY_FILE, WinFolders};
 use crate::manifest::{CustomGame, Manifest, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
-use crate::scan::Environment;
+#[cfg(windows)]
+use crate::registry::windows::WindowsRegistryError;
+use crate::registry::wine::RegFile;
+use crate::registry::{RegistryError, RegistryExport};
+use crate::scan::{Environment, FoundFile, GameScan, RegistrySource};
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 /// The extra tag of a safety backup made before a restore (ADR-0010).
@@ -237,6 +243,244 @@ fn collect_tails(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Why [`run`] wrote nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    /// The plan replaces registry keys in a Wine prefix while a wineserver runs, which would
+    /// overwrite them on its next save (ADR-0006).
+    #[error("a wineserver is running: close every Wine and Proton program first")]
+    WineserverRunning,
+    /// An overridden target exists but has no `Absolute`/`WinAbsolute` tail (such as a UNC
+    /// path), so the safety backup cannot hold it.
+    #[error("cannot back up the overridden target {0}")]
+    UnstageableTarget(PathBuf),
+    /// The safety backup failed.
+    #[error("the safety backup failed, nothing was restored")]
+    SafetyBackup(#[from] BackupError),
+}
+
+/// Why one write, or the registry, of a plan was not applied.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyError {
+    /// The staged source is a symlink or anything else but a regular file.
+    #[error("the staged file is not a regular file")]
+    SourceNotAFile,
+    /// The target's final component is a symlink, which is never written through.
+    #[error("target is a symlink")]
+    TargetIsSymlink,
+    /// Reading or writing failed.
+    #[error("I/O failed on {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// The prefix's `user.reg` cannot be parsed or the keys cannot be replaced.
+    #[error("cannot update the registry in {path}")]
+    WineRegistry {
+        path: PathBuf,
+        #[source]
+        source: RegistryError,
+    },
+    /// The live Windows registry cannot be written.
+    #[cfg(windows)]
+    #[error("cannot write the Windows registry")]
+    WindowsRegistry(#[from] WindowsRegistryError),
+    /// The plan's registry target has no registry this OS can write.
+    #[error("the registry target cannot be written on this OS")]
+    NoRegistry,
+}
+
+fn apply_io(path: &Path) -> impl FnOnce(io::Error) -> ApplyError + '_ {
+    move |source| ApplyError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+/// What [`run`] did.
+#[derive(Debug)]
+pub struct RestoreReport {
+    /// The safety backup; `None` when nothing existed at the targets or the repository already
+    /// held exactly that state.
+    pub safety_backup: Option<SnapshotInfo>,
+    /// The outcome of each of the plan's writes, in order.
+    pub files: Vec<Result<(), ApplyError>>,
+    /// The outcome of the registry restore; `None` when the plan has none.
+    pub registry: Option<Result<(), ApplyError>>,
+}
+
+/// Runs `plan` for the game `title`; the only way a restore writes (ADR-0005):
+/// 1. a registry restore into a Wine prefix is refused while `wineserver_running` (ADR-0006);
+/// 2. whatever the plan overwrites is backed up as a snapshot of `title` tagged
+///    [`PRE_RESTORE_TAG`], with `roots` for the target roots it covers: existing target files
+///    (an overridden one by its full path under `Absolute`/`WinAbsolute`) and the registry
+///    subtrees it replaces. It is staged in `stage_root`, which must not be the backup mirror's
+///    since staging removes files. Nothing existing at the targets counts as success;
+/// 3. each write is copied into a temp file renamed over its target, then the registry keys
+///    are replaced. A staged source that is not a regular file and a target that is a symlink
+///    are refused; symlinked parent directories are followed (Proton's legacy dirs).
+///
+/// Per-file and registry failures in step 3 are in the [`RestoreReport`]; the rest goes on.
+///
+/// # Errors
+/// [`RunError::WineserverRunning`], [`RunError::UnstageableTarget`] or
+/// [`RunError::SafetyBackup`]; then nothing was written.
+pub fn run(
+    storage: &mut Storage,
+    title: &str,
+    plan: &RestorePlan,
+    stage_root: &Path,
+    wineserver_running: bool,
+) -> Result<RestoreReport, RunError> {
+    if wineserver_running && matches!(plan.registry, Some((_, Context::WinePrefix { .. }))) {
+        return Err(RunError::WineserverRunning);
+    }
+    let checks: Vec<_> = plan.writes.iter().map(check).collect();
+    let mut existing = GameScan {
+        title: title.to_owned(),
+        files: Vec::new(),
+        roots: Vec::new(),
+        registry_keys: Vec::new(),
+        registry_source: None,
+        unreadable: Vec::new(),
+    };
+    for (write, check) in plan.writes.iter().zip(&checks) {
+        let Ok(Some(size)) = *check else {
+            continue;
+        };
+        let (file, root) = match (&write.target_file, &write.target_root) {
+            (Some(file), Some(root)) => (file.clone(), root.clone()),
+            _ => {
+                let tail = layout::tail_of(&write.target, Path::new(""))
+                    .ok_or_else(|| RunError::UnstageableTarget(write.target.clone()))?;
+                let base = if cfg!(windows) {
+                    Base::WinAbsolute
+                } else {
+                    Base::Absolute
+                };
+                ((base, tail.clone()), (base, tail))
+            }
+        };
+        existing.files.push(FoundFile {
+            base: file.0,
+            tail: file.1,
+            real: write.target.clone(),
+            size,
+        });
+        if !existing.roots.contains(&root) {
+            existing.roots.push(root);
+        }
+    }
+    if let Some((export, ctx)) = &plan.registry {
+        existing.registry_keys = export.keys.keys().cloned().collect();
+        existing.registry_source = match ctx {
+            // A prefix without `user.reg` has no keys to lose; applying reports it missing.
+            Context::WinePrefix { prefix, .. } => (prefix.join("user.reg").exists())
+                .then(|| RegistrySource::WinePrefix(prefix.clone())),
+            Context::WindowsNative(_) => Some(RegistrySource::Windows),
+            Context::Linux(_) => None,
+        };
+    }
+    let safety_backup = if existing.files.is_empty() && existing.registry_source.is_none() {
+        None
+    } else {
+        let tags = [PRE_RESTORE_TAG];
+        let games = slice::from_ref(&existing);
+        let mut outcomes = backup_games(storage, games, stage_root, &tags, |_| {})?;
+        let outcome = outcomes.pop().expect("one outcome per game");
+        outcome.result?
+    };
+
+    let files = (plan.writes.iter().zip(checks))
+        .map(|(write, check)| check.and_then(|_| apply_file(write)))
+        .collect();
+    let registry = (plan.registry.as_ref()).map(|(export, ctx)| apply_registry(export, ctx));
+    Ok(RestoreReport {
+        safety_backup,
+        files,
+        registry,
+    })
+}
+
+/// Whether `write` may be applied: its source is a regular file and its target is not a
+/// symlink. Gives the target's size when it is an existing regular file, to back up.
+fn check(write: &Write) -> Result<Option<u64>, ApplyError> {
+    let source = fs::symlink_metadata(&write.source).map_err(apply_io(&write.source))?;
+    if !source.is_file() {
+        return Err(ApplyError::SourceNotAFile);
+    }
+    match fs::symlink_metadata(&write.target) {
+        Ok(target) if target.is_symlink() => Err(ApplyError::TargetIsSymlink),
+        Ok(target) => Ok(target.is_file().then_some(target.len())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(apply_io(&write.target)(err)),
+    }
+}
+
+fn apply_file(write: &Write) -> Result<(), ApplyError> {
+    let mut source = File::open(&write.source).map_err(apply_io(&write.source))?;
+    let modified = (source.metadata())
+        .and_then(|meta| meta.modified())
+        .map_err(apply_io(&write.source))?;
+    replace(&write.target, |file| {
+        io::copy(&mut source, file)?;
+        file.set_modified(modified)
+    })
+}
+
+fn apply_registry(export: &RegistryExport, ctx: &Context) -> Result<(), ApplyError> {
+    match ctx {
+        Context::WinePrefix { prefix, .. } => {
+            let path = prefix.join("user.reg");
+            let text = fs::read_to_string(&path).map_err(apply_io(&path))?;
+            let mut file = RegFile::parse(&text).map_err(|source| ApplyError::WineRegistry {
+                path: path.clone(),
+                source,
+            })?;
+            (file.replace_subtrees(export)).map_err(|source| ApplyError::WineRegistry {
+                path: path.clone(),
+                source,
+            })?;
+            replace(&path, |out| out.write_all(file.to_string().as_bytes()))
+        }
+        #[cfg(windows)]
+        Context::WindowsNative(_) => Ok(crate::registry::windows::replace_subtrees(export)?),
+        _ => Err(ApplyError::NoRegistry),
+    }
+}
+
+/// Writes `target` through `fill` into a new temp file beside it, then renames it over
+/// `target`: a failure never leaves a half-written file, and a link at `target` is replaced,
+/// not written through.
+fn replace(
+    target: &Path,
+    fill: impl FnOnce(&mut File) -> io::Result<()>,
+) -> Result<(), ApplyError> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(apply_io(parent))?;
+    }
+    let mut tmp = target.as_os_str().to_owned();
+    tmp.push(".salvajocs-tmp");
+    let tmp = PathBuf::from(tmp);
+    match fs::remove_file(&tmp) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(apply_io(&tmp)(err)),
+        _ => {}
+    }
+    // `create_new` does not follow a link at `tmp`; the file is closed before the rename, which
+    // Windows needs, and synced so a crash cannot leave the renamed file empty.
+    let written = File::create_new(&tmp).and_then(|mut file| {
+        fill(&mut file)?;
+        file.sync_all()
+    });
+    let result = written.and_then(|()| fs::rename(&tmp, target));
+    if result.is_err() {
+        // Best effort: the write's own error is the one to report.
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(apply_io(target))
 }
 
 #[cfg(test)]

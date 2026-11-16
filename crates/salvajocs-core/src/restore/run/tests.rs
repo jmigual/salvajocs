@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::backup::backup_games;
-use crate::layout::{Base, LinuxFolders};
+use crate::layout::{LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Integration, Steam};
-use crate::scan::{FoundFile, GameScan};
+use crate::registry::{RegData, RegValue};
 use crate::storage::{Compression, RepoLocation};
 
 /// Writes `contents` to `path`, creating its parent directories.
@@ -222,4 +222,290 @@ fn default_targets_on_windows_host_is_native_only() {
             win: Some(native),
         }
     );
+}
+
+const FOO: &str = "HKEY_CURRENT_USER\\Software\\Foo";
+
+/// Writes a `user.reg` holding `Software\Foo` with `v` = `value`, and `Software\Other`.
+fn user_reg(prefix: &Path, value: &str) {
+    write(
+        &prefix.join("user.reg"),
+        &format!(
+            "WINE REGISTRY Version 2\n\n[Software\\\\Foo] 1\n#time=0\n\"v\"=\"{value}\"\n\n\
+             [Software\\\\Other] 1\n#time=0\n\"keep\"=\"me\"\n"
+        ),
+    );
+}
+
+fn foo_registry(value: &str) -> RegistryExport {
+    let mut export = RegistryExport::default();
+    export.keys.insert(
+        FOO.into(),
+        vec![RegValue {
+            name: "v".into(),
+            data: RegData::Sz(value.into()),
+        }],
+    );
+    export
+}
+
+/// `key` and its subtree as the `user.reg` of `prefix` holds them.
+fn reg(prefix: &Path, key: &str) -> RegistryExport {
+    let text = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    RegFile::parse(&text).unwrap().export(&[key]).unwrap()
+}
+
+fn read(path: &Path) -> String {
+    fs::read_to_string(path).unwrap()
+}
+
+/// A repository and a user-picked prefix with the user `me`.
+struct Fixture {
+    tmp: tempfile::TempDir,
+    storage: Storage,
+    prefix: PathBuf,
+    folders: WinFolders,
+}
+
+fn fixture() -> Fixture {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = init_repo(tmp.path());
+    let prefix = make_prefix(&tmp.path().join("picked"), "me");
+    let folders = WinFolders::for_prefix(&prefix, "me");
+    Fixture {
+        tmp,
+        storage,
+        prefix,
+        folders,
+    }
+}
+
+impl Fixture {
+    fn staged(&self) -> PathBuf {
+        self.tmp.path().join("staged")
+    }
+
+    /// A write of the staged `WinAppData` file `tail`, holding `contents`, into the prefix.
+    fn planned(&self, tail: &str, contents: &str) -> Write {
+        Write {
+            source: write(&self.staged().join("files/WinAppData").join(tail), contents),
+            target: self.folders.app_data.join(tail),
+            target_file: Some((Base::WinAppData, tail.into())),
+            target_root: Some((Base::WinAppData, "<game>".into())),
+        }
+    }
+
+    fn ctx(&self) -> Context {
+        in_prefix(&self.prefix, "me")
+    }
+
+    fn run(
+        &mut self,
+        plan: &RestorePlan,
+        wineserver_running: bool,
+    ) -> Result<RestoreReport, RunError> {
+        let stage_root = self.tmp.path().join("pre-restore");
+        run(
+            &mut self.storage,
+            "Foo",
+            plan,
+            &stage_root,
+            wineserver_running,
+        )
+    }
+
+    /// The staged game of the safety backup `info`.
+    fn restored(&mut self, info: &SnapshotInfo) -> PathBuf {
+        let dir = self.tmp.path().join("restored").join(&info.id);
+        let path = format!("/salvajocs/{}", crate::slug::slug("Foo"));
+        self.storage.restore_path(&info.id, &path, &dir).unwrap();
+        dir
+    }
+}
+
+fn plan_of(writes: Vec<Write>, registry: Option<(RegistryExport, Context)>) -> RestorePlan {
+    RestorePlan {
+        writes,
+        registry,
+        skipped: vec![],
+        cross_build: false,
+        notes: vec![],
+    }
+}
+
+fn staged_meta(dir: &Path) -> SnapshotMeta {
+    serde_json::from_slice(&fs::read(dir.join(META_FILE)).unwrap()).unwrap()
+}
+
+#[test]
+fn registry_restore_refused_while_wineserver_runs() {
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes.clone(), Some((foo_registry("new"), f.ctx())));
+
+    assert!(matches!(
+        f.run(&plan, true),
+        Err(RunError::WineserverRunning)
+    ));
+    assert_eq!(read(&target), "old");
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("old"));
+    assert!(f.storage.snapshots("salvajocs").unwrap().is_empty());
+
+    // Files alone leave the registry alone, so they restore while a wineserver runs.
+    let report = f.run(&plan_of(writes, None), true).unwrap();
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert_eq!(read(&target), "new");
+}
+
+#[test]
+fn apply_aborts_when_safety_backup_fails() {
+    let mut f = fixture();
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let fresh = f.folders.app_data.join("Game/fresh.sav");
+    let writes = vec![
+        f.planned("Game/save.sav", "new"),
+        f.planned("Game/fresh.sav", "new"),
+    ];
+    let repo = f.tmp.path().join("repo");
+    let moved = f.tmp.path().join("moved");
+    fs::rename(&repo, &moved).unwrap();
+
+    let plan = plan_of(writes.clone(), None);
+    assert!(matches!(
+        f.run(&plan, false),
+        Err(RunError::SafetyBackup(BackupError::Storage(_)))
+    ));
+    assert_eq!(read(&target), "old");
+    assert!(!fresh.exists());
+
+    // The repository is back, but the game's own backup fails on an unparsable `user.reg`.
+    fs::rename(&moved, &repo).unwrap();
+    write(&f.prefix.join("user.reg"), "not a registry");
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+    assert!(matches!(
+        f.run(&plan, false),
+        Err(RunError::SafetyBackup(BackupError::WineRegistry { .. }))
+    ));
+    assert_eq!(read(&target), "old");
+    assert!(!fresh.exists());
+    assert_eq!(read(&f.prefix.join("user.reg")), "not a registry");
+    assert!(f.storage.snapshots("salvajocs").unwrap().is_empty());
+}
+
+#[test]
+fn safety_backup_covers_planned_targets_in_user_picked_prefix() {
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    let report = f.run(&plan, false).unwrap();
+    let info = report.safety_backup.as_ref().expect("a safety backup");
+    assert_eq!(info.label, "Foo");
+    assert!(info.tags.iter().any(|tag| tag == PRE_RESTORE_TAG));
+    let game_tag = format!("game:{}", crate::slug::slug("Foo"));
+    assert!(info.tags.contains(&game_tag));
+    let dir = f.restored(info);
+    assert_eq!(read(&dir.join("files/WinAppData/Game/save.sav")), "old");
+    let registry: RegistryExport =
+        serde_json::from_slice(&fs::read(dir.join(REGISTRY_FILE)).unwrap()).unwrap();
+    assert_eq!(registry, foo_registry("old"));
+
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert!(matches!(report.registry, Some(Ok(()))));
+    assert_eq!(read(&target), "new");
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("new"));
+}
+
+#[test]
+fn safety_backup_meta_has_roots() {
+    let mut f = fixture();
+    write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let missing = Write {
+        source: write(&f.staged().join("files/WinDocuments/x.sav"), "new"),
+        target: f.folders.documents.join("My Games/Game/x.sav"),
+        target_file: Some((Base::WinDocuments, "My Games/Game/x.sav".into())),
+        target_root: Some((Base::WinDocuments, "My Games/<game>".into())),
+    };
+    let plan = plan_of(vec![f.planned("Game/save.sav", "new"), missing], None);
+
+    let report = f.run(&plan, false).unwrap();
+    let dir = f.restored(report.safety_backup.as_ref().unwrap());
+    let meta = staged_meta(&dir);
+    assert_eq!(meta.title, "Foo");
+    // Only the root of a target that existed, raw as planned.
+    assert_eq!(meta.roots, [(Base::WinAppData, "<game>".to_owned())]);
+    assert!(!dir.join("files/WinDocuments").exists());
+}
+
+#[test]
+fn safety_backup_covers_overridden_target() {
+    let mut f = fixture();
+    let elsewhere = write(&f.tmp.path().join("elsewhere/save.sav"), "old");
+    let mut plan = plan_of(vec![f.planned("Game/save.sav", "new")], None);
+    plan.override_target(0, elsewhere.clone()).unwrap();
+
+    let report = f.run(&plan, false).unwrap();
+    let dir = f.restored(report.safety_backup.as_ref().unwrap());
+    let base = if cfg!(windows) {
+        Base::WinAbsolute
+    } else {
+        Base::Absolute
+    };
+    let tail = layout::tail_of(&elsewhere, Path::new("")).unwrap();
+    let staged = layout::target_path(&dir.join("files").join(base.dir_name()), &tail, false);
+    assert_eq!(read(&staged.unwrap()), "old");
+    assert_eq!(staged_meta(&dir).roots, [(base, tail)]);
+    assert_eq!(read(&elsewhere), "new");
+    assert!(!f.folders.app_data.join("Game/save.sav").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn staged_symlink_not_restored() {
+    let mut f = fixture();
+    let secret = write(&f.tmp.path().join("secret.txt"), "secret");
+    let link = f.planned("Game/link.sav", "");
+    fs::remove_file(&link.source).unwrap();
+    std::os::unix::fs::symlink(&secret, &link.source).unwrap();
+    let plan = plan_of(vec![link, f.planned("Game/save.sav", "new")], None);
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(matches!(report.files[0], Err(ApplyError::SourceNotAFile)));
+    assert!(fs::symlink_metadata(f.folders.app_data.join("Game/link.sav")).is_err());
+    assert!(report.files[1].is_ok());
+    assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "new");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_target_file_refused() {
+    let mut f = fixture();
+    let outside = write(&f.tmp.path().join("outside.txt"), "outside");
+    let link = f.folders.app_data.join("Game/save.sav");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    // Proton links `Documents` to a real directory; writing below it is fine.
+    let real_docs = f.tmp.path().join("real-docs");
+    fs::create_dir_all(&real_docs).unwrap();
+    std::os::unix::fs::symlink(&real_docs, &f.folders.documents).unwrap();
+    let below_link = Write {
+        source: write(&f.staged().join("files/WinDocuments/Game/doc.sav"), "new"),
+        target: f.folders.documents.join("Game/doc.sav"),
+        target_file: Some((Base::WinDocuments, "Game/doc.sav".into())),
+        target_root: Some((Base::WinDocuments, "<game>".into())),
+    };
+    let plan = plan_of(vec![f.planned("Game/save.sav", "new"), below_link], None);
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(matches!(report.files[0], Err(ApplyError::TargetIsSymlink)));
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_eq!(read(&outside), "outside");
+    // The link was neither followed into the safety backup nor replaced.
+    assert!(report.safety_backup.is_none());
+    assert!(report.files[1].is_ok(), "{report:?}");
+    assert_eq!(read(&real_docs.join("Game/doc.sav")), "new");
 }
