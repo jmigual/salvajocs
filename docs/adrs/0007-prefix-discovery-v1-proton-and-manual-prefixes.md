@@ -22,8 +22,11 @@ Ludusavi validates a prefix by `drive_c`, `drive_c/users` and one of
 v1 discovers:
 
 1. **Steam roots.** Linux: `~/.steam/steam`, `~/.local/share/Steam`, and the Flatpak path
-   `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` (to verify in plan step 5). Windows:
-   `C:\Program Files (x86)\Steam` (to verify in plan step 5). A directory is a Steam root when it
+   `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` (confirmed in the flathub
+   `com.valvesoftware.Steam` sources: `--persist=.` and `steam_wrapper.py` move `Steam` to
+   `<state>/.local/share`; installs not yet migrated may still have `.../data/Steam`). Windows:
+   `%ProgramFiles(x86)%\Steam`, else `C:\Program Files (x86)\Steam` (only partly verified: no
+   Valve page states it; ludusavi `config.rs` `find_missing_roots` uses the same paths). A directory is a Steam root when it
    has `steamapps`. Extra library folders are added by the user as Steam roots.
 2. **Proton prefixes** at `<steamroot>/steamapps/compatdata/<steam.id>/pfx` for manifest entries
    that have `steam.id`.

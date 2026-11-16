@@ -130,8 +130,10 @@ Dependency graph:
     error has an `Ambiguous` variant.
   - `steam_roots()`, `proton_prefix(steam_root, app_id)`.
   - `wineserver_running() -> bool` (Linux `/proc/*/comm`; `false` on Windows).
-- **Verify here:** the Flatpak Steam path and the Windows default path. A real Steam root for
-  manual checks is `/home/jmigual/.local/share/Steam`; the dev `$HOME` (distrobox) is different.
+- **Verified in step 5:** the Flatpak Steam path is confirmed from the flathub sources; the
+  Windows default `%ProgramFiles(x86)%\Steam` is only partly verified (see ADR-0007). A real Steam
+  root for manual checks is `/home/jmigual/.local/share/Steam`; the dev `$HOME` (distrobox) is
+  different.
 - **Accept:** `cargo test -p salvajocs-core prefix`:
   - `proton_prefix_picks_steamuser`;
   - `single_user_prefix_picks_that_user`;
