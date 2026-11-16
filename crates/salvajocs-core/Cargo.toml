@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 dirs.workspace = true
 glob.workspace = true
+keyring-core.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 rustic_backend.workspace = true
 rustic_core.workspace = true
@@ -14,6 +15,12 @@ serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
