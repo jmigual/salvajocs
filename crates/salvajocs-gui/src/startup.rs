@@ -1,0 +1,109 @@
+//! The blocking work of starting up, run in jobs: finding the secrets, opening the repository
+//! and loading the manifest.
+
+use std::path::Path;
+
+use anyhow::Result;
+use salvajocs_core::config::{self, AppConfig, PasswordMode};
+use salvajocs_core::manifest::Manifest;
+use salvajocs_core::manifest::fetch;
+use salvajocs_core::secret::SecretKey;
+use salvajocs_core::storage::Storage;
+
+use crate::env::{Env, RefreshManifest};
+
+/// The secrets of the open repository, held for this session only.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Credentials {
+    /// The repository password; empty means none.
+    pub password: String,
+    /// The values of the secret options, by key.
+    pub options: std::collections::BTreeMap<String, String>,
+}
+
+impl Credentials {
+    /// Adds the values the user typed for the secrets that were missing.
+    pub fn answer(&mut self, answers: Vec<(SecretKey, String)>) {
+        for (key, value) in answers {
+            match key {
+                SecretKey::Password => self.password = value,
+                SecretKey::Option(key) => {
+                    self.options.insert(key, value);
+                }
+            }
+        }
+    }
+}
+
+/// What the keyring held for a config, and what the user still has to type.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Resolved {
+    /// The secrets found in the keyring.
+    pub found: Credentials,
+    /// The secrets to ask for, as `config::missing_secrets` lists them.
+    pub missing: Vec<SecretKey>,
+}
+
+/// Looks up the keyring secrets of `config`. A keyring that fails reads as "not stored", so the
+/// secret is asked for instead (ADR-0009).
+pub fn resolve(env: &Env, config: &AppConfig) -> Resolved {
+    let scope = config.secret_scope();
+    let candidates = config
+        .repository_options
+        .iter()
+        .filter(|option| option.secret)
+        .map(|option| SecretKey::Option(option.key.clone()))
+        .chain((config.password == PasswordMode::Keyring).then_some(SecretKey::Password));
+    let looked_up: Vec<(SecretKey, String)> = candidates
+        .filter_map(|key| {
+            let value = env.secrets.get(&scope, &key).ok().flatten()?;
+            Some((key, value))
+        })
+        .collect();
+    let missing = config::missing_secrets(config, |key| {
+        looked_up
+            .iter()
+            .find(|(found, _)| found == key)
+            .map(|(_, value)| value.clone())
+    });
+    let mut found = Credentials::default();
+    found.answer(looked_up);
+    Resolved { found, missing }
+}
+
+/// Opens the repository of `config`; this runs scrypt, so it belongs in a job. Boxed because a
+/// [`Storage`] is large and travels through a job.
+pub fn open(config: &AppConfig, credentials: &Credentials) -> Result<Box<Storage>> {
+    let location = config.location(&credentials.options)?;
+    Ok(Box::new(Storage::open(&location, &credentials.password)?))
+}
+
+/// The manifest as far as it could be loaded, and why not further.
+#[derive(Debug, Default)]
+pub struct ManifestLoad {
+    /// The cached manifest, refreshed when the download worked.
+    pub manifest: Option<Manifest>,
+    /// The download or cache failure to show in a banner.
+    pub error: Option<String>,
+}
+
+fn describe(err: impl Into<anyhow::Error>) -> String {
+    format!("{:#}", err.into())
+}
+
+/// Revalidates the manifest cache with `refresh`, then reads it. A failed download still leaves
+/// the cached copy usable.
+pub fn load_manifest(cache_dir: &Path, refresh: RefreshManifest) -> ManifestLoad {
+    let mut error = refresh(cache_dir).err().map(describe);
+    let manifest = match fetch::load_cached(cache_dir) {
+        Ok(manifest) => manifest,
+        Err(err) => {
+            error.get_or_insert_with(|| describe(err));
+            None
+        }
+    };
+    ManifestLoad { manifest, error }
+}
+
+#[cfg(test)]
+mod tests;
