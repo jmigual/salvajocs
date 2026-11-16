@@ -64,7 +64,8 @@ machine and OS.
     to the source's with std `File::set_modified`.
   - Staged files whose source is gone are removed, except for a game whose scan reported
     unreadable paths: it is staged without deletions, so a read error never removes saves from
-    the next snapshot.
+    the next snapshot. Its `salvajocs.json` also keeps the roots it already lists, after the
+    scan's own, so restore still finds the kept files.
   - `salvajocs.json` and `registry.json` hold no timestamps, are serialized deterministically
     (sorted maps), and are rewritten only when their bytes change.
   An unchanged game therefore keeps identical file metadata, and `skip_if_unchanged`

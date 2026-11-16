@@ -303,12 +303,14 @@ Dependency graph:
     mtime differ, then `File::set_modified`; remove files whose source is gone). It writes
     `SnapshotMeta` (with `roots`) and `registry.json` only when their bytes change. The
     registry export is read fresh from the scan's `registry_source`; an empty export is dropped
-    (no `registry.json`). Nothing is removed from the mirror when the scan reported `unreadable`
-    paths for the game.
-  - `backup_games(&Storage, scans, extra_tags, progress)`: reindexes once, then one game after
-    another,
-    `as_path = /salvajocs/<slug>`, `label` = title, tags `salvajocs` and `game:<slug>`. The
-    registry export comes from `registry::wine` (prefix) or `registry::windows` (native).
+    (no `registry.json`). Nothing is removed from the mirror, and `SnapshotMeta` keeps the roots
+    it already lists, when the scan reported `unreadable` paths for the game.
+  - `backup_games(&mut Storage, games: &[GameScan], stage_root, extra_tags, progress) ->
+    Result<Vec<GameBackup>>`: reindexes once, then one game after another, staged in
+    `stage_root/<slug>`, `as_path = /salvajocs/<slug>`, `label` = title, tags `salvajocs` and
+    `game:<slug>` plus `extra_tags`. Only the reindex fails the call; each `GameBackup` holds
+    its game's result. The registry export comes from `registry::wine` (prefix) or
+    `registry::windows` (native).
 - **Measure here:** wall time of one reindex plus 20 sequential per-game backups on a local repo.
   Note it in ADR-0010.
 - **Accept:** `cargo test -p salvajocs-core backup`:
@@ -411,8 +413,10 @@ Dependency graph:
     1. registry writes into a `WinePrefix` while `wineserver_running` → typed error;
     2. safety backup of the existing targets (tag `pre-restore`). Overridden targets are staged
        under `Absolute`/`WinAbsolute` with their full path. It reindexes once and writes
-       `SnapshotMeta` with `roots` for the target roots it covers. Any error → nothing
-       written;
+       `SnapshotMeta` with `roots` for the target roots it covers. Step 12's
+       `backup_games(&mut Storage, games, stage_root, &["pre-restore"], progress)` does this
+       given a `stage_root` of its own (not the backup mirror's); a game's failure is in its
+       `GameBackup`, not in the outer `Result`. Any error → nothing written;
     3. apply files and registry.
 - **Accept:** `cargo test -p salvajocs-core restore::run`:
   - `registry_restore_refused_while_wineserver_runs`;
