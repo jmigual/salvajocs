@@ -14,7 +14,8 @@ use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
 use salvajocs_core::layout::Base;
 use salvajocs_core::manifest::{
-    self, CustomGame, FileRule, GameEntry, Integration, Manifest, Pair, RegistryRule, Steam, Tag,
+    self, CustomGame, FileRule, GameEntry, Integration, Manifest, Os, Pair, RegistryRule, Steam,
+    Tag, When,
 };
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
@@ -69,6 +70,57 @@ fn run_until_saved(
         .unwrap()
         .unwrap()
         .custom_games
+}
+
+/// The first node labelled exactly `label`, for buttons that repeat once per game.
+fn first<'a>(harness: &'a Harness<'static, App>, label: &'a str) -> egui_kittest::Node<'a> {
+    harness.query_all_by_label(label).next().unwrap()
+}
+
+/// A game whose kept lines carry rules the form cannot show: an OS condition and a tag.
+fn kept_rules_game() -> CustomGame {
+    let when = When {
+        os: Some(Os::Linux),
+        store: None,
+    };
+    CustomGame {
+        name: "Game".into(),
+        entry: GameEntry {
+            files: BTreeMap::from([(
+                "<home>/.game/config".to_owned(),
+                FileRule {
+                    tags: vec![Tag::Config],
+                    when: vec![when.clone()],
+                },
+            )]),
+            registry: BTreeMap::from([(
+                "HKEY_CURRENT_USER/Software/Game".to_owned(),
+                RegistryRule {
+                    tags: vec![Tag::Config],
+                    when: vec![when],
+                },
+            )]),
+            steam: Some(Steam { id: Some(42) }),
+            ..GameEntry::default()
+        },
+        integration: Integration::Override,
+        wine_prefix: None,
+        pairs: vec![pair("<xdgData>/game", "<winAppData>/game")],
+    }
+}
+
+/// What the restore mapping dialog saves for `title`.
+fn dialog_game(title: &str) -> CustomGame {
+    let mut config = local_config("unused");
+    crossbuild::apply_choices(
+        &mut config,
+        title,
+        &[(
+            (Base::XdgData, "Foo".to_owned()),
+            Choice::Template("<winAppData>/Foo".to_owned()),
+        )],
+    );
+    config.custom_games.remove(0)
 }
 
 fn save_rule() -> FileRule {
@@ -177,24 +229,11 @@ fn custom_games_empty_and_duplicate_names_are_rejected() {
 
 #[test]
 fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
-    let kept = FileRule {
-        tags: vec![Tag::Config],
-        when: Vec::new(),
-    };
-    let game = CustomGame {
-        name: "Game".into(),
-        entry: GameEntry {
-            files: BTreeMap::from([("<home>/.game/config".to_owned(), kept)]),
-            steam: Some(Steam { id: Some(42) }),
-            ..GameEntry::default()
-        },
-        integration: Integration::Override,
-        wine_prefix: None,
-        pairs: vec![pair("<xdgData>/game", "<winAppData>/game")],
-    };
-    let (mut harness, env, _tmp) = open_tab(vec![game.clone()], &[]);
+    let game = kept_rules_game();
+    let other = dialog_game("Other");
+    let (mut harness, env, _tmp) = open_tab(vec![game.clone(), other.clone()], &[]);
 
-    harness.get_by_label("Edit").click();
+    first(&harness, "Edit").click();
     harness.run();
     assert!(shows(&harness, "Edit custom game"));
     replace_text(&mut harness, "Name", "Renamed");
@@ -206,33 +245,51 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     let saved = run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.name == "Renamed")
     });
+    let renamed = CustomGame {
+        name: "Renamed".into(),
+        pairs: Vec::new(),
+        ..game
+    };
+    assert_eq!(saved, [renamed.clone(), other.clone()]);
+
+    // Removing one game leaves the other as it was.
+    first(&harness, "Remove").click();
+    harness.run();
+    assert_eq!(
+        run_until_saved(&mut harness, &env, |games| games.len() == 1),
+        [other]
+    );
+}
+
+#[test]
+fn custom_games_removing_an_earlier_game_keeps_the_open_form_on_its_game() {
+    let (mut harness, env, _tmp) = open_tab(vec![kept_rules_game(), dialog_game("Other")], &[]);
+
+    harness.query_all_by_label("Edit").nth(1).unwrap().click();
+    harness.run();
+    first(&harness, "Remove").click();
+    harness.run();
+    assert!(shows(&harness, "Edit custom game"), "the form stays open");
+    replace_text(&mut harness, "Name", "Moved");
+    harness.get_by_label("Save game").click();
+    harness.run();
+
+    let saved = run_until_saved(&mut harness, &env, |games| {
+        games.first().is_some_and(|game| game.name == "Moved")
+    });
     assert_eq!(
         saved,
         [CustomGame {
-            name: "Renamed".into(),
-            pairs: Vec::new(),
-            ..game
+            name: "Moved".into(),
+            ..dialog_game("Other")
         }]
     );
-
-    harness.get_by_label("Remove").click();
-    harness.run();
-    run_until_saved(&mut harness, &env, |games| games.is_empty());
 }
 
 #[test]
 fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     // What the mapping dialog leaves behind for a manifest game the user never added.
-    let mut dialog = local_config("unused");
-    crossbuild::apply_choices(
-        &mut dialog,
-        "Manifest Game",
-        &[(
-            (Base::XdgData, "Foo".to_owned()),
-            Choice::Template("<winAppData>/Foo".to_owned()),
-        )],
-    );
-    let (mut harness, env, _tmp) = open_tab(dialog.custom_games, &["Manifest Game"]);
+    let (mut harness, env, _tmp) = open_tab(vec![dialog_game("Manifest Game")], &["Manifest Game"]);
 
     assert!(shows(&harness, "Manifest Game (extends the manifest game)"));
     harness.get_by_label("Edit").click();
