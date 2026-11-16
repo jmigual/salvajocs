@@ -266,7 +266,9 @@ Dependency graph:
     has files or a `registry_source`. Backup reads the keys fresh from the source.
   - Errors: `WinePrefix` roots are resolved once per scan. A `PrefixError` (such as
     `Ambiguous`) becomes a `ScanProblem { path, kind }` instead of being dropped. A
-    `read_dir` or glob failure becomes a problem and is added to that game's `unreadable`.
+    `read_dir` or glob failure becomes a problem and is added to that game's `unreadable`. So
+    does an unreadable or malformed `user.reg` (or a failed Windows export): the registry walk
+    stops there, so a lower-priority source never stands in for it.
     Nothing is dropped silently.
   - Prefix priority and first-wins per logical path (ADR-0007). Dedupe by real path. Patterns
     come from `layout::expand`; each match's tail is `tail_of(match, base dir)` with the base dir
