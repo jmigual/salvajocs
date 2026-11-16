@@ -66,8 +66,11 @@ dependency yet; once added, the two builds unify.
     literal and wildcard parts alike. It needs no new dependency.
   - Known limit: each part is now a directory listing instead of one `stat`. A `WinePrefix`
     root is checked against every manifest game (ADR-0007), so shared dirs like
-    `AppData/Roaming` are listed thousands of times per scan. Plan step 11 times this. If it is
-    too slow, the fix is to cache directory listings per scan, not to drop case-insensitivity.
+    `AppData/Roaming` are listed thousands of times per scan.
+  - Measured in plan step 11 (release build, 2026-11-16): a full-manifest scan (53 551
+    top-level entries, aliases skipped) against one real Proton prefix as the only `WinePrefix`
+    root takes 6.4-6.7 s (two runs). It runs in a background `Job`, so v1 accepts it. If it
+    must be faster, cache directory listings per scan, not drop case-insensitivity.
   - Rejected: a hand-written per-component `read_dir` walk. It would reimplement `*`/`**`/`?`
     matching that `glob` already does.
 - **Custom games** (stored in config, ADR-0009; the `CustomGame`, `Integration` and `Pair` types
