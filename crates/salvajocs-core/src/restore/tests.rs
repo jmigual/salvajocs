@@ -702,3 +702,65 @@ fn unity_note_kept_when_mapped_automatically() {
     );
     assert_eq!(plan.notes, [PLAYER_PREFS_NOTE]);
 }
+
+#[test]
+fn crafted_root_cannot_read_outside_the_staged_files() {
+    // A root holding `..` would match a tail that leaves `files/<Base>`.
+    let staged = staged(&[(Base::XdgData, "x/..")], &[(Base::XdgData, "x/../save")]);
+    let mapping = ResolvedMapping {
+        root: (Base::XdgData, "x/..".into()),
+        target: Some((Base::WinAppData, "Game".into())),
+    };
+    let plan = plan(&staged, &win_only(native_win()), &vars(), None, &[mapping]).unwrap();
+    assert!(plan.writes.is_empty());
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UnsafePath]
+    );
+}
+
+#[test]
+fn store_game_id_substituted_into_root() {
+    let staged = staged(
+        &[(Base::WinAppData, "<storeGameId>/Saves")],
+        &[(Base::WinAppData, "123/Saves/s.sav")],
+    );
+    let with_id = GameVars::new("Game", vec![], &[], Some("123".into()));
+    let plan_id = plan(&staged, &win_only(native_win()), &with_id, None, &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan_id),
+        [Path::new(
+            "/win/drive_c/users/Alice/AppData/Roaming/123/Saves/s.sav"
+        )]
+    );
+    let plan_none = plan(&staged, &win_only(native_win()), &vars(), None, &[]).unwrap();
+    assert_eq!(
+        plan_none
+            .skipped
+            .iter()
+            .map(|s| s.reason)
+            .collect::<Vec<_>>(),
+        [SkipReason::OutsideRoots]
+    );
+}
+
+#[test]
+fn linux_snapshot_restored_into_proton_build() {
+    // On a Linux host the user picked the Windows build in a prefix, so `linux` is unset.
+    let prefix = tempfile::tempdir().unwrap();
+    let folders = WinFolders::for_prefix(prefix.path(), "steamuser");
+    let ctx = Context::WinePrefix {
+        prefix: prefix.path().into(),
+        folders: folders.clone(),
+    };
+    let staged = staged(
+        &[(Base::XdgConfig, "unity3d/Co/Game")],
+        &[(Base::XdgConfig, "unity3d/Co/Game/save.dat")],
+    );
+    let plan = prepare(&staged, &win_only(ctx), &vars(), None, &[], &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [folders.local_app_data_low.join("Co/Game/save.dat")]
+    );
+    assert!(plan.cross_build);
+}
