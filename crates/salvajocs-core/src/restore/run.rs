@@ -16,7 +16,7 @@ use crate::config::AppConfig;
 use crate::layout::{
     self, Base, Context, FILES_DIR, GameVars, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
 };
-use crate::manifest::{GameEntry, Manifest, merge_custom};
+use crate::manifest::{CustomGame, GameEntry, Manifest, Pair, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
@@ -92,15 +92,8 @@ pub fn default_targets(
             win: Some(win.clone()),
         },
         native => {
-            let mut merged = Manifest {
-                games: (manifest.games.get(title))
-                    .map(|entry| (title.to_owned(), entry.clone()))
-                    .into_iter()
-                    .collect(),
-            };
-            merge_custom(&mut merged, custom);
-            let steam_id = (merged.games.get(title))
-                .and_then(|entry| entry.steam.as_ref()?.id)
+            let steam_id = (game_info(title, manifest, custom).entry)
+                .and_then(|entry| entry.steam?.id)
                 .map(u64::from);
             let custom_prefix = (custom.iter())
                 .filter(|game| game.name == title)
@@ -123,6 +116,36 @@ pub fn default_targets(
             };
             Targets { linux, win }
         }
+    }
+}
+
+/// What the manifest and the custom games say about one game, as a restore needs it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GameInfo {
+    /// The manifest entry with the custom game applied (`manifest::merge_custom`); `None` when
+    /// neither has the title.
+    pub entry: Option<GameEntry>,
+    /// The custom game's saved pairs (ADR-0011).
+    pub pairs: Vec<Pair>,
+    /// The custom game's saved skips (ADR-0011).
+    pub skips: Vec<String>,
+}
+
+/// The entry, pairs and skips of `title` from `manifest` and the `custom` games, the inputs
+/// [`super::prepare`] takes besides the snapshot, targets and variables.
+pub fn game_info(title: &str, manifest: &Manifest, custom: &[CustomGame]) -> GameInfo {
+    let mut merged = Manifest {
+        games: (manifest.games.get(title))
+            .map(|entry| (title.to_owned(), entry.clone()))
+            .into_iter()
+            .collect(),
+    };
+    merge_custom(&mut merged, custom);
+    let custom = || custom.iter().filter(|game| game.name == title);
+    GameInfo {
+        entry: merged.games.remove(title),
+        pairs: custom().flat_map(|game| game.pairs.clone()).collect(),
+        skips: custom().flat_map(|game| game.skips.clone()).collect(),
     }
 }
 

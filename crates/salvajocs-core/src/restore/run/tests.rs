@@ -5,7 +5,7 @@ use super::*;
 use crate::backup::backup_games;
 use crate::config::{AppConfig, PasswordMode};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
-use crate::manifest::{CustomGame, GameEntry, Integration, Steam};
+use crate::manifest::{CustomGame, GameEntry, Integration, Pair, Steam};
 use crate::registry::{RegData, RegValue};
 use crate::storage::{Compression, RepoLocation};
 
@@ -299,6 +299,43 @@ fn default_targets_linux_only_without_prefix() {
             win: None,
         }
     );
+}
+
+#[test]
+fn game_info_merges_the_custom_game_and_takes_its_pairs_and_skips() {
+    let manifest = crate::manifest::parse_yaml(
+        "Foo:\n  steam: {id: 620}\n  files:\n    <winAppData>/Foo: {}\n",
+    )
+    .unwrap();
+    let custom = |name: &str, file: &str| CustomGame {
+        name: name.into(),
+        entry: crate::manifest::parse_yaml(&format!("{name}:\n  files:\n    {file}: {{}}\n"))
+            .unwrap()
+            .games
+            .remove(name)
+            .unwrap(),
+        integration: Integration::Extend,
+        wine_prefix: None,
+        pairs: vec![Pair {
+            linux: format!("<xdgData>/{name}"),
+            windows: format!("<winAppData>/{name}"),
+        }],
+        skips: vec![format!("<home>/{name}")],
+    };
+    let games = [
+        custom("Foo", "<xdgData>/Foo"),
+        custom("Bar", "<xdgData>/Bar"),
+    ];
+
+    let info = game_info("Foo", &manifest, &games);
+
+    let entry = info.entry.unwrap();
+    let files: Vec<_> = entry.files.keys().map(String::as_str).collect();
+    assert_eq!(files, ["<winAppData>/Foo", "<xdgData>/Foo"]);
+    assert_eq!(entry.steam.and_then(|steam| steam.id), Some(620));
+    assert_eq!(info.pairs, games[0].pairs);
+    assert_eq!(info.skips, ["<home>/Foo"]);
+    assert_eq!(game_info("Baz", &manifest, &games), GameInfo::default());
 }
 
 #[test]
