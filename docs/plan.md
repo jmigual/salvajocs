@@ -377,8 +377,8 @@ Dependency graph:
       with "outside the game's save roots". A root is validated against the entry: it must
       equal or lie below (component-wise, case-insensitive for `Win*` bases, no `..`) the
       classified glob-free prefix of an entry file template, a pair side or an engine-rule
-      target of those (an empty-rest prefix from a globbed template trusts only files whose
-      tail matches its glob), else its files are skipped with "save root not declared for
+      target of those (a prefix from a globbed template trusts only files whose tail or a
+      parent dir matches its glob), else its files are skipped with "save root not declared for
       this game" (all of them without an entry). Only registry keys at or below a key the entry
       declares (case-insensitive) are restored, others are skipped with "registry key not
       declared for this game", and without an entry every key is skipped.
@@ -437,7 +437,8 @@ Dependency graph:
   - `os_user_name_root_loses_a_tie_to_a_literal_root`;
   - `root_below_a_pair_side_is_trusted`;
   - `empty_rest_prefix_only_trusts_files_matching_the_template`;
-  - `empty_rest_user_folder_prefix_only_trusts_matching_files`.
+  - `empty_rest_user_folder_prefix_only_trusts_matching_files`;
+  - `shallow_prefix_only_trusts_files_matching_the_template`.
 
 ## 15. Restore list, fetch, safety backup, apply (depends on 5, 12, 14)
 
