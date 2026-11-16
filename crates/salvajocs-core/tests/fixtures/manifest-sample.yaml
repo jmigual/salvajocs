@@ -1,0 +1,177 @@
+"! That Bastard Is Trying To Steal Our Gold !":
+  installDir:
+    "! That Bastard Is Trying To Steal Our Gold !": {}
+  launch:
+    "<base>/TDTTSOG.exe":
+      - when:
+          - os: windows
+            store: steam
+    "<base>/TDTTSOGLinux.x86":
+      - when:
+          - bit: 32
+            os: linux
+            store: steam
+    "<base>/TDTTSOGLinux.x86_64":
+      - when:
+          - bit: 64
+            os: linux
+            store: steam
+  registry:
+    HKEY_CURRENT_USER/SOFTWARE/WTFOMGames/That Dick Trying To Steal Our Gold:
+      tags:
+        - config
+        - save
+  steam:
+    id: 449940
+"-KLAUS-":
+  alias: Klaus
+"AI: The Somnium Files":
+  cloud:
+    steam: true
+  files:
+    "<winLocalAppData>/Packages/44133SpikeChunsoftCo.Ltd.429137939DA7E_f545tdr3ah1rr/SystemAppData/wgs":
+      tags:
+        - save
+      when:
+        - os: windows
+          store: microsoft
+    "<winLocalAppData>/SpikeChunsoft/AI The Somnium Files/PSYNCAUTOSAVE":
+      tags:
+        - save
+      when:
+        - os: windows
+    "<winLocalAppData>/SpikeChunsoft/AI The Somnium Files/PSYNCDEF*":
+      tags:
+        - save
+      when:
+        - os: windows
+    "<winLocalAppData>/SpikeChunsoft/AI The Somnium Files/launcher.ini":
+      tags:
+        - config
+      when:
+        - os: windows
+        - os: windows
+          store: microsoft
+  installDir:
+    AI The Somnium Files: {}
+  launch:
+    "<base>/Launcher.exe":
+      - when:
+          - os: windows
+            store: steam
+  registry:
+    HKEY_CURRENT_USER/Software/SpikeChunsoft/AI_TheSomniumFiles:
+      tags:
+        - config
+      when:
+        - store: microsoft
+  steam:
+    id: 948740
+Hollow Knight:
+  cloud:
+    gog: true
+    steam: true
+  files:
+    "<base>/hollow_knight_Data/Config.ini":
+      tags:
+        - config
+      when:
+        - os: windows
+        - os: linux
+    "<home>/AppData/LocalLow/Team Cherry/Hollow Knight/*.bak":
+      tags:
+        - save
+      when:
+        - os: windows
+    "<home>/AppData/LocalLow/Team Cherry/Hollow Knight/*.dat":
+      tags:
+        - save
+      when:
+        - os: windows
+    "<home>/Library/Application Support/unity.Team Cherry.Hollow Knight":
+      tags:
+        - save
+      when:
+        - os: mac
+    "<home>/Library/Preferences/unity.Team Cherry.Hollow Knight.plist":
+      tags:
+        - config
+      when:
+        - os: mac
+    "<winProgramData>/Packages/TeamCherry.15373CD61C66B_y4jvztpgccj42/SystemAppData/wgs":
+      tags:
+        - config
+        - save
+      when:
+        - os: windows
+          store: microsoft
+    "<xdgConfig>/unity3d/Team Cherry/Hollow Knight/*.dat":
+      tags:
+        - save
+      when:
+        - os: linux
+    "<xdgConfig>/unity3d/Team Cherry/Hollow Knight/prefs":
+      tags:
+        - config
+      when:
+        - os: linux
+  gog:
+    id: 1308320804
+  id:
+    gogExtra:
+      - 1984697392
+      - 2031197911
+    lutris: hollow-knight
+    steamExtra:
+      - 598190
+      - 916000
+  installDir:
+    Hollow Knight: {}
+  launch:
+    "<base>/hollow_knight.app":
+      - when:
+          - os: mac
+            store: steam
+    "<base>/hollow_knight.exe":
+      - when:
+          - os: windows
+            store: steam
+    "<base>/hollow_knight.x86_64":
+      - when:
+          - os: linux
+            store: steam
+  registry:
+    HKEY_CURRENT_USER/Software/Team Cherry/Hollow Knight:
+      tags:
+        - config
+  steam:
+    id: 367520
+Klaus:
+  cloud:
+    steam: true
+  files:
+    "<home>/AppData/LocalLow/La Cosa Entertainment/KLAUS/<storeUserId>/*.sav":
+      when:
+        - os: windows
+          store: steam
+    "<home>/AppData/LocalLow/La Cosa Entertainment/KLAUS/<storeUserId>/*.xml":
+      when:
+        - os: windows
+          store: steam
+    "<home>/Library/Application Support/unity.La Cosa Entertainment.KLAUS/<storeUserId>/*.sav":
+      when:
+        - os: mac
+          store: steam
+  installDir:
+    KLAUS: {}
+  launch:
+    "<base>/KLAUS.app/Contents/MacOS/KLAUS":
+      - when:
+          - os: mac
+            store: steam
+    "<base>/KLAUS.exe":
+      - when:
+          - os: windows
+            store: steam
+  steam:
+    id: 729370
