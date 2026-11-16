@@ -253,3 +253,12 @@ fn snapshot_path_is_the_same_on_every_os() {
     let real = format!("{}/sub/b.sav", src.to_str().unwrap().replace('\\', "/"));
     assert!(storage.restore_path(&info.id, &real, &out).is_err());
 }
+
+#[test]
+fn settled_tree_has_a_current_listing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    wait_for_listing_to_settle(&src);
+    assert!(listing_is_current(&src));
+    assert!(listing_is_current(&src.join("missing")));
+}

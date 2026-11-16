@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to_type_and_path};
 use rustic_core::{
@@ -15,6 +15,10 @@ use rustic_core::{
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
 const ZSTD_DEFAULT_LEVEL: i32 = 3;
+
+/// How long a backup waits for directory listings to catch up with the files (ADR-0003).
+const LISTING_SETTLE_POLLS: u32 = 50;
+const LISTING_SETTLE_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Errors from [`Storage`] and [`probe`].
 #[derive(Debug, thiserror::Error)]
@@ -303,6 +307,7 @@ impl Storage {
         let src = src
             .to_str()
             .ok_or_else(|| StorageError::NonUtf8Path(src.to_path_buf()))?;
+        wait_for_listing_to_settle(Path::new(src));
         let source = PathList::from_string(src)
             .map_err(backend)?
             .sanitize()
@@ -381,6 +386,34 @@ impl Storage {
             .map_err(backend)?;
         repo.restore(plan, &options, nodes, &dest).map_err(backend)
     }
+}
+
+/// Waits, bounded, until the mtimes a directory listing reports match the entries' own. On
+/// Windows the scan reads the listing's cached metadata, which can lag a just-written directory;
+/// rustic hashes directory mtimes, so a lagging read makes an unchanged tree look changed.
+fn wait_for_listing_to_settle(dir: &Path) {
+    for _ in 0..LISTING_SETTLE_POLLS {
+        if listing_is_current(dir) {
+            return;
+        }
+        std::thread::sleep(LISTING_SETTLE_INTERVAL);
+    }
+}
+
+/// Whether every entry under `dir` has the same mtime in its parent's listing as on its own.
+/// Entries that cannot be read count as current: the backup reports them itself.
+fn listing_is_current(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    entries.flatten().all(|entry| {
+        let path = entry.path();
+        let (Ok(listed), Ok(actual)) = (entry.metadata(), fs::symlink_metadata(&path)) else {
+            return true;
+        };
+        listed.modified().ok() == actual.modified().ok()
+            && (!actual.is_dir() || listing_is_current(&path))
+    })
 }
 
 /// Rejects an entry path that is not purely relative and descending, so a crafted `..` or
