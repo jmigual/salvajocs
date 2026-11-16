@@ -17,8 +17,14 @@ cannot restore to Windows.
 - **Interchange form:** `registry.json` in the staging tree (ADR-0004) holds a sorted map from the
   full key path (`HKEY_CURRENT_USER\Software\Foo\Bar`, backslashes) to its values. A value is
   `{ name ("" = default), kind, data }`, with `kind` one of
-  `sz | expand_sz | multi_sz | dword | qword | binary | other(u32)`. Key lookup is
-  case-insensitive. JSON because `serde_json` is already needed for the manifest cache.
+  `sz | expand_sz | multi_sz | dword | qword | binary | other`; `other` is
+  `{"kind":"other","data":{"code":<u32>,"bytes":[..]}}` and keeps types without a typed form (for
+  example Unity's 8-byte `hex(4):` doubles). Key lookup is case-insensitive, on whole path
+  elements. An export of key `K` holds `K` itself (possibly without values) and every existing
+  key below it; restore deletes the subtree of each key in the export, then writes them. The
+  HKCU root itself and paths with empty elements (`A\\B`, trailing `\`) are refused with a typed
+  error: there is no whole-HKCU restore in v1. JSON because `serde_json` is already needed for
+  the manifest cache.
 - **Scope v1:** HKCU only. HKLM manifest keys are skipped with a warning (writing them needs admin
   on Windows).
 - **Windows:** `winreg` reads and writes the subtree (`cfg(windows)` module).
@@ -30,8 +36,11 @@ cannot restore to Windows.
   the user (`/proc/*/comm`). Reads during backup are allowed; they can be up to 30 s stale.
   Upgrade path: match the specific prefix through the wineserver's server directory (dev/inode of
   the prefix). That mechanism is not in research, so verify it before adopting.
-- Escaping of non-ASCII and special characters in `user.reg` is not in research. To verify in
-  plan step 4 against a fixture copied from a real prefix.
+- **Escaping (verified in plan step 4):** wineserver writes every UTF-16 unit above 127 as
+  `\x<hex>` (surrogate pairs as two escapes), never raw UTF-8; see the `registry::wine` module
+  doc for the full rules. The key-name case is verified against a real Proton prefix (an emoji
+  key written by wineserver). Non-ASCII *value strings* go through the same `dump_strW` in
+  wineserver's source, but no real prefix here has one, so they are verified from source only.
 
 ## Alternatives considered
 
