@@ -52,10 +52,19 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   falls back to asking. At startup, `config::missing_secrets` lists the password and every
   secret option not found in the keyring. The GUI prompts for exactly those before opening the
   repository.
-- **Keyring crate:** its layout changed. `keyring` 4.x exposes stores under a `cli` module, and
-  `keyring-core` 1.0 exists separately. Which crate(s) a library should use is to verify in plan
-  step 8. On Linux prefer Secret Service: the kernel keyutils default may not survive a reboot,
-  also to verify in step 8.
+- **Keyring crates (verified in step 8):** `keyring-core` 1.x plus one store crate per OS, each
+  behind a target `cfg`. The `keyring` crate is not used: its `v1` feature pulls the zbus
+  Secret Service store, and its `cli` feature pulls every store.
+  - Windows: `windows-native-keyring-store` (Credential Manager), 15 packages in total.
+  - Linux: `dbus-secret-service-keyring-store` with features `vendored` (builds libdbus, no system
+    `libdbus-1-dev`) and `crypto-rust` (the store does not compile without a crypto feature),
+    49 packages in total. The zbus Secret Service store needs more than 100 packages and an async
+    runtime feature.
+  - `linux-keyutils-keyring-store` is smaller (8 packages) but the kernel keyring is in memory and
+    is cleared by a reboot, so it cannot hold a remembered password.
+  - The store is installed on first use in `core::secret`. A missing store or Secret Service
+    daemon surfaces as `SecretError` and the app falls back to asking.
+  - `keyring_set_get_delete` passed on Linux against a Secret Service daemon (KDE).
 - An empty password means no password (ADR-0003), shown with a warning.
 
 ## Alternatives considered
