@@ -74,14 +74,18 @@ Dependency graph:
   - `glob_pattern(base_dir, rest, case_insensitive) -> String`: escapes `base_dir` and, when the
     flag is set, rewrites each ASCII letter of `rest` into `[xX]`, leaving letters inside an
     existing `[...]` class alone (ADR-0008).
-  - `expand(template, &Context, &GameVars) -> Vec<glob pattern>`. Every pattern is built by
+  - `expand(template, &Context, &GameVars) -> Vec<(PathBuf, String)>`: (base dir, glob
+    pattern), one per candidate base dir. A match's tail is `tail_of(match, base dir)`. Every
+    pattern is built by
     `glob_pattern(base_dir, rest, ctx.case_insensitive())`, so callers cannot bypass the
     case-insensitive rewrite. `GameVars` holds `<game>`, `<base>` and `<root>` candidates,
     `<storeGameId>` and `<osUserName>`; `<storeUserId>` becomes `*`.
   - `GameVars::new(title, install_dirs: Vec<String>, …)`: holds the `installDir` candidates,
     falling back to the title. It takes plain strings, so this step stays independent of
     step 2.
-  - `base_dir(Base, &Context, &GameVars) -> Option<PathBuf>`.
+  - `base_dir(Base, &Context, &GameVars) -> Option<PathBuf>`; `None` for `WinAbsolute`.
+  - `win_absolute_target(tail, &Context) -> Option<PathBuf>`: resolves a `WinAbsolute` tail
+    (drive letter first) in a `WindowsNative` context.
   - `tail_of(real_path, base_dir)`.
   - `target_path(base_dir, tail, case_insensitive: bool)`.
   - `SnapshotMeta { format, title, roots: Vec<(Base, String)> }` (serde) and the names `files/`,
@@ -252,7 +256,8 @@ Dependency graph:
     String)>, registry_keys }`. `roots` holds the glob-free prefixes of templates that matched.
     `registry_keys` is the manifest's applicable HKCU list, not checked against the registry.
   - Prefix priority and first-wins per logical path (ADR-0007). Dedupe by real path. Patterns
-    come from `layout::expand`.
+    come from `layout::expand`; each match's tail is `tail_of(match, base dir)` with the base dir
+    of the pair that produced it.
 - **Measure here:** wall time of a full-manifest scan against one `WinePrefix` root (a real
   prefix under `/home/jmigual/.local/share/Steam/steamapps/compatdata/`). Record it in
   ADR-0008.
@@ -330,7 +335,8 @@ Dependency graph:
   - `Targets { linux: Option<LinuxFolders>, win: Option<Context> }`.
   - `plan(&StagedGame, &Targets, &Roots, &GameVars, &[ResolvedMapping]) ->
     Result<RestorePlan, PlanError>`.
-    - Bases resolve against their own family's target.
+    - Bases resolve against their own family's target. `WinAbsolute` resolves through
+      `win_absolute_target`, not `base_dir`.
     - Files of a family with no target go through the mapping.
     - `registry.json` with no `win` target is skipped with "registry: no Windows target".
     - `RestorePlan { writes, registry, skipped, cross_build: bool }`.

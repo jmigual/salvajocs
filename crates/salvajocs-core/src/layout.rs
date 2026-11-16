@@ -292,7 +292,8 @@ fn base_dirs(base: Base, ctx: &Context, vars: &GameVars) -> Vec<PathBuf> {
 }
 
 /// The directory `base` resolves to in `ctx`, or `None` when the context has no such base or
-/// (for `GameDir`/`StoreRoot`) no candidate exists on disk.
+/// (for `GameDir`/`StoreRoot`) no candidate exists on disk. `WinAbsolute` has no base dir; it
+/// resolves through [`win_absolute_target`].
 pub fn base_dir(base: Base, ctx: &Context, vars: &GameVars) -> Option<PathBuf> {
     let mut dirs = base_dirs(base, ctx, vars).into_iter();
     match base {
