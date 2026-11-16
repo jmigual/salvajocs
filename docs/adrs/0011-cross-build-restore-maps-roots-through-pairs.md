@@ -58,8 +58,12 @@ Engine layouts, from primary sources:
   carries `pairs: Vec<Pair>`. There is no general redirect engine.
 - **Skip:** a root the user skipped is stored as its placeholder template in
   `skips: Vec<String>` on the same custom game, so the dialog does not return for it. A skip
-  matches like a pair side, and the deepest match among pairs and skips wins (a pair on a tie).
-  A skip passes the same validation as a pair side. Choosing a target for a root removes its
+  has no family: it matches a root of the source family whose base and rest equal its own
+  (component boundary, ASCII case ignored for Windows), and the deepest match among pairs and
+  skips wins (a pair on a tie). So a `<home>/Foo` skip applies in both directions: it also skips
+  the Windows root `<home>/Foo` on a later Windows to Linux restore, and choosing a target for
+  that root removes the skip. The editor lists every skip, so the user can remove it. A skip
+  passes the same validation as a pair side. Choosing a target for a root removes its
   skip, and skipping a root removes its pair.
 - **Mapping a root:** `SnapshotMeta.roots` (ADR-0004) holds `(Base, rest)` per root. A pair
   side classifies the same way. A root matches a pair side when its base is equal and its `rest`
