@@ -4,12 +4,27 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "salvajocs_gui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "salvajocs"
 path = "src/main.rs"
 
 [dependencies]
-eframe.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+# glow instead of the default wgpu: a lighter renderer that needs no GPU stack at build time.
+eframe = { workspace = true, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
+rfd = { workspace = true, features = ["xdg-portal"] }
+salvajocs-core = { path = "../salvajocs-core" }
+thiserror.workspace = true
+
+[dev-dependencies]
+# No wgpu/snapshot features: the tests only inspect the widget tree, so no renderer is needed.
+egui_kittest.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
