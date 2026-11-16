@@ -31,7 +31,8 @@ for Proton, which cannot restore to Windows.
   The exported root key keeps the caller's spelling and keys below it the registry's (Wine and
   Windows JSON may differ in root case; replace matches case-insensitively). Replace deletes
   every subtree before writing, so it is not atomic; restore backs up the current state first
-  (plan step 15).
+  (plan step 15). Windows may append a NUL when writing an unterminated `REG_SZ`; the string
+  content is unchanged but the bytes are not exact.
   `winreg` 0.56 was rejected: its `RegType` is a closed enum and `get_raw_value` fails on type
   codes above 11, so `RegData::Other` could not round-trip. `windows-registry` 0.100 needs Rust
   1.95, above the workspace's 1.91, hence 0.6.1. Its `set_bytes` debug-asserts terminated data for
