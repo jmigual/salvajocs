@@ -112,11 +112,14 @@ fn windows_save_plans_into_prefix_user() {
         folders: folders.clone(),
     };
     let plan = plan(&staged, &win_only(ctx), &[], &vars(), &[]).unwrap();
-    // The existing `co` is reused instead of creating `Co` next to it (ADR-0005).
+    // The existing `co` is reused instead of creating `Co` next to it (ADR-0005). NTFS ignores
+    // case, so there the existing `co` is found under the tail's spelling.
+    #[cfg(unix)]
     assert_eq!(
         targets_of(&plan),
         [folders.local_app_data_low.join("co/Game/save.dat")]
     );
+    assert_eq!(plan.writes.len(), 1);
     assert_eq!(
         plan.writes[0].target_root,
         file(Base::WinLocalAppDataLow, "Co/Game")
@@ -248,19 +251,21 @@ fn override_target_rejects_relative_path() {
     let staged = staged(&[(Base::XdgData, "Game")], &[(Base::XdgData, "Game/a")]);
     let mut plan = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
     let before = plan.clone();
+    // Absolute on every host, unlike `/elsewhere` on Windows.
+    let elsewhere = std::env::temp_dir().join("elsewhere/a");
     assert_eq!(
         plan.override_target(0, "elsewhere/a".into()),
         Err(OverrideError::RelativePath)
     );
     assert_eq!(
-        plan.override_target(1, "/elsewhere/a".into()),
+        plan.override_target(1, elsewhere.clone()),
         Err(OverrideError::NoSuchWrite(1))
     );
     assert_eq!(plan, before);
 
-    plan.override_target(0, "/elsewhere/a".into()).unwrap();
+    plan.override_target(0, elsewhere.clone()).unwrap();
     let write = &plan.writes[0];
-    assert_eq!(write.target, Path::new("/elsewhere/a"));
+    assert_eq!(write.target, elsewhere);
     assert_eq!(write.target_file, None);
     assert_eq!(write.target_root, None);
 }
@@ -375,6 +380,31 @@ fn cross_build_unknown_entry_blocks_restore() {
 }
 
 #[test]
+fn nested_roots_count_files_under_the_deepest() {
+    let staged = staged(
+        &[(Base::XdgData, "Game"), (Base::XdgData, "Game/sub")],
+        &[
+            (Base::XdgData, "Game/a.sav"),
+            (Base::XdgData, "Game/sub/b.sav"),
+            (Base::XdgData, "Game/sub/c.sav"),
+        ],
+    );
+    let result = prepare(
+        &staged,
+        &win_only(native_win()),
+        &[],
+        &vars(),
+        None,
+        &[],
+        &[],
+    );
+    let Err(PrepareError::NeedsMapping(entries)) = result else {
+        panic!("expected NeedsMapping, got {result:?}");
+    };
+    assert_eq!(entries.iter().map(|e| e.files).collect::<Vec<_>>(), [1, 2]);
+}
+
+#[test]
 fn prepare_with_choices_returns_plan() {
     let staged = linux_unity_and_unknown();
     let targets = win_only(native_win());
@@ -449,8 +479,9 @@ fn prepare_engine_rule_returns_plan_without_choices() {
 
 #[test]
 fn linux_save_maps_onto_windows_via_pair() {
-    // Raw roots and pair sides keep `<game>`; the install dir differs from the title.
-    let vars = GameVars::new("Title", vec!["Real Name".into()], &[], None, "me".into());
+    // Raw roots and pair sides keep `<game>`; the target uses the candidate the root matched.
+    let dirs = vec!["Missing".into(), "Real Name".into()];
+    let vars = GameVars::new("Title", dirs, &[], None, "me".into());
     let staged = staged(
         &[(Base::XdgData, "<game>")],
         &[(Base::XdgData, "Real Name/save.dat")],
