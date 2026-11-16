@@ -102,7 +102,8 @@ fn windows_save_plans_into_prefix_user() {
     let staged = staged(
         &[(Base::WinLocalAppDataLow, "Co/Game")],
         &[
-            (Base::WinLocalAppDataLow, "Co/Game/save.dat"),
+            // Scanned case-insensitively, so the disk case can differ from the root's.
+            (Base::WinLocalAppDataLow, "CO/Game/save.dat"),
             (Base::WinAbsolute, "C/Games/Foo/save.dat"),
         ],
     );
@@ -115,6 +116,10 @@ fn windows_save_plans_into_prefix_user() {
     assert_eq!(
         targets_of(&plan),
         [folders.local_app_data_low.join("co/Game/save.dat")]
+    );
+    assert_eq!(
+        plan.writes[0].target_root,
+        file(Base::WinLocalAppDataLow, "Co/Game")
     );
     // A drive path restores to native Windows only.
     assert_eq!(
