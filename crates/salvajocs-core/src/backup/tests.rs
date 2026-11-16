@@ -159,6 +159,12 @@ fn restage_unchanged_keeps_inode_and_mtime() {
     assert_eq!(mtime(&stage_dir.join(META_FILE)), old);
     assert_eq!(mtime(&stage_dir.join(REGISTRY_FILE)), old);
 
+    // The same mtime with another size is a change.
+    write(&staged, "sav");
+    set_mtime(&staged, mtime(&save));
+    stage(&scan, &registry("a"), &stage_dir).unwrap();
+    assert_eq!(fs::read_to_string(&staged).unwrap(), "save");
+
     // A new mtime alone, same size, is a change.
     let touched = mtime(&save) + Duration::from_secs(10);
     set_mtime(&save, touched);
@@ -278,6 +284,44 @@ fn restage_replaces_a_link_at_the_destination() {
     assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
     assert!(fs::symlink_metadata(&staged).unwrap().is_file());
     assert_eq!(fs::read_to_string(&staged).unwrap(), "changed");
+}
+
+#[test]
+fn stage_rejects_unsafe_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let save = write(&tmp.path().join("src/save.dat"), "save");
+    let stage_dir = tmp.path().join("stage");
+    let scan = game("Foo", vec![found(Base::WinAppData, "Foo/save.dat", &save)]);
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+
+    for tail in ["../x", "Foo/../../x", "../../../x"] {
+        // Without the good file: had the tail been checked after the removal pass, it would be gone.
+        let bad = game("Foo", vec![found(Base::WinAppData, tail, &save)]);
+        assert!(matches!(
+            stage(&bad, &RegistryExport::default(), &stage_dir),
+            Err(BackupError::UnsafeTail(_))
+        ));
+    }
+    assert!(stage_dir.join("files/WinAppData/Foo/save.dat").is_file());
+    assert!(!stage_dir.join("files/x").exists());
+    assert!(!tmp.path().join("x").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn restage_removes_a_link_without_following_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let save = write(&tmp.path().join("src/save.dat"), "save");
+    let scan = game("Foo", vec![found(Base::WinAppData, "Foo/save.dat", &save)]);
+    let stage_dir = tmp.path().join("stage");
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    let target = write(&tmp.path().join("elsewhere/keep.txt"), "keep");
+    let link = stage_dir.join("files/WinAppData/link");
+    std::os::unix::fs::symlink(target.parent().unwrap(), &link).unwrap();
+
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
 }
 
 fn staged_meta(stage_dir: &Path) -> SnapshotMeta {
