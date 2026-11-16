@@ -21,6 +21,7 @@ dbus-secret-service-keyring-store.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store.workspace = true
+windows-registry.workspace = true
 
 [dev-dependencies]
 opendal.workspace = true

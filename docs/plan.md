@@ -181,8 +181,8 @@ Dependency graph:
 ## 7. CI on GitHub Actions (depends on 6)
 
 - **Goal:** every push runs the suite on Linux and Windows. This is the gate for every
-  Windows-only check (`WinFolders::native()`, `winreg`, Known Folders, storage paths, keyring on
-  Windows).
+  Windows-only check (`WinFolders::native()`, `windows-registry`, Known Folders, storage paths,
+  keyring on Windows).
 - **Files:** `.github/workflows/ci.yml`.
 - **Content:**
   - Jobs on `ubuntu-latest` and `windows-latest`. Each runs:
@@ -240,7 +240,8 @@ Dependency graph:
 - **Goal:** ADR-0006 Windows side.
 - **Files:** `core/src/registry/windows.rs` and its `tests.rs` (`cfg(windows)`).
 - **Content:** `export(keys) -> RegistryExport` and `replace_subtrees(&RegistryExport)` through
-  `winreg`, HKCU only.
+  `windows-registry`, HKCU only, spelled as the registry stores each key; not atomic (the restore
+  safety backup of step 15 covers failures).
 - **Accept:** step 7's Windows job is green and includes `windows_registry_round_trip` under
   `HKCU\Software\salvajocs-test`.
 
