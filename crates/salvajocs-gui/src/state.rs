@@ -1,6 +1,6 @@
 //! What every screen shares: the config, the open repository and the notices to show.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use eframe::egui;
 use salvajocs_core::config::{AppConfig, PasswordMode};
@@ -15,6 +15,13 @@ use crate::startup::Credentials;
 
 /// The open repository, shared with the jobs that work on it.
 pub type SharedStorage = Arc<Mutex<Storage>>;
+
+/// Locks the repository for a job; a lock poisoned by a panicked job is reported, not unwrapped.
+pub fn lock_storage(storage: &SharedStorage) -> anyhow::Result<MutexGuard<'_, Storage>> {
+    storage
+        .lock()
+        .map_err(|_| anyhow::anyhow!("the repository lock is poisoned; restart the app"))
+}
 
 /// An open repository and what the screens show about it without locking it.
 pub struct Session {
@@ -89,6 +96,12 @@ impl State {
             save_again: false,
             remembering: None,
         }
+    }
+
+    /// The manifest to scan and restore with: the loaded one, or an empty one so that custom games
+    /// still work.
+    pub fn manifest_or_empty(&self) -> Arc<Manifest> {
+        self.manifest.clone().unwrap_or_default()
     }
 
     /// Makes a repository the user just connected the current one and saves the config. Roots and

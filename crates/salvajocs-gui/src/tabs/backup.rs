@@ -6,14 +6,12 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use anyhow::anyhow;
 use eframe::egui::{self, Color32, Ui};
 use salvajocs_core::backup::{self, GameBackup};
-use salvajocs_core::manifest::Manifest;
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 
 use crate::job::Job;
-use crate::state::{SharedStorage, State};
+use crate::state::{SharedStorage, State, lock_storage};
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -210,7 +208,7 @@ impl BackupTab {
         let enabled = !manifest_loading && !self.busy();
         let button = ui.add_enabled(enabled, egui::Button::new("Scan for games"));
         if let (true, Some(config)) = (button.clicked(), &state.config) {
-            let (manifest, config) = (manifest(state), config.clone());
+            let (manifest, config) = (state.manifest_or_empty(), config.clone());
             let environment = state.env.environment.clone();
             self.scan_error = None;
             self.scanning = Some(Job::spawn(ui.ctx(), move || {
@@ -291,7 +289,11 @@ impl BackupTab {
         }));
         self.progress = progress.clone();
         self.run_error = None;
-        let (manifest, config, titles) = (manifest(state), config.clone(), self.selected.clone());
+        let (manifest, config, titles) = (
+            state.manifest_or_empty(),
+            config.clone(),
+            self.selected.clone(),
+        );
         let (storage, stage_root, waker) = (
             session.storage.clone(),
             state.env.cache_dir.join("stage"),
@@ -350,11 +352,6 @@ impl BackupTab {
     }
 }
 
-/// The manifest to scan with: the loaded one, or an empty one so that custom games still scan.
-fn manifest(state: &State) -> Arc<Manifest> {
-    state.manifest.clone().unwrap_or_default()
-}
-
 fn lock(progress: &Mutex<Progress>) -> MutexGuard<'_, Progress> {
     progress.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -366,9 +363,7 @@ fn back_up(
     stage_root: &Path,
     progress: impl FnMut(&GameBackup),
 ) -> anyhow::Result<()> {
-    let mut storage = storage
-        .lock()
-        .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))?;
+    let mut storage = lock_storage(storage)?;
     backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
     Ok(())
 }

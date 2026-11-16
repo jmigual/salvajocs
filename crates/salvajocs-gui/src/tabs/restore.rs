@@ -22,7 +22,7 @@ use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
-use crate::state::{SharedStorage, State};
+use crate::state::{State, lock_storage};
 
 mod mapping;
 
@@ -375,7 +375,7 @@ impl RestoreTab {
         self.selected = None;
         self.pick = None;
         self.listing = Some(Job::spawn(ctx, move || {
-            Ok(restore::list(&*lock(&storage)?)?)
+            Ok(restore::list(&*lock_storage(&storage)?)?)
         }));
     }
 
@@ -457,7 +457,11 @@ impl RestoreTab {
         self.pick = None;
         self.error = None;
         self.forget_plan();
-        let (title, manifest, config) = (game.title.clone(), manifest(state), config.clone());
+        let (title, manifest, config) = (
+            game.title.clone(),
+            state.manifest_or_empty(),
+            config.clone(),
+        );
         let environment = state.env.environment.clone();
         self.detecting = Some(Job::spawn(ctx, move || {
             let environment = environment.unwrap_or_else(Environment::detect);
@@ -485,14 +489,17 @@ impl RestoreTab {
         let targets = pick.targets();
         self.error = None;
         self.forget_plan();
-        let (storage, manifest, config) =
-            (session.storage.clone(), manifest(state), config.clone());
+        let (storage, manifest, config) = (
+            session.storage.clone(),
+            state.manifest_or_empty(),
+            config.clone(),
+        );
         let environment = state.env.environment.clone();
         let work_dir = state.env.cache_dir.join("restore-work");
         self.preparing = Some(Job::spawn(ctx, move || {
             let targets = targets()?;
             remove_dir(&work_dir)?;
-            let staged = restore::fetch(&mut *lock(&storage)?, &snapshot, &work_dir)?;
+            let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
             let mut merged = Manifest {
                 games: (manifest.games.get(&title).cloned())
                     .map(|entry| (title.clone(), entry))
@@ -651,7 +658,7 @@ impl RestoreTab {
         let stage_root = state.env.cache_dir.join("restore-stage");
         self.restoring = Some(Job::spawn(ctx, move || {
             let report = restore::run(
-                &mut *lock(&storage)?,
+                &mut *lock_storage(&storage)?,
                 &title,
                 &plan,
                 &stage_root,
@@ -731,19 +738,6 @@ fn remove_dir(dir: &Path) -> io::Result<()> {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
         _ => Ok(()),
     }
-}
-
-/// The manifest to plan with: the loaded one, or an empty one so that custom games still restore.
-fn manifest(state: &State) -> Arc<Manifest> {
-    state.manifest.clone().unwrap_or_default()
-}
-
-fn lock(
-    storage: &SharedStorage,
-) -> anyhow::Result<std::sync::MutexGuard<'_, salvajocs_core::storage::Storage>> {
-    storage
-        .lock()
-        .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))
 }
 
 #[cfg(test)]
