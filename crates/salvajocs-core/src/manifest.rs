@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_saphyr::{Budget, Options};
 
+pub mod fetch;
+
 /// Failure to read or write a manifest.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
