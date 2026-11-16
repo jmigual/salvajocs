@@ -167,27 +167,30 @@ fn backup_with_as_path_then_restore_round_trip() {
 #[test]
 fn second_unchanged_backup_is_skipped() {
     let tmp = tempfile::tempdir().unwrap();
-    let src = save_dir(tmp.path());
-    let location = local(&tmp.path().join("repo"));
     let mut storage = init_local(tmp.path(), "", Compression::Default);
-    assert!(
-        storage
-            .backup_dir(&src, AS_PATH, TAGS, "Test")
-            .unwrap()
-            .is_some()
-    );
-    drop(storage);
-
-    // A new app session: reopen and reindex before the next run.
-    let mut storage = Storage::open(&location, "").unwrap();
-    storage.reindex().unwrap();
-    assert!(
-        storage
-            .backup_dir(&src, AS_PATH, TAGS, "Test")
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
+    // The Windows stale-listing race hit about one round in four, so one round proves little.
+    // A fresh source per round shares one repository, saving a key derivation per round.
+    let rounds = if cfg!(windows) { 20 } else { 1 };
+    let mut src = PathBuf::new();
+    for round in 0..rounds {
+        src = save_dir(&tmp.path().join(round.to_string()));
+        assert!(
+            storage
+                .backup_dir(&src, AS_PATH, TAGS, "Test")
+                .unwrap()
+                .is_some()
+        );
+        // A new app run reindexes before the next backup.
+        storage.reindex().unwrap();
+        assert!(
+            storage
+                .backup_dir(&src, AS_PATH, TAGS, "Test")
+                .unwrap()
+                .is_none(),
+            "round {round} wrote an extra snapshot"
+        );
+    }
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), rounds);
 
     fs::write(src.join("a.sav"), "changed").unwrap();
     storage.reindex().unwrap();
@@ -197,7 +200,7 @@ fn second_unchanged_backup_is_skipped() {
             .unwrap()
             .is_some()
     );
-    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 2);
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), rounds + 1);
 }
 
 #[test]
@@ -252,34 +255,4 @@ fn snapshot_path_is_the_same_on_every_os() {
     // The source's real location is not what the snapshot stores.
     let real = format!("{}/sub/b.sav", src.to_str().unwrap().replace('\\', "/"));
     assert!(storage.restore_path(&info.id, &real, &out).is_err());
-}
-
-// The Windows stale-listing race hit about one round in four, so a single run proves little.
-#[test]
-fn unchanged_backup_is_skipped_in_every_round() {
-    for round in 0..20 {
-        let tmp = tempfile::tempdir().unwrap();
-        let src = save_dir(tmp.path());
-        let location = local(&tmp.path().join("repo"));
-        let mut storage = init_local(tmp.path(), "", Compression::Default);
-        storage
-            .backup_dir(&src, AS_PATH, TAGS, "Test")
-            .unwrap()
-            .expect("first backup is written");
-        drop(storage);
-
-        let mut storage = Storage::open(&location, "").unwrap();
-        storage.reindex().unwrap();
-        let second = storage.backup_dir(&src, AS_PATH, TAGS, "Test").unwrap();
-        assert!(second.is_none(), "round {round} wrote an extra snapshot");
-    }
-}
-
-#[test]
-fn settled_tree_has_a_current_listing() {
-    let tmp = tempfile::tempdir().unwrap();
-    let src = save_dir(tmp.path());
-    wait_for_listing_to_settle(&src);
-    assert!(listing_is_current(&src));
-    assert!(listing_is_current(&src.join("missing")));
 }

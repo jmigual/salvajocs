@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to_type_and_path};
 use rustic_core::{
@@ -17,7 +17,7 @@ use rustic_core::{
 const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 /// How long a backup waits for directory listings to catch up with the files (ADR-0003).
-const LISTING_SETTLE_POLLS: u32 = 50;
+const LISTING_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const LISTING_SETTLE_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Errors from [`Storage`] and [`probe`].
@@ -388,19 +388,19 @@ impl Storage {
     }
 }
 
-/// Waits, bounded, until the mtimes a directory listing reports match the entries' own. On
+/// Waits, up to a timeout, until the mtime and size a directory listing reports match the
+/// entries' own. On
 /// Windows the scan reads the listing's cached metadata, which can lag a just-written directory;
 /// rustic hashes directory mtimes, so a lagging read makes an unchanged tree look changed.
 fn wait_for_listing_to_settle(dir: &Path) {
-    for _ in 0..LISTING_SETTLE_POLLS {
-        if listing_is_current(dir) {
-            return;
-        }
+    let start = Instant::now();
+    while !listing_is_current(dir) && start.elapsed() < LISTING_SETTLE_TIMEOUT {
         std::thread::sleep(LISTING_SETTLE_INTERVAL);
     }
 }
 
-/// Whether every entry under `dir` has the same mtime in its parent's listing as on its own.
+/// Whether every entry under `dir` has the same mtime and (for files) size in its parent's
+/// listing as on its own. atime is not compared: rustic stores mtime in its place.
 /// Entries that cannot be read count as current: the backup reports them itself.
 fn listing_is_current(dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -412,6 +412,7 @@ fn listing_is_current(dir: &Path) -> bool {
             return true;
         };
         listed.modified().ok() == actual.modified().ok()
+            && (actual.is_dir() || listed.len() == actual.len())
             && (!actual.is_dir() || listing_is_current(&path))
     })
 }
