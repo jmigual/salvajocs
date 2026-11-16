@@ -472,8 +472,16 @@ fn extend_custom_game_keeps_the_manifest_files() {
 #[test]
 #[ignore = "needs the real manifest and a prefix"]
 fn time_full_manifest_scan() {
-    let yaml = fs::read_to_string(std::env::var("SALVAJOCS_MANIFEST_YAML").unwrap()).unwrap();
-    let prefix = PathBuf::from(std::env::var("SALVAJOCS_PREFIX").unwrap());
+    // CI runs ignored tests too; without the inputs there is nothing to time.
+    let (Ok(manifest_path), Ok(prefix)) = (
+        std::env::var("SALVAJOCS_MANIFEST_YAML"),
+        std::env::var("SALVAJOCS_PREFIX"),
+    ) else {
+        eprintln!("SALVAJOCS_MANIFEST_YAML and SALVAJOCS_PREFIX are not both set; skipping");
+        return;
+    };
+    let yaml = fs::read_to_string(manifest_path).unwrap();
+    let prefix = PathBuf::from(prefix);
     let manifest = parse_yaml(&yaml).unwrap();
     let config = config(vec![wine_root(&prefix)], vec![]);
     let started = Instant::now();
