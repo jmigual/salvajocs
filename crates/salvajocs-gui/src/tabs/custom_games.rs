@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, TextEdit, Ui};
-use salvajocs_core::crossbuild::{self, PairError};
+use salvajocs_core::crossbuild::{self, PairError, SkipError};
 use salvajocs_core::manifest::{CustomGame, FileRule, Integration, Pair, Tag};
 
 use crate::state::State;
@@ -29,6 +29,9 @@ enum FormError {
     /// A pair side is not a placeholder template of its OS.
     #[error(transparent)]
     Pair(#[from] PairError),
+    /// A skipped folder is not a placeholder template.
+    #[error(transparent)]
+    Skip(#[from] SkipError),
     /// The game changed since the form was opened, for example by a restore mapping.
     #[error("This game changed since the form was opened; reload it to see the new values")]
     Changed,
@@ -53,6 +56,8 @@ struct Form {
     registry: String,
     wine_prefix: String,
     pairs: Vec<PairRow>,
+    /// One skipped root template per row; an empty row is unused.
+    skips: Vec<String>,
     /// The game as the form read it. What the form does not edit (install dirs, Steam id, rules
     /// of kept lines, a wine prefix left as is) survives a save, and a save refuses when the
     /// config no longer holds this game.
@@ -80,6 +85,7 @@ impl Form {
             registry: String::new(),
             wine_prefix: String::new(),
             pairs: Vec::new(),
+            skips: Vec::new(),
             snapshot: None,
             error: None,
         }
@@ -113,6 +119,7 @@ impl Form {
                     windows: pair.windows.clone(),
                 })
                 .collect(),
+            skips: game.skips.clone(),
             snapshot: Some(game.clone()),
             error: None,
         }
@@ -121,8 +128,8 @@ impl Form {
     /// The game the form describes. `games` are all custom games, including the one being edited.
     ///
     /// # Errors
-    /// [`FormError`] for an empty or taken name, a pair side that `crossbuild::validate_pair`
-    /// rejects, and a game that is no longer the one the form was opened on.
+    /// [`FormError`] for an empty or taken name, a pair side or skipped folder that
+    /// `crossbuild::validate_pair` or `validate_skip` rejects, and a game that is no longer the one the form was opened on.
     fn build(&self, games: &[CustomGame]) -> Result<CustomGame, FormError> {
         if let Some(index) = self.index
             && games.get(index) != self.snapshot.as_ref()
@@ -151,6 +158,10 @@ impl Form {
                 };
                 crossbuild::validate_pair(&pair).map(|()| pair)
             })
+            .collect::<Result<_, _>>()?;
+        let skips = (self.skips.iter().map(|skip| skip.trim()))
+            .filter(|skip| !skip.is_empty())
+            .map(|skip| crossbuild::validate_skip(skip).map(|()| skip.to_owned()))
             .collect::<Result<_, _>>()?;
         let original = self.snapshot.as_ref();
         let mut entry = original.map(|game| game.entry.clone()).unwrap_or_default();
@@ -186,7 +197,7 @@ impl Form {
             wine_prefix: kept
                 .or_else(|| (!wine_prefix.is_empty()).then(|| PathBuf::from(wine_prefix))),
             pairs,
-            skips: original.map(|game| game.skips.clone()).unwrap_or_default(),
+            skips,
         })
     }
 }
@@ -224,7 +235,7 @@ fn relation(game: &CustomGame, in_manifest: bool) -> &'static str {
 
 impl Form {
     /// The Linux/Windows pairs, each editable and removable, including those the restore
-    /// mapping dialog saved. Skipped roots get their own section next to it.
+    /// mapping dialog saved.
     fn pairs_ui(&mut self, ui: &mut Ui) {
         ui.label("Pairs: the same saves on a native Linux build and on a Windows build");
         let mut remove = None;
@@ -253,6 +264,32 @@ impl Form {
         }
         if ui.button("Add pair").clicked() {
             self.pairs.push(PairRow::default());
+        }
+    }
+
+    /// The root templates a cross-build restore leaves out, each editable and removable,
+    /// including those the restore mapping dialog saved.
+    fn skips_ui(&mut self, ui: &mut Ui) {
+        ui.label("Skipped folders: roots a restore on the other OS leaves out");
+        let mut remove = None;
+        for (index, skip) in self.skips.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                inline_edit(
+                    ui,
+                    format!("Skipped folder {}", index + 1),
+                    skip,
+                    "<xdgData>/Game",
+                );
+                if ui.button("Remove skipped folder").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            self.skips.remove(index);
+        }
+        if ui.button("Add skipped folder").clicked() {
+            self.skips.push(String::new());
         }
     }
 
@@ -294,6 +331,7 @@ impl Form {
              resets its OS condition; use a pair instead.",
         );
         self.pairs_ui(ui);
+        self.skips_ui(ui);
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error.to_string());
         }

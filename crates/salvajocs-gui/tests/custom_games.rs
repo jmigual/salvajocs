@@ -124,6 +124,17 @@ fn dialog_game(title: &str) -> CustomGame {
     config.custom_games.remove(0)
 }
 
+/// What the restore mapping dialog saves when the user skips a root of `title`.
+fn skipped_game(title: &str) -> CustomGame {
+    let mut config = local_config("unused");
+    crossbuild::apply_choices(
+        &mut config,
+        title,
+        &[((Base::XdgData, "Foo".to_owned()), Choice::Skip)],
+    );
+    config.custom_games.remove(0)
+}
+
 fn save_rule() -> FileRule {
     FileRule {
         tags: vec![Tag::Save],
@@ -327,4 +338,43 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     run_settled(&mut harness);
     run_until_saved(&mut harness, &env, |games| games.is_empty());
     assert!(!shows(&harness, "Manifest Game"));
+}
+
+#[test]
+fn custom_games_skip_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
+    let (mut harness, env, _tmp) =
+        open_tab(vec![skipped_game("Manifest Game")], &["Manifest Game"]);
+
+    harness.get_by_label("Edit").click();
+    run_settled(&mut harness);
+    assert_eq!(
+        harness.get_by_label("Skipped folder 1").value().as_deref(),
+        Some("<xdgData>/Foo")
+    );
+    replace_text(&mut harness, "Skipped folder 1", "<winAppData>/Foo");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    let saved = run_until_saved(&mut harness, &env, |games| {
+        games
+            .first()
+            .is_some_and(|game| game.skips == ["<winAppData>/Foo"])
+    });
+    assert_eq!(saved[0].integration, Integration::Extend);
+
+    // A skip that is not a placeholder template is refused inline.
+    harness.get_by_label("Edit").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Skipped folder 1", "/opt/foo");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "not a placeholder template"));
+    assert!(shows(&harness, "Save game"), "the form stays open");
+
+    harness.get_by_label("Remove skipped folder").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    run_until_saved(&mut harness, &env, |games| {
+        games.first().is_some_and(|game| game.skips.is_empty())
+    });
 }
