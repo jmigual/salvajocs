@@ -528,7 +528,7 @@ impl RestoreTab {
         let action = egui::Modal::new(egui::Id::unique("restore_mapping"))
             .show(ctx, |ui| {
                 ui.set_width(720.0);
-                dialog.ui(ui, &fetched.title, busy)
+                dialog.ui(ui, &fetched.title, busy, fetched.targets.win.is_none())
             })
             .inner;
         match action {
@@ -541,6 +541,13 @@ impl RestoreTab {
                         choices,
                     })
                 }));
+            }
+            Some(DialogAction::UsePrefix) => {
+                self.mapping = None;
+                if let Some(pick) = &mut self.pick {
+                    pick.use_linux = false;
+                    pick.use_prefix = true;
+                }
             }
             Some(DialogAction::Cancel) => self.mapping = None,
             Some(DialogAction::Confirm(_)) | None => {}

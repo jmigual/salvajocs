@@ -9,13 +9,15 @@ use common::{
     env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
     run_until_ready, save_config, shows,
 };
-use eframe::egui::accesskit::Role;
+use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::layout::{Base, Context, LinuxFolders};
-use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, Pair, parse_yaml};
+use salvajocs_core::manifest::{
+    self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
+};
 use salvajocs_core::scan::{Environment, FoundFile, GameScan};
 use salvajocs_core::storage::{RepoLocation, Storage};
 use salvajocs_gui::tabs::Tab;
@@ -238,9 +240,12 @@ fn alpha(tmp: &TempDir) -> (Harness<'static, App>, Env, PathBuf) {
     (harness, env, saves)
 }
 
-/// Uni, a Unity game backed up from its Windows build, optionally with a prefix of its own.
+/// Uni, a Unity game backed up from its Windows build, optionally with a prefix of its own. Its
+/// `PlayerPrefs` live in the registry on Windows.
 fn unity(tmp: &TempDir, prefix: Option<&Path>) -> Harness<'static, App> {
-    let game = custom("Uni", &["<winLocalAppDataLow>/Co/Uni"], prefix, Vec::new());
+    let mut game = custom("Uni", &["<winLocalAppDataLow>/Co/Uni"], prefix, Vec::new());
+    let prefs = "HKEY_CURRENT_USER/Software/Co/Uni".to_owned();
+    game.entry.registry.insert(prefs, RegistryRule::default());
     let snapshot = scan(
         tmp,
         "Uni",
@@ -438,6 +443,7 @@ fn restore_engine_rule_mapping_needs_no_dialog() {
     let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
     assert!(shows_path(&harness, &format!("-> {}", target.display())));
     assert!(shows(&harness, "Cross-build restore"));
+    assert!(shows(&harness, "Note: Unity settings (PlayerPrefs)"));
 }
 
 #[test]
@@ -520,6 +526,20 @@ fn restore_mapping_dialog_prefills_known_roots_and_blocks_unknown() {
     click(&mut harness, "<xdgConfig>/MixCfg");
     assert_eq!(value(&harness, "Target 2"), "<xdgConfig>/MixCfg");
     assert!(!disabled(&harness, "Confirm"));
+}
+
+#[test]
+fn restore_dialog_offers_a_prefix_instead() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env) = mix(&tmp);
+
+    click(&mut harness, "Restore into a Wine prefix instead");
+
+    assert!(!shows(&harness, "Where should the saves"));
+    let toggled = |label| harness.get_by_label(label).accesskit_node().toggled();
+    assert_eq!(toggled("Native Linux build"), Some(Toggled::False));
+    let prefix = toggled("Windows build in a Wine/Proton prefix");
+    assert_eq!(prefix, Some(Toggled::True));
 }
 
 #[test]

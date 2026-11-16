@@ -18,6 +18,8 @@ struct Row {
 pub(super) enum DialogAction {
     /// Every root has a choice; prepare the restore with them.
     Confirm(Vec<(SnapshotRoot, Choice)>),
+    /// Restore into the game's Windows build in a prefix instead of mapping (ADR-0005).
+    UsePrefix,
     Cancel,
 }
 
@@ -75,8 +77,15 @@ impl Dialog {
             .collect()
     }
 
-    /// Draws the dialog for the game `title`; Confirm waits for `busy` to end.
-    pub(super) fn ui(&mut self, ui: &mut Ui, title: &str, busy: bool) -> Option<DialogAction> {
+    /// Draws the dialog for the game `title`; Confirm waits for `busy` to end. `offer_prefix`
+    /// offers restoring into a Wine prefix instead, for Windows saves mapped onto native Linux.
+    pub(super) fn ui(
+        &mut self,
+        ui: &mut Ui,
+        title: &str,
+        busy: bool,
+        offer_prefix: bool,
+    ) -> Option<DialogAction> {
         ui.heading(format!("Where should the saves of {title} go?"));
         ui.label(
             "This snapshot holds folders of the other OS's build. Choose where each goes in \
@@ -101,6 +110,9 @@ impl Dialog {
                 .clicked()
             {
                 action = choices.map(DialogAction::Confirm);
+            }
+            if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
+                action = Some(DialogAction::UsePrefix);
             }
             if ui.button("Cancel").clicked() {
                 action = Some(DialogAction::Cancel);
