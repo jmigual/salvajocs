@@ -9,7 +9,11 @@ use crate::manifest::{CustomGame, Integration, parse_yaml};
 fn make_prefix(root: &Path) -> PathBuf {
     let prefix = root.join("pfx");
     fs::create_dir_all(prefix.join("drive_c/users/steamuser")).unwrap();
-    fs::write(prefix.join("user.reg"), "").unwrap();
+    fs::write(
+        prefix.join("user.reg"),
+        "WINE REGISTRY Version 2\n\n#arch=win64\n",
+    )
+    .unwrap();
     prefix
 }
 
@@ -56,9 +60,10 @@ fn no_native_env(steam_roots: Vec<PathBuf>) -> Environment {
 }
 
 fn game(manifest: &Manifest, config: &AppConfig, env: &Environment) -> GameScan {
-    let mut scans = scan(manifest, config, env);
-    assert_eq!(scans.len(), 1, "{scans:?}");
-    scans.remove(0)
+    let mut report = scan(manifest, config, env);
+    assert_eq!(report.games.len(), 1, "{report:?}");
+    assert_eq!(report.problems, []);
+    report.games.remove(0)
 }
 
 fn tails(scan: &GameScan) -> Vec<(Base, &str)> {
@@ -176,10 +181,11 @@ fn roots_record_glob_free_prefixes() {
     let home = tempfile::tempdir().unwrap();
     write(&home.path().join(".config/foo/slot1/save.dat"), "a");
     write(&home.path().join(".local/share/bar/one.sav"), "a");
+    write(&home.path().join(".local/share/Foo/saves/a"), "a");
     write(&home.path().join(".config/none/x.dat"), "a");
     let manifest = parse_yaml(
         "Foo:\n  files:\n    <xdgConfig>/foo/*/save.dat: {}\n    <home>/.local/share/bar: {}\n    \
-         <xdgConfig>/missing/*/x: {}\n",
+         <xdgData>/<game>/saves: {}\n    <xdgConfig>/missing/*/x: {}\n",
     )
     .unwrap();
     let found = game(&manifest, &config(vec![], vec![]), &linux_env(home.path()));
@@ -188,6 +194,7 @@ fn roots_record_glob_free_prefixes() {
     assert_eq!(
         roots,
         [
+            (Base::XdgData, "<game>/saves".to_owned()),
             (Base::XdgData, "bar".to_owned()),
             (Base::XdgConfig, "foo".to_owned())
         ]
@@ -235,6 +242,190 @@ fn custom_game_with_wine_prefix_is_scanned() {
     assert_eq!(tails(&found), [(Base::WinAppData, "Mine/s.dat")]);
 }
 
+/// Writes a `user.reg` holding one valueful key per entry of `keys` (`Software\Foo` form).
+fn write_user_reg(prefix: &Path, keys: &[&str]) {
+    let mut text = String::from("WINE REGISTRY Version 2\n\n#arch=win64\n");
+    for key in keys {
+        let key = key.replace('\\', "\\\\");
+        text.push_str(&format!(
+            "\n[{key}] 1700000000\n#time=1d9\n\"Level\"=dword:00000005\n"
+        ));
+    }
+    fs::write(prefix.join("user.reg"), text).unwrap();
+}
+
+fn custom_game(name: &str, files: &str, integration: Integration) -> CustomGame {
+    let yaml = format!("{name}:\n  files:\n    {files}: {{}}\n");
+    CustomGame {
+        name: name.into(),
+        entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
+        integration,
+        wine_prefix: None,
+        pairs: Vec::new(),
+    }
+}
+
+const REGISTRY_ONLY: &str = "Foo:\n  registry:\n    HKEY_CURRENT_USER/Software/Foo: {}\n";
+
+#[test]
+fn registry_only_game_is_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    write_user_reg(&pfx, &["Software\\Foo\\Sub"]);
+    let manifest = parse_yaml(REGISTRY_ONLY).unwrap();
+    let config = config(vec![wine_root(&pfx)], vec![]);
+    let found = game(&manifest, &config, &no_native_env(vec![]));
+    assert!(found.files.is_empty());
+    assert_eq!(found.registry_keys, [r"HKEY_CURRENT_USER\Software\Foo"]);
+    assert_eq!(found.registry_source, Some(RegistrySource::WinePrefix(pfx)));
+}
+
+#[test]
+fn registry_source_is_first_context_with_keys() {
+    let steam = tempfile::tempdir().unwrap();
+    let own = make_prefix(&steam.path().join("steamapps/compatdata/620"));
+    let first = make_prefix(&steam.path().join("first"));
+    let second = make_prefix(&steam.path().join("second"));
+    write_user_reg(&first, &["Software\\Foo"]);
+    write_user_reg(&second, &["Software\\Foo"]);
+    let manifest = parse_yaml(
+        "Foo:\n  steam: {id: 620}\n  registry:\n    HKEY_CURRENT_USER/Software/Foo: {}\n",
+    )
+    .unwrap();
+    let env = no_native_env(vec![steam.path().to_path_buf()]);
+    let config = config(vec![wine_root(&first), wine_root(&second)], vec![]);
+    // The game's own prefix has no key, so the first root that has one is the source.
+    let found = game(&manifest, &config, &env);
+    assert_eq!(
+        found.registry_source,
+        Some(RegistrySource::WinePrefix(first))
+    );
+    write_user_reg(&own, &["Software\\Foo"]);
+    let found = game(&manifest, &config, &env);
+    assert_eq!(found.registry_source, Some(RegistrySource::WinePrefix(own)));
+}
+
+#[test]
+fn user_reg_parsed_once_per_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    write_user_reg(&pfx, &["Software\\Foo"]);
+    let cache = Cache::default();
+    assert!(cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Foo".into()]));
+    assert!(!cache.prefix_has_keys(&pfx, &[r"HKEY_CURRENT_USER\Software\Bar".into()]));
+    assert_eq!(cache.user_reg_loads.get(), 1);
+    assert_eq!(cache.problems.into_inner(), []);
+}
+
+#[test]
+fn ambiguous_wine_prefix_root_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    fs::remove_dir(pfx.join("drive_c/users/steamuser")).unwrap();
+    for user in ["alice", "bob"] {
+        fs::create_dir(pfx.join("drive_c/users").join(user)).unwrap();
+    }
+    let config = config(vec![wine_root(&pfx)], vec![]);
+    let report = scan(&Manifest::default(), &config, &no_native_env(vec![]));
+    assert_eq!(report.games, []);
+    assert_eq!(
+        report.problems,
+        [ScanProblem {
+            path: pfx,
+            kind: ProblemKind::AmbiguousPrefix(vec!["alice".into(), "bob".into()]),
+        }]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_dir_reported_not_dropped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let locked = home.path().join(".config/foo/locked");
+    write(&home.path().join(".config/foo/ok/a"), "a");
+    fs::create_dir_all(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let manifest = parse_yaml(
+        "Foo:\n  files:\n    <xdgConfig>/foo/ok: {}\n    <xdgConfig>/foo/locked/*.dat: {}\n",
+    )
+    .unwrap();
+    let report = scan(&manifest, &config(vec![], vec![]), &linux_env(home.path()));
+    let readable = fs::read_dir(&locked).is_ok();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        return; // running as root: permissions do not apply
+    }
+    assert_eq!(report.games.len(), 1);
+    assert_eq!(report.games[0].unreadable, std::slice::from_ref(&locked));
+    assert_eq!(report.games[0].files.len(), 1);
+    assert!(matches!(
+        report.problems.as_slice(),
+        [ScanProblem { path, kind: ProblemKind::Unreadable(_) }] if *path == locked
+    ));
+}
+
+#[test]
+fn os_user_name_comes_from_the_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    let home = tempfile::tempdir().unwrap();
+    let prefix_home = pfx.join("drive_c/users/steamuser");
+    write(&prefix_home.join("Documents/steamuser/s.dat"), "a");
+    write(&prefix_home.join("Documents/me/s.dat"), "a");
+    write(&home.path().join(".local/share/me/s.dat"), "a");
+    write(&home.path().join(".local/share/steamuser/s.dat"), "a");
+    let manifest = parse_yaml(
+        "Foo:\n  files:\n    <winDocuments>/<osUserName>: {}\n    <xdgData>/<osUserName>: {}\n",
+    )
+    .unwrap();
+    let config = config(vec![wine_root(&pfx)], vec![]);
+    let found = game(&manifest, &config, &linux_env(home.path()));
+    let mut got = tails(&found);
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            (Base::WinDocuments, "steamuser/s.dat"),
+            (Base::XdgData, "me/s.dat")
+        ]
+    );
+}
+
+#[test]
+fn prefixes_differing_in_case_list_a_logical_path_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = make_prefix(&dir.path().join("a"));
+    let second = make_prefix(&dir.path().join("b"));
+    write(
+        &first.join("drive_c/users/steamuser/Documents/My Games/Foo/s.dat"),
+        "a",
+    );
+    write(
+        &second.join("drive_c/users/steamuser/Documents/my games/foo/s.dat"),
+        "b",
+    );
+    let manifest = parse_yaml("Foo:\n  files:\n    <winDocuments>/My Games/Foo: {}\n").unwrap();
+    let config = config(vec![wine_root(&first), wine_root(&second)], vec![]);
+    let found = game(&manifest, &config, &no_native_env(vec![]));
+    assert_eq!(tails(&found), [(Base::WinDocuments, "My Games/Foo/s.dat")]);
+}
+
+#[test]
+fn extend_custom_game_keeps_the_manifest_files() {
+    let home = tempfile::tempdir().unwrap();
+    write(&home.path().join(".config/foo/a"), "a");
+    write(&home.path().join(".local/share/foo/b"), "b");
+    let manifest = parse_yaml("Foo:\n  files:\n    <xdgConfig>/foo: {}\n").unwrap();
+    let custom = custom_game("Foo", "<xdgData>/foo", Integration::Extend);
+    let config = config(vec![], vec![custom]);
+    let found = game(&manifest, &config, &linux_env(home.path()));
+    let mut got = tails(&found);
+    got.sort();
+    assert_eq!(got, [(Base::XdgData, "foo/b"), (Base::XdgConfig, "foo/a")]);
+}
+
 /// Times a full-manifest scan against one prefix root (ADR-0008). Run with
 /// `SALVAJOCS_MANIFEST_YAML=<manifest.yaml> SALVAJOCS_PREFIX=<pfx> cargo test --release -p
 /// salvajocs-core scan::tests::time_full_manifest_scan -- --ignored --nocapture`.
@@ -246,11 +437,12 @@ fn time_full_manifest_scan() {
     let manifest = parse_yaml(&yaml).unwrap();
     let config = config(vec![wine_root(&prefix)], vec![]);
     let started = Instant::now();
-    let scans = scan(&manifest, &config, &no_native_env(vec![]));
+    let report = scan(&manifest, &config, &no_native_env(vec![]));
     println!(
-        "{} games, {} files in {:?}",
-        scans.len(),
-        scans.iter().map(|s| s.files.len()).sum::<usize>(),
+        "{} games, {} files, {} problems in {:?}",
+        report.games.len(),
+        report.games.iter().map(|s| s.files.len()).sum::<usize>(),
+        report.problems.len(),
         started.elapsed()
     );
 }
