@@ -1,6 +1,7 @@
 //! Repository storage over `rustic_core` (ADR-0003). The only module that names rustic types.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
@@ -41,12 +42,22 @@ fn backend(err: impl AsRef<RusticError>) -> StorageError {
 
 /// Where a repository lives: a rustic repository string (a plain path, `local:`, `rest:`,
 /// `rclone:`, `opendal:<service>`) and the backend options for it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct RepoLocation {
     /// The repository string.
     pub repository: String,
     /// Backend options, such as the opendal service configuration.
     pub options: BTreeMap<String, String>,
+}
+
+/// Debug output lists only the option keys: the values may be secrets.
+impl fmt::Debug for RepoLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RepoLocation")
+            .field("repository", &self.repository)
+            .field("option_keys", &self.options.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl RepoLocation {

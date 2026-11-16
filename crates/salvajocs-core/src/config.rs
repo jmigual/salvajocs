@@ -2,8 +2,9 @@
 //! password and secret option values are never part of it; they live in [`crate::secret`].
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,17 +34,33 @@ pub enum ConfigError {
     MissingValue(String),
 }
 
-/// One backend option. A secret option keeps only its key here; its value is in the keyring.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One backend option. A secret option keeps only its key in the saved config; its value is in
+/// the keyring and is never written by [`AppConfig::save`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoOption {
     /// The option name, such as an opendal service key.
     pub key: String,
-    /// The value; always `None` for a secret option.
+    /// The value. For a secret option it may be held in memory but is never saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// Whether the value is kept in the keyring instead of the config.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub secret: bool,
+}
+
+/// Debug output hides the value of a secret option.
+impl fmt::Debug for RepoOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match (&self.value, self.secret) {
+            (Some(_), true) => Some("<redacted>"),
+            (value, _) => value.as_deref(),
+        };
+        f.debug_struct("RepoOption")
+            .field("key", &self.key)
+            .field("value", &value)
+            .field("secret", &self.secret)
+            .finish()
+    }
 }
 
 /// Where the repository password comes from.
@@ -151,7 +168,10 @@ impl AppConfig {
         let yaml = serde_saphyr::to_string(&stripped)?;
         fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{CONFIG_FILE}.tmp"));
-        fs::write(&tmp, yaml)?;
+        // Sync before the rename so a crash cannot leave an empty config.yaml.
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(yaml.as_bytes())?;
+        file.sync_all()?;
         fs::rename(&tmp, dir.join(CONFIG_FILE))?;
         Ok(())
     }

@@ -146,3 +146,41 @@ fn missing_secrets_lists_password_and_secret_options() {
         [SecretKey::Option("secret_access_key".into())]
     );
 }
+
+#[test]
+fn debug_output_hides_secret_values() {
+    let mut config = sample();
+    config.repository_options[1].value = Some("hunter2".into());
+    assert!(!format!("{config:?}").contains("hunter2"));
+
+    let secrets = BTreeMap::from([("secret_access_key".to_string(), "hunter2".to_string())]);
+    let location = config.location(&secrets).unwrap();
+    assert!(!format!("{location:?}").contains("hunter2"));
+}
+
+#[test]
+fn minimal_file_loads_with_empty_lists() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.repository, "/backups");
+    assert_eq!(config.password, PasswordMode::None);
+    assert!(config.repository_options.is_empty());
+    assert!(config.roots.is_empty());
+    assert!(config.custom_games.is_empty());
+}
+
+#[test]
+fn unknown_fields_are_accepted() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: ask\nfuture_setting: 1\n",
+    )
+    .unwrap();
+    assert!(AppConfig::load(tmp.path()).unwrap().is_some());
+}
