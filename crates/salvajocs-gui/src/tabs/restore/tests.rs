@@ -4,6 +4,8 @@ use std::time::Duration;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::crossbuild::{Confidence, MappingEntry};
+use salvajocs_core::layout::{SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
@@ -99,4 +101,132 @@ fn listing_waits_for_the_manifest_to_load() {
     );
     harness.step();
     assert!(is_disabled(&harness, "Load backups"));
+}
+
+/// A fetched game with no files and no targets.
+fn fetched() -> Arc<Fetched> {
+    Arc::new(Fetched {
+        title: "Mix".into(),
+        staged: StagedGame {
+            root: PathBuf::from("/staged"),
+            meta: SnapshotMeta {
+                format: SNAPSHOT_FORMAT,
+                title: "Mix".into(),
+                roots: Vec::new(),
+            },
+            files: Vec::new(),
+            registry: None,
+        },
+        targets: Targets {
+            linux: None,
+            win: None,
+        },
+        vars: GameVars::new("Mix", Vec::new(), &[], None),
+        entry: None,
+        pairs: Vec::new(),
+        skips: Vec::new(),
+    })
+}
+
+fn unknown_root() -> SnapshotRoot {
+    (Base::WinAppData, "Mix".into())
+}
+
+/// The tab with the mapping dialog open over one unknown root.
+fn with_dialog() -> RestoreTab {
+    let entry = MappingEntry {
+        root: unknown_root(),
+        files: 1,
+        proposed: None,
+        confidence: Confidence::Unknown,
+        candidates: Vec::new(),
+        notes: Vec::new(),
+    };
+    RestoreTab {
+        mapping: Some((fetched(), Dialog::new(vec![entry]))),
+        ..RestoreTab::default()
+    }
+}
+
+/// A confirm job that hands back a plan for the unknown root once `hold` is released.
+fn confirm_job(ctx: &egui::Context, hold: mpsc::Receiver<()>) -> Job<Prepared> {
+    Job::spawn(ctx, move || {
+        let _ = hold.recv();
+        Ok(Prepared {
+            fetched: fetched(),
+            choices: vec![(unknown_root(), Choice::Template("<xdgData>/Mix".into()))],
+            plan: Ok(RestorePlan {
+                writes: Vec::new(),
+                registry: None,
+                skipped: Vec::new(),
+                cross_build: true,
+                notes: Vec::new(),
+            }),
+        })
+    })
+}
+
+type TabHarness = Harness<'static, (RestoreTab, State)>;
+
+fn tab_harness(dir: &Path, tab: RestoreTab) -> TabHarness {
+    Harness::new_ui_state(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (tab, state(dir)),
+    )
+}
+
+/// Runs frames until the tab's preview or confirm job is done.
+fn run_until_prepared(harness: &mut TabHarness) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.preparing.is_some() {
+        assert!(std::time::Instant::now() < deadline, "the job never ended");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn the_dialog_waits_while_its_confirm_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_dialog());
+    let (release, hold) = mpsc::channel();
+    let job = confirm_job(&harness.ctx.clone(), hold);
+    harness.state_mut().0.preparing = Some((0, job));
+    harness.step();
+    harness.step();
+
+    assert!(is_disabled(&harness, "Cancel"));
+    assert!(is_disabled(&harness, "Restore into a Wine prefix instead"));
+    drop(release);
+}
+
+/// Confirms a choice in the dialog; with `close`, the dialog closes while the job runs, as
+/// Cancel or a change of targets does.
+fn confirm(close: bool) -> (RestoreTab, State) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_dialog());
+    let (release, hold) = mpsc::channel();
+    let job = confirm_job(&harness.ctx.clone(), hold);
+    harness.state_mut().0.preparing = Some((0, job));
+    harness.step();
+    if close {
+        harness.state_mut().0.forget_plan();
+    }
+    drop(release);
+    run_until_prepared(&mut harness);
+    harness.into_state()
+}
+
+#[test]
+fn a_confirm_ending_after_the_dialog_closed_is_dropped() {
+    let (tab, state) = confirm(false);
+    assert!(tab.preview.is_some());
+    let games = &state.config.as_ref().unwrap().custom_games;
+    assert_eq!(games.len(), 1, "the choice is saved");
+
+    let (tab, state) = confirm(true);
+    assert!(tab.preview.is_none());
+    assert!(tab.mapping.is_none());
+    let games = &state.config.as_ref().unwrap().custom_games;
+    assert!(games.is_empty(), "nothing is saved: {games:?}");
 }

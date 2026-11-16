@@ -226,12 +226,16 @@ pub struct RestoreTab {
     detecting: Option<Job<Targets>>,
     pick: Option<TargetPick>,
     picking: Option<Job<Option<PathBuf>>>,
-    preparing: Option<Job<Prepared>>,
+    /// The preview or confirm job, with the [`RestoreTab::generation`] it started in.
+    preparing: Option<(u64, Job<Prepared>)>,
     mapping: Option<(Arc<Fetched>, Dialog)>,
     preview: Option<Preview>,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
     error: Option<String>,
+    /// Counts [`RestoreTab::forget_plan`] calls, so a job's result for a closed dialog or
+    /// changed targets is dropped.
+    generation: u64,
 }
 
 impl RestoreTab {
@@ -269,10 +273,12 @@ impl RestoreTab {
             || self.restoring.is_some()
     }
 
-    /// Drops the plan and the dialog, which no longer match the chosen game or targets.
+    /// Drops the plan and the dialog, which no longer match the chosen game or targets, and the
+    /// result of a preview or confirm still running.
     fn forget_plan(&mut self) {
         self.preview = None;
         self.mapping = None;
+        self.generation += 1;
     }
 
     fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
@@ -304,11 +310,14 @@ impl RestoreTab {
                 self.forget_plan();
             }
         }
-        if let Some(job) = &mut self.preparing
+        if let Some((generation, job)) = &mut self.preparing
             && let Some(result) = job.take_result()
         {
+            let current = *generation == self.generation;
             self.preparing = None;
             match result {
+                // A plan for a closed dialog or other targets is neither shown nor saved.
+                _ if !current => {}
                 Ok(prepared) => self.prepared(prepared, ctx, state),
                 Err(err) => self.error = Some(format!("The preview failed: {err:#}")),
             }
@@ -496,7 +505,7 @@ impl RestoreTab {
         );
         let environment = state.env.environment.clone();
         let work_dir = state.env.cache_dir.join("restore-work");
-        self.preparing = Some(Job::spawn(ctx, move || {
+        let job = Job::spawn(ctx, move || {
             let targets = targets()?;
             remove_dir(&work_dir)?;
             let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
@@ -520,39 +529,42 @@ impl RestoreTab {
                 fetched: Arc::new(fetched),
                 choices: Vec::new(),
             })
-        }));
+        });
+        self.preparing = Some((self.generation, job));
     }
 
     fn mapping_ui(&mut self, ctx: &egui::Context, state: &State) {
-        let busy = self.busy();
+        let (busy, error) = (self.busy(), self.error.clone());
         let Some((fetched, dialog)) = &mut self.mapping else {
             return;
         };
         let action = egui::Modal::new(egui::Id::unique("restore_mapping"))
             .show(ctx, |ui| {
                 ui.set_width(720.0);
-                dialog.ui(ui, &fetched.title, busy, fetched.targets.win.is_none())
+                let offer_prefix = fetched.targets.win.is_none();
+                dialog.ui(ui, &fetched.title, busy, offer_prefix, error.as_deref())
             })
             .inner;
         match action {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
                 let fetched = fetched.clone();
-                self.preparing = Some(Job::spawn(ctx, move || {
+                let job = Job::spawn(ctx, move || {
                     Ok(Prepared {
                         plan: fetched.prepare(&choices),
                         fetched,
                         choices,
                     })
-                }));
+                });
+                self.preparing = Some((self.generation, job));
             }
             Some(DialogAction::UsePrefix) => {
-                self.mapping = None;
+                self.forget_plan();
                 if let Some(pick) = &mut self.pick {
                     pick.use_linux = false;
                     pick.use_prefix = true;
                 }
             }
-            Some(DialogAction::Cancel) => self.mapping = None,
+            Some(DialogAction::Cancel) => self.forget_plan(),
             Some(DialogAction::Confirm(_)) | None => {}
         }
     }

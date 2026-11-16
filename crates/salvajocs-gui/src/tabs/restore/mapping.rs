@@ -77,14 +77,16 @@ impl Dialog {
             .collect()
     }
 
-    /// Draws the dialog for the game `title`; Confirm waits for `busy` to end. `offer_prefix`
+    /// Draws the dialog for the game `title`; its buttons wait for `busy` to end. `offer_prefix`
     /// offers restoring into a Wine prefix instead, for Windows saves mapped onto native Linux.
+    /// `error` is the tab's error, which the modal would otherwise hide.
     pub(super) fn ui(
         &mut self,
         ui: &mut Ui,
         title: &str,
         busy: bool,
         offer_prefix: bool,
+        error: Option<&str>,
     ) -> Option<DialogAction> {
         ui.heading(format!("Where should the saves of {title} go?"));
         ui.label(
@@ -101,22 +103,25 @@ impl Dialog {
                 }
             });
         ui.separator();
+        if let Some(error) = error {
+            ui.colored_label(Color32::LIGHT_RED, error);
+        }
         let choices = self.choices();
         let mut action = None;
-        ui.horizontal(|ui| {
-            let ready = choices.is_some() && !busy;
-            if ui
-                .add_enabled(ready, egui::Button::new("Confirm"))
-                .clicked()
-            {
-                action = choices.map(DialogAction::Confirm);
-            }
-            if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
-                action = Some(DialogAction::UsePrefix);
-            }
-            if ui.button("Cancel").clicked() {
-                action = Some(DialogAction::Cancel);
-            }
+        // The whole row waits for a running confirm, whose plan was made for these targets.
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal(|ui| {
+                let confirm = ui.add_enabled(choices.is_some(), egui::Button::new("Confirm"));
+                if confirm.clicked() {
+                    action = choices.map(DialogAction::Confirm);
+                }
+                if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
+                    action = Some(DialogAction::UsePrefix);
+                }
+                if ui.button("Cancel").clicked() {
+                    action = Some(DialogAction::Cancel);
+                }
+            });
         });
         action
     }
