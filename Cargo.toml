@@ -5,6 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 edition = "2024"
 rust-version = "1.91"
+license = "MIT"
+repository = "https://github.com/jmigual/salvajocs"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
