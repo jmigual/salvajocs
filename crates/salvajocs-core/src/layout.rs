@@ -216,13 +216,13 @@ impl Context {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GameVars {
     /// `<game>` candidates: the `installDir` names, or the title when there are none.
-    game: Vec<String>,
+    pub(crate) game: Vec<String>,
     /// `<base>` candidates, one per root and `<game>`.
     base: Vec<PathBuf>,
     /// `<root>` candidates.
     root: Vec<PathBuf>,
-    store_game_id: Option<String>,
-    os_user_name: String,
+    pub(crate) store_game_id: Option<String>,
+    pub(crate) os_user_name: String,
 }
 
 impl GameVars {

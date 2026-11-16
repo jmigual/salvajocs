@@ -21,7 +21,7 @@ pub enum Family {
 }
 
 impl Family {
-    fn other(self) -> Self {
+    pub(crate) fn other(self) -> Self {
         match self {
             Family::Linux => Family::Windows,
             Family::Windows => Family::Linux,
@@ -144,7 +144,7 @@ pub enum ResolveError {
 }
 
 /// The family a base belongs to; `None` for the install-relative bases, which resolve on either.
-fn base_family(base: Base) -> Option<Family> {
+pub(crate) fn base_family(base: Base) -> Option<Family> {
     match base {
         Base::Home | Base::XdgData | Base::XdgConfig | Base::Absolute => Some(Family::Linux),
         Base::WinHome
