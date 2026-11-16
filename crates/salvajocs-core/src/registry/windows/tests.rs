@@ -58,6 +58,13 @@ fn export_of(entries: Vec<(String, Vec<RegValue>)>) -> RegistryExport {
     }
 }
 
+/// What the crate itself reads back for each of `names`, one per line, for failure messages.
+fn raw_values<const N: usize>(key: &Key, names: [&str; N]) -> String {
+    names
+        .map(|name| format!("{name}: {:?}", key.get_value(name)))
+        .join("\n")
+}
+
 #[test]
 fn windows_registry_round_trip() {
     let key = TestKey::new();
@@ -245,6 +252,7 @@ fn non_canonical_values_are_kept_as_other() {
         target.set_bytes(name, Type::Other(code), bytes).unwrap();
     }
 
+    let written = raw_values(&target, cases.map(|(name, ..)| name));
     let exported = key.export();
     for (name, code, bytes) in cases {
         let data = &exported.keys[&key.path("")]
@@ -263,7 +271,15 @@ fn non_canonical_values_are_kept_as_other() {
 
     // Writing the export back leaves the bytes unchanged.
     replace_subtrees(&exported).unwrap();
-    assert_eq!(key.export(), exported);
+    let restored = raw_values(
+        &CURRENT_USER.open(&key.relative).unwrap(),
+        cases.map(|(name, ..)| name),
+    );
+    assert_eq!(
+        key.export(),
+        exported,
+        "raw values after the initial write:\n{written}\nraw values after replace_subtrees:\n{restored}"
+    );
 }
 
 #[test]
