@@ -70,6 +70,7 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         cache_dir: tmp.path().join("cache"),
         secrets,
         refresh_manifest: offline,
+        environment: None,
     }
 }
 

@@ -16,6 +16,7 @@ fn env(secrets: Arc<dyn SecretStore>) -> Env {
         cache_dir: "cache".into(),
         secrets,
         refresh_manifest: offline,
+        environment: None,
     }
 }
 

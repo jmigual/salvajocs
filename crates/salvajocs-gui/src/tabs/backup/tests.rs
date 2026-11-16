@@ -99,6 +99,7 @@ fn state(dir: &Path) -> State {
         cache_dir: dir.join("cache"),
         secrets: Arc::new(MemorySecrets::new()),
         refresh_manifest: offline,
+        environment: None,
     });
     state.config = Some(AppConfig {
         repository: String::new(),

@@ -62,6 +62,7 @@ fn state_with(store: crate::env::MemorySecrets) -> State {
         cache_dir: tmp.join("cache"),
         secrets: Arc::new(store),
         refresh_manifest: offline,
+        environment: None,
     });
     state.config = Some(config("/backups", PasswordMode::Keyring, false));
     state.credentials.password = "right".to_string();

@@ -211,9 +211,11 @@ impl BackupTab {
         let button = ui.add_enabled(enabled, egui::Button::new("Scan for games"));
         if let (true, Some(config)) = (button.clicked(), &state.config) {
             let (manifest, config) = (manifest(state), config.clone());
+            let environment = state.env.environment.clone();
             self.scan_error = None;
             self.scanning = Some(Job::spawn(ui.ctx(), move || {
-                Ok(scan::scan(&manifest, &config, &Environment::detect()))
+                let environment = environment.unwrap_or_else(Environment::detect);
+                Ok(scan::scan(&manifest, &config, &environment))
             }));
         }
         if manifest_loading {
@@ -295,8 +297,10 @@ impl BackupTab {
             state.env.cache_dir.join("stage"),
             ctx.clone(),
         );
+        let environment = state.env.environment.clone();
         self.running = Some(Job::spawn(ctx, move || {
-            let report = scan::scan(&manifest, &config, &Environment::detect());
+            let environment = environment.unwrap_or_else(Environment::detect);
+            let report = scan::scan(&manifest, &config, &environment);
             let games: Vec<GameScan> = report
                 .games
                 .iter()

@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use salvajocs_core::config;
 use salvajocs_core::manifest::fetch::{self, FetchError, Freshness};
+use salvajocs_core::scan::Environment;
 use salvajocs_core::secret::{self, SecretError, SecretKey};
 
 /// The credential store of one repository scope (`AppConfig::secret_scope`).
@@ -112,6 +113,9 @@ pub struct Env {
     pub secrets: Arc<dyn SecretStore>,
     /// Revalidates the manifest cache.
     pub refresh_manifest: RefreshManifest,
+    /// The machine scans and restores look at; `None` detects it (`Environment::detect`) in
+    /// the job that needs it.
+    pub environment: Option<Environment>,
 }
 
 impl Env {
@@ -122,6 +126,7 @@ impl Env {
             cache_dir: dirs::cache_dir()?.join("salvajocs"),
             secrets: Arc::new(SystemSecrets),
             refresh_manifest: fetch::refresh,
+            environment: None,
         })
     }
 }
