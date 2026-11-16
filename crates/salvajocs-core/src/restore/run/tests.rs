@@ -434,6 +434,32 @@ fn staged_meta(dir: &Path) -> SnapshotMeta {
     serde_json::from_slice(&fs::read(dir.join(META_FILE)).unwrap()).unwrap()
 }
 
+fn created(report: &RestoreReport) -> &SnapshotInfo {
+    match &report.safety_backup {
+        SafetyBackup::Created(info) => info,
+        other => panic!("no safety backup: {other:?}"),
+    }
+}
+
+#[test]
+fn no_safety_backup_when_no_planned_key_or_file_exists() {
+    let mut f = fixture();
+    write(
+        &f.prefix.join("user.reg"),
+        "WINE REGISTRY Version 2\n\n[Software\\\\Other] 1\n#time=0\n\"keep\"=\"me\"\n",
+    );
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    let report = f.run(&plan, false).unwrap();
+    assert_eq!(report.safety_backup, SafetyBackup::NothingExisted);
+    assert!(f.storage.snapshots("salvajocs").unwrap().is_empty());
+    assert!(matches!(report.registry, Some(Ok(()))));
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("new"));
+    let kept = reg(&f.prefix, "HKEY_CURRENT_USER\\Software\\Other");
+    assert_eq!(kept.keys.len(), 1);
+}
+
 #[test]
 fn registry_restore_refused_while_wineserver_runs() {
     let mut f = fixture();
@@ -500,7 +526,7 @@ fn safety_backup_covers_planned_targets_in_user_picked_prefix() {
     let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
 
     let report = f.run(&plan, false).unwrap();
-    let info = report.safety_backup.as_ref().expect("a safety backup");
+    let info = created(&report);
     assert_eq!(info.label, "Foo");
     assert!(info.tags.iter().any(|tag| tag == PRE_RESTORE_TAG));
     let game_tag = format!("game:{}", crate::slug::slug("Foo"));
@@ -530,7 +556,7 @@ fn safety_backup_meta_has_roots() {
     let plan = plan_of(vec![f.planned("Game/save.sav", "new"), missing], None);
 
     let report = f.run(&plan, false).unwrap();
-    let dir = f.restored(report.safety_backup.as_ref().unwrap());
+    let dir = f.restored(created(&report));
     let meta = staged_meta(&dir);
     assert_eq!(meta.title, "Foo");
     // Only the root of a target that existed, raw as planned.
@@ -546,7 +572,7 @@ fn safety_backup_covers_overridden_target() {
     plan.override_target(0, elsewhere.clone()).unwrap();
 
     let report = f.run(&plan, false).unwrap();
-    let dir = f.restored(report.safety_backup.as_ref().unwrap());
+    let dir = f.restored(created(&report));
     let base = if cfg!(windows) {
         Base::WinAbsolute
     } else {
@@ -602,7 +628,7 @@ fn symlinked_target_file_refused() {
     assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
     assert_eq!(read(&outside), "outside");
     // The link was neither followed into the safety backup nor replaced.
-    assert!(report.safety_backup.is_none());
+    assert_eq!(report.safety_backup, SafetyBackup::NothingExisted);
     assert!(report.files[1].is_ok(), "{report:?}");
     assert_eq!(read(&real_docs.join("Game/doc.sav")), "new");
 }
@@ -677,7 +703,7 @@ fn proton_backup_restores_into_windows_layout() {
 
     assert_applied(&report);
     // Nothing existed at the targets.
-    assert!(report.safety_backup.is_none());
+    assert_eq!(report.safety_backup, SafetyBackup::NothingExisted);
     assert_eq!(read(&win.app_data.join("Foo/save.dat")), "proton");
     assert_eq!(read(&win.documents.join("My Games/Foo/slot1.sav")), "slot");
 }
@@ -736,7 +762,7 @@ fn prefix_registry_restores_into_other_prefix() {
     assert_eq!(read(&save), "a");
 
     // The safety backup holds the other prefix's old subtree.
-    let info = report.safety_backup.expect("a safety backup");
+    let info = created(&report);
     let dir = tmp.path().join("restored");
     let path = format!("/salvajocs/{}", crate::slug::slug("Foo"));
     storage.restore_path(&info.id, &path, &dir).unwrap();

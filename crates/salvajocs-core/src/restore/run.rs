@@ -328,12 +328,22 @@ fn apply_io(path: &Path) -> impl FnOnce(io::Error) -> ApplyError + '_ {
     }
 }
 
+/// The safety backup [`run`] made before writing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SafetyBackup {
+    /// No target file and none of the replaced registry keys existed, so none was needed.
+    NothingExisted,
+    /// The repository already held exactly that state, so no snapshot was added.
+    Unchanged,
+    /// The new [`PRE_RESTORE_TAG`] snapshot.
+    Created(SnapshotInfo),
+}
+
 /// What [`run`] did.
 #[derive(Debug)]
 pub struct RestoreReport {
-    /// The safety backup; `None` when nothing existed at the targets or the repository already
-    /// held exactly that state.
-    pub safety_backup: Option<SnapshotInfo>,
+    /// The safety backup.
+    pub safety_backup: SafetyBackup,
     /// The outcome of each of the plan's writes, in order.
     pub files: Vec<Result<(), ApplyError>>,
     /// The outcome of the registry restore; `None` when the plan has none.
@@ -404,22 +414,18 @@ pub fn run(
     }
     if let Some((export, ctx)) = &plan.registry {
         existing.registry_keys = export.keys.keys().cloned().collect();
-        existing.registry_source = match ctx {
-            // A prefix without `user.reg` has no keys to lose; applying reports it missing.
-            Context::WinePrefix { prefix, .. } => (prefix.join("user.reg").exists())
-                .then(|| RegistrySource::WinePrefix(prefix.clone())),
-            Context::WindowsNative(_) => Some(RegistrySource::Windows),
-            Context::Linux(_) => None,
-        };
+        existing.registry_source = registry_source(&existing.registry_keys, ctx);
     }
     let safety_backup = if existing.files.is_empty() && existing.registry_source.is_none() {
-        None
+        SafetyBackup::NothingExisted
     } else {
         let tags = [PRE_RESTORE_TAG];
         let games = slice::from_ref(&existing);
         let mut outcomes = backup_games(storage, games, stage_root, &tags, |_| {})?;
         let outcome = outcomes.pop().expect("one outcome per game");
-        outcome.result?
+        outcome
+            .result?
+            .map_or(SafetyBackup::Unchanged, SafetyBackup::Created)
     };
 
     let files = (plan.writes.iter().zip(checks))
@@ -431,6 +437,36 @@ pub fn run(
         files,
         registry,
     })
+}
+
+/// Where the safety backup reads the `keys` a restore into `ctx` replaces; `None` when none of
+/// them exists there, so nothing is lost. A source that cannot be read is kept, so the backup
+/// fails on it rather than the restore overwriting what it could not save.
+fn registry_source(keys: &[String], ctx: &Context) -> Option<RegistrySource> {
+    match ctx {
+        Context::WinePrefix { prefix, .. } => {
+            let holds_keys = match fs::read_to_string(prefix.join("user.reg")) {
+                // No `user.reg`, no keys to lose; applying reports it missing.
+                Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                Err(_) => true,
+                Ok(text) => holds_keys(RegFile::parse(&text).and_then(|file| file.export(keys))),
+            };
+            holds_keys.then(|| RegistrySource::WinePrefix(prefix.clone()))
+        }
+        #[cfg(windows)]
+        Context::WindowsNative(_) => {
+            holds_keys(crate::registry::windows::export(keys)).then_some(RegistrySource::Windows)
+        }
+        // Off Windows the backup reports that the live registry cannot be read.
+        #[cfg(not(windows))]
+        Context::WindowsNative(_) => Some(RegistrySource::Windows),
+        Context::Linux(_) => None,
+    }
+}
+
+/// Whether an export holds keys; a failed one counts, so the backup reports the failure.
+fn holds_keys<E>(export: Result<RegistryExport, E>) -> bool {
+    export.map_or(true, |export| !export.keys.is_empty())
 }
 
 /// Whether `write` may be applied: its source is a regular file and its target is not a
