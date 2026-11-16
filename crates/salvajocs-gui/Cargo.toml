@@ -16,7 +16,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 dirs.workspace = true
 # glow instead of the default wgpu: a lighter renderer that needs no GPU stack at build time.
-eframe = { workspace = true, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
+eframe = { workspace = true, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "system_fonts", "wayland", "x11"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
 salvajocs-core = { path = "../salvajocs-core" }
 thiserror.workspace = true
