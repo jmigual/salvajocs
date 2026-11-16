@@ -2,6 +2,7 @@
 //! skip reason, through a cross-build mapping where a base family has no target (ADR-0005,
 //! ADR-0011). Nothing here writes to disk.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -64,6 +65,8 @@ pub enum SkipReason {
     OutsideRoots,
     /// `registry.json` with no Windows target.
     NoWindowsTarget,
+    /// A registry key outside the keys the game's entry declares.
+    UndeclaredRegistryKey,
 }
 
 impl fmt::Display for SkipReason {
@@ -75,15 +78,27 @@ impl fmt::Display for SkipReason {
             SkipReason::UnsafePath => "path leaves its base directory",
             SkipReason::OutsideRoots => "outside the game's save roots",
             SkipReason::NoWindowsTarget => "registry: no Windows target",
+            SkipReason::UndeclaredRegistryKey => "registry key not declared for this game",
         })
     }
+}
+
+/// What a [`Skipped`] refers to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkippedItem {
+    /// A staged file as `(base, tail)`.
+    File(Base, String),
+    /// The whole `registry.json`.
+    Registry,
+    /// One key of `registry.json`.
+    RegistryKey(String),
 }
 
 /// A staged item that is not restored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skipped {
-    /// The staged file as `(base, tail)`; `None` for `registry.json`.
-    pub file: Option<(Base, String)>,
+    /// The skipped item.
+    pub item: SkippedItem,
     /// Why it is skipped.
     pub reason: SkipReason,
 }
@@ -280,13 +295,28 @@ fn resolve_path(
     layout::target_path(&dir, tail, case_insensitive).ok_or(SkipReason::UnsafePath)
 }
 
+/// Whether the registry `key` lies at or below a key `entry` declares, ignoring ASCII case, with
+/// `\` and `/` both separating; a snapshot is untrusted, so nothing else is restored (ADR-0005).
+fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
+    let normalize = |key: &str| key.replace('\\', "/").to_ascii_lowercase();
+    let key = normalize(key);
+    entry.is_some_and(|entry| {
+        entry.registry.keys().any(|declared| {
+            let declared = normalize(declared);
+            let declared = declared.trim_end_matches('/');
+            key == declared || key.starts_with(&format!("{declared}/"))
+        })
+    })
+}
+
 /// Maps every staged file to a target path or a skip reason. A base resolves against its own
 /// family's target; a file whose family has none goes through the `mappings` entry of its root
 /// (ADR-0011). `Absolute`/`WinAbsolute` restore to the same OS only (ADR-0005). A file must lie
 /// under a recorded root. Its tail below the root is kept, and the root's raw rest (or the
 /// mapping target's) is substituted with `vars` and the target context's user, so
 /// `<osUserName>` becomes this machine's user. `GameDir`/`StoreRoot` resolve through the
-/// install dirs in `vars`.
+/// install dirs in `vars`. Only the registry keys `entry` declares are restored; `entry` is the
+/// game's manifest entry with its custom game applied (`manifest::merge_custom`).
 ///
 /// # Errors
 /// [`PlanError::Unmapped`] when a file of a family without a target lies under a root that has
@@ -295,6 +325,7 @@ pub fn plan(
     staged: &StagedGame,
     targets: &Targets,
     vars: &GameVars,
+    entry: Option<&GameEntry>,
     mappings: &[ResolvedMapping],
 ) -> Result<RestorePlan, PlanError> {
     let linux = targets.linux.clone().map(Context::Linux);
@@ -361,15 +392,27 @@ pub fn plan(
                 plan.writes.push(write);
             }
             Err(reason) => plan.skipped.push(Skipped {
-                file: Some((*base, tail.clone())),
+                item: SkippedItem::File(*base, tail.clone()),
                 reason,
             }),
         }
     }
     match (&staged.registry, &targets.win) {
-        (Some(export), Some(win)) => plan.registry = Some((export.clone(), win.clone())),
+        (Some(export), Some(win)) => {
+            let (keys, undeclared): (BTreeMap<_, _>, BTreeMap<_, _>) = (export.keys.clone())
+                .into_iter()
+                .partition(|(key, _)| declared(entry, key));
+            plan.skipped
+                .extend(undeclared.into_keys().map(|key| Skipped {
+                    item: SkippedItem::RegistryKey(key),
+                    reason: SkipReason::UndeclaredRegistryKey,
+                }));
+            if !keys.is_empty() {
+                plan.registry = Some((RegistryExport { keys }, win.clone()));
+            }
+        }
         (Some(_), None) => plan.skipped.push(Skipped {
-            file: None,
+            item: SkippedItem::Registry,
             reason: SkipReason::NoWindowsTarget,
         }),
         (None, _) => {}
@@ -400,7 +443,8 @@ pub enum PrepareError {
 /// Plans a restore, mapping the roots of a base family without a target onto the other family:
 /// [`crossbuild::propose`], then [`crossbuild::resolve`] with `choices`, then [`plan`]. Saved
 /// pairs, engine rules and auto-pairs apply without choices (ADR-0011). `entry` is the game's
-/// manifest entry and `pairs` its saved pairs.
+/// manifest entry with its custom game applied (`manifest::merge_custom`) and `pairs` its saved
+/// pairs.
 ///
 /// # Errors
 /// [`PrepareError::NeedsMapping`] while an unknown root has no choice;
@@ -453,7 +497,7 @@ pub fn prepare(
             }
         };
     }
-    let mut plan = plan(staged, targets, vars, &mappings)?;
+    let mut plan = plan(staged, targets, vars, entry, &mappings)?;
     plan.notes = notes;
     Ok(plan)
 }
