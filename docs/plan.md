@@ -245,18 +245,29 @@ Dependency graph:
 - **Accept:** step 7's Windows job is green and includes `windows_registry_round_trip` under
   `HKCU\Software\salvajocs-test`.
 
-## 11. Scan (depends on 2, 3, 5, 8)
+## 11. Scan (depends on 2, 3, 4, 5, 8, 10)
 
 - **Goal:** find every game's save files on this machine and list the registry keys to export.
 - **Files:** `core/src/scan.rs`, `core/src/scan/tests.rs`.
 - **Content:**
-  - `scan(&Manifest, &AppConfig, &Environment) -> Vec<GameScan>`. `Environment` holds the native
-    context, the Steam roots and the prefixes, built by `Environment::detect()` and
-    constructible in tests.
+  - `scan(&Manifest, &AppConfig, &Environment) -> ScanReport { games: Vec<GameScan>, problems:
+    Vec<ScanProblem> }`. `Environment` holds the native context, its OS user name and the Steam
+    roots, built by `Environment::detect()` and constructible in tests. Prefixes come from
+    `config.roots` (`WinePrefix`), a custom game's `wine_prefix` and Proton lookups under the
+    Steam roots.
   - `GameScan { title, files: Vec<FoundFile{base, tail, real, size}>, roots: Vec<(Base,
-    String)>, registry_keys }`. `roots` holds the glob-free prefixes of templates that
-    matched, as raw template text (a `<game>` template keeps `<game>` in `roots`).
-    `registry_keys` is the manifest's applicable HKCU list, not checked against the registry.
+    String)>, registry_keys, registry_source: Option<RegistrySource>, unreadable: Vec<PathBuf>
+    }`. `roots` holds the glob-free prefixes of templates that matched, as raw template text
+    (a `<game>` template keeps `<game>` in `roots`). `registry_keys` is the manifest's
+    applicable HKCU list. `RegistrySource` is `Windows` or `WinePrefix(PathBuf)`.
+  - Registry: walk the contexts in priority order and record the first whose export of the
+    game's keys is non-empty. A prefix's `user.reg` is parsed with `registry::wine` once per
+    prefix per scan; native Windows uses `registry::windows::export`. A game is kept when it
+    has files or a `registry_source`. Backup reads the keys fresh from the source.
+  - Errors: `WinePrefix` roots are resolved once per scan. A `PrefixError` (such as
+    `Ambiguous`) becomes a `ScanProblem { path, kind }` instead of being dropped. A
+    `read_dir` or glob failure becomes a problem and is added to that game's `unreadable`.
+    Nothing is dropped silently.
   - Prefix priority and first-wins per logical path (ADR-0007). Dedupe by real path. Patterns
     come from `layout::expand`; each match's tail is `tail_of(match, base dir)` with the base dir
     of the pair that produced it.
@@ -270,7 +281,15 @@ Dependency graph:
   - `game_specific_prefix_beats_wine_prefix_root`;
   - `prefix_scan_matches_case_insensitively`;
   - `roots_record_glob_free_prefixes` (also asserts a `<game>` template keeps `<game>` in
-    `roots`).
+    `roots`);
+  - `registry_only_game_is_offered`;
+  - `registry_source_is_first_context_with_keys`;
+  - `user_reg_parsed_once_per_prefix`;
+  - `ambiguous_wine_prefix_root_reported`;
+  - `unreadable_dir_reported_not_dropped`;
+  - `os_user_name_comes_from_the_context`,
+    `prefixes_differing_in_case_list_a_logical_path_once` and
+    `extend_custom_game_keeps_the_manifest_files`.
 
 ## 12. Backup (depends on 4, 6, 10, 11)
 
@@ -280,7 +299,10 @@ Dependency graph:
   - `slug(title)` (FNV-1a 32).
   - `stage(game_scan, registry: &RegistryExport, stage_dir)` syncs the mirror (copy when size or
     mtime differ, then `File::set_modified`; remove files whose source is gone). It writes
-    `SnapshotMeta` (with `roots`) and `registry.json` only when their bytes change.
+    `SnapshotMeta` (with `roots`) and `registry.json` only when their bytes change. The
+    registry export is read fresh from the scan's `registry_source`; an empty export is dropped
+    (no `registry.json`). Nothing is removed from the mirror when the scan reported `unreadable`
+    paths for the game.
   - `backup_games(&Storage, scans, extra_tags, progress)`: reindexes once, then one game after
     another,
     `as_path = /salvajocs/<slug>`, `label` = title, tags `salvajocs` and `game:<slug>`. The
@@ -293,7 +315,9 @@ Dependency graph:
   - `restage_unchanged_keeps_inode_and_mtime`;
   - `restage_removes_deleted_source`;
   - `backup_creates_tagged_labelled_snapshot_per_game`;
-  - `unchanged_game_makes_no_new_snapshot`.
+  - `unchanged_game_makes_no_new_snapshot`;
+  - `registry_exported_from_recorded_source`;
+  - `restage_keeps_copies_when_source_unreadable`.
 
 ## 13. Cross-build mapping (depends on 2, 3, 8; parallel with 11, 12)
 
@@ -350,6 +374,8 @@ Dependency graph:
     - `SnapshotMeta.roots` are raw glob-free template prefixes (`<game>` etc. unsubstituted), and
       so are the proposed targets. `prepare`/`plan` substitute `GameVars` into the root's rest
       to match file tails and into the resolved target.
+    - A scan's `roots` keep the template's case while file tails keep the disk's, so matching a
+      file to a root ignores case for `Win*` bases.
     - `prepare` fills `MappingEntry.files` from `StagedGame.files` (`propose` leaves 0).
     - `prepare` adds the Unity PlayerPrefs note when `StagedGame.registry` has the matching
       HKCU key (`propose` only checks the manifest entry; ADR-0011's "or registry.json").

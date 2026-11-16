@@ -69,8 +69,11 @@ dependency yet; once added, the two builds unify.
     `AppData/Roaming` are listed thousands of times per scan.
   - Measured in plan step 11 (release build, 2026-11-16): a full-manifest scan (53 551
     top-level entries, aliases skipped) against one real Proton prefix as the only `WinePrefix`
-    root takes 6.4-6.7 s (two runs). It runs in a background `Job`, so v1 accepts it. If it
-    must be faster, cache directory listings per scan, not drop case-insensitivity.
+    root takes 3.0 s after the prefix is resolved once per scan (6.4-6.7 s when each game
+    re-validated it; two runs each). Measured with no native context and no Steam roots; the
+    real cost is about (1 + prefix contexts) times that, since every context is globbed. It runs
+    in a background `Job`, so v1 accepts it. If it must be faster, cache directory listings per
+    scan, not drop case-insensitivity.
   - Rejected: a hand-written per-component `read_dir` walk. It would reimplement `*`/`**`/`?`
     matching that `glob` already does.
 - **Custom games** (stored in config, ADR-0009; the `CustomGame`, `Integration` and `Pair` types

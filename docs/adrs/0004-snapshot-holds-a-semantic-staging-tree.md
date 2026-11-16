@@ -62,7 +62,9 @@ machine and OS.
 - The staging dir is fixed per machine and game and kept between backups as a **mirror**:
   - A file is copied only when its size or mtime differs from the source. Its mtime is then set
     to the source's with std `File::set_modified`.
-  - Staged files whose source is gone are removed.
+  - Staged files whose source is gone are removed, except for a game whose scan reported
+    unreadable paths: it is staged without deletions, so a read error never removes saves from
+    the next snapshot.
   - `salvajocs.json` and `registry.json` hold no timestamps, are serialized deterministically
     (sorted maps), and are rewritten only when their bytes change.
   An unchanged game therefore keeps identical file metadata, and `skip_if_unchanged`

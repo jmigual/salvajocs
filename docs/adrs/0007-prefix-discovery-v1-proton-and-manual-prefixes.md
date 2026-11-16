@@ -41,7 +41,8 @@ has a `root` dir), else `steamuser`, else a typed `Ambiguous` error. A prefix wi
 
 Priority when several prefixes match a game: the game's own prefix (Proton appid or
 `wine_prefix`) first, then `WinePrefix` roots in configured order. When several match, the first
-one wins per logical path.
+one wins per logical path. Registry keys use the same context priority. Scan problems, such as
+an `Ambiguous` prefix, are returned typed, never dropped.
 
 ## Alternatives considered
 
