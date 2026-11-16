@@ -25,3 +25,7 @@ thiserror = "2.0.21"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Unoptimised scrypt key derivation made the storage tests take ~38 s; now ~1.4 s.
+[profile.dev.package.scrypt]
+opt-level = 3
