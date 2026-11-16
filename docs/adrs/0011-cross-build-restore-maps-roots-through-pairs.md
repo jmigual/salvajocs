@@ -74,8 +74,8 @@ Engine layouts, from primary sources:
      one Windows entry. Their glob-free prefixes form the pair.
   4. **Unknown:** no default. The dialog lists the manifest's save templates for the target OS
      as candidates; the user picks one, types a path, or skips the root.
-- **Who computes what:** `restore::prepare(staged, targets, roots, vars, entry, pairs,
-  choices)` is the core entry point. It calls `crossbuild::propose`, then `crossbuild::resolve`
+- **Who computes what:** `restore::prepare(staged, targets, vars, entry, pairs, choices)` is
+  the core entry point. It calls `crossbuild::propose`, then `crossbuild::resolve`
   (`MappingEntry`s + user `Choice`s → `ResolvedMapping`s; a choice for a root replaces its
   proposal, whatever the confidence), then `restore::plan`. Missing choices
   return `NeedsMapping(Vec<MappingEntry>)`. The GUI only shows those entries and calls
@@ -89,12 +89,13 @@ Engine layouts, from primary sources:
   Unknown}`, candidate targets, and notes.
   - Unity note: if the Windows side has the `HKEY_CURRENT_USER/Software/{c}/{p}` key in the
     manifest or in `registry.json`, a prefilled note says "settings (PlayerPrefs) are stored
-    differently and are not converted".
+    differently and are not converted". Notes always reach the preview (`RestorePlan.notes`),
+    whether the root was mapped automatically or chosen.
   - `propose` returns `Saved`, `EngineRule` and `AutoPair` entries already resolved. They are
     applied automatically, with no dialog. The plan preview shows where every file goes, plus
     the cross-build warning, and the per-file override is available there.
-  - On a Linux host whose snapshot has `Win*` bases, the target control always offers both "Windows
-    build in prefix X" and "native Linux build (cross-build mapping)". It defaults from
+  - On a Linux host the target control always offers both "Windows build in prefix X" and
+    "native Linux build (cross-build mapping)", whatever bases the snapshot has. It defaults from
     `default_targets`, so a stale Proton prefix doesn't force the Windows-build path.
   - A file-level or globbed template pairs through its glob-free parent directory. The tail
     under it may then nest differently in the other build, so the preview shows every

@@ -92,4 +92,7 @@ machine and OS.
 - Only changed files are copied on each backup.
 - The snapshot is self-describing. A user can browse `/salvajocs/<slug>/files/WinAppData/...`
   with rustic or restic.
-- `<osUserName>` or `<storeUserId>` inside a tail is stored as is and not translated in v1.
+- `<osUserName>` stays literal in `SnapshotMeta.roots`. On restore it matches exactly one
+  path component of the tail, and the write's tail takes the target family's user there
+  (ADR-0005), so a Proton save under `steamuser/` lands under the Windows user's name.
+  `<storeUserId>` inside a tail is stored as is and not translated in v1.

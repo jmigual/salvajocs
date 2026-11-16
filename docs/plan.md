@@ -62,7 +62,9 @@ Dependency graph:
 - **Content:**
   - `Base` enum.
   - `WinFolders` (with `native()` under `cfg(windows)` and `for_prefix(prefix, user)`),
-    `LinuxFolders::native()`, `Roots`/`Root{path, kind}`.
+    `LinuxFolders::native()`, `Roots`/`Root{path, kind}`. Both folder types carry `user`, the
+    value of `<osUserName>` (`native()`: the OS user; `for_prefix`: the Wine user), read
+    through `Context::user()`.
   - `Context::{WindowsNative(WinFolders), WinePrefix { prefix, folders }, Linux(LinuxFolders)}`.
     The prefix variant keeps the prefix path, which restore needs for `user.reg` and for
     case-insensitive matching.
@@ -78,8 +80,8 @@ Dependency graph:
     pattern), one per candidate base dir. A match's tail is `tail_of(match, base dir)`. Every
     pattern is built by
     `glob_pattern(base_dir, rest, ctx.case_insensitive())`, so callers cannot bypass the
-    case-insensitive rewrite. `GameVars` holds `<game>`, `<base>` and `<root>` candidates,
-    `<storeGameId>` and `<osUserName>`; `<storeUserId>` becomes `*`.
+    case-insensitive rewrite. `GameVars` holds `<game>`, `<base>` and `<root>` candidates and
+    `<storeGameId>`; `<osUserName>` comes from the context; `<storeUserId>` becomes `*`.
   - `GameVars::new(title, install_dirs: Vec<String>, …)`: holds the `installDir` candidates,
     falling back to the title. It takes plain strings, so this step stays independent of
     step 2.
@@ -251,10 +253,10 @@ Dependency graph:
 - **Files:** `core/src/scan.rs`, `core/src/scan/tests.rs`.
 - **Content:**
   - `scan(&Manifest, &AppConfig, &Environment) -> ScanReport { games: Vec<GameScan>, problems:
-    Vec<ScanProblem> }`. `Environment` holds the native context, its OS user name and the Steam
-    roots, built by `Environment::detect()` and constructible in tests. Prefixes come from
-    `config.roots` (`WinePrefix`), a custom game's `wine_prefix` and Proton lookups under the
-    Steam roots.
+    Vec<ScanProblem> }`. `Environment` holds the native context (which carries its OS user
+    name) and the Steam roots, built by `Environment::detect()` and constructible in tests.
+    Prefixes come from `config.roots` (`WinePrefix`), a custom game's `wine_prefix` and Proton
+    lookups under the Steam roots.
   - `GameScan { title, files: Vec<FoundFile{base, tail, real, size}>, roots: Vec<(Base,
     String)>, registry_keys, registry_source: Option<RegistrySource>, unreadable: Vec<PathBuf>
     }`. `roots` holds the glob-free prefixes of templates that matched, as raw template text
@@ -364,14 +366,23 @@ Dependency graph:
   - `StagedGame { root, meta: SnapshotMeta, files: Vec<(Base, tail)>, registry:
     Option<RegistryExport> }`.
   - `Targets { linux: Option<LinuxFolders>, win: Option<Context> }`.
-  - `plan(&StagedGame, &Targets, &Roots, &GameVars, &[ResolvedMapping]) ->
-    Result<RestorePlan, PlanError>`.
+  - `plan(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[ResolvedMapping]) ->
+    Result<RestorePlan, PlanError>`. The entry is the game's manifest entry with its custom game
+    applied.
     - Bases resolve against their own family's target. `WinAbsolute` resolves through
       `win_absolute_target`, not `base_dir`.
     - Files of a family with no target go through the mapping.
     - `registry.json` with no `win` target is skipped with "registry: no Windows target".
-    - `RestorePlan { writes, registry, skipped, cross_build: bool }`.
-  - `prepare(&StagedGame, &Targets, &Roots, &GameVars, Option<&GameEntry>, &[Pair],
+    - A snapshot is untrusted (ADR-0005): a file under no `SnapshotMeta.roots` entry is skipped
+      with "outside the game's save roots"; only registry keys at or below a key the entry
+      declares (case-insensitive) are restored, others are skipped with "registry key not
+      declared for this game", and without an entry every key is skipped.
+    - `<osUserName>` stays literal in the roots and matches exactly one tail component. A
+      write's tail is the root's rest (or the mapping target's) with `<osUserName>` replaced by
+      the target family's `user`, plus the matched remainder (ADR-0004).
+    - A mapping whose target is `Absolute`/`WinAbsolute` is skipped as having no target.
+    - `RestorePlan { writes, registry, skipped, cross_build: bool, notes }`.
+  - `prepare(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[Pair],
     &[(root, Choice)]) -> Result<RestorePlan, PrepareError>`. This is the one call the GUI
     makes: it runs `crossbuild::propose`, `resolve` and `plan`, and returns
     `NeedsMapping(Vec<MappingEntry>)` while choices are missing (ADR-0011).
@@ -383,6 +394,10 @@ Dependency graph:
     - `prepare` fills `MappingEntry.files` from `StagedGame.files` (`propose` leaves 0).
     - `prepare` adds the Unity PlayerPrefs note when `StagedGame.registry` has the matching
       HKCU key (`propose` only checks the manifest entry; ADR-0011's "or registry.json").
+    - `prepare` copies every `MappingEntry.notes` into `RestorePlan.notes`, whether the root
+      was mapped automatically or chosen.
+    - `crossbuild::propose` does not propose `Absolute`/`WinAbsolute` roots; they restore to
+      the same OS only.
   - `RestorePlan::override_target(index, PathBuf) -> Result<()>`: per-file override for this
     restore only; the path must be absolute (ADR-0005).
 - **Accept:** `cargo test -p salvajocs-core restore::tests`:
@@ -397,7 +412,17 @@ Dependency graph:
   - `prepare_engine_rule_returns_plan_without_choices`;
   - `linux_save_maps_onto_windows_via_pair` (sets `cross_build`);
   - `registry_skipped_without_windows_target`;
-  - `override_target_rejects_relative_path`.
+  - `override_target_rejects_relative_path`;
+  - `os_user_name_in_tail_is_swapped_proton_to_windows`;
+  - `mixed_restore_uses_each_family_user`;
+  - `mapped_root_with_os_user_name_covers_file`;
+  - `unity_note_kept_when_mapped_automatically`;
+  - `file_outside_recorded_roots_skipped`;
+  - `undeclared_registry_key_skipped`;
+  - `registry_skipped_without_game_entry`;
+  - `linux_snapshot_restored_into_proton_build`;
+  - `crafted_root_cannot_read_outside_the_staged_files`;
+  - `store_game_id_substituted_into_root`.
 
 ## 15. Restore list, fetch, safety backup, apply (depends on 5, 12, 14)
 
@@ -417,7 +442,10 @@ Dependency graph:
        `backup_games(&mut Storage, games, stage_root, &["pre-restore"], progress)` does this
        given a `stage_root` of its own (not the backup mirror's); a game's failure is in its
        `GameBackup`, not in the outer `Result`. Any error → nothing written;
-    3. apply files and registry.
+    3. apply files and registry. A staged source is copied only when its `symlink_metadata`
+       is a regular file. A target whose final component is an existing symlink is refused
+       with "target is a symlink"; symlinked parent directories are allowed (Proton's legacy
+       dirs).
 - **Accept:** `cargo test -p salvajocs-core restore::run`:
   - `registry_restore_refused_while_wineserver_runs`;
   - `apply_aborts_when_safety_backup_fails` (the repository location is made unreachable;
@@ -430,7 +458,9 @@ Dependency graph:
   - `safety_backup_meta_has_roots`;
   - `safety_backup_covers_overridden_target`;
   - `proton_backup_restores_into_windows_layout`;
-  - `prefix_registry_restores_into_other_prefix`.
+  - `prefix_registry_restores_into_other_prefix`;
+  - `staged_symlink_not_restored`;
+  - `symlinked_target_file_refused`.
 
 ## 16. GUI shell, jobs, first run, Settings (depends on 8, 9)
 
@@ -476,8 +506,9 @@ Dependency graph:
 
 - **Goal:**
   - games from snapshots, with a snapshot picker (time, host, "pre-restore" label);
-  - targets preselected from `restore::default_targets`. On Linux with `Win*` bases the control
-    always offers both "Windows build in prefix" and "native Linux build (cross-build mapping)";
+  - targets preselected from `restore::default_targets`. On Linux the control always offers
+    both "Windows build in prefix" and "native Linux build (cross-build mapping)", whatever
+    bases the snapshot has;
   - engine-rule and auto-pair mappings need no dialog; they go straight to the preview;
   - only on `NeedsMapping` (at least one unknown root), the mapping dialog: one row per root of
     the game with source path, file count, proposal, confidence, a candidate dropdown plus free
@@ -486,7 +517,8 @@ Dependency graph:
     shown inline.
   - confirm calls `restore::prepare` again with the choices and saves all of the game's roots via
     `crossbuild::apply_choices`;
-  - a plan preview with writes, skips and the cross-build warning. Each write's target can be
+  - a plan preview with writes, skips, the cross-build warning and `RestorePlan.notes`.
+    Writes to `Absolute`/`WinAbsolute` targets are flagged. Each write's target can be
     overridden for this restore (`RestorePlan::override_target`). Then `restore::run`.
 - **Files:** `gui/src/tabs/restore.rs`, `gui/src/tabs/restore/mapping.rs`, `gui/tests/restore.rs`.
 - **Accept:** `cargo test -p salvajocs-gui restore`:
@@ -523,7 +555,7 @@ Dependency graph:
 - Engine rules beyond Unity and Godot.
 - Auto-discovery of Heroic, Lutris and Bottles prefixes. Steam library folders from
   `libraryfolders.vdf`. Non-Steam shortcuts.
-- HKLM registry keys. Translating `<osUserName>`/`<storeUserId>` inside tails.
+- HKLM registry keys. Translating `<storeUserId>` inside tails.
 - macOS.
 - Retention (`forget`/`prune`), scheduled or automatic backups, a CLI front-end, release
   packaging.

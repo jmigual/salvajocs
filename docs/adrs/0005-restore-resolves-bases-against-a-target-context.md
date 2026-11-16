@@ -14,14 +14,16 @@ configured roots (research.md §2).
 ## Decision
 
 - **Contexts are plain data**, built by detection functions and constructible in tests:
-  - `WinFolders { home, documents, app_data, local_app_data, local_app_data_low, public,
+  - Contexts carry `user`, the value of `<osUserName>`: `native()` sets the OS user and
+    `WinFolders::for_prefix` the Wine user. `GameVars` does not hold it.
+  - `WinFolders { user, home, documents, app_data, local_app_data, local_app_data_low, public,
     program_data, windows }`:
     - `WinFolders::native()` on Windows uses `dirs` (Known Folders, so a OneDrive-redirected
       Documents folder works); `local_app_data_low` = `<home>/AppData/LocalLow`; `public`,
       `program_data` and `windows` come from `%PUBLIC%`, `%PROGRAMDATA%` and `%WINDIR%`.
     - `WinFolders::for_prefix(prefix, user)` joins `drive_c/users/<user>/...`,
       `drive_c/users/Public`, `drive_c/ProgramData` and `drive_c/windows`.
-  - `LinuxFolders { home, xdg_data, xdg_config }`.
+  - `LinuxFolders { user, home, xdg_data, xdg_config }`.
   - `Context::{WindowsNative(WinFolders), WinePrefix { prefix, folders: WinFolders },
     Linux(LinuxFolders)}`. The prefix variant keeps the prefix path, because restore needs it for
     `user.reg` and for case-insensitive matching.
@@ -30,7 +32,11 @@ configured roots (research.md §2).
     `<root>/<installDir>` for Other. `<installDir>` comes from the manifest `installDir`, falling
     back to the title. `StoreRoot` = the Steam root.
 - **Username swap is implicit.** The Windows user name is never stored. `WinHome` and the others
-  resolve to whichever user the target context has.
+  resolve to whichever user the target context has. Where a root holds `<osUserName>`, each
+  write's tail is the root's rest with `<osUserName>` replaced by the target family's `user`,
+  plus the matched remainder, so a mixed restore uses each family's own user (ADR-0004).
+- **A snapshot is untrusted input.** Only files under a recorded root and registry keys under
+  the keys the game's entry declares are restored; anything else is skipped with a reason.
 - **Target choice on restore:** one restore has up to two targets,
   `Targets { linux: Option<LinuxFolders>, win: Option<Context> }`, where `win` is
   `WindowsNative` or `WinePrefix`. Each base resolves against the target that has it, so a
@@ -38,9 +44,11 @@ configured roots (research.md §2).
   - Windows host: `win` = native `WinFolders`, `linux` = `None`.
   - Linux host: `linux` = `LinuxFolders`. `win` = the game's own prefix (Proton
     `compatdata/<steam.id>`, or the custom game's `wine_prefix`) when it exists.
-  - On a Linux host whose snapshot has `Win*` bases, the user can always switch from "Windows
-    build in a prefix" to "native Linux build (cross-build mapping)". A leftover Proton prefix
-    must not force the Windows path.
+  - On a Linux host the user always picks the build: native Linux (`linux` set, `win` unset)
+    or Windows in a prefix (`win` set, `linux` unset), whatever bases the snapshot has; a
+    mixed snapshot may keep both. `default_targets` supplies the default. A leftover Proton
+    prefix must not force the Windows path, and a Linux-only snapshot can go into a Proton
+    build.
   - When a base family has no target on this machine, the restore is a **cross-build
     restore** (ADR-0011). Examples: Linux bases on a Windows host, or `Win*` bases on Linux with
     no prefix found. Those roots are mapped onto the other family. On Linux with `Win*` bases
