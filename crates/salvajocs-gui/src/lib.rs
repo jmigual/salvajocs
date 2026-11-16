@@ -1,6 +1,8 @@
 //! egui front-end for salvajocs.
 
+pub mod env;
 pub mod job;
+pub mod widgets;
 
 /// Opens the main window and blocks until it is closed.
 pub fn run() -> eframe::Result {
