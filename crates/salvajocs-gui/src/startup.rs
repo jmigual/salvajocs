@@ -1,6 +1,8 @@
 //! The blocking work of starting up, run in jobs: finding the secrets, opening the repository
 //! and loading the manifest.
 
+use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 
 use anyhow::Result;
@@ -13,12 +15,22 @@ use salvajocs_core::storage::Storage;
 use crate::env::{Env, RefreshManifest};
 
 /// The secrets of the open repository, held for this session only.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct Credentials {
     /// The repository password; empty means none.
     pub password: String,
     /// The values of the secret options, by key.
-    pub options: std::collections::BTreeMap<String, String>,
+    pub options: BTreeMap<String, String>,
+}
+
+/// Debug output hides the values: they are secrets.
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Credentials")
+            .field("has_password", &!self.password.is_empty())
+            .field("option_keys", &self.options.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl Credentials {

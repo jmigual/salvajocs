@@ -13,8 +13,8 @@ use crate::job::Job;
 /// Where the options of each backend are documented.
 const OPTIONS_DOCS: &str = "https://docs.rs/rustic_backend/0.7.0/rustic_backend/";
 
-/// One row of the option list.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// One row of the option list. No `Debug`: the value may be a secret.
+#[derive(Default)]
 struct OptionRow {
     key: String,
     value: String,
