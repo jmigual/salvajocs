@@ -115,9 +115,9 @@ Dependency graph:
   - `RegFile::export(keys) -> RegistryExport` (absent keys give an empty export).
   - `RegFile::replace_subtrees(&RegistryExport)`.
   - `RegFile::to_string()`.
-- **Verify here:** how Wine escapes non-ASCII and special characters (research gap). Only a
-  value Wine itself wrote counts as verified. If no real prefix has one, leave the question
-  open in ADR-0006.
+- **Verified here:** Wine escapes non-ASCII as `\x<hex>` per UTF-16 unit (see ADR-0006). A
+  real prefix verified it for a key name; value strings are verified from wineserver's source
+  only (no real prefix has one). The HKCU root and empty path elements are refused.
 - **Accept:** `cargo test -p salvajocs-core registry`:
   - `parse_then_write_is_byte_identical`;
   - `export_then_replace_round_trips`;
