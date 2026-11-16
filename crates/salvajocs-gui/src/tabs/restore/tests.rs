@@ -292,3 +292,39 @@ fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
     assert_eq!(mode & 0o777, 0o555, "a linked dir is left alone");
     remove_dir(&work).unwrap();
 }
+
+#[test]
+fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        preview: Some(Preview {
+            fetched: fetched(storage),
+            plan: RestorePlan {
+                writes: Vec::new(),
+                registry: None,
+                skipped: Vec::new(),
+                cross_build: false,
+                notes: Vec::new(),
+            },
+            overrides: Vec::new(),
+            override_error: None,
+        }),
+        ..RestoreTab::default()
+    });
+    let job = Job::spawn(&harness.ctx.clone(), || {
+        Err(RunError::WineserverRunning.into())
+    });
+    harness.state_mut().0.restoring = Some(job);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.restoring.is_some() {
+        assert!(std::time::Instant::now() < deadline, "the job never ended");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.step();
+
+    let tab = &harness.state().0;
+    assert!(tab.preview.is_some(), "the plan is kept for another try");
+    assert!(tab.error.as_deref().unwrap().contains("Close the game"));
+    assert!(!is_disabled(&harness, "Restore files"));
+}

@@ -381,6 +381,15 @@ fn restore_fetch_preview_restore_reports() {
     // The safety backup was staged apart from the backup mirror.
     assert!(env.cache_dir.join("restore-stage").exists());
     assert!(!env.cache_dir.join("stage").exists());
+
+    // The reloaded list offers the safety backup, but not as the default.
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups")
+    });
+    select(&mut harness, "Alpha");
+    assert!(!value(&harness, "Snapshot").contains("pre-restore"));
+    click(&mut harness, "Snapshot");
+    assert!(shows(&harness, ", pre-restore"));
 }
 
 #[test]
@@ -451,6 +460,32 @@ fn restore_override_with_a_relative_path_shows_error() {
 
     assert!(shows(&harness, "not an absolute path"));
     assert!(!shows(&harness, "overridden for this restore"));
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_preview_flags_an_absolute_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let saves = tmp.path().join("abs/Abso");
+    let template = saves.to_str().unwrap().to_owned();
+    let rest = template.trim_start_matches('/').to_owned();
+    let game = custom("Abso", &[&template], None, Vec::new());
+    let tail = format!("{rest}/save.dat");
+    let snapshot = scan(
+        &tmp,
+        "Abso",
+        &[(Base::Absolute, &tail)],
+        &[(Base::Absolute, &rest)],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Abso");
+    preview(&mut harness);
+
+    let target = saves.join("save.dat");
+    assert!(shows(
+        &harness,
+        &format!("-> {} (absolute path)", target.display())
+    ));
 }
 
 #[test]
