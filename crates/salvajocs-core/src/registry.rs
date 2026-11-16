@@ -1,5 +1,7 @@
 //! Registry keys as normalized data (ADR-0006), shared by the Wine and Windows backends.
 
+pub mod wine;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,9 @@ pub enum RegistryError {
     /// A key path is not under `HKEY_CURRENT_USER` (backslash separated).
     #[error("key is not under HKEY_CURRENT_USER: {key}")]
     UnsupportedRoot { key: String },
+    /// A key path is the HKCU root itself or has an empty element (doubled or trailing `\`).
+    #[error("invalid key path: {key}")]
+    InvalidKey { key: String },
 }
 
 /// A registry value's data, tagged by Windows value type.
