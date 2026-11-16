@@ -422,7 +422,9 @@ Dependency graph:
   - `registry_skipped_without_game_entry`;
   - `linux_snapshot_restored_into_proton_build`;
   - `crafted_root_cannot_read_outside_the_staged_files`;
-  - `store_game_id_substituted_into_root`.
+  - `store_game_id_substituted_into_root`;
+  - `snapshot_registry_keys_do_not_declare_themselves`;
+  - `os_user_name_does_not_match_dot_dot`.
 
 ## 15. Restore list, fetch, safety backup, apply (depends on 5, 12, 14)
 
