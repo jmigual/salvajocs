@@ -3,7 +3,8 @@
 //! Same contract as the Wine side: an export of key `K` holds `K` itself plus every key below
 //! it, and replacing deletes the subtree of each exported key before writing it. Value data
 //! that is not in canonical form (unterminated or odd-length strings, a `REG_DWORD` of 8 bytes)
-//! is kept as [`RegData::Other`] so it writes back byte for byte.
+//! is kept as [`RegData::Other`] so it writes back byte for byte. Windows may append a NUL when
+//! writing an unterminated `REG_SZ`: the string is unchanged but the bytes are not exact.
 
 use std::io;
 
