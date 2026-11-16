@@ -1205,3 +1205,39 @@ fn os_user_name_root_loses_a_tie_to_a_literal_root() {
         )]
     );
 }
+
+#[test]
+fn root_below_a_pair_side_is_trusted() {
+    // A pre-restore snapshot of a cross-build restore records the pair side plus the subdirectory.
+    let game = staged(
+        &[(Base::WinDocuments, "my games/foo/sub"), (Base::Home, "")],
+        &[
+            (Base::WinDocuments, "my games/foo/sub/x.sav"),
+            (Base::Home, ".ssh/authorized_keys"),
+        ],
+    );
+    let pairs = [Pair {
+        linux: "<xdgData>/Foo".into(),
+        windows: "<winDocuments>/My Games/Foo".into(),
+    }];
+    let plan = plan(&game, &win_only(native_win()), &vars(), None, &pairs, &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/users/Alice/Documents/my games/foo/sub/x.sav"
+        )]
+    );
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UndeclaredRoot]
+    );
+    // `..` below a declared prefix is still refused.
+    let dot_dot = staged(
+        &[(Base::XdgData, "Foo/..")],
+        &[(Base::XdgData, "Foo/../x.sav")],
+    );
+    assert_eq!(
+        plan_of(&dot_dot, None, &pairs).skipped[0].reason,
+        SkipReason::UndeclaredRoot
+    );
+}

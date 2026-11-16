@@ -335,6 +335,29 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<SnapshotRoot
     roots
 }
 
+/// Whether `root` equals or lies below one of `declared` (ASCII case ignored for Windows bases),
+/// so a pre-restore snapshot of a mapped root deeper than its pair side stays restorable; a root
+/// with a component that is not plain (`..`) never is.
+fn is_declared(root: &SnapshotRoot, declared: &[SnapshotRoot]) -> bool {
+    let windows = crossbuild::base_family(root.0) == Some(Family::Windows);
+    components(&root.1).all(layout::is_plain_component)
+        && declared
+            .iter()
+            .filter(|prefix| prefix.0 == root.0)
+            .any(|prefix| {
+                let mut parts = components(&root.1);
+                components(&prefix.1).all(|want| {
+                    parts.next().is_some_and(|got| {
+                        if windows {
+                            got.eq_ignore_ascii_case(want)
+                        } else {
+                            got == want
+                        }
+                    })
+                })
+            })
+}
+
 /// Whether the registry `key` lies at or below a key `entry` declares, ignoring ASCII case, with
 /// `\` and `/` both separating; a snapshot is untrusted, so nothing else is restored (ADR-0005).
 fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
@@ -393,7 +416,7 @@ pub fn plan(
         let mapped = family.is_some() && target(family).is_none();
         let placed = match covering {
             None => Err(SkipReason::OutsideRoots),
-            Some(covering) if !declared_roots.contains(covering.root) => {
+            Some(covering) if !is_declared(covering.root, &declared_roots) => {
                 Err(SkipReason::UndeclaredRoot)
             }
             Some(covering) if !mapped => Ok((covering.root, covering)),
@@ -517,7 +540,7 @@ pub fn prepare(
         let declared = declared_roots(entry, pairs);
         let meta = SnapshotMeta {
             roots: (staged.meta.roots.iter())
-                .filter(|root| declared.contains(root))
+                .filter(|root| is_declared(root, &declared))
                 .cloned()
                 .collect(),
             ..staged.meta.clone()
