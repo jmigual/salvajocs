@@ -220,8 +220,9 @@ pub struct RestoreTab {
     games: Vec<GameBackups>,
     /// The slug of the chosen game.
     selected: Option<String>,
-    /// The chosen snapshot's index in the game's `snapshots`.
-    snapshot: usize,
+    /// The chosen snapshot's index in the game's `snapshots`. It starts as the game's default, so
+    /// `None` when every snapshot is a safety backup, which is never preselected (ADR-0010).
+    snapshot: Option<usize>,
     detecting: Option<Job<Targets>>,
     pick: Option<TargetPick>,
     picking: Option<Job<Option<PathBuf>>>,
@@ -408,14 +409,12 @@ impl RestoreTab {
         let label = ui.label("Snapshot");
         egui::ComboBox::from_id_salt("restore_snapshot")
             .selected_text(
-                game.snapshots
-                    .get(self.snapshot)
-                    .map(snapshot_label)
-                    .unwrap_or_default(),
+                (self.snapshot.and_then(|index| game.snapshots.get(index)))
+                    .map_or_else(|| "Choose a snapshot".to_owned(), snapshot_label),
             )
             .show_ui(ui, |ui| {
                 for (index, snapshot) in game.snapshots.iter().enumerate() {
-                    ui.selectable_value(&mut self.snapshot, index, snapshot_label(snapshot));
+                    ui.selectable_value(&mut self.snapshot, Some(index), snapshot_label(snapshot));
                 }
             })
             .response
@@ -432,14 +431,16 @@ impl RestoreTab {
         if changed {
             self.forget_plan();
         }
-        let ready = self.pick.as_ref().is_some_and(TargetPick::ready) && state.session.is_some();
+        let ready = self.pick.as_ref().is_some_and(TargetPick::ready)
+            && self.snapshot.is_some()
+            && state.session.is_some();
         if ui
             .add_enabled(ready, egui::Button::new("Preview"))
             .clicked()
-            && let Some(snapshot) = game.snapshots.get(self.snapshot).cloned()
+            && let Some(snapshot) = self.snapshot.and_then(|index| game.snapshots.get(index))
         {
             let title = game.title.clone();
-            self.start_preview(ui.ctx(), state, title, snapshot);
+            self.start_preview(ui.ctx(), state, title, snapshot.clone());
         }
         if manifest_loading {
             ui.weak("The game manifest is loading.");
@@ -452,7 +453,7 @@ impl RestoreTab {
             return;
         };
         self.selected = Some(game.slug.clone());
-        self.snapshot = game.default.unwrap_or(0);
+        self.snapshot = game.default;
         self.pick = None;
         self.error = None;
         self.forget_plan();
@@ -588,7 +589,8 @@ impl RestoreTab {
                 let field = TextEdit::singleline(&mut preview.overrides[index])
                     .hint_text("an absolute path, for this restore only");
                 ui.add(field).labelled_by(label.id);
-                if ui.button(format!("Override {number}")).clicked() {
+                let button = egui::Button::new(format!("Override {number}"));
+                if ui.add_enabled(!busy, button).clicked() {
                     overridden = Some(index);
                 }
             });

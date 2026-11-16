@@ -94,6 +94,16 @@ fn open_tab(
     games: Vec<CustomGame>,
     snapshots: &[GameScan],
 ) -> (Harness<'static, App>, Env) {
+    open_tab_tagged(tmp, games, snapshots, &[])
+}
+
+/// Like [`open_tab`], with `tags` added to the snapshots.
+fn open_tab_tagged(
+    tmp: &TempDir,
+    games: Vec<CustomGame>,
+    snapshots: &[GameScan],
+    tags: &[&str],
+) -> (Harness<'static, App>, Env) {
     let mut env = env(tmp);
     env.environment = Some(Environment {
         native: Some(Context::Linux(LinuxFolders {
@@ -121,7 +131,7 @@ fn open_tab(
         &mut storage,
         snapshots,
         &tmp.path().join("fixture-stage"),
-        &[],
+        tags,
         |_| {},
     )
     .unwrap();
@@ -288,6 +298,31 @@ fn restore_preview_lists_writes_and_skips() {
     ));
     assert!(!shows(&harness, "Cross-build restore"));
     assert!(!shows(&harness, "Where should the saves"));
+}
+
+#[test]
+fn restore_only_safety_backups_preselect_no_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let snapshot = scan(
+        &tmp,
+        "Alpha",
+        &[(Base::WinAppData, "Alpha/save.dat")],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (mut harness, _env) = open_tab_tagged(&tmp, vec![game], &[snapshot], &["pre-restore"]);
+    select(&mut harness, "Alpha");
+
+    assert_eq!(value(&harness, "Snapshot"), "Choose a snapshot");
+    assert!(disabled(&harness, "Preview"));
+
+    click(&mut harness, "Snapshot");
+    let option = harness.query_all_by_label_contains(", pre-restore").next();
+    option.expect("the safety backup is listed").click();
+    run_settled(&mut harness);
+    assert!(value(&harness, "Snapshot").ends_with(", pre-restore"));
+    assert!(!disabled(&harness, "Preview"));
 }
 
 #[test]
