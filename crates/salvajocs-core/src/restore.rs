@@ -308,8 +308,8 @@ fn resolve_path(
 /// A root prefix the game declares.
 struct Declared {
     prefix: SnapshotRoot,
-    /// For an empty-rest prefix from a globbed template (`<base>/*.sav`): the template's rest,
-    /// which a file's tail must match, since the prefix alone would trust the whole base.
+    /// For a prefix from a globbed template (`<base>/*.sav`): the template's rest, which a
+    /// file's tail must match, since the prefix alone would trust its whole dir.
     glob: Option<String>,
 }
 
@@ -325,14 +325,16 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
             else {
                 continue;
             };
-            let glob = if prefix.1.is_empty() {
+            // A literal template's full path is its prefix; a globbed one's prefix alone would
+            // trust a whole shallow dir (`<winDir>/System32`).
+            let glob = if layout::glob_free_prefix(template) == template.as_str() {
+                None
+            } else {
                 // A template that does not classify whole declares nothing.
                 let Some((_, rest)) = crossbuild::classify(template, family) else {
                     continue;
                 };
-                Some(rest).filter(|rest| !rest.is_empty())
-            } else {
-                None
+                Some(rest)
             };
             declared.push(Declared { prefix, glob });
         }
@@ -389,7 +391,7 @@ fn declaring<'a>(
 }
 
 /// Whether the file `tail` under `root` is declared: `root` lies at or below a declared prefix
-/// and, for an empty-rest prefix from a globbed template, the tail or one of its parent dirs
+/// and, for a prefix from a globbed template, the tail or one of its parent dirs
 /// (a matched dir's files are saved too) matches that template.
 fn file_declared(root: &SnapshotRoot, tail: &str, declared: &[Declared], vars: &GameVars) -> bool {
     let parts: Vec<&str> = components(tail).collect();

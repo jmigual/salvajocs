@@ -1318,3 +1318,35 @@ fn empty_rest_user_folder_prefix_only_trusts_matching_files() {
         [SkipReason::UndeclaredRoot]
     );
 }
+
+#[test]
+fn shallow_prefix_only_trusts_files_matching_the_template() {
+    // `[number]` is a glob class, as in the scan: it matches one of those letters.
+    let game = staged(
+        &[(Base::WinDir, "System32")],
+        &[
+            (Base::WinDir, "System32/Skout-Interpreter-sn"),
+            (Base::WinDir, "System32/evil.dll"),
+        ],
+    );
+    let entry = templates(&["<winDir>/System32/Skout-Interpreter-s[number]"]);
+    let plan = plan(
+        &game,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/windows/System32/Skout-Interpreter-sn"
+        )]
+    );
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UndeclaredRoot]
+    );
+}
