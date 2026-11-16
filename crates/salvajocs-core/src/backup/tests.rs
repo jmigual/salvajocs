@@ -226,6 +226,41 @@ fn restage_keeps_copies_when_source_unreadable() {
     assert!(!stage_dir.join(REGISTRY_FILE).exists());
 }
 
+fn staged_meta(stage_dir: &Path) -> SnapshotMeta {
+    serde_json::from_slice(&fs::read(stage_dir.join(META_FILE)).unwrap()).unwrap()
+}
+
+#[test]
+fn restage_keeps_recorded_roots_when_source_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stage_dir = tmp.path().join("stage");
+    let a = (Base::WinAppData, "A".to_string());
+    let b = (Base::WinDocuments, "B".to_string());
+    let mut scan = game("Foo", vec![]);
+    scan.roots = vec![a.clone(), b.clone()];
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+
+    // B's files were all unreadable, so the scan did not record B.
+    scan.roots = vec![a.clone()];
+    scan.unreadable = vec![tmp.path().join("B")];
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(staged_meta(&stage_dir).roots, [a.clone(), b.clone()]);
+    let bytes = fs::read(stage_dir.join(META_FILE)).unwrap();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(fs::read(stage_dir.join(META_FILE)).unwrap(), bytes);
+
+    scan.unreadable.clear();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(staged_meta(&stage_dir).roots, [a]);
+
+    write(&stage_dir.join(META_FILE), "not json");
+    scan.unreadable = vec![tmp.path().join("B")];
+    assert!(matches!(
+        stage(&scan, &RegistryExport::default(), &stage_dir),
+        Err(BackupError::Meta { .. })
+    ));
+}
+
 fn init_repo(root: &Path) -> Storage {
     let location = RepoLocation {
         repository: root.join("repo").to_str().unwrap().into(),

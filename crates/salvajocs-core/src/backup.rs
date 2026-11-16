@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::layout::{
-    FILES_DIR, META_FILE, REGISTRY_FILE, SNAPSHOT_FORMAT, SnapshotMeta, target_path,
+    Base, FILES_DIR, META_FILE, REGISTRY_FILE, SNAPSHOT_FORMAT, SnapshotMeta, target_path,
 };
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
@@ -32,6 +32,13 @@ pub enum BackupError {
     /// A found file's tail is not a plain relative path, so it would leave the staging dir.
     #[error("unsafe file tail: {0}")]
     UnsafeTail(String),
+    /// The staged `salvajocs.json` cannot be parsed.
+    #[error("cannot parse the staged {path}")]
+    Meta {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
     /// The `user.reg` the scan found the game's keys in cannot be parsed or exported.
     #[error("cannot export the registry from {path}")]
     WineRegistry {
@@ -65,8 +72,9 @@ fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
 /// and `registry.json` are written only when their bytes change; an empty `registry` means no
 /// `registry.json`.
 ///
-/// When `game.unreadable` is not empty nothing is removed, `registry.json` included: a read
-/// error must not drop saves from the next snapshot. The found files are only read.
+/// When `game.unreadable` is not empty nothing is removed, `registry.json` included, and the
+/// roots already in `salvajocs.json` are kept after the scan's: a read error must not drop
+/// saves from the next snapshot or from a restore. The found files are only read.
 pub fn stage(
     game: &GameScan,
     registry: &RegistryExport,
@@ -90,12 +98,21 @@ pub fn stage(
         sync_file(real, dest)?;
     }
 
+    let meta_file = stage_dir.join(META_FILE);
+    let mut roots = game.roots.clone();
+    if keep_all {
+        for root in staged_roots(&meta_file)? {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
     let meta = SnapshotMeta {
         format: SNAPSHOT_FORMAT,
         title: game.title.clone(),
-        roots: game.roots.clone(),
+        roots,
     };
-    write_if_changed(&stage_dir.join(META_FILE), &json(&meta))?;
+    write_if_changed(&meta_file, &json(&meta))?;
     let registry_file = stage_dir.join(REGISTRY_FILE);
     if !registry.keys.is_empty() {
         write_if_changed(&registry_file, &json(registry))?;
@@ -108,6 +125,21 @@ pub fn stage(
         }
     }
     Ok(())
+}
+
+/// The roots of the staged `salvajocs.json`, none when there is none yet.
+fn staged_roots(meta_file: &Path) -> Result<Vec<(Base, String)>, BackupError> {
+    let bytes = match fs::read(meta_file) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(io_error(meta_file)(err)),
+    };
+    let meta: SnapshotMeta =
+        serde_json::from_slice(&bytes).map_err(|source| BackupError::Meta {
+            path: meta_file.to_path_buf(),
+            source,
+        })?;
+    Ok(meta.roots)
 }
 
 fn json(value: &impl Serialize) -> Vec<u8> {
