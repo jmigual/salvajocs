@@ -15,6 +15,9 @@ use super::{HKCU, RegData, RegValue, RegistryError, RegistryExport};
 /// `HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)`, what a missing key reports.
 const NOT_FOUND: i32 = 0x8007_0002_u32 as i32;
 
+/// How often a key's listing is re-read before giving up on it settling.
+const LISTING_ATTEMPTS: usize = 5;
+
 /// Errors from reading or writing the live registry.
 #[derive(Debug, thiserror::Error)]
 pub enum WindowsRegistryError {
@@ -28,18 +31,24 @@ pub enum WindowsRegistryError {
         #[source]
         source: io::Error,
     },
+    /// The subkeys or values of `key` kept changing while they were listed.
+    #[error("registry key {key} kept changing while it was read")]
+    Unstable { key: String },
 }
 
 /// Collects each of `keys` (`HKEY_CURRENT_USER\...`) and everything below it.
 ///
-/// Absent keys add nothing. Every key is spelled as the registry stores it. The HKCU root itself
-/// and paths with empty elements are refused.
+/// Absent keys add nothing. Each requested key keeps the caller's spelling; keys below it are
+/// spelled as the registry stores them. The HKCU root itself and paths with empty elements are
+/// refused. A key whose listing keeps changing fails with [`WindowsRegistryError::Unstable`]
+/// rather than exporting a partial list.
 pub fn export<S: AsRef<str>>(keys: &[S]) -> Result<RegistryExport, WindowsRegistryError> {
     let mut export = RegistryExport::default();
     for key in keys {
         let relative = hkcu_relative(key.as_ref())?;
-        if let Some((path, root)) = open_stored(relative)? {
-            collect(&root, &path, &mut export)?;
+        // Opened directly: enumerating ancestors would race with unrelated keys created there.
+        if let Some(root) = found(key.as_ref(), CURRENT_USER.open(relative))? {
+            collect(&root, &format!("{HKCU}\\{relative}"), &mut export)?;
         }
     }
     Ok(export)
@@ -72,16 +81,18 @@ pub fn replace_subtrees(export: &RegistryExport) -> Result<(), WindowsRegistryEr
 
 /// Adds `key` (at `path`) and every key below it to `export`.
 fn collect(key: &Key, path: &str, export: &mut RegistryExport) -> Result<(), WindowsRegistryError> {
-    let mut values: Vec<RegValue> = os(path, key.values())?
-        .map(|(name, value)| RegValue {
-            name,
-            data: from_raw(&value),
-        })
-        .collect();
+    let mut values = stable(path, || {
+        Ok(os(path, key.values())?
+            .map(|(name, value)| RegValue {
+                name,
+                data: from_raw(&value),
+            })
+            .collect())
+    })?;
     // The registry lists values in creation order; sorted keeps exports deterministic.
     values.sort_by(|a, b| a.name.cmp(&b.name));
     export.keys.insert(path.to_owned(), values);
-    for name in os(path, key.keys())? {
+    for name in stable(path, || Ok(os(path, key.keys())?.collect()))? {
         // A listed name that cannot be reopened (e.g. lossy UTF-16) must fail, not be skipped:
         // a later replace would delete the subtree this export silently left out.
         let child = os(path, key.open(&name))?;
@@ -90,24 +101,21 @@ fn collect(key: &Key, path: &str, export: &mut RegistryExport) -> Result<(), Win
     Ok(())
 }
 
-/// Opens `relative` below HKCU, returning its full path spelled as the registry stores each
-/// element, or `None` if the key is absent.
-fn open_stored(relative: &str) -> Result<Option<(String, Key)>, WindowsRegistryError> {
-    let mut path = HKCU.to_owned();
-    let mut current: Option<Key> = None;
-    for element in relative.split('\\') {
-        let parent = current.as_ref().unwrap_or(CURRENT_USER);
-        let wanted = element.to_lowercase();
-        let name = os(&path, parent.keys())?
-            .find(|name| name.to_lowercase() == wanted)
-            .unwrap_or_else(|| element.to_owned());
-        path = format!("{path}\\{name}");
-        match found(&path, parent.open(&name))? {
-            Some(key) => current = Some(key),
-            None => return Ok(None),
+/// Lists `key` until two reads in a row agree. The crate's iterators size their buffers up front
+/// and, when the key changes meanwhile, silently end early (release) or panic (debug).
+fn stable<T: PartialEq>(
+    key: &str,
+    mut read: impl FnMut() -> Result<Vec<T>, WindowsRegistryError>,
+) -> Result<Vec<T>, WindowsRegistryError> {
+    for _ in 0..LISTING_ATTEMPTS {
+        let first = read()?;
+        if first == read()? {
+            return Ok(first);
         }
     }
-    Ok(current.map(|key| (path, key)))
+    Err(WindowsRegistryError::Unstable {
+        key: key.to_owned(),
+    })
 }
 
 fn os<T>(key: &str, result: windows_registry::Result<T>) -> Result<T, WindowsRegistryError> {

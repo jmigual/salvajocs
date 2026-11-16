@@ -1,4 +1,6 @@
-//! These run against the real HKCU, in a throwaway `Software\salvajocs-test-*` key.
+//! These run against the real HKCU, each in its own throwaway `Software\salvajocs-test-*` key.
+//! None lists a key shared with another test (such as `Software`): tests run in parallel, and a
+//! listing that races with a new key is exactly what the module guards against.
 
 use std::process;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -19,7 +21,6 @@ impl TestKey {
             .map_or(0, |d| d.as_nanos());
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         TestKey {
-            // Spelled `SOFTWARE`, as Windows stores it: exports use the stored spelling.
             relative: format!("SOFTWARE\\salvajocs-test-{}-{nanos}-{n}", process::id()),
         }
     }
@@ -142,17 +143,38 @@ fn export_of_a_subkey_excludes_its_siblings() {
 }
 
 #[test]
-fn keys_are_matched_case_insensitively_and_spelled_as_stored() {
+fn the_exported_root_keeps_the_callers_spelling_and_children_the_stored_one() {
     let key = TestKey::new();
     replace_subtrees(&export_of(vec![(
-        key.path("Mixed"),
+        key.path("Mixed\\Child"),
         vec![value("v", RegData::Dword(1))],
     )]))
     .unwrap();
 
-    let found = export(&[key.path("mixed").to_uppercase()]).unwrap();
+    let root = key.path("mixed").to_uppercase();
+    let found = export(&[&root]).unwrap();
 
-    assert_eq!(found.keys.keys().collect::<Vec<_>>(), [&key.path("Mixed")]);
+    assert_eq!(
+        found.keys.keys().collect::<Vec<_>>(),
+        [&root, &format!("{root}\\Child")]
+    );
+}
+
+#[test]
+fn a_listing_is_returned_once_two_reads_agree() {
+    let mut reads = [vec![1], vec![1, 2], vec![1, 2], vec![1, 2]].into_iter();
+    let listed = stable("key", || Ok(reads.next().unwrap())).unwrap();
+    assert_eq!(listed, [1, 2]);
+}
+
+#[test]
+fn a_listing_that_never_settles_is_an_error() {
+    let mut len = 0;
+    let result = stable("key", || {
+        len += 1;
+        Ok(vec![0; len])
+    });
+    assert!(matches!(result, Err(WindowsRegistryError::Unstable { .. })));
 }
 
 #[test]
