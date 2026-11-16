@@ -148,6 +148,26 @@ fn missing_secrets_lists_password_and_secret_options() {
 }
 
 #[test]
+fn secret_scope_differs_per_bucket_and_ignores_option_order() {
+    let mut other = sample();
+    other.repository_options[0].value = Some("other-bucket".into());
+    assert_ne!(sample().secret_scope(), other.secret_scope());
+
+    let mut reordered = sample();
+    reordered
+        .repository_options
+        .insert(0, option("region", Some("eu"), false));
+    let mut shuffled = reordered.clone();
+    shuffled.repository_options.reverse();
+    assert_eq!(reordered.secret_scope(), shuffled.secret_scope());
+
+    // A secret option's value never reaches the scope.
+    let mut with_secret = sample();
+    with_secret.repository_options[1].value = Some("hunter2".into());
+    assert_eq!(with_secret.secret_scope(), sample().secret_scope());
+}
+
+#[test]
 fn debug_output_hides_secret_values() {
     let mut config = sample();
     config.repository_options[1].value = Some("hunter2".into());

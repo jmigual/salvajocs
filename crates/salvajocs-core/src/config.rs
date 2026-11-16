@@ -176,6 +176,19 @@ impl AppConfig {
         Ok(())
     }
 
+    /// The keyring scope of this repository: JSON of the repository string and its sorted
+    /// non-secret options, so two buckets on one service never share a password.
+    pub fn secret_scope(&self) -> String {
+        let options: BTreeMap<_, _> = self
+            .repository_options
+            .iter()
+            .filter(|option| !option.secret)
+            .filter_map(|option| Some((&option.key, option.value.as_ref()?)))
+            .collect();
+        serde_json::to_string(&(&self.repository, options))
+            .expect("strings and string maps always serialize")
+    }
+
     /// The repository location, with secret options taken from `secrets` (key to value).
     pub fn location(
         &self,
