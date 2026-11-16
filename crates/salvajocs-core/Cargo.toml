@@ -23,6 +23,7 @@ dbus-secret-service-keyring-store.workspace = true
 windows-native-keyring-store.workspace = true
 
 [dev-dependencies]
+opendal.workspace = true
 tempfile.workspace = true
 
 [lints]

@@ -6043,6 +6043,7 @@ dependencies = [
  "dirs 7.0.0",
  "glob",
  "keyring-core",
+ "opendal",
  "reqwest",
  "rustic_backend",
  "rustic_core",

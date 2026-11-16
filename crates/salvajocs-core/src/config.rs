@@ -88,7 +88,8 @@ pub enum BackendKind {
     OpenDal(&'static str),
 }
 
-/// The opendal services `rustic_backend` builds for this OS (ADR-0003); `sftp` is Unix-only.
+/// The opendal services offered in the picker: those `rustic_backend` builds for this OS, minus
+/// the ones ADR-0009 hides. `sftp` is Unix-only (ADR-0003).
 const OPENDAL_SERVICES: &[&str] = &[
     "azblob",
     "azdls",
@@ -96,14 +97,10 @@ const OPENDAL_SERVICES: &[&str] = &[
     "b2",
     "cos",
     "dropbox",
-    "fs",
     "ftp",
     "gcs",
     "gdrive",
-    "ghac",
-    "http",
     "ipmfs",
-    "memory",
     "obs",
     "onedrive",
     "oss",

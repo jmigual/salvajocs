@@ -104,6 +104,33 @@ fn backend_kinds_start_with_local_rest_rclone() {
     assert!(kinds.contains(&BackendKind::OpenDal("s3")));
 }
 
+/// Services rustic_backend builds that the picker hides (ADR-0009).
+const HIDDEN_SERVICES: &[&str] = &["fs", "ghac", "http", "memory"];
+
+/// Extra schemes the registry maps onto services above.
+const ALIAS_SCHEMES: &[&str] = &["file", "cosn", "https"];
+
+/// Fails when a rustic_backend upgrade adds or drops an opendal service, so the list is revisited.
+#[test]
+fn opendal_services_match_the_built_registry() {
+    opendal::init_default_registry();
+    let built = opendal::OperatorRegistry::get().schemes();
+    let listed: std::collections::HashSet<String> = OPENDAL_SERVICES
+        .iter()
+        .chain(HIDDEN_SERVICES)
+        .chain(ALIAS_SCHEMES)
+        .map(|service| service.to_string())
+        .collect();
+    assert_eq!(built, listed);
+}
+
+#[test]
+fn hidden_services_are_not_offered() {
+    for service in HIDDEN_SERVICES {
+        assert!(!backend_kinds().contains(&BackendKind::OpenDal(service)));
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn backend_kinds_exclude_sftp_on_windows() {
