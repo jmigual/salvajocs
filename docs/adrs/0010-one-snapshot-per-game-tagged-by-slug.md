@@ -18,8 +18,9 @@ and paths by default.
   (ADR-0004) and `label` = the exact title.
 - Tags: `salvajocs` and `game:<slug>`. The slug is the title lowercased, with ASCII alphanumeric
   runs joined by `-`, truncated to 40 characters, plus `-` and 8 hex digits of FNV-1a 32 over the
-  exact title. FNV is a few lines of code rather than a dependency. The slug must be stable
-  forever: a unit test pins known title→slug pairs.
+  exact title. A `-` left at the end by the cut is dropped, and a title without ASCII
+  alphanumerics gives the 8 hex digits alone. FNV is a few lines of code rather than a
+  dependency. The slug must be stable forever: a unit test pins known title→slug pairs.
 - A safety backup made before a restore (ADR-0005) gets an extra `pre-restore` tag.
 - **Restore list:** one `get_matching_snapshots` call filtered on the `salvajocs` tag, grouped by
   the `game:` tag. Each row shows the title from `label`. Each game lists all snapshots from all
@@ -46,5 +47,8 @@ and paths by default.
 
 - A full backup of N games is one index load plus N backup calls. They run one after another,
   which keeps progress reporting simple; save sets are small.
+  - Measured in plan step 12 (release build, 2026-11-16, local repo on tmpfs): one reindex plus
+    20 per-game backups of one 100 kB file each takes 0.32-0.38 s when all 20 are new and
+    0.29 s when all are unchanged and skipped.
 - Retention (`forget`/`prune`) is out of scope for v1. Snapshots accumulate; dedup keeps the data
   small.
