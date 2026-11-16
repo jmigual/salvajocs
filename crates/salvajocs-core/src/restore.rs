@@ -5,8 +5,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::crossbuild::{self, Family, ResolvedMapping, SnapshotRoot};
+use crate::crossbuild::{
+    self, Choice, Family, MappingEntry, ResolveError, ResolvedMapping, SnapshotRoot,
+};
 use crate::layout::{self, Base, Context, GameVars, LinuxFolders, Root, SnapshotMeta};
+use crate::manifest::{GameEntry, Pair, RegistryRule};
 use crate::registry::RegistryExport;
 
 /// A snapshot of one game restored into a work dir (ADR-0004).
@@ -334,6 +337,87 @@ pub fn plan(
         (None, _) => {}
     }
     Ok(plan)
+}
+
+/// Why [`prepare`] returned no plan.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PrepareError {
+    /// An unknown root has no choice. Holds every mapped root of the game with its file count,
+    /// the known ones prefilled, for the mapping dialog (ADR-0011).
+    #[error("the cross-build restore needs a choice for an unmapped root")]
+    NeedsMapping(Vec<MappingEntry>),
+    /// A chosen template is not a glob-free placeholder template of the target OS.
+    #[error("not a placeholder template of the target OS: {template}")]
+    Unclassifiable {
+        /// The root the template was meant for.
+        root: SnapshotRoot,
+        /// The rejected template.
+        template: String,
+    },
+    /// Planning failed.
+    #[error(transparent)]
+    Plan(#[from] PlanError),
+}
+
+/// Plans a restore, mapping the roots of a base family without a target onto the other family:
+/// [`crossbuild::propose`], then [`crossbuild::resolve`] with `choices`, then [`plan`]. Saved
+/// pairs, engine rules and auto-pairs apply without choices (ADR-0011). `entry` is the game's
+/// manifest entry and `pairs` its saved pairs.
+///
+/// # Errors
+/// [`PrepareError::NeedsMapping`] while an unknown root has no choice;
+/// [`PrepareError::Unclassifiable`] for a chosen template that is not a placeholder template of
+/// the target OS; [`PrepareError::Plan`] when [`plan`] fails.
+pub fn prepare(
+    staged: &StagedGame,
+    targets: &Targets,
+    roots: &[Root],
+    vars: &GameVars,
+    entry: Option<&GameEntry>,
+    pairs: &[Pair],
+    choices: &[(SnapshotRoot, Choice)],
+) -> Result<RestorePlan, PrepareError> {
+    let target_family = match (&targets.linux, &targets.win) {
+        (Some(_), None) => Some(Family::Linux),
+        (None, Some(_)) => Some(Family::Windows),
+        _ => None,
+    };
+    let mut mappings = Vec::new();
+    if let Some(family) = target_family {
+        // Custom absolute paths restore to the same OS only (ADR-0005), so they are not mapped.
+        let meta = SnapshotMeta {
+            roots: (staged.meta.roots.iter())
+                .filter(|root| !matches!(root.0, Base::Absolute | Base::WinAbsolute))
+                .cloned()
+                .collect(),
+            ..staged.meta.clone()
+        };
+        // Staged registry keys count like manifest keys for the PlayerPrefs note.
+        let mut entry = entry.cloned().unwrap_or_default();
+        if let Some(export) = &staged.registry {
+            let keys = export.keys.keys();
+            (entry.registry).extend(keys.map(|key| (key.clone(), RegistryRule::default())));
+        }
+        let mut entries = crossbuild::propose(&meta, Some(&entry), pairs, family);
+        for mapping in &mut entries {
+            mapping.files = (staged.files.iter())
+                .filter(|(base, tail)| {
+                    covering_root(&staged.meta.roots, *base, tail, vars)
+                        .is_some_and(|covering| *covering.root == mapping.root)
+                })
+                .count();
+        }
+        mappings = match crossbuild::resolve(&entries, choices) {
+            Ok(mappings) => mappings,
+            Err(ResolveError::MissingChoice { .. }) => {
+                return Err(PrepareError::NeedsMapping(entries));
+            }
+            Err(ResolveError::Unclassifiable { root, template }) => {
+                return Err(PrepareError::Unclassifiable { root, template });
+            }
+        };
+    }
+    Ok(plan(staged, targets, roots, vars, &mappings)?)
 }
 
 #[cfg(test)]

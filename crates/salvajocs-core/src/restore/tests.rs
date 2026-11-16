@@ -2,7 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use super::*;
+use crate::crossbuild::{Confidence, PLAYER_PREFS_NOTE};
 use crate::layout::{RootKind, SNAPSHOT_FORMAT, WinFolders};
+use crate::registry::HKCU;
 
 fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
     let owned = |list: &[(Base, &str)]| {
@@ -298,5 +300,236 @@ fn unmapped_root_without_target_is_an_error() {
         Err(PlanError::Unmapped {
             root: (Base::XdgData, "Game".into()),
         })
+    );
+}
+
+fn root(base: Base, rest: &str) -> SnapshotRoot {
+    (base, rest.to_owned())
+}
+
+#[test]
+fn native_linux_save_restores_without_prefix() {
+    let staged = staged(
+        &[(Base::XdgConfig, "Game")],
+        &[(Base::XdgConfig, "Game/save.dat")],
+    );
+    let plan = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/home/me/.config/Game/save.dat")]
+    );
+    assert!(plan.skipped.is_empty());
+    assert!(!plan.cross_build);
+}
+
+/// A Linux snapshot with a Unity root (engine rule) and an unknown root.
+fn linux_unity_and_unknown() -> StagedGame {
+    staged(
+        &[
+            (Base::XdgConfig, "unity3d/Co/Game"),
+            (Base::XdgData, "Game"),
+        ],
+        &[
+            (Base::XdgConfig, "unity3d/Co/Game/prefs.dat"),
+            (Base::XdgData, "Game/a.sav"),
+            (Base::XdgData, "Game/sub/b.sav"),
+        ],
+    )
+}
+
+#[test]
+fn cross_build_unknown_entry_blocks_restore() {
+    let result = prepare(
+        &linux_unity_and_unknown(),
+        &win_only(native_win()),
+        &[],
+        &vars(),
+        None,
+        &[],
+        &[],
+    );
+    let Err(PrepareError::NeedsMapping(entries)) = result else {
+        panic!("expected NeedsMapping, got {result:?}");
+    };
+    let summary: Vec<_> = entries
+        .iter()
+        .map(|e| (e.root.clone(), e.confidence, e.files, e.proposed.as_deref()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (
+                root(Base::XdgConfig, "unity3d/Co/Game"),
+                Confidence::EngineRule,
+                1,
+                Some("<winLocalAppDataLow>/Co/Game"),
+            ),
+            (root(Base::XdgData, "Game"), Confidence::Unknown, 2, None),
+        ]
+    );
+}
+
+#[test]
+fn prepare_with_choices_returns_plan() {
+    let staged = linux_unity_and_unknown();
+    let targets = win_only(native_win());
+    let choose = |choice: Choice| [(root(Base::XdgData, "Game"), choice)];
+    let choices = choose(Choice::Template("<winDocuments>/My Games/Game".into()));
+    let plan = prepare(&staged, &targets, &[], &vars(), None, &[], &choices).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [
+            Path::new("/win/drive_c/users/Alice/AppData/LocalLow/Co/Game/prefs.dat"),
+            Path::new("/win/drive_c/users/Alice/Documents/My Games/Game/a.sav"),
+            Path::new("/win/drive_c/users/Alice/Documents/My Games/Game/sub/b.sav"),
+        ]
+    );
+    assert_eq!(
+        plan.writes[2].target_file,
+        file(Base::WinDocuments, "My Games/Game/sub/b.sav")
+    );
+    assert_eq!(
+        plan.writes[2].target_root,
+        file(Base::WinDocuments, "My Games/Game")
+    );
+    assert!(plan.cross_build);
+
+    let skipped = prepare(
+        &staged,
+        &targets,
+        &[],
+        &vars(),
+        None,
+        &[],
+        &choose(Choice::Skip),
+    )
+    .unwrap();
+    assert_eq!(skipped.writes.len(), 1);
+    assert_eq!(
+        skipped.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::SkippedByUser; 2]
+    );
+
+    let real_path = choose(Choice::Template("/home/me/Game".into()));
+    assert!(matches!(
+        prepare(&staged, &targets, &[], &vars(), None, &[], &real_path),
+        Err(PrepareError::Unclassifiable { .. })
+    ));
+}
+
+#[test]
+fn prepare_engine_rule_returns_plan_without_choices() {
+    let staged = staged(
+        &[(Base::XdgConfig, "unity3d/Co/Game")],
+        &[(Base::XdgConfig, "unity3d/Co/Game/save.dat")],
+    );
+    let plan = prepare(
+        &staged,
+        &win_only(native_win()),
+        &[],
+        &vars(),
+        None,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/users/Alice/AppData/LocalLow/Co/Game/save.dat"
+        )]
+    );
+    assert!(plan.cross_build);
+}
+
+#[test]
+fn linux_save_maps_onto_windows_via_pair() {
+    // Raw roots and pair sides keep `<game>`; the install dir differs from the title.
+    let vars = GameVars::new("Title", vec!["Real Name".into()], &[], None, "me".into());
+    let staged = staged(
+        &[(Base::XdgData, "<game>")],
+        &[(Base::XdgData, "Real Name/save.dat")],
+    );
+    let pairs = [Pair {
+        linux: "<xdgData>/<game>".into(),
+        windows: "<winAppData>/<game>/Saves".into(),
+    }];
+    let plan = prepare(
+        &staged,
+        &win_only(native_win()),
+        &[],
+        &vars,
+        None,
+        &pairs,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new(
+            "/win/drive_c/users/Alice/AppData/Roaming/Real Name/Saves/save.dat"
+        )]
+    );
+    let write = &plan.writes[0];
+    assert_eq!(
+        write.target_file,
+        file(Base::WinAppData, "Real Name/Saves/save.dat")
+    );
+    assert_eq!(write.target_root, file(Base::WinAppData, "<game>/Saves"));
+    assert!(plan.cross_build);
+}
+
+#[test]
+fn prepare_adds_player_prefs_note_from_staged_registry() {
+    let mut staged = staged(
+        &[
+            (Base::WinLocalAppDataLow, "Co/Game"),
+            (Base::WinDocuments, "Game"),
+        ],
+        &[
+            (Base::WinLocalAppDataLow, "Co/Game/save.dat"),
+            (Base::WinDocuments, "Game/b.sav"),
+        ],
+    );
+    let note = |staged: &StagedGame| {
+        let result = prepare(staged, &linux_only(), &[], &vars(), None, &[], &[]);
+        let Err(PrepareError::NeedsMapping(entries)) = result else {
+            panic!("expected NeedsMapping, got {result:?}");
+        };
+        entries[0].notes.clone()
+    };
+    assert!(note(&staged).is_empty());
+    let mut export = RegistryExport::default();
+    export
+        .keys
+        .insert(format!("{HKCU}\\Software\\co\\game"), Vec::new());
+    staged.registry = Some(export);
+    assert_eq!(note(&staged), [PLAYER_PREFS_NOTE]);
+}
+
+#[test]
+fn absolute_root_restores_to_its_own_os_only() {
+    let staged = staged(
+        &[(Base::Absolute, "opt/game")],
+        &[(Base::Absolute, "opt/game/save.dat")],
+    );
+    // No Linux target: the root is skipped, not offered for mapping.
+    let plan = prepare(
+        &staged,
+        &win_only(native_win()),
+        &[],
+        &vars(),
+        None,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(plan.writes.is_empty());
+    assert_eq!(
+        plan.skipped,
+        [Skipped {
+            file: file(Base::Absolute, "opt/game/save.dat"),
+            reason: SkipReason::NoTarget,
+        }]
     );
 }
