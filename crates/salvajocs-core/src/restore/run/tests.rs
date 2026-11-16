@@ -5,7 +5,7 @@ use super::*;
 use crate::backup::backup_games;
 use crate::config::{AppConfig, PasswordMode};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
-use crate::manifest::{GameEntry, Integration, Steam};
+use crate::manifest::{CustomGame, GameEntry, Integration, Steam};
 use crate::registry::{RegData, RegValue};
 use crate::storage::{Compression, RepoLocation};
 
@@ -237,7 +237,7 @@ fn default_targets_uses_proton_compatdata() {
     let env = linux_env(&tmp.path().join("home"), vec![steam]);
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &[], &env),
+        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
         Targets {
             linux: Some(linux_folders(&tmp.path().join("home"))),
             win: Some(in_prefix(&pfx, "steamuser")),
@@ -261,9 +261,27 @@ fn default_targets_prefers_custom_wine_prefix() {
         skips: vec![],
     };
 
-    let targets = default_targets("Foo", &steam_game(620), &[custom], &env);
+    let mut config = config(vec![]);
+    config.custom_games = vec![custom];
+
+    let targets = default_targets("Foo", &steam_game(620), &config, &env);
     assert_eq!(targets.win, Some(in_prefix(&own, "me")));
     assert!(targets.linux.is_some());
+}
+
+#[test]
+fn default_targets_finds_proton_in_configured_steam_library() {
+    let tmp = tempfile::tempdir().unwrap();
+    let library = tmp.path().join("library");
+    let pfx = make_prefix(&library.join("steamapps/compatdata/620/pfx"), "steamuser");
+    let env = linux_env(&tmp.path().join("home"), vec![tmp.path().join("steam")]);
+    let roots = vec![Root {
+        path: library,
+        kind: RootKind::Steam,
+    }];
+
+    let targets = default_targets("Foo", &steam_game(620), &config(roots), &env);
+    assert_eq!(targets.win, Some(in_prefix(&pfx, "steamuser")));
 }
 
 #[test]
@@ -275,7 +293,7 @@ fn default_targets_linux_only_without_prefix() {
     let env = linux_env(&tmp.path().join("home"), vec![steam]);
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &[], &env),
+        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
         Targets {
             linux: Some(linux_folders(&tmp.path().join("home"))),
             win: None,
@@ -295,7 +313,7 @@ fn default_targets_on_windows_host_is_native_only() {
     };
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &[], &env),
+        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
         Targets {
             linux: None,
             win: Some(native),

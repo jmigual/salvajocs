@@ -12,8 +12,11 @@ use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
 use super::{RestorePlan, StagedGame, Targets, Write};
 use crate::backup::{BackupError, backup_games};
-use crate::layout::{self, Base, Context, FILES_DIR, META_FILE, REGISTRY_FILE, WinFolders};
-use crate::manifest::{CustomGame, Manifest, merge_custom};
+use crate::config::AppConfig;
+use crate::layout::{
+    self, Base, Context, FILES_DIR, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
+};
+use crate::manifest::{Manifest, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
@@ -73,14 +76,16 @@ pub fn list(storage: &Storage) -> Result<Vec<GameBackups>, StorageError> {
 
 /// The targets a restore of `title` starts with (ADR-0005). On Windows the native folders; on
 /// Linux the native folders plus, when it exists, the game's own prefix: the custom game's
-/// `wine_prefix`, else its Proton prefix under `env.steam_roots`. The user may change them.
-/// A prefix whose Wine user cannot be determined is passed over.
+/// `wine_prefix`, else its Proton prefix under `env.steam_roots` or a configured Steam root,
+/// as the scan looks them up. The user may change them. A prefix whose Wine user cannot be
+/// determined is passed over.
 pub fn default_targets(
     title: &str,
     manifest: &Manifest,
-    custom: &[CustomGame],
+    config: &AppConfig,
     env: &Environment,
 ) -> Targets {
+    let custom = &config.custom_games;
     match &env.native {
         Some(win @ Context::WindowsNative(_)) => Targets {
             linux: None,
@@ -101,7 +106,12 @@ pub fn default_targets(
                 .filter(|game| game.name == title)
                 .filter_map(|game| game.wine_prefix.clone())
                 .next_back();
-            let proton = (env.steam_roots.iter()).filter_map(|root| proton_prefix(root, steam_id?));
+            let configured = (config.roots.iter())
+                .filter(|root| root.kind == RootKind::Steam)
+                .map(|root| &root.path);
+            let proton = (env.steam_roots.iter())
+                .chain(configured)
+                .filter_map(|root| proton_prefix(root, steam_id?));
             let win = custom_prefix.into_iter().chain(proton).find_map(|prefix| {
                 let user = wine_user(&prefix).ok()?;
                 let folders = WinFolders::for_prefix(&prefix, &user);
