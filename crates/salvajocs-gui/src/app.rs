@@ -13,7 +13,10 @@ use crate::job::Job;
 use crate::prompt::SecretPrompt;
 use crate::startup::{self, Credentials, ManifestLoad, Resolved};
 use crate::state::{Session, State};
-use crate::tabs::{Tab, backup::BackupTab, custom_games::CustomGamesTab, settings::SettingsTab};
+use crate::tabs::{
+    Tab, backup::BackupTab, custom_games::CustomGamesTab, restore::RestoreTab,
+    settings::SettingsTab,
+};
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
 enum Stage {
@@ -43,6 +46,7 @@ pub struct App {
     stage: Stage,
     tab: Tab,
     backup: BackupTab,
+    restore: RestoreTab,
     settings: SettingsTab,
     custom_games: CustomGamesTab,
     started: bool,
@@ -69,6 +73,7 @@ impl App {
             stage,
             tab: Tab::default(),
             backup: BackupTab::default(),
+            restore: RestoreTab::default(),
             settings: SettingsTab::default(),
             custom_games: CustomGamesTab::default(),
             started: false,
@@ -310,8 +315,11 @@ impl eframe::App for App {
                     self.backup.ui(ui, &self.state, self.manifest.is_some());
                     false
                 }
-                // Placeholder until step 18.
-                (_, Tab::Restore) => false,
+                (_, Tab::Restore) => {
+                    self.restore
+                        .ui(ui, &mut self.state, self.manifest.is_some());
+                    false
+                }
                 (_, Tab::CustomGames) => {
                     self.custom_games.ui(ui, &mut self.state);
                     false

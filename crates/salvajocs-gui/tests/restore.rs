@@ -1,0 +1,386 @@
+//! Headless checks of the Restore tab and its mapping dialog.
+
+mod common;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use common::{
+    env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
+    run_until_ready, save_config, shows,
+};
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
+use salvajocs_core::backup::backup_games;
+use salvajocs_core::layout::{Base, Context, LinuxFolders};
+use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, Pair, parse_yaml};
+use salvajocs_core::scan::{Environment, FoundFile, GameScan};
+use salvajocs_core::storage::{RepoLocation, Storage};
+use salvajocs_gui::tabs::Tab;
+use salvajocs_gui::{App, Env};
+use tempfile::TempDir;
+
+/// `rel`'s `/`-separated components below `base`, so a path shows as the restore builds it on
+/// every OS.
+fn under(base: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+}
+
+/// The Linux home of the tests' machine.
+fn home(tmp: &TempDir) -> PathBuf {
+    tmp.path().join("home")
+}
+
+/// A Wine prefix with a `steamuser` home.
+fn make_prefix(tmp: &TempDir) -> PathBuf {
+    let prefix = tmp.path().join("pfx");
+    fs::create_dir_all(prefix.join("drive_c/users/steamuser")).unwrap();
+    fs::write(prefix.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    prefix
+}
+
+/// A custom game that replaces the manifest entry with `files`, each save-tagged.
+fn custom(name: &str, files: &[&str], wine_prefix: Option<&Path>, pairs: Vec<Pair>) -> CustomGame {
+    let mut yaml = format!("{name}:\n  files:\n");
+    for file in files {
+        yaml += &format!("    {file}: {{tags: [save]}}\n");
+    }
+    CustomGame {
+        name: name.into(),
+        entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
+        integration: Integration::Override,
+        wine_prefix: wine_prefix.map(Path::to_path_buf),
+        pairs,
+        skips: Vec::new(),
+    }
+}
+
+/// A scan of `title` with `files` as `(base, tail)` and `roots`; each file holds its tail.
+fn scan(tmp: &TempDir, title: &str, files: &[(Base, &str)], roots: &[(Base, &str)]) -> GameScan {
+    let files = files
+        .iter()
+        .map(|&(base, tail)| {
+            let real = tmp.path().join("src").join(title).join(tail);
+            fs::create_dir_all(real.parent().unwrap()).unwrap();
+            fs::write(&real, tail).unwrap();
+            FoundFile {
+                base,
+                tail: tail.into(),
+                size: tail.len() as u64,
+                real,
+            }
+        })
+        .collect();
+    GameScan {
+        title: title.into(),
+        files,
+        roots: roots
+            .iter()
+            .map(|&(base, rest)| (base, rest.into()))
+            .collect(),
+        registry_keys: Vec::new(),
+        registry_source: None,
+        unreadable: Vec::new(),
+    }
+}
+
+/// An app on a Linux machine whose home is in `tmp`, with `snapshots` backed up, `games` in
+/// the config and the Restore tab showing the list.
+fn open_tab(
+    tmp: &TempDir,
+    games: Vec<CustomGame>,
+    snapshots: &[GameScan],
+) -> (Harness<'static, App>, Env) {
+    let mut env = env(tmp);
+    env.environment = Some(Environment {
+        native: Some(Context::Linux(LinuxFolders {
+            user: "me".into(),
+            home: home(tmp),
+            xdg_data: under(&home(tmp), ".local/share"),
+            xdg_config: home(tmp).join(".config"),
+        })),
+        steam_roots: Vec::new(),
+    });
+    fs::create_dir_all(&env.cache_dir).unwrap();
+    fs::write(
+        env.cache_dir.join("manifest.json"),
+        manifest::to_json(&Manifest::default()).unwrap(),
+    )
+    .unwrap();
+    let repository = repo_dir(tmp);
+    init_repo(&repository);
+    let location = RepoLocation {
+        repository: repository.clone(),
+        options: Default::default(),
+    };
+    let mut storage = Storage::open(&location, "").unwrap();
+    backup_games(
+        &mut storage,
+        snapshots,
+        &tmp.path().join("fixture-stage"),
+        &[],
+        |_| {},
+    )
+    .unwrap();
+    drop(storage);
+    let mut config = local_config(&repository);
+    config.custom_games = games;
+    save_config(&env, &config);
+    let mut harness = harness(env.clone());
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness.get_by_label("Load backups").click();
+    let first = snapshots[0].title.clone();
+    run_until(&mut harness, "the list", move |h| shows(h, &first));
+    (harness, env)
+}
+
+/// Selects `title` and waits for its default targets.
+fn select(harness: &mut Harness<'static, App>, title: &str) {
+    harness.get_by_label(title).click();
+    run_until(harness, "the default targets", |h| {
+        shows(h, "Restore into:")
+    });
+}
+
+/// Previews the restore and waits for the plan or the mapping dialog.
+fn preview(harness: &mut Harness<'static, App>) {
+    harness.get_by_label("Preview").click();
+    run_until(harness, "the preview", |h| {
+        shows(h, "Files to write") || shows(h, "Where should the saves")
+    });
+}
+
+fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
+    harness.get_by_label(label).accesskit_node().is_disabled()
+}
+
+fn click(harness: &mut Harness<'static, App>, label: &str) {
+    harness.get_by_label(label).click();
+    run_settled(harness);
+}
+
+fn pair(linux: &str, windows: &str) -> Pair {
+    Pair {
+        linux: linux.into(),
+        windows: windows.into(),
+    }
+}
+
+/// Alpha, a Windows build in the prefix `pfx`, with two saves and a file outside its root.
+fn alpha(tmp: &TempDir) -> (Harness<'static, App>, Env, PathBuf) {
+    let prefix = make_prefix(tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let snapshot = scan(
+        tmp,
+        "Alpha",
+        &[
+            (Base::WinAppData, "Alpha/save.dat"),
+            (Base::WinAppData, "Alpha/slot2.dat"),
+            (Base::WinAppData, "Stray/x.dat"),
+        ],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (harness, env) = open_tab(tmp, vec![game], &[snapshot]);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    (harness, env, saves)
+}
+
+/// Uni, a Unity game backed up from its Windows build, optionally with a prefix of its own.
+fn unity(tmp: &TempDir, prefix: Option<&Path>) -> Harness<'static, App> {
+    let game = custom("Uni", &["<winLocalAppDataLow>/Co/Uni"], prefix, Vec::new());
+    let snapshot = scan(
+        tmp,
+        "Uni",
+        &[(Base::WinLocalAppDataLow, "Co/Uni/save.dat")],
+        &[(Base::WinLocalAppDataLow, "Co/Uni")],
+    );
+    open_tab(tmp, vec![game], &[snapshot]).0
+}
+
+#[test]
+fn restore_preview_lists_writes_and_skips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    assert!(shows(&harness, "Files to write (2)"));
+    let target = saves.join("save.dat");
+    assert!(shows(
+        &harness,
+        &format!("WinAppData/Alpha/save.dat -> {}", target.display())
+    ));
+    assert!(shows(&harness, "Skipped (1)"));
+    assert!(shows(
+        &harness,
+        "WinAppData/Stray/x.dat: outside the game's save roots"
+    ));
+    assert!(!shows(&harness, "Cross-build restore"));
+    assert!(!shows(&harness, "Where should the saves"));
+}
+
+#[test]
+fn restore_apply_disabled_until_plan_loaded() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    assert!(disabled(&harness, "Restore files"));
+    select(&mut harness, "Alpha");
+    assert!(disabled(&harness, "Restore files"));
+
+    preview(&mut harness);
+    assert!(!disabled(&harness, "Restore files"));
+
+    // Another build drops the plan, which was made for the old targets.
+    click(&mut harness, "Native Linux build");
+    assert!(!shows(&harness, "Files to write"));
+    assert!(disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn restore_fetch_preview_restore_reports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), "old").unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "Safety backup: snapshot"));
+    let target = saves.join("save.dat");
+    assert!(shows(&harness, &format!("{}: restored", target.display())));
+    assert!(shows(
+        &harness,
+        &format!("{}: restored", saves.join("slot2.dat").display())
+    ));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "Alpha/save.dat");
+    assert_eq!(
+        fs::read_to_string(saves.join("slot2.dat")).unwrap(),
+        "Alpha/slot2.dat"
+    );
+    assert!(
+        !saves.with_file_name("Stray").exists(),
+        "a skipped file stays out"
+    );
+    // The safety backup was staged apart from the backup mirror.
+    assert!(env.cache_dir.join("restore-stage").exists());
+    assert!(!env.cache_dir.join("stage").exists());
+}
+
+#[test]
+fn restore_preview_per_file_override_changes_one_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+
+    replace_text(
+        &mut harness,
+        "Override target 1",
+        elsewhere.to_str().unwrap(),
+    );
+    click(&mut harness, "Override 1");
+
+    assert!(shows(
+        &harness,
+        &format!("-> {} (overridden for this restore)", elsewhere.display())
+    ));
+    assert!(!shows(
+        &harness,
+        &saves.join("save.dat").display().to_string()
+    ));
+    assert!(shows(
+        &harness,
+        &saves.join("slot2.dat").display().to_string()
+    ));
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+    assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "Alpha/save.dat");
+    assert!(!saves.join("save.dat").exists());
+    assert!(saves.join("slot2.dat").exists());
+}
+
+#[test]
+fn restore_override_with_a_relative_path_shows_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    replace_text(&mut harness, "Override target 2", "relative/save.dat");
+    click(&mut harness, "Override 2");
+
+    assert!(shows(&harness, "not an absolute path"));
+    assert!(!shows(&harness, "overridden for this restore"));
+}
+
+#[test]
+fn restore_engine_rule_mapping_needs_no_dialog() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = unity(&tmp, None);
+    select(&mut harness, "Uni");
+    preview(&mut harness);
+
+    assert!(!shows(&harness, "Where should the saves"));
+    let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
+    assert!(shows(&harness, &format!("-> {}", target.display())));
+    assert!(shows(&harness, "Cross-build restore"));
+}
+
+#[test]
+fn restore_prefix_found_but_user_picks_native_linux_mapping() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let mut harness = unity(&tmp, Some(&prefix));
+    select(&mut harness, "Uni");
+    let in_prefix = under(
+        &prefix,
+        "drive_c/users/steamuser/AppData/LocalLow/Co/Uni/save.dat",
+    );
+
+    // The found prefix is the default, next to the native build.
+    preview(&mut harness);
+    assert!(shows(&harness, &format!("-> {}", in_prefix.display())));
+    assert!(!shows(&harness, "Cross-build restore"));
+
+    click(&mut harness, "Windows build in a Wine/Proton prefix");
+    preview(&mut harness);
+
+    let native = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
+    assert!(shows(&harness, &format!("-> {}", native.display())));
+    assert!(!shows(&harness, &in_prefix.display().to_string()));
+    assert!(shows(&harness, "Cross-build restore"));
+}
+
+#[test]
+fn restore_cross_build_warning_shown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    // A native Linux snapshot restored into the Windows build through a saved pair.
+    let pairs = vec![pair("<xdgData>/Pairy", "<winAppData>/Pairy")];
+    let game = custom("Pairy", &["<xdgData>/Pairy"], Some(&prefix), pairs);
+    let snapshot = scan(
+        &tmp,
+        "Pairy",
+        &[(Base::XdgData, "Pairy/save.dat")],
+        &[(Base::XdgData, "Pairy")],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Pairy");
+    click(&mut harness, "Native Linux build");
+    preview(&mut harness);
+
+    assert!(shows(&harness, "Cross-build restore"));
+    let target = under(
+        &prefix,
+        "drive_c/users/steamuser/AppData/Roaming/Pairy/save.dat",
+    );
+    assert!(shows(&harness, &format!("-> {}", target.display())));
+}
