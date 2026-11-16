@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use super::*;
 use crate::layout::Base;
 use crate::registry::{HKCU, RegData, RegValue};
 use crate::scan::FoundFile;
-use crate::slug::slug;
+use crate::storage::{Compression, RepoLocation};
 
 /// Writes `contents` to `path`, creating its parent directories.
 fn write(path: &Path, contents: &str) -> PathBuf {
@@ -223,4 +224,136 @@ fn restage_keeps_copies_when_source_unreadable() {
     stage(&partial, &RegistryExport::default(), &stage_dir).unwrap();
     assert!(!foo.join("sub").exists());
     assert!(!stage_dir.join(REGISTRY_FILE).exists());
+}
+
+fn init_repo(root: &Path) -> Storage {
+    let location = RepoLocation {
+        repository: root.join("repo").to_str().unwrap().into(),
+        options: BTreeMap::new(),
+    };
+    Storage::init(&location, "", Compression::Default).unwrap()
+}
+
+/// A game with one save file `<title>.sav` holding `contents` under `root/src`.
+fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
+    let real = write(&root.join("src").join(format!("{title}.sav")), contents);
+    game(title, vec![found(Base::WinAppData, "Game/save.sav", &real)])
+}
+
+/// The new snapshot of each game, `None` when it was unchanged; panics on a failed game.
+fn written(outcomes: &[GameBackup]) -> Vec<Option<SnapshotInfo>> {
+    outcomes
+        .iter()
+        .map(|outcome| outcome.result.as_ref().unwrap().clone())
+        .collect()
+}
+
+fn user_reg(prefix: &Path, value: &str) {
+    write(
+        &prefix.join("user.reg"),
+        &format!("WINE REGISTRY Version 2\n\n[Software\\\\Foo] 1\n#time=0\n\"v\"=\"{value}\"\n"),
+    );
+}
+
+#[test]
+fn backup_creates_tagged_labelled_snapshot_per_game() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [
+        game_with_save(tmp.path(), "Foo, Part 1: ünï", "foo"),
+        game_with_save(tmp.path(), "Bar", "bar"),
+    ];
+    let stage_root = tmp.path().join("stage");
+    let mut seen = Vec::new();
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &["extra"], |outcome| {
+        seen.push(outcome.title.clone())
+    })
+    .unwrap();
+
+    assert_eq!(seen, ["Foo, Part 1: ünï", "Bar"]);
+    for (game, outcome) in games.iter().zip(&outcomes) {
+        let slug = slug(&game.title);
+        assert_eq!((&outcome.title, &outcome.slug), (&game.title, &slug));
+        let info = outcome.result.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(info.label, game.title);
+        let mut tags = info.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["extra", &format!("game:{slug}"), "salvajocs"]);
+
+        let restored = tmp.path().join("restored").join(&slug);
+        storage
+            .restore_path(&info.id, &format!("/salvajocs/{slug}"), &restored)
+            .unwrap();
+        let meta: SnapshotMeta =
+            serde_json::from_slice(&fs::read(restored.join(META_FILE)).unwrap()).unwrap();
+        assert_eq!(meta.title, game.title);
+        assert!(restored.join("files/WinAppData/Game/save.sav").is_file());
+    }
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 2);
+}
+
+#[test]
+fn unchanged_game_makes_no_new_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [
+        game_with_save(tmp.path(), "Foo", "foo"),
+        game_with_save(tmp.path(), "Bar", "bar"),
+    ];
+    let stage_root = tmp.path().join("stage");
+    let run = |storage: &mut Storage| {
+        written(&backup_games(storage, &games, &stage_root, &[], |_| {}).unwrap())
+    };
+
+    assert!(run(&mut storage).iter().all(Option::is_some));
+    assert_eq!(run(&mut storage), [None, None]);
+    write(&games[0].files[0].real, "foo, changed");
+    let third = run(&mut storage);
+    assert!(third[0].is_some());
+    assert_eq!(third[1], None);
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 3);
+}
+
+#[test]
+fn registry_exported_from_recorded_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (first, second) = (tmp.path().join("first"), tmp.path().join("second"));
+    user_reg(&first, "first");
+    user_reg(&second, "second");
+    let mut scan = game("Foo", vec![]);
+    scan.registry_keys = vec![format!("{HKCU}\\Software\\Foo")];
+    scan.registry_source = Some(RegistrySource::WinePrefix(second.clone()));
+    // Changed after the scan: the backup reads the source again.
+    user_reg(&second, "fresh");
+    let mut storage = init_repo(tmp.path());
+    let stage_root = tmp.path().join("stage");
+    let games = [scan];
+
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    assert!(written(&outcomes)[0].is_some());
+    let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
+    let staged: RegistryExport =
+        serde_json::from_slice(&fs::read(&registry_file).unwrap()).unwrap();
+    assert_eq!(staged, registry("fresh"));
+
+    // The keys are gone from the source: the export is empty and `registry.json` is dropped.
+    write(&second.join("user.reg"), "WINE REGISTRY Version 2\n");
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    assert!(written(&outcomes)[0].is_some());
+    assert!(!registry_file.exists());
+}
+
+#[test]
+fn failed_game_does_not_stop_the_others() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut broken = game("Broken", vec![]);
+    broken.registry_keys = vec![format!("{HKCU}\\Software\\Foo")];
+    broken.registry_source = Some(RegistrySource::WinePrefix(tmp.path().join("no-prefix")));
+    let games = [broken, game_with_save(tmp.path(), "Fine", "fine")];
+    let mut storage = init_repo(tmp.path());
+
+    let outcomes =
+        backup_games(&mut storage, &games, &tmp.path().join("stage"), &[], |_| {}).unwrap();
+    assert!(matches!(outcomes[0].result, Err(BackupError::Io { .. })));
+    assert!(matches!(outcomes[1].result, Ok(Some(_))));
 }

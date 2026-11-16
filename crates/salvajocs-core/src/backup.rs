@@ -11,8 +11,13 @@ use serde::Serialize;
 use crate::layout::{
     FILES_DIR, META_FILE, REGISTRY_FILE, SNAPSHOT_FORMAT, SnapshotMeta, target_path,
 };
-use crate::registry::RegistryExport;
-use crate::scan::GameScan;
+#[cfg(windows)]
+use crate::registry::windows::WindowsRegistryError;
+use crate::registry::wine::RegFile;
+use crate::registry::{RegistryError, RegistryExport};
+use crate::scan::{GameScan, RegistrySource};
+use crate::slug::slug;
+use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 /// Errors from staging or backing up one game.
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +32,24 @@ pub enum BackupError {
     /// A found file's tail is not a plain relative path, so it would leave the staging dir.
     #[error("unsafe file tail: {0}")]
     UnsafeTail(String),
+    /// The `user.reg` the scan found the game's keys in cannot be parsed or exported.
+    #[error("cannot export the registry from {path}")]
+    WineRegistry {
+        path: PathBuf,
+        #[source]
+        source: RegistryError,
+    },
+    /// The live Windows registry cannot be exported.
+    #[cfg(windows)]
+    #[error("cannot export the Windows registry")]
+    WindowsRegistry(#[from] WindowsRegistryError),
+    /// The scan recorded the live Windows registry as the source, but this is not Windows.
+    #[cfg(not(windows))]
+    #[error("the Windows registry is not available on this OS")]
+    NoWindowsRegistry,
+    /// The repository failed.
+    #[error("repository error")]
+    Storage(#[from] StorageError),
 }
 
 fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
@@ -150,6 +173,83 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
         Ok(old) if old == bytes => Ok(()),
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(io_error(path)(err)),
         _ => fs::write(path, bytes).map_err(io_error(path)),
+    }
+}
+
+/// The outcome of one game in [`backup_games`].
+#[derive(Debug)]
+pub struct GameBackup {
+    /// The game's title.
+    pub title: String,
+    /// The game's slug (ADR-0010).
+    pub slug: String,
+    /// The new snapshot, `None` when nothing changed since the last one, or why it failed.
+    pub result: Result<Option<SnapshotInfo>, BackupError>,
+}
+
+/// Backs up each of `games` as its own snapshot (ADR-0010), one after another: the game is
+/// staged in `stage_root/<slug>` with its registry keys read fresh from the scan's
+/// `registry_source`, then stored as `/salvajocs/<slug>` with label = title and tags
+/// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas). An unchanged
+/// game makes no snapshot.
+///
+/// The repository is reindexed once first; only that failure is returned as `Err`. A game's
+/// failure is in its [`GameBackup`] and does not stop the others. `progress` gets each outcome
+/// as it is done.
+pub fn backup_games(
+    storage: &mut Storage,
+    games: &[GameScan],
+    stage_root: &Path,
+    extra_tags: &[&str],
+    mut progress: impl FnMut(&GameBackup),
+) -> Result<Vec<GameBackup>, BackupError> {
+    storage.reindex()?;
+    let mut outcomes = Vec::with_capacity(games.len());
+    for game in games {
+        let slug = slug(&game.title);
+        let result = backup_game(storage, game, &stage_root.join(&slug), &slug, extra_tags);
+        let outcome = GameBackup {
+            title: game.title.clone(),
+            slug,
+            result,
+        };
+        progress(&outcome);
+        outcomes.push(outcome);
+    }
+    Ok(outcomes)
+}
+
+fn backup_game(
+    storage: &mut Storage,
+    game: &GameScan,
+    stage_dir: &Path,
+    slug: &str,
+    extra_tags: &[&str],
+) -> Result<Option<SnapshotInfo>, BackupError> {
+    stage(game, &read_registry(game)?, stage_dir)?;
+    let game_tag = format!("game:{slug}");
+    let mut tags = vec!["salvajocs", game_tag.as_str()];
+    tags.extend_from_slice(extra_tags);
+    let as_path = format!("/salvajocs/{slug}");
+    Ok(storage.backup_dir(stage_dir, &as_path, &tags, &game.title)?)
+}
+
+/// Exports `game.registry_keys` from the source the scan recorded. A source that cannot be read
+/// now is an error, never an empty export, which would drop `registry.json` from the snapshot.
+fn read_registry(game: &GameScan) -> Result<RegistryExport, BackupError> {
+    match &game.registry_source {
+        None => Ok(RegistryExport::default()),
+        Some(RegistrySource::WinePrefix(prefix)) => {
+            let path = prefix.join("user.reg");
+            let text = fs::read_to_string(&path).map_err(io_error(&path))?;
+            RegFile::parse(&text)
+                .and_then(|file| file.export(&game.registry_keys))
+                .map_err(|source| BackupError::WineRegistry { path, source })
+        }
+        #[cfg(windows)]
+        Some(RegistrySource::Windows) => Ok(crate::registry::windows::export(&game.registry_keys)?),
+        #[cfg(not(windows))]
+        Some(RegistrySource::Windows) => Err(BackupError::NoWindowsRegistry),
     }
 }
 
