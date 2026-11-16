@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::crossbuild::{
     self, Choice, Family, MappingEntry, ResolveError, ResolvedMapping, SnapshotRoot,
 };
-use crate::layout::{self, Base, Context, GameVars, LinuxFolders, Root, SnapshotMeta};
+use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Pair, RegistryRule};
 use crate::registry::RegistryExport;
 
@@ -282,8 +282,8 @@ fn resolve_path(
 /// (ADR-0011). `Absolute`/`WinAbsolute` restore to the same OS only (ADR-0005). A file must lie
 /// under a recorded root. Its tail below the root is kept, and the root's raw rest (or the
 /// mapping target's) is substituted with `vars` and the target context's user, so
-/// `<osUserName>` becomes this machine's user. `_roots` is unused: `vars` already holds the
-/// install dirs found through them.
+/// `<osUserName>` becomes this machine's user. `GameDir`/`StoreRoot` resolve through the
+/// install dirs in `vars`.
 ///
 /// # Errors
 /// [`PlanError::Unmapped`] when a file of a family without a target lies under a root that has
@@ -291,7 +291,6 @@ fn resolve_path(
 pub fn plan(
     staged: &StagedGame,
     targets: &Targets,
-    _roots: &[Root],
     vars: &GameVars,
     mappings: &[ResolvedMapping],
 ) -> Result<RestorePlan, PlanError> {
@@ -331,6 +330,8 @@ pub fn plan(
                     })?;
                 match &mapping.target {
                     None => Err(SkipReason::SkippedByUser),
+                    // A custom absolute path never is the other OS's location (ADR-0005).
+                    Some((Base::Absolute | Base::WinAbsolute, _)) => Err(SkipReason::NoTarget),
                     Some(target_root) => Ok((target_root, covering)),
                 }
             }
@@ -404,7 +405,6 @@ pub enum PrepareError {
 pub fn prepare(
     staged: &StagedGame,
     targets: &Targets,
-    roots: &[Root],
     vars: &GameVars,
     entry: Option<&GameEntry>,
     pairs: &[Pair],
@@ -417,21 +417,13 @@ pub fn prepare(
     };
     let mut mappings = Vec::new();
     if let Some(family) = target_family {
-        // Custom absolute paths restore to the same OS only (ADR-0005), so they are not mapped.
-        let meta = SnapshotMeta {
-            roots: (staged.meta.roots.iter())
-                .filter(|root| !matches!(root.0, Base::Absolute | Base::WinAbsolute))
-                .cloned()
-                .collect(),
-            ..staged.meta.clone()
-        };
         // Staged registry keys count like manifest keys for the PlayerPrefs note.
         let mut entry = entry.cloned().unwrap_or_default();
         if let Some(export) = &staged.registry {
             let keys = export.keys.keys();
             (entry.registry).extend(keys.map(|key| (key.clone(), RegistryRule::default())));
         }
-        let mut entries = crossbuild::propose(&meta, Some(&entry), pairs, family);
+        let mut entries = crossbuild::propose(&staged.meta, Some(&entry), pairs, family);
         for mapping in &mut entries {
             mapping.files = (staged.files.iter())
                 .filter(|(base, tail)| {
@@ -450,7 +442,7 @@ pub fn prepare(
             }
         };
     }
-    Ok(plan(staged, targets, roots, vars, &mappings)?)
+    Ok(plan(staged, targets, vars, &mappings)?)
 }
 
 #[cfg(test)]

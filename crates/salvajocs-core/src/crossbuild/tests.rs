@@ -304,11 +304,19 @@ fn only_roots_of_the_other_family_are_proposed() {
         linux_root("<xdgData>/Foo"),
         win_root("<winAppData>/Foo"),
         (Base::GameDir, "saves".into()),
+        // Custom absolute paths restore to the same OS only (ADR-0005).
+        (Base::Absolute, "opt/foo".into()),
+        (Base::WinAbsolute, "C/Games/Foo".into()),
     ]);
     let entries = propose(&roots, None, &[], Family::Windows);
     assert_eq!(
         entries.iter().map(|e| e.root.clone()).collect::<Vec<_>>(),
         [linux_root("<xdgData>/Foo")]
+    );
+    let entries = propose(&roots, None, &[], Family::Linux);
+    assert_eq!(
+        entries.iter().map(|e| e.root.clone()).collect::<Vec<_>>(),
+        [win_root("<winAppData>/Foo")]
     );
 }
 

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::*;
 use crate::crossbuild::{Confidence, PLAYER_PREFS_NOTE};
-use crate::layout::{RootKind, SNAPSHOT_FORMAT, WinFolders};
+use crate::layout::{Root, RootKind, SNAPSHOT_FORMAT, WinFolders};
 use crate::registry::HKCU;
 
 fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
@@ -76,7 +76,7 @@ fn proton_save_plans_into_windows_folders() {
             (Base::WinDocuments, "My Games/Foo/slot1.sav"),
         ],
     );
-    let plan = plan(&staged, &win_only(native_win()), &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &win_only(native_win()), &vars(), &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [
@@ -115,7 +115,7 @@ fn windows_save_plans_into_prefix_user() {
         prefix: prefix.path().into(),
         folders: folders.clone(),
     };
-    let plan = plan(&staged, &win_only(ctx), &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &win_only(ctx), &vars(), &[]).unwrap();
     // The existing `co` is reused instead of creating `Co` next to it (ADR-0005). NTFS ignores
     // case, so there the existing `co` is found under the tail's spelling.
     #[cfg(unix)]
@@ -152,7 +152,7 @@ fn mixed_snapshot_restores_both_families() {
         linux: Some(linux_folders()),
         win: Some(native_win()),
     };
-    let plan = plan(&staged, &targets, &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &targets, &vars(), &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [
@@ -181,7 +181,7 @@ fn game_dir_resolves_through_install_dir() {
         &[(Base::GameDir, "saves")],
         &[(Base::GameDir, "saves/a.sav")],
     );
-    let plan = plan(&staged, &linux_only(), &roots, &vars, &[]).unwrap();
+    let plan = plan(&staged, &linux_only(), &vars, &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [root.path().join("Install Dir/saves/a.sav")]
@@ -198,7 +198,7 @@ fn game_dir_skipped_when_not_installed() {
         &[(Base::GameDir, "saves")],
         &[(Base::GameDir, "saves/a.sav")],
     );
-    let plan = plan(&staged, &linux_only(), &roots, &vars, &[]).unwrap();
+    let plan = plan(&staged, &linux_only(), &vars, &[]).unwrap();
     assert!(plan.writes.is_empty());
     assert_eq!(
         plan.skipped,
@@ -213,7 +213,7 @@ fn game_dir_skipped_when_not_installed() {
 fn registry_skipped_without_windows_target() {
     let mut staged = staged(&[(Base::XdgData, "Game")], &[(Base::XdgData, "Game/a")]);
     staged.registry = Some(RegistryExport::default());
-    let plan_linux = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
+    let plan_linux = plan(&staged, &linux_only(), &vars(), &[]).unwrap();
     assert_eq!(plan_linux.registry, None);
     let skipped = Skipped {
         file: None,
@@ -230,7 +230,7 @@ fn registry_skipped_without_windows_target() {
         linux: Some(linux_folders()),
         win: Some(native_win()),
     };
-    let plan_win = plan(&staged, &targets, &[], &vars(), &[]).unwrap();
+    let plan_win = plan(&staged, &targets, &vars(), &[]).unwrap();
     assert_eq!(
         plan_win.registry,
         Some((RegistryExport::default(), native_win()))
@@ -241,7 +241,7 @@ fn registry_skipped_without_windows_target() {
 #[test]
 fn override_target_rejects_relative_path() {
     let staged = staged(&[(Base::XdgData, "Game")], &[(Base::XdgData, "Game/a")]);
-    let mut plan = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
+    let mut plan = plan(&staged, &linux_only(), &vars(), &[]).unwrap();
     let before = plan.clone();
     // Absolute on every host, unlike `/elsewhere` on Windows.
     let elsewhere = std::env::temp_dir().join("elsewhere/a");
@@ -268,7 +268,7 @@ fn tail_leaving_its_base_is_skipped() {
         &[(Base::XdgData, "Game")],
         &[(Base::XdgData, "Game/../../x")],
     );
-    let direct = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
+    let direct = plan(&staged, &linux_only(), &vars(), &[]).unwrap();
     assert!(direct.writes.is_empty());
     assert_eq!(
         direct.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
@@ -280,7 +280,7 @@ fn tail_leaving_its_base_is_skipped() {
         root: (Base::XdgData, "Game".into()),
         target: Some((Base::WinAppData, "Game".into())),
     };
-    let mapped = plan(&staged, &win_only(native_win()), &[], &vars(), &[mapping]).unwrap();
+    let mapped = plan(&staged, &win_only(native_win()), &vars(), &[mapping]).unwrap();
     assert!(mapped.writes.is_empty());
     assert_eq!(
         mapped.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
@@ -299,7 +299,7 @@ fn file_outside_recorded_roots_skipped() {
             (Base::XdgConfig, "Game/c.sav"),
         ],
     );
-    let plan = plan(&staged, &linux_only(), &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &linux_only(), &vars(), &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new("/home/me/.local/share/Game/a.sav")]
@@ -316,7 +316,7 @@ fn os_user_name_in_tail_is_swapped_proton_to_windows() {
         &[(Base::WinDocuments, "<osUserName>/Game")],
         &[(Base::WinDocuments, "steamuser/Game/s.sav")],
     );
-    let plan = plan(&staged, &win_only(native_win()), &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &win_only(native_win()), &vars(), &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new(
@@ -350,7 +350,7 @@ fn mixed_restore_uses_each_family_user() {
         linux: Some(linux_folders()),
         win: Some(native_win()),
     };
-    let plan = plan(&staged, &targets, &[], &vars(), &[]).unwrap();
+    let plan = plan(&staged, &targets, &vars(), &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [
@@ -361,10 +361,25 @@ fn mixed_restore_uses_each_family_user() {
 }
 
 #[test]
+fn absolute_mapping_target_is_skipped() {
+    let staged = staged(&[(Base::XdgData, "Game")], &[(Base::XdgData, "Game/a")]);
+    let mapping = ResolvedMapping {
+        root: (Base::XdgData, "Game".into()),
+        target: Some((Base::WinAbsolute, "C/Games/Game".into())),
+    };
+    let plan = plan(&staged, &win_only(native_win()), &vars(), &[mapping]).unwrap();
+    assert!(plan.writes.is_empty());
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::NoTarget]
+    );
+}
+
+#[test]
 fn unmapped_root_without_target_is_an_error() {
     let staged = staged(&[(Base::XdgData, "Game")], &[(Base::XdgData, "Game/a")]);
     assert_eq!(
-        plan(&staged, &win_only(native_win()), &[], &vars(), &[]),
+        plan(&staged, &win_only(native_win()), &vars(), &[]),
         Err(PlanError::Unmapped {
             root: (Base::XdgData, "Game".into()),
         })
@@ -381,7 +396,7 @@ fn native_linux_save_restores_without_prefix() {
         &[(Base::XdgConfig, "Game")],
         &[(Base::XdgConfig, "Game/save.dat")],
     );
-    let plan = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &[]).unwrap();
+    let plan = prepare(&staged, &linux_only(), &vars(), None, &[], &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new("/home/me/.config/Game/save.dat")]
@@ -410,7 +425,6 @@ fn cross_build_unknown_entry_blocks_restore() {
     let result = prepare(
         &linux_unity_and_unknown(),
         &win_only(native_win()),
-        &[],
         &vars(),
         None,
         &[],
@@ -447,15 +461,7 @@ fn nested_roots_count_files_under_the_deepest() {
             (Base::XdgData, "Game/sub/c.sav"),
         ],
     );
-    let result = prepare(
-        &staged,
-        &win_only(native_win()),
-        &[],
-        &vars(),
-        None,
-        &[],
-        &[],
-    );
+    let result = prepare(&staged, &win_only(native_win()), &vars(), None, &[], &[]);
     let Err(PrepareError::NeedsMapping(entries)) = result else {
         panic!("expected NeedsMapping, got {result:?}");
     };
@@ -468,7 +474,7 @@ fn prepare_with_choices_returns_plan() {
     let targets = win_only(native_win());
     let choose = |choice: Choice| [(root(Base::XdgData, "Game"), choice)];
     let choices = choose(Choice::Template("<winDocuments>/My Games/Game".into()));
-    let plan = prepare(&staged, &targets, &[], &vars(), None, &[], &choices).unwrap();
+    let plan = prepare(&staged, &targets, &vars(), None, &[], &choices).unwrap();
     assert_eq!(
         targets_of(&plan),
         [
@@ -487,16 +493,7 @@ fn prepare_with_choices_returns_plan() {
     );
     assert!(plan.cross_build);
 
-    let skipped = prepare(
-        &staged,
-        &targets,
-        &[],
-        &vars(),
-        None,
-        &[],
-        &choose(Choice::Skip),
-    )
-    .unwrap();
+    let skipped = prepare(&staged, &targets, &vars(), None, &[], &choose(Choice::Skip)).unwrap();
     assert_eq!(skipped.writes.len(), 1);
     assert_eq!(
         skipped.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
@@ -505,7 +502,7 @@ fn prepare_with_choices_returns_plan() {
 
     let real_path = choose(Choice::Template("/home/me/Game".into()));
     assert!(matches!(
-        prepare(&staged, &targets, &[], &vars(), None, &[], &real_path),
+        prepare(&staged, &targets, &vars(), None, &[], &real_path),
         Err(PrepareError::Unclassifiable { .. })
     ));
 }
@@ -516,16 +513,7 @@ fn prepare_engine_rule_returns_plan_without_choices() {
         &[(Base::XdgConfig, "unity3d/Co/Game")],
         &[(Base::XdgConfig, "unity3d/Co/Game/save.dat")],
     );
-    let plan = prepare(
-        &staged,
-        &win_only(native_win()),
-        &[],
-        &vars(),
-        None,
-        &[],
-        &[],
-    )
-    .unwrap();
+    let plan = prepare(&staged, &win_only(native_win()), &vars(), None, &[], &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new(
@@ -548,16 +536,7 @@ fn linux_save_maps_onto_windows_via_pair() {
         linux: "<xdgData>/<game>".into(),
         windows: "<winAppData>/<game>/Saves".into(),
     }];
-    let plan = prepare(
-        &staged,
-        &win_only(native_win()),
-        &[],
-        &vars,
-        None,
-        &pairs,
-        &[],
-    )
-    .unwrap();
+    let plan = prepare(&staged, &win_only(native_win()), &vars, None, &pairs, &[]).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new(
@@ -586,7 +565,7 @@ fn prepare_adds_player_prefs_note_from_staged_registry() {
         ],
     );
     let note = |staged: &StagedGame| {
-        let result = prepare(staged, &linux_only(), &[], &vars(), None, &[], &[]);
+        let result = prepare(staged, &linux_only(), &vars(), None, &[], &[]);
         let Err(PrepareError::NeedsMapping(entries)) = result else {
             panic!("expected NeedsMapping, got {result:?}");
         };
@@ -608,16 +587,7 @@ fn absolute_root_restores_to_its_own_os_only() {
         &[(Base::Absolute, "opt/game/save.dat")],
     );
     // No Linux target: the root is skipped, not offered for mapping.
-    let plan = prepare(
-        &staged,
-        &win_only(native_win()),
-        &[],
-        &vars(),
-        None,
-        &[],
-        &[],
-    )
-    .unwrap();
+    let plan = prepare(&staged, &win_only(native_win()), &vars(), None, &[], &[]).unwrap();
     assert!(plan.writes.is_empty());
     assert_eq!(
         plan.skipped,
@@ -634,7 +604,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         &[(Base::WinDocuments, "<osUserName>/Game")],
         &[(Base::WinDocuments, "steamuser/Game/s.sav")],
     );
-    let result = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &[]);
+    let result = prepare(&staged, &linux_only(), &vars(), None, &[], &[]);
     let Err(PrepareError::NeedsMapping(entries)) = result else {
         panic!("expected NeedsMapping, got {result:?}");
     };
@@ -644,7 +614,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         root(Base::WinDocuments, "<osUserName>/Game"),
         Choice::Template("<xdgData>/<osUserName>/Game".into()),
     )];
-    let plan = prepare(&staged, &linux_only(), &[], &vars(), None, &[], &choices).unwrap();
+    let plan = prepare(&staged, &linux_only(), &vars(), None, &[], &choices).unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new("/home/me/.local/share/me/Game/s.sav")]

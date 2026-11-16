@@ -347,7 +347,7 @@ fn has_registry_key(entry: &GameEntry, key: &str) -> bool {
 
 /// Proposes a target for every root of `meta` that belongs to the family opposite
 /// `target_family`; roots already in the target family and install-relative roots need no
-/// mapping. Order of sources: saved `pairs`, [`ENGINE_RULES`], the manifest auto-pair, unknown.
+/// mapping, and `Absolute`/`WinAbsolute` roots restore to the same OS only (ADR-0005). Order of sources: saved `pairs`, [`ENGINE_RULES`], the manifest auto-pair, unknown.
 pub fn propose(
     meta: &SnapshotMeta,
     entry: Option<&GameEntry>,
@@ -377,7 +377,10 @@ pub fn propose(
     };
     meta.roots
         .iter()
-        .filter(|root| base_family(root.0) == Some(source))
+        .filter(|root| {
+            base_family(root.0) == Some(source)
+                && !matches!(root.0, Base::Absolute | Base::WinAbsolute)
+        })
         .map(|root| {
             let saved = pairs
                 .iter()
