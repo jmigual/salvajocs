@@ -7,7 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::crossbuild::{
-    self, Choice, Family, MappingEntry, ResolveError, ResolvedMapping, SnapshotRoot,
+    self, Choice, Confidence, Family, MappingEntry, ResolveError, ResolvedMapping, SnapshotRoot,
 };
 use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Pair, RegistryRule};
@@ -63,6 +63,8 @@ pub enum SkipReason {
     UnsafePath,
     /// The file lies under none of the snapshot's recorded roots.
     OutsideRoots,
+    /// The file's root is not one the game declares.
+    UndeclaredRoot,
     /// `registry.json` with no Windows target.
     NoWindowsTarget,
     /// A registry key outside the keys the game's entry declares.
@@ -77,6 +79,7 @@ impl fmt::Display for SkipReason {
             SkipReason::SkippedByUser => "skipped by choice",
             SkipReason::UnsafePath => "path leaves its base directory",
             SkipReason::OutsideRoots => "outside the game's save roots",
+            SkipReason::UndeclaredRoot => "save root not declared for this game",
             SkipReason::NoWindowsTarget => "registry: no Windows target",
             SkipReason::UndeclaredRegistryKey => "registry key not declared for this game",
         })
@@ -296,6 +299,36 @@ fn resolve_path(
     layout::target_path(&dir, tail, case_insensitive).ok_or(SkipReason::UnsafePath)
 }
 
+/// The roots a snapshot of this game may hold (ADR-0005): the classified glob-free prefix of each
+/// file template of `entry` (in either family), each side of `pairs`, and the engine-rule
+/// targets of those.
+fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<SnapshotRoot> {
+    let mut roots = Vec::new();
+    for family in [Family::Linux, Family::Windows] {
+        let templates = (entry.into_iter())
+            .flat_map(|entry| entry.files.keys().map(String::as_str))
+            .map(layout::glob_free_prefix)
+            .chain(pairs.iter().map(|pair| match family {
+                Family::Linux => pair.linux.as_str(),
+                Family::Windows => pair.windows.as_str(),
+            }));
+        roots.extend(templates.filter_map(|template| crossbuild::classify(template, family)));
+    }
+    let meta = SnapshotMeta {
+        format: layout::SNAPSHOT_FORMAT,
+        title: String::new(),
+        roots: roots.clone(),
+    };
+    for family in [Family::Linux, Family::Windows] {
+        let engine = crossbuild::propose(&meta, None, &[], family)
+            .into_iter()
+            .filter(|mapping| mapping.confidence == Confidence::EngineRule)
+            .filter_map(|mapping| crossbuild::classify(&mapping.proposed?, family));
+        roots.extend(engine);
+    }
+    roots
+}
+
 /// Whether the registry `key` lies at or below a key `entry` declares, ignoring ASCII case, with
 /// `\` and `/` both separating; a snapshot is untrusted, so nothing else is restored (ADR-0005).
 fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
@@ -316,8 +349,10 @@ fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
 /// under a recorded root. Its tail below the root is kept, and the root's raw rest (or the
 /// mapping target's) is substituted with `vars` and the target context's user, so
 /// `<osUserName>` becomes this machine's user. `GameDir`/`StoreRoot` resolve through the
-/// install dirs in `vars`. Only the registry keys `entry` declares are restored; `entry` is the
-/// game's manifest entry with its custom game applied (`manifest::merge_custom`).
+/// install dirs in `vars`. A snapshot is untrusted (ADR-0005): only files under a root the
+/// game declares (its `entry` templates, its saved `pairs` and their engine-rule targets) and
+/// only the registry keys `entry` declares are restored. `entry` is the game's manifest entry
+/// with its custom game applied (`manifest::merge_custom`).
 ///
 /// # Errors
 /// [`PlanError::Unmapped`] when a file of a family without a target lies under a root that has
@@ -327,8 +362,10 @@ pub fn plan(
     targets: &Targets,
     vars: &GameVars,
     entry: Option<&GameEntry>,
+    pairs: &[Pair],
     mappings: &[ResolvedMapping],
 ) -> Result<RestorePlan, PlanError> {
+    let declared_roots = declared_roots(entry, pairs);
     let linux = targets.linux.clone().map(Context::Linux);
     let target = |family: Option<Family>| match family {
         Some(Family::Linux) => linux.as_ref(),
@@ -350,6 +387,9 @@ pub fn plan(
         let mapped = family.is_some() && target(family).is_none();
         let placed = match covering {
             None => Err(SkipReason::OutsideRoots),
+            Some(covering) if !declared_roots.contains(covering.root) => {
+                Err(SkipReason::UndeclaredRoot)
+            }
             Some(covering) if !mapped => Ok((covering.root, covering)),
             Some(_)
                 if matches!(base, Base::Absolute | Base::WinAbsolute)
@@ -467,13 +507,22 @@ pub fn prepare(
     let mut mappings = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     if let Some(family) = target_family {
+        // Undeclared roots are skipped by `plan`, so they are not offered for mapping either.
+        let declared = declared_roots(entry, pairs);
+        let meta = SnapshotMeta {
+            roots: (staged.meta.roots.iter())
+                .filter(|root| declared.contains(root))
+                .cloned()
+                .collect(),
+            ..staged.meta.clone()
+        };
         // Staged registry keys count like manifest keys for the PlayerPrefs note.
         let mut entry = entry.cloned().unwrap_or_default();
         if let Some(export) = &staged.registry {
             let keys = export.keys.keys();
             (entry.registry).extend(keys.map(|key| (key.clone(), RegistryRule::default())));
         }
-        let mut entries = crossbuild::propose(&staged.meta, Some(&entry), pairs, family);
+        let mut entries = crossbuild::propose(&meta, Some(&entry), pairs, family);
         for mapping in &mut entries {
             mapping.files = (staged.files.iter())
                 .filter(|(base, tail)| {
@@ -498,7 +547,7 @@ pub fn prepare(
             }
         };
     }
-    let mut plan = plan(staged, targets, vars, entry, &mappings)?;
+    let mut plan = plan(staged, targets, vars, entry, pairs, &mappings)?;
     plan.notes = notes;
     Ok(plan)
 }

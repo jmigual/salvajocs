@@ -175,7 +175,7 @@ fn family_context(family: Family) -> Context {
 
 /// `layout::classify` in `family`, rejecting a rest with a component that is not plain (`..`),
 /// since templates come from config, the user and snapshot roots.
-fn classify(template: &str, family: Family) -> Option<(Base, String)> {
+pub(crate) fn classify(template: &str, family: Family) -> Option<(Base, String)> {
     let classified = layout::classify(template, &family_context(family))?;
     let plain = components(&classified.1).all(layout::is_plain_component);
     plain.then_some(classified)
@@ -482,7 +482,7 @@ pub fn resolve(
 }
 
 /// The placeholder template that classifies back to `root` in its own family.
-fn root_template((base, rest): &SnapshotRoot) -> String {
+pub(crate) fn root_template((base, rest): &SnapshotRoot) -> String {
     let leading = match base {
         Base::WinHome | Base::Home => "<home>",
         Base::WinDocuments => "<winDocuments>",
