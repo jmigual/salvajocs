@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use common::{
     MemorySecrets, env, env_with, harness, init_repo, init_repo_with, local_config, other_repo_dir,
-    replace_text, repo_dir, run_until, run_until_ready, save_config, shows,
+    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -23,7 +23,7 @@ fn fill(harness: &mut Harness<'static, App>, label: &str, text: &str) {
     let field = harness.get_by_label(label);
     field.focus();
     field.type_text(text);
-    harness.run();
+    run_settled(harness);
 }
 
 /// Waits until the saved config satisfies `ready`; saving is a background job.
@@ -46,7 +46,7 @@ fn open_settings(env: Env) -> Harness<'static, App> {
     let mut harness = harness(env);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::Settings);
-    harness.run();
+    run_settled(&mut harness);
     harness
 }
 
@@ -61,7 +61,7 @@ fn apply_new_location(harness: &mut Harness<'static, App>, env: &Env, repository
     harness.get_by_label("Create").click();
     run_until_saved(harness, env, |config| config.repository == repository);
     // The stage changes in the frame that adopts the repository and is drawn in the next one.
-    harness.run();
+    run_settled(harness);
 }
 
 #[test]
@@ -135,11 +135,11 @@ fn backend_option_marked_secret_not_written_to_config() {
     fill(&mut harness, "Location", &repository);
     fill(&mut harness, "Password", "pw-1");
     harness.get_by_label("Add option").click();
-    harness.run();
+    run_settled(&mut harness);
     fill(&mut harness, "Option 1 key", "access_key");
     fill(&mut harness, "Option 1 value", "hunter2");
     harness.get_by_label("secret").click();
-    harness.run();
+    run_settled(&mut harness);
     harness.get_by_label("Continue").click();
     run_until(&mut harness, "the confirmation", |h| {
         shows(h, "Create a new repository at")
@@ -231,7 +231,7 @@ fn unreadable_config_blocks_settings_and_is_left_alone() {
     std::fs::write(&path, "repository: [unclosed").unwrap();
     let mut harness = harness(env);
     harness.state_mut().set_tab(Tab::Settings);
-    harness.run();
+    run_settled(&mut harness);
 
     assert!(shows(&harness, "cannot be read"));
     assert!(!shows(&harness, "Location"), "no form can overwrite it");
@@ -271,7 +271,7 @@ fn applying_a_new_location_keeps_roots_added_since_the_form_was_built() {
 
     fill(&mut harness, "Root folder", "/games");
     harness.get_by_label("Add root").click();
-    harness.run();
+    run_settled(&mut harness);
     run_until_saved(&mut harness, &env, |config| config.roots.len() == 1);
 
     let other = other_repo_dir(&tmp);
@@ -330,7 +330,7 @@ fn choosing_a_repository_in_settings_clears_the_open_failure() {
         shows(h, "could not be opened")
     });
     harness.state_mut().set_tab(Tab::Settings);
-    harness.run();
+    run_settled(&mut harness);
 
     apply_new_location(&mut harness, &env, &other_repo_dir(&tmp));
 

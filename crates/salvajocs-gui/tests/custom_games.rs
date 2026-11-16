@@ -5,8 +5,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{
-    env, harness, init_repo, local_config, replace_text, repo_dir, run_until, run_until_ready,
-    save_config, shows,
+    env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
+    run_until_ready, save_config, shows,
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -49,7 +49,7 @@ fn open_tab(
     let mut harness = harness(env.clone());
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::CustomGames);
-    harness.run();
+    run_settled(&mut harness);
     (harness, env, tmp)
 }
 
@@ -142,7 +142,7 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
     let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
 
     harness.get_by_label("Add game").click();
-    harness.run();
+    run_settled(&mut harness);
     replace_text(&mut harness, "Name", "My Game");
     replace_text(&mut harness, "Files", "<winDocuments>/My Game/*.sav");
     replace_text(
@@ -152,11 +152,11 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
     );
     replace_text(&mut harness, "Wine prefix", "/prefixes/mygame");
     harness.get_by_label("Add pair").click();
-    harness.run();
+    run_settled(&mut harness);
     replace_text(&mut harness, "Linux 1", "<xdgData>/mygame");
     replace_text(&mut harness, "Windows 1", "<winDocuments>/My Game");
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
 
     let saved = run_until_saved(&mut harness, &env, |games| games.len() == 1);
     assert_eq!(
@@ -188,15 +188,15 @@ fn custom_games_pair_that_does_not_classify_shows_error_and_is_not_saved() {
     let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
 
     harness.get_by_label("Add game").click();
-    harness.run();
+    run_settled(&mut harness);
     replace_text(&mut harness, "Name", "My Game");
     harness.get_by_label("Add pair").click();
-    harness.run();
+    run_settled(&mut harness);
     // A Windows template on the Linux side.
     replace_text(&mut harness, "Linux 1", "<winAppData>/mygame");
     replace_text(&mut harness, "Windows 1", "<winAppData>/mygame");
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
 
     assert!(shows(&harness, "not a placeholder template"));
     assert!(shows(&harness, "Save game"), "the form stays open");
@@ -216,14 +216,14 @@ fn custom_games_empty_and_duplicate_names_are_rejected() {
     let (mut harness, _env, _tmp) = open_tab(vec![existing], &[]);
 
     harness.get_by_label("Add game").click();
-    harness.run();
+    run_settled(&mut harness);
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
     assert!(shows(&harness, "needs a name"));
 
     replace_text(&mut harness, "Name", "Taken");
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
     assert!(shows(&harness, "already a custom game named Taken"));
 }
 
@@ -234,13 +234,13 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     let (mut harness, env, _tmp) = open_tab(vec![game.clone(), other.clone()], &[]);
 
     first(&harness, "Edit").click();
-    harness.run();
+    run_settled(&mut harness);
     assert!(shows(&harness, "Edit custom game"));
     replace_text(&mut harness, "Name", "Renamed");
     harness.get_by_label("Remove pair").click();
-    harness.run();
+    run_settled(&mut harness);
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
 
     let saved = run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.name == "Renamed")
@@ -254,7 +254,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
 
     // Removing one game leaves the other as it was.
     first(&harness, "Remove").click();
-    harness.run();
+    run_settled(&mut harness);
     assert_eq!(
         run_until_saved(&mut harness, &env, |games| games.len() == 1),
         [other]
@@ -266,13 +266,13 @@ fn custom_games_removing_an_earlier_game_keeps_the_open_form_on_its_game() {
     let (mut harness, env, _tmp) = open_tab(vec![kept_rules_game(), dialog_game("Other")], &[]);
 
     harness.query_all_by_label("Edit").nth(1).unwrap().click();
-    harness.run();
+    run_settled(&mut harness);
     first(&harness, "Remove").click();
-    harness.run();
+    run_settled(&mut harness);
     assert!(shows(&harness, "Edit custom game"), "the form stays open");
     replace_text(&mut harness, "Name", "Moved");
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
 
     let saved = run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.name == "Moved")
@@ -293,14 +293,14 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
 
     assert!(shows(&harness, "Manifest Game (extends the manifest game)"));
     harness.get_by_label("Edit").click();
-    harness.run();
+    run_settled(&mut harness);
     assert_eq!(
         harness.get_by_label("Linux 1").value().as_deref(),
         Some("<xdgData>/Foo")
     );
     replace_text(&mut harness, "Windows 1", "<winLocalAppData>/Foo");
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
 
     let saved = run_until_saved(&mut harness, &env, |games| {
         games
@@ -310,17 +310,17 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     assert_eq!(saved[0].integration, Integration::Extend);
 
     harness.get_by_label("Edit").click();
-    harness.run();
+    run_settled(&mut harness);
     harness.get_by_label("Remove pair").click();
-    harness.run();
+    run_settled(&mut harness);
     harness.get_by_label("Save game").click();
-    harness.run();
+    run_settled(&mut harness);
     run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.pairs.is_empty())
     });
 
     harness.get_by_label("Remove").click();
-    harness.run();
+    run_settled(&mut harness);
     run_until_saved(&mut harness, &env, |games| games.is_empty());
     assert!(!shows(&harness, "Manifest Game"));
 }

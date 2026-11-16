@@ -119,7 +119,7 @@ pub fn replace_text(harness: &mut Harness<'static, App>, label: &str, text: &str
     field.focus();
     harness.key_combination_modifiers(Modifiers::COMMAND, &[Key::A]);
     harness.get_by_label(label).type_text(text);
-    harness.run();
+    run_settled(harness);
 }
 
 /// Drives the app the way eframe does, for as many frames as the test needs.
@@ -156,6 +156,18 @@ pub fn run_until(
             return;
         }
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Runs frames until the screen stops asking to be redrawn.
+///
+/// Unlike `run`, a job in flight (a config save, say) is waited out instead of panicking when
+/// it outlasts the step budget.
+pub fn run_settled(harness: &mut Harness<'static, App>) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while harness.run_ok().is_none() {
+        assert!(Instant::now() < deadline, "timed out waiting to settle");
         std::thread::sleep(Duration::from_millis(5));
     }
 }
