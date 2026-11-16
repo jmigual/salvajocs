@@ -218,7 +218,8 @@ fn component_matches(want: &str, got: &str, windows: bool) -> bool {
     };
     match want.split_once("<osUserName>") {
         Some((pre, post)) => {
-            got.len() > pre.len() + post.len()
+            layout::is_plain_component(got)
+                && got.len() > pre.len() + post.len()
                 && got.get(..pre.len()).is_some_and(|got| same(got, pre))
                 && got
                     .get(got.len() - post.len()..)

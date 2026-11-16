@@ -764,3 +764,41 @@ fn linux_snapshot_restored_into_proton_build() {
     );
     assert!(plan.cross_build);
 }
+
+#[test]
+fn snapshot_registry_keys_do_not_declare_themselves() {
+    // `prepare` reads the staged keys for the PlayerPrefs note; they must not pass the filter.
+    let mut staged = staged(
+        &[(Base::XdgConfig, "unity3d/Co/Game")],
+        &[(Base::XdgConfig, "unity3d/Co/Game/save.dat")],
+    );
+    staged.registry = Some(registry(&["Software\\Game", "Software\\Evil"]));
+    let entry = declaring(&["HKEY_CURRENT_USER/Software/Game"]);
+    let plan = prepare(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        plan.registry,
+        Some((registry(&["Software\\Game"]), native_win()))
+    );
+    assert_eq!(plan.skipped, undeclared(&["Software\\Evil"]));
+}
+
+#[test]
+fn os_user_name_does_not_match_dot_dot() {
+    let staged = staged(
+        &[(Base::XdgData, "<osUserName>/Game")],
+        &[(Base::XdgData, "../Game/s.sav")],
+    );
+    let plan = plan(&staged, &linux_only(), &vars(), None, &[]).unwrap();
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::OutsideRoots]
+    );
+}
