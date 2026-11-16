@@ -651,6 +651,32 @@ fn failed_write_leaves_no_temp_file() {
     assert_eq!(read(&inside), "keep");
 }
 
+#[cfg(unix)]
+#[test]
+fn unreadable_user_reg_blocks_the_restore() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let user_reg = f.prefix.join("user.reg");
+    fs::set_permissions(&user_reg, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&user_reg).is_ok() {
+        fs::set_permissions(&user_reg, fs::Permissions::from_mode(0o644)).unwrap();
+        return;
+    }
+    let plan = plan_of(vec![], Some((foo_registry("new"), f.ctx())));
+
+    let result = f.run(&plan, false);
+    fs::set_permissions(&user_reg, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        matches!(result, Err(RunError::SafetyBackup(_))),
+        "{result:?}"
+    );
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("old"));
+    assert!(f.storage.snapshots("salvajocs").unwrap().is_empty());
+}
+
 #[test]
 fn prefix_without_user_reg_still_restores_files() {
     let mut f = fixture();
