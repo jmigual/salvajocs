@@ -19,7 +19,8 @@ impl TestKey {
             .map_or(0, |d| d.as_nanos());
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         TestKey {
-            relative: format!("Software\\salvajocs-test-{}-{nanos}-{n}", process::id()),
+            // Spelled `SOFTWARE`, as Windows stores it: exports use the stored spelling.
+            relative: format!("SOFTWARE\\salvajocs-test-{}-{nanos}-{n}", process::id()),
         }
     }
 
