@@ -412,6 +412,8 @@ Dependency graph:
     before the repository is opened.
   - Settings: the backend widget, the repo's compression (read and change), password mode and the
     roots list.
+  - Settings: when the repository location changes, offer to delete the old location's keyring
+    entries (`secret::delete` with the old `AppConfig::secret_scope`).
   - Manifest load and refresh in a `Job` on start, with a banner on failure.
 - **Accept:** `cargo test -p salvajocs-gui`:
   - `smoke_renders_every_tab`;

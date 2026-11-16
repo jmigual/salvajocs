@@ -30,7 +30,14 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   Compression is **not** stored here: it lives in the repository config (ADR-0003).
 - **Generic backend UI:**
   - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone" and
-    "OpenDAL service" (a dropdown of the services rustic_backend builds for this OS).
+    "OpenDAL service" (a dropdown of the services rustic_backend builds for this OS, minus the
+    four below).
+  - Hidden services, because each is a trap in a backup picker (`config::tests` compares the
+    list with opendal's registry):
+    - `memory`: data vanishes when the process exits;
+    - `http`: read-only;
+    - `ghac`: works only inside GitHub Actions;
+    - `fs`: duplicates "Local folder".
   - Then the location string and a key/value list for options. No per-service forms.
   - Any option can be ticked "secret". Its value then goes to the keyring and the config keeps
     only the key.
@@ -47,10 +54,15 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `WrongPassword` → inline error.
   - `Error` (network, auth, …) → shown as is, never treated as missing.
 - **Secrets:** "remember" stores the password in the OS credential store under service
-  `salvajocs`, account = repository string. Secret options use account `<repository>#<key>`.
+  `salvajocs`. The account is the scope plus, for a secret option, `#<key>`. The scope
+  (`AppConfig::secret_scope`) is JSON of the repository string and its sorted non-secret
+  options, so two buckets on one service (`opendal:s3`) keep separate passwords and a `#` in a
+  path cannot collide. Editing a non-secret option changes the scope, so the old entries are
+  orphaned; Settings offers to delete them.
   Otherwise they are asked once per session and held in memory. If the store fails, the app
-  falls back to asking. At startup, `config::missing_secrets` lists the password and every
-  secret option not found in the keyring. The GUI prompts for exactly those before opening the
+  falls back to asking. The Windows store rejects values over 2560 bytes; `SecretError::TooLong`
+  marks that case and the caller treats the secret as "ask every session". At startup,
+  `config::missing_secrets` lists the password and every secret option not found in the keyring. The GUI prompts for exactly those before opening the
   repository.
 - **Keyring crates (verified in step 8):** `keyring-core` 1.x plus one store crate per OS, each
   behind a target `cfg`. The `keyring` crate is not used: its `v1` feature pulls the zbus
