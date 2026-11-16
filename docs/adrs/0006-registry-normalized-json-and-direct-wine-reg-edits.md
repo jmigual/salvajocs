@@ -6,11 +6,11 @@
 ## Context
 
 Manifest registry keys look like `HKEY_CURRENT_USER/Software/Foo`; a key means the key and all of
-its subkeys (research.md §1). On Windows, the live registry is reached through the `winreg` crate.
-In a Wine prefix, `user.reg` holds HKCU and `system.reg` holds HKLM, in Wine's text format
-(research.md §5). wineserver keeps the registry in memory and saves it every 30 s and on exit. A
-file edited while it runs is overwritten. Ludusavi backs up whole `*.reg` files for Proton, which
-cannot restore to Windows.
+its subkeys (research.md §1). On Windows, the live registry is reached through the
+`windows-registry` crate. In a Wine prefix, `user.reg` holds HKCU and `system.reg` holds HKLM, in
+Wine's text format (research.md §5). wineserver keeps the registry in memory and saves it every
+30 s and on exit. A file edited while it runs is overwritten. Ludusavi backs up whole `*.reg` files
+for Proton, which cannot restore to Windows.
 
 ## Decision
 
@@ -27,7 +27,14 @@ cannot restore to Windows.
   the manifest cache.
 - **Scope v1:** HKCU only. HKLM manifest keys are skipped with a warning (writing them needs admin
   on Windows).
-- **Windows:** `winreg` reads and writes the subtree (`cfg(windows)` module).
+- **Windows:** `windows-registry` 0.6.1 reads and writes the subtree (`cfg(windows)` module).
+  Each exported key is spelled as the registry stores it. Replace deletes every subtree before
+  writing, so it is not atomic; restore backs up the current state first (plan step 15).
+  `winreg` 0.56 was rejected: its `RegType` is a closed enum and `get_raw_value` fails on type
+  codes above 11, so `RegData::Other` could not round-trip. `windows-registry` 0.100 needs Rust
+  1.95, above the workspace's 1.91, hence 0.6.1. Its `set_bytes` debug-asserts terminated data for
+  `String`/`ExpandString`/`MultiString`, so `Other` values are written as `Type::Other(code)`: an
+  empty `REG_SZ` from Wine's `hex(1):` is valid data.
 - **Wine:** the program parses and writes `user.reg` directly. The parser keeps the header and
   every untouched key block verbatim. On restore each backed-up key's subtree is replaced: the old
   subtree is deleted and the captured keys are written with a fresh timestamp. The file is written
