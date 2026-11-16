@@ -215,7 +215,7 @@ fn non_canonical_values_are_kept_as_other() {
         ("odd", 1, &[b'a', 0, 0, 0, 7]),
         ("empty", 1, &[]),
         ("one byte", 2, &[0]),
-        ("trailing", 7, &[b'a', 0, 0, 0, b'b', 0, 0, 0, 0, 0]),
+        ("trailing", 7, &[b'a', 0, 0, 0, 0, 0, b'b', 0, 0, 0, 0, 0]),
         ("high type", 100, &[1, 2, 3]),
     ];
     for (name, code, bytes) in cases {
