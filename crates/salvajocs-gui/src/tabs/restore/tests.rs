@@ -103,9 +103,10 @@ fn listing_waits_for_the_manifest_to_load() {
     assert!(is_disabled(&harness, "Load backups"));
 }
 
-/// A fetched game with no files and no targets.
-fn fetched() -> Arc<Fetched> {
+/// A fetched game from `storage` with no files and no targets.
+fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
     Arc::new(Fetched {
+        storage: storage.clone(),
         title: "Mix".into(),
         staged: StagedGame {
             root: PathBuf::from("/staged"),
@@ -132,8 +133,8 @@ fn unknown_root() -> SnapshotRoot {
     (Base::WinAppData, "Mix".into())
 }
 
-/// The tab with the mapping dialog open over one unknown root.
-fn with_dialog() -> RestoreTab {
+/// The tab with the mapping dialog open over one unknown root of a game from `storage`.
+fn with_dialog(storage: &SharedStorage) -> RestoreTab {
     let entry = MappingEntry {
         root: unknown_root(),
         files: 1,
@@ -143,17 +144,22 @@ fn with_dialog() -> RestoreTab {
         notes: Vec::new(),
     };
     RestoreTab {
-        mapping: Some((fetched(), Dialog::new(vec![entry]))),
+        mapping: Some((fetched(storage), Dialog::new(vec![entry]))),
         ..RestoreTab::default()
     }
 }
 
 /// A confirm job that hands back a plan for the unknown root once `hold` is released.
-fn confirm_job(ctx: &egui::Context, hold: mpsc::Receiver<()>) -> Job<Prepared> {
+fn confirm_job(
+    ctx: &egui::Context,
+    hold: mpsc::Receiver<()>,
+    storage: &SharedStorage,
+) -> Job<Prepared> {
+    let fetched = fetched(storage);
     Job::spawn(ctx, move || {
         let _ = hold.recv();
         Ok(Prepared {
-            fetched: fetched(),
+            fetched,
             choices: vec![(unknown_root(), Choice::Template("<xdgData>/Mix".into()))],
             plan: Ok(RestorePlan {
                 writes: Vec::new(),
@@ -168,11 +174,15 @@ fn confirm_job(ctx: &egui::Context, hold: mpsc::Receiver<()>) -> Job<Prepared> {
 
 type TabHarness = Harness<'static, (RestoreTab, State)>;
 
-fn tab_harness(dir: &Path, tab: RestoreTab) -> TabHarness {
-    Harness::new_ui_state(
-        |ui, (tab, state)| tab.ui(ui, state, false),
-        (tab, state(dir)),
-    )
+/// The tab built by `tab` over the open repository of a state in `dir`.
+fn tab_harness(dir: &Path, tab: impl FnOnce(&SharedStorage) -> RestoreTab) -> TabHarness {
+    let state = state(dir);
+    let tab = tab(&state.session.as_ref().unwrap().storage);
+    Harness::new_ui_state(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state))
+}
+
+fn storage(harness: &TabHarness) -> SharedStorage {
+    harness.state().1.session.as_ref().unwrap().storage.clone()
 }
 
 /// Runs frames until the tab's preview or confirm job is done.
@@ -188,9 +198,9 @@ fn run_until_prepared(harness: &mut TabHarness) {
 #[test]
 fn the_dialog_waits_while_its_confirm_runs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = tab_harness(dir.path(), with_dialog());
+    let mut harness = tab_harness(dir.path(), with_dialog);
     let (release, hold) = mpsc::channel();
-    let job = confirm_job(&harness.ctx.clone(), hold);
+    let job = confirm_job(&harness.ctx.clone(), hold, &storage(&harness));
     harness.state_mut().0.preparing = Some((0, job));
     harness.step();
     harness.step();
@@ -204,9 +214,9 @@ fn the_dialog_waits_while_its_confirm_runs() {
 /// Cancel or a change of targets does.
 fn confirm(close: bool) -> (RestoreTab, State) {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = tab_harness(dir.path(), with_dialog());
+    let mut harness = tab_harness(dir.path(), with_dialog);
     let (release, hold) = mpsc::channel();
-    let job = confirm_job(&harness.ctx.clone(), hold);
+    let job = confirm_job(&harness.ctx.clone(), hold, &storage(&harness));
     harness.state_mut().0.preparing = Some((0, job));
     harness.step();
     if close {
@@ -229,4 +239,32 @@ fn a_confirm_ending_after_the_dialog_closed_is_dropped() {
     assert!(tab.mapping.is_none());
     let games = &state.config.as_ref().unwrap().custom_games;
     assert!(games.is_empty(), "nothing is saved: {games:?}");
+}
+
+#[test]
+fn a_new_repository_clears_the_list_and_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        repository: Some(storage.clone()),
+        games: vec![GameBackups {
+            slug: "mix".into(),
+            title: "Mix".into(),
+            snapshots: Vec::new(),
+            default: None,
+        }],
+        selected: Some("mix".into()),
+        ..with_dialog(storage)
+    });
+    harness.step();
+    assert_eq!(harness.state().0.games.len(), 1);
+
+    // Settings opens another repository.
+    let other = tempfile::tempdir().unwrap();
+    harness.state_mut().1.session = state(other.path()).session;
+    harness.step();
+
+    let tab = &harness.state().0;
+    assert!(tab.games.is_empty());
+    assert!(tab.selected.is_none());
+    assert!(tab.mapping.is_none());
 }

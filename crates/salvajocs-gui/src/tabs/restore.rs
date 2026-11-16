@@ -22,7 +22,7 @@ use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
-use crate::state::{State, lock_storage};
+use crate::state::{SharedStorage, State, lock_storage};
 
 mod mapping;
 
@@ -164,6 +164,8 @@ impl TargetPick {
 
 /// A fetched snapshot and what `restore::prepare` needs besides the user's choices.
 struct Fetched {
+    /// The repository the snapshot came from, which the safety backup goes into.
+    storage: SharedStorage,
     title: String,
     staged: StagedGame,
     targets: Targets,
@@ -216,6 +218,8 @@ struct Restored {
 /// The state of the Restore tab.
 #[derive(Default)]
 pub struct RestoreTab {
+    /// The repository the list came from.
+    repository: Option<SharedStorage>,
     listing: Option<Job<Vec<GameBackups>>>,
     games: Vec<GameBackups>,
     /// The slug of the chosen game.
@@ -242,6 +246,13 @@ impl RestoreTab {
     /// Draws the tab. Listing, fetching, planning and restoring run in jobs; the mapping dialog's
     /// choices are saved to the config. `manifest_loading` is whether the manifest job runs.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
+        // The list and plan of a repository Settings replaced are dropped, jobs included.
+        let current = state.session.as_ref().map(|session| &session.storage);
+        if (self.repository.as_ref())
+            .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
+        {
+            *self = Self::default();
+        }
         self.poll(ui.ctx(), state);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Restore");
@@ -381,6 +392,7 @@ impl RestoreTab {
             return;
         };
         let storage = session.storage.clone();
+        self.repository = Some(storage.clone());
         self.selected = None;
         self.pick = None;
         self.listing = Some(Job::spawn(ctx, move || {
@@ -516,6 +528,7 @@ impl RestoreTab {
             } = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
+                storage,
                 vars: restore::game_vars(&title, entry.as_ref(), &config, &environment),
                 title,
                 staged,
@@ -656,12 +669,12 @@ impl RestoreTab {
 
     /// Runs the previewed plan behind a safety backup staged in its own dir under the cache dir.
     fn start_restore(&mut self, ctx: &egui::Context, state: &State) {
-        let (Some(session), Some(preview)) = (&state.session, &self.preview) else {
+        let Some(preview) = &self.preview else {
             return;
         };
         self.error = None;
         self.restored = None;
-        let (storage, plan) = (session.storage.clone(), preview.plan.clone());
+        let (storage, plan) = (preview.fetched.storage.clone(), preview.plan.clone());
         let title = preview.fetched.title.clone();
         let stage_root = state.env.cache_dir.join("restore-stage");
         self.restoring = Some(Job::spawn(ctx, move || {
