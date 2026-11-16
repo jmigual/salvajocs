@@ -40,6 +40,10 @@ throwaway program built against them in the scratchpad:
   index was loaded after the parent snapshot was written. In the spike, a second backup on the
   same in-memory index saved a duplicate; after reopening and reindexing it was skipped. The
   in-memory index is not updated by `backup`.
+  - On Windows the scan reads the directory listing's cached metadata, which can lag a
+    just-written subdirectory's mtime (Windows CI: 5 of 20 rounds). rustic hashes directory
+    mtimes, so the unchanged second backup wrote a snapshot. `backup_dir` therefore waits,
+    bounded to 1 s, until each entry's listed mtime equals its own, before it scans.
 - **Backends (rustic_backend):** a repository string plus a `BTreeMap<String, String>` of
   options (`BackendOptions { repository, options, .. }.to_backends()`).
   - Plain path or `local:` → local filesystem.
