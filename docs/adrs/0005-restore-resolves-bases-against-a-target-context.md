@@ -40,6 +40,8 @@ configured roots (research.md §2).
   of one of the game's declared templates: the entry's file templates (manifest merged with the
   custom game), a side of one of its saved pairs, or an engine-rule target of those. "Below"
   keeps a pre-restore snapshot of a mapped root (pair side plus a subdirectory) restorable.
+  An empty-rest prefix from a globbed template (`<base>/*.sav`) trusts only files whose tail
+  matches that template's glob.
   Only files under a trusted root and registry keys under the keys the entry declares
   are restored; anything else is skipped with a reason, and without an entry nothing is.
   A pre-restore snapshot whose roots came from a per-file override (`Absolute`/`WinAbsolute`)
