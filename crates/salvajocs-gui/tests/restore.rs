@@ -9,8 +9,9 @@ use common::{
     env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
     run_until_ready, save_config, shows,
 };
+use eframe::egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::layout::{Base, Context, LinuxFolders};
@@ -154,6 +155,20 @@ fn preview(harness: &mut Harness<'static, App>) {
     });
 }
 
+/// Like `shows`, but `\` counts as `/`: on Windows a path joined from `/`-separated parts
+/// shows both separators.
+fn shows_path(harness: &Harness<'static, App>, text: &str) -> bool {
+    let want = text.replace('\\', "/");
+    let shown = |node: &AccessKitNode<'_>| {
+        let label = match node.role() {
+            Role::Label => node.value(),
+            _ => node.label(),
+        };
+        label.is_some_and(|label| label.replace('\\', "/").contains(&want))
+    };
+    harness.query_all(by().predicate(shown)).next().is_some()
+}
+
 fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
@@ -262,7 +277,7 @@ fn restore_preview_lists_writes_and_skips() {
 
     assert!(shows(&harness, "Files to write (2)"));
     let target = saves.join("save.dat");
-    assert!(shows(
+    assert!(shows_path(
         &harness,
         &format!("WinAppData/Alpha/save.dat -> {}", target.display())
     ));
@@ -306,8 +321,11 @@ fn restore_fetch_preview_restore_reports() {
 
     assert!(shows(&harness, "Safety backup: snapshot"));
     let target = saves.join("save.dat");
-    assert!(shows(&harness, &format!("{}: restored", target.display())));
-    assert!(shows(
+    assert!(shows_path(
+        &harness,
+        &format!("{}: restored", target.display())
+    ));
+    assert!(shows_path(
         &harness,
         &format!("{}: restored", saves.join("slot2.dat").display())
     ));
@@ -340,15 +358,15 @@ fn restore_preview_per_file_override_changes_one_write() {
     );
     click(&mut harness, "Override 1");
 
-    assert!(shows(
+    assert!(shows_path(
         &harness,
         &format!("-> {} (overridden for this restore)", elsewhere.display())
     ));
-    assert!(!shows(
+    assert!(!shows_path(
         &harness,
         &saves.join("save.dat").display().to_string()
     ));
-    assert!(shows(
+    assert!(shows_path(
         &harness,
         &saves.join("slot2.dat").display().to_string()
     ));
@@ -383,7 +401,7 @@ fn restore_engine_rule_mapping_needs_no_dialog() {
 
     assert!(!shows(&harness, "Where should the saves"));
     let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows(&harness, &format!("-> {}", target.display())));
+    assert!(shows_path(&harness, &format!("-> {}", target.display())));
     assert!(shows(&harness, "Cross-build restore"));
 }
 
@@ -400,15 +418,15 @@ fn restore_prefix_found_but_user_picks_native_linux_mapping() {
 
     // The found prefix is the default, next to the native build.
     preview(&mut harness);
-    assert!(shows(&harness, &format!("-> {}", in_prefix.display())));
+    assert!(shows_path(&harness, &format!("-> {}", in_prefix.display())));
     assert!(!shows(&harness, "Cross-build restore"));
 
     click(&mut harness, "Windows build in a Wine/Proton prefix");
     preview(&mut harness);
 
     let native = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows(&harness, &format!("-> {}", native.display())));
-    assert!(!shows(&harness, &in_prefix.display().to_string()));
+    assert!(shows_path(&harness, &format!("-> {}", native.display())));
+    assert!(!shows_path(&harness, &in_prefix.display().to_string()));
     assert!(shows(&harness, "Cross-build restore"));
 }
 
@@ -435,7 +453,7 @@ fn restore_cross_build_warning_shown() {
         &prefix,
         "drive_c/users/steamuser/AppData/Roaming/Pairy/save.dat",
     );
-    assert!(shows(&harness, &format!("-> {}", target.display())));
+    assert!(shows_path(&harness, &format!("-> {}", target.display())));
 }
 
 #[test]
@@ -480,7 +498,7 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
 
     assert!(!shows(&harness, "Where should the saves"));
     let target = under(&home(&tmp), ".local/share/Mix/a.sav");
-    assert!(shows(&harness, &format!("-> {}", target.display())));
+    assert!(shows_path(&harness, &format!("-> {}", target.display())));
     let games = run_until_saved(&mut harness, &env, |games| {
         games.iter().any(|game| !game.pairs.is_empty())
     });
