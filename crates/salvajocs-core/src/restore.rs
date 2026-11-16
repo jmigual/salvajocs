@@ -13,6 +13,10 @@ use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Pair, RegistryRule};
 use crate::registry::RegistryExport;
 
+mod run;
+
+pub use run::{GameBackups, PRE_RESTORE_TAG, default_targets, list};
+
 /// A snapshot of one game restored into a work dir (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagedGame {
