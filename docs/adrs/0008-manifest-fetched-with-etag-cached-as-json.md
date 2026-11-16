@@ -26,17 +26,22 @@ in a release build:
 - The default budget **fails**: "budget breached: Nodes { nodes: 250001 }" at line 117 139.
 - With the budget disabled (`Options.budget = None`), the full file parses in about 1.6 s.
 
-`reqwest` (blocking, rustls) is already in the dependency tree through rustic_backend's `rest`
-feature (ADR-0003).
+rustic_backend's `rest` feature (ADR-0003) pulls in `reqwest` (blocking, rustls). It is not a
+dependency yet; once added, the two builds unify.
 
 ## Decision
 
 - **Fetch:** `reqwest` blocking client, run inside a GUI `Job`, with `If-None-Match` from a
-  stored ETag. Its `gzip` feature is enabled in our dependency. The exact reqwest 0.13 feature
-  names are to verify in plan step 9. A separate HTTP crate (ureq) is not added.
+  stored ETag and a 300 s request timeout. The root `Cargo.toml` entry has
+  `default-features = false`; `salvajocs-core` enables `blocking`, `gzip` and `rustls` (verified
+  against reqwest 0.13.5, a subset of rustic_backend's features plus `gzip`). The server sends
+  `content-encoding: gzip` and a weak ETag, and revalidation with it returns 304. A separate
+  HTTP crate (ureq) is not added.
 - **Parse:** `serde-saphyr` with the budget's limits raised above the manifest's real size, with
-  headroom. Alias and anchor limits stay. The values are measured in plan step 9. The typed
-  subset ignores unknown fields:
+  headroom. Alias and anchor limits stay. Measured in plan step 9 on the 17.8 MB manifest, it
+  needs about 1.9 M nodes and 2.6 M events. `BUDGET_LIMIT` stays at 64 Mi for both: it is a
+  sanity bound, the source is trusted, and the headroom avoids breaking when the manifest grows.
+  The typed subset ignores unknown fields:
   - `files: {template: {tags, when: [{os, store}]}}`
   - `registry: {key: {tags, when: [{store}]}}`
   - `installDir: {name: {}}`

@@ -222,10 +222,10 @@ Dependency graph:
 - **Files:** `core/src/manifest/fetch.rs`, `core/src/manifest/fetch/tests.rs`.
 - **Content:** `refresh(cache_dir) -> Result<Freshness::{NotModified, Updated}>` with ETag and
   gzip through `reqwest` blocking; `load_cached(cache_dir)`.
-- **Verify here:**
-  - the reqwest 0.13 feature names (`blocking`, rustls, `gzip`);
+- **Verified here (recorded in ADR-0008):**
+  - the reqwest 0.13 feature names (`blocking`, `rustls`, `gzip`);
   - the serde-saphyr budget limits needed for the full manifest (the default fails at 250 001
-    nodes), recorded in ADR-0008.
+    nodes): about 1.9 M nodes and 2.6 M events.
 - **Accept:**
   - `cargo test -p salvajocs-core fetch`: cache and ETag file handling, no network.
   - `#[ignore]` real download: asserts > 10 000 games parsed and a second call returns
