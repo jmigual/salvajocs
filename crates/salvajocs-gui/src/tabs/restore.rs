@@ -659,7 +659,21 @@ impl RestoreTab {
                 ui.weak(format!("{item}: {}", skipped.reason));
             }
         }
-        let ready = !busy && state.session.is_some();
+        // Typed text that is not the write's target would be silently ignored by the restore.
+        let unapplied =
+            (preview.overrides.iter().zip(&preview.plan.writes)).position(|(text, write)| {
+                !text.trim().is_empty() && Path::new(text.trim()) != write.target
+            });
+        if let Some(index) = unapplied {
+            let number = index + 1;
+            ui.colored_label(
+                Color32::LIGHT_RED,
+                format!(
+                    "Override target {number} is not applied: click Override {number} or clear it."
+                ),
+            );
+        }
+        let ready = !busy && state.session.is_some() && unapplied.is_none();
         if ui
             .add_enabled(ready, egui::Button::new("Restore files"))
             .clicked()

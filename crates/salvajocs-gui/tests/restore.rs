@@ -419,6 +419,27 @@ fn restore_preview_per_file_override_changes_one_write() {
 }
 
 #[test]
+fn restore_waits_for_a_typed_override_to_be_applied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+
+    replace_text(
+        &mut harness,
+        "Override target 1",
+        elsewhere.to_str().unwrap(),
+    );
+    assert!(disabled(&harness, "Restore files"));
+    assert!(shows(&harness, "Override target 1 is not applied"));
+
+    click(&mut harness, "Override 1");
+    assert!(!disabled(&harness, "Restore files"));
+    assert!(!shows(&harness, "is not applied"));
+}
+
+#[test]
 fn restore_override_with_a_relative_path_shows_error() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, _env, _) = alpha(&tmp);
