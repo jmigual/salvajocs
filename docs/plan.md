@@ -254,7 +254,8 @@ Dependency graph:
     context, the Steam roots and the prefixes, built by `Environment::detect()` and
     constructible in tests.
   - `GameScan { title, files: Vec<FoundFile{base, tail, real, size}>, roots: Vec<(Base,
-    String)>, registry_keys }`. `roots` holds the glob-free prefixes of templates that matched.
+    String)>, registry_keys }`. `roots` holds the glob-free prefixes of templates that
+    matched, as raw template text (a `<game>` template keeps `<game>` in `roots`).
     `registry_keys` is the manifest's applicable HKCU list, not checked against the registry.
   - Prefix priority and first-wins per logical path (ADR-0007). Dedupe by real path. Patterns
     come from `layout::expand`; each match's tail is `tail_of(match, base dir)` with the base dir
@@ -268,7 +269,8 @@ Dependency graph:
   - `same_file_from_two_templates_listed_once`;
   - `game_specific_prefix_beats_wine_prefix_root`;
   - `prefix_scan_matches_case_insensitively`;
-  - `roots_record_glob_free_prefixes`.
+  - `roots_record_glob_free_prefixes` (also asserts a `<game>` template keeps `<game>` in
+    `roots`).
 
 ## 12. Backup (depends on 4, 6, 10, 11)
 
@@ -345,6 +347,12 @@ Dependency graph:
     &[(root, Choice)]) -> Result<RestorePlan, PrepareError>`. This is the one call the GUI
     makes: it runs `crossbuild::propose`, `resolve` and `plan`, and returns
     `NeedsMapping(Vec<MappingEntry>)` while choices are missing (ADR-0011).
+    - `SnapshotMeta.roots` are raw glob-free template prefixes (`<game>` etc. unsubstituted), and
+      so are the proposed targets. `prepare`/`plan` substitute `GameVars` into the root's rest
+      to match file tails and into the resolved target.
+    - `prepare` fills `MappingEntry.files` from `StagedGame.files` (`propose` leaves 0).
+    - `prepare` adds the Unity PlayerPrefs note when `StagedGame.registry` has the matching
+      HKCU key (`propose` only checks the manifest entry; ADR-0011's "or registry.json").
   - `RestorePlan::override_target(index, PathBuf) -> Result<()>`: per-file override for this
     restore only; the path must be absolute (ADR-0005).
 - **Accept:** `cargo test -p salvajocs-core restore::tests`:
