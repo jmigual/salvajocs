@@ -562,18 +562,18 @@ Dependency graph:
 - **Goal:**
   - games from snapshots, with a snapshot picker (time in UTC, host, "pre-restore" label)
     starting at `GameBackups.default`; with none (every snapshot is `pre-restore`) the user
-    must choose one before Preview;
-    "Load backups" runs `restore::list` in a `Job` (manual, like the scan) and runs again after
-    a restore, so the new safety backup shows;
+    must choose one before Preview. "Load backups" runs `restore::list` in a `Job` (manual, like the scan) and runs again after
+    a restore, so the new safety backup shows. A repository switch in Settings clears the
+    list and the plan;
   - targets preselected from `restore::default_targets`, computed in a `Job` when a game is
     chosen (disabled while the manifest loads). On Linux two checkboxes, "Native Linux build"
     and "Windows build in a Wine/Proton prefix" with a prefix field and folder picker, map onto
     `Targets { linux, win }`; both checked restores each family into its own target. The
     prefix's Wine user is read in the preview job. A Windows host shows no control;
-  - "Preview" runs one `Job`: `fetch` into a fresh `<cache>/restore-work`, the entry merged with
-    the custom game (`manifest::merge_custom`), the custom game's pairs and skips,
-    `restore::game_vars` (added to core in this step: a game's `GameVars` built as the scan
-    builds them), then `restore::prepare`;
+  - "Preview" runs one `Job`: `fetch` into a fresh `<cache>/restore-work/<pid>` (read-only
+    dirs left by the last fetch are made writable before it is cleared, links not followed),
+    `restore::game_info` (the entry merged with the custom game, its pairs and skips) and
+    `restore::game_vars` (both added to core in this step), then `restore::prepare`;
   - engine-rule and auto-pair mappings need no dialog; they go straight to the preview;
   - only on `NeedsMapping` (at least one unknown root), the mapping dialog: one row per root of
     the game with source path (`crossbuild::root_template`), file count, proposal, confidence,
@@ -581,30 +581,35 @@ Dependency graph:
     are prefilled and editable; unknown ones start empty. Free text must be a placeholder
     template; `prepare`'s `Unclassifiable` error is shown inline on its row. When the saves
     are mapped onto native Linux (no Windows target), "Restore into a Wine prefix instead"
-    closes the dialog and switches the build checkboxes to the prefix (ADR-0005).
+    closes the dialog and switches the build checkboxes to the prefix (ADR-0005). The dialog's
+    buttons wait while its confirm runs, and errors show inside it.
   - confirm calls `restore::prepare` again in a `Job` with a choice for every row; only when it
     returns a plan are all of the game's roots saved via `crossbuild::apply_choices` and
-    `State::save_config` (an open Custom games form then reports `Changed`);
+    `State::save_config` (an open Custom games form then reports `Changed`). A plan that
+    arrives after the dialog closed or the targets changed is dropped;
   - a plan preview with writes (`<Base>/<tail> -> target`), skips with reasons, the registry
     target, the cross-build warning and `RestorePlan.notes`. Writes to `Absolute`/`WinAbsolute`
     targets are flagged. Each write's target can be overridden for this restore
     (`RestorePlan::override_target`; a refusal shows on the row). Any change of game, snapshot
-    or targets drops the plan and the dialog;
-  - "Restore files" runs `restore::run` in a `Job` with `prefix::wineserver_running()` and the
-    safety backup staged in `<cache>/restore-stage` (not the backup mirror `<cache>/stage`).
+    or targets drops the plan and the dialog. "Restore files" waits while a typed override is
+    not applied;
+  - "Restore files" runs `restore::run` in a `Job` on the repository the snapshot came from,
+    with `prefix::wineserver_running()` and the safety backup staged in
+    `<cache>/restore-stage/<pid>` (not the backup mirror `<cache>/stage`).
     The report shows the safety backup (created, unchanged, none needed) and each write's and
     the registry's result; `RunError::WineserverRunning` asks to close the game and Wine first
     and keeps the plan. Every action waits while a job of the tab runs.
   - `Env.environment` (`None` detects it in the job) lets tests point scans and restores at a
     temp home; the Backup tab uses it too.
 - **Files:** `gui/src/tabs/restore.rs` (+ `restore/tests.rs`), `gui/src/tabs/restore/mapping.rs`,
-  `gui/tests/restore.rs`; `core/src/restore/run.rs` (`game_vars`).
+  `gui/tests/restore.rs`; `core/src/restore/run.rs` (`game_info`, `game_vars`).
 - **Accept:** `cargo test -p salvajocs-gui restore`:
   - `restore_preview_lists_writes_and_skips`;
   - `restore_only_safety_backups_preselect_no_snapshot`;
   - `restore_apply_disabled_until_plan_loaded`;
   - `restore_fetch_preview_restore_reports` (temp repo: fetch, preview, restore over an
-    existing file, report with a created safety backup);
+    existing file, report with a created safety backup; the reloaded picker offers the
+    safety backup);
   - `restore_engine_rule_mapping_needs_no_dialog` (a Unity snapshot goes straight to the
     preview, with the cross-build warning and the PlayerPrefs note);
   - `restore_mapping_dialog_prefills_known_roots_and_blocks_unknown` (dialog shown only with an
@@ -618,9 +623,17 @@ Dependency graph:
   - `restore_typed_template_that_does_not_classify_shows_error`;
   - `restore_preview_per_file_override_changes_one_write`;
   - `restore_override_with_a_relative_path_shows_error`;
+  - `restore_waits_for_a_typed_override_to_be_applied`;
+  - `restore_preview_flags_an_absolute_target` (Unix);
   - unit tests: `times_show_as_utc_dates`, `a_running_wineserver_asks_to_close_wine`,
-    `listing_waits_while_a_job_runs`, `listing_waits_for_the_manifest_to_load`;
-  - core: `game_vars_finds_the_install_dir_under_steam_and_configured_roots`.
+    `listing_waits_while_a_job_runs`, `listing_waits_for_the_manifest_to_load`,
+    `the_dialog_waits_while_its_confirm_runs`,
+    `a_confirm_ending_after_the_dialog_closed_is_dropped`,
+    `a_new_repository_clears_the_list_and_the_plan`,
+    `clearing_the_work_dir_removes_read_only_dirs_without_following_links` (Unix),
+    `the_plan_stays_when_a_wineserver_blocks_the_restore`;
+  - core: `game_info_merges_the_custom_game_and_takes_its_pairs_and_skips`,
+    `game_vars_finds_the_install_dir_under_steam_and_configured_roots`.
 
 ## 19. GUI Custom games editor (depends on 16)
 
