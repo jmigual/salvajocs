@@ -42,8 +42,9 @@ throwaway program built against them in the scratchpad:
   in-memory index is not updated by `backup`.
   - On Windows the scan reads the directory listing's cached metadata, which can lag a
     just-written subdirectory's mtime (Windows CI: 5 of 20 rounds). rustic hashes directory
-    mtimes, so the unchanged second backup wrote a snapshot. `backup_dir` therefore waits,
-    bounded to 1 s, until each entry's listed mtime equals its own, before it scans.
+    mtimes, so the unchanged second backup wrote a snapshot. `backup_dir` therefore waits, up to
+    1 s, until each entry's listed mtime (and a file's size) equals its own, before it scans.
+    If the timeout passes, it backs up anyway: at worst one extra snapshot, no data loss.
 - **Backends (rustic_backend):** a repository string plus a `BTreeMap<String, String>` of
   options (`BackendOptions { repository, options, .. }.to_backends()`).
   - Plain path or `local:` → local filesystem.
