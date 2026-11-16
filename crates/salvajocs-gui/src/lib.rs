@@ -6,6 +6,7 @@ pub mod job;
 pub mod prompt;
 pub mod startup;
 pub mod state;
+pub mod tabs;
 pub mod widgets;
 
 /// Opens the main window and blocks until it is closed.
