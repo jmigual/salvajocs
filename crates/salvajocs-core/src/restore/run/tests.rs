@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::backup::backup_games;
-use crate::layout::{LinuxFolders, SnapshotMeta};
+use crate::config::{AppConfig, PasswordMode};
+use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
 use crate::manifest::{GameEntry, Integration, Steam};
 use crate::registry::{RegData, RegValue};
 use crate::storage::{Compression, RepoLocation};
@@ -508,4 +509,144 @@ fn symlinked_target_file_refused() {
     assert!(report.safety_backup.is_none());
     assert!(report.files[1].is_ok(), "{report:?}");
     assert_eq!(read(&real_docs.join("Game/doc.sav")), "new");
+}
+
+fn config(roots: Vec<Root>) -> AppConfig {
+    AppConfig {
+        repository: String::new(),
+        repository_options: vec![],
+        password: PasswordMode::None,
+        roots,
+        custom_games: vec![],
+    }
+}
+
+/// Scans `manifest`, backs every found game up and fetches the default snapshot of the first
+/// listed game.
+fn back_up_and_fetch(
+    storage: &mut Storage,
+    root: &Path,
+    manifest: &Manifest,
+    config: &AppConfig,
+    env: &Environment,
+) -> StagedGame {
+    let report = crate::scan::scan(manifest, config, env);
+    assert_eq!(report.problems, []);
+    back_up(storage, root, &report.games, &[]);
+    let game = list(storage).unwrap().remove(0);
+    let snapshot = &game.snapshots[game.default.unwrap()];
+    fetch(storage, snapshot, &root.join("work")).unwrap()
+}
+
+fn assert_applied(report: &RestoreReport) {
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert!(
+        report.registry.as_ref().is_none_or(Result::is_ok),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn proton_backup_restores_into_windows_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let steam = tmp.path().join("steam");
+    let pfx = make_prefix(&steam.join("steamapps/compatdata/620/pfx"), "steamuser");
+    let home = pfx.join("drive_c/users/steamuser");
+    write(&home.join("AppData/Roaming/Foo/save.dat"), "proton");
+    write(&home.join("Documents/My Games/Foo/slot1.sav"), "slot");
+    let manifest = crate::manifest::parse_yaml(
+        "Foo:\n  steam: {id: 620}\n  files:\n    <winAppData>/Foo: {}\n    \
+         <winDocuments>/My Games/Foo: {}\n",
+    )
+    .unwrap();
+    let env = Environment {
+        native: None,
+        steam_roots: vec![steam],
+    };
+    let staged = back_up_and_fetch(&mut storage, tmp.path(), &manifest, &config(vec![]), &env);
+
+    // A native Windows user, as plain data.
+    let win = WinFolders::for_prefix(&tmp.path().join("win"), "Alice");
+    let targets = Targets {
+        linux: None,
+        win: Some(Context::WindowsNative(win.clone())),
+    };
+    let vars = GameVars::new("Foo", vec![], &[], Some("620".into()));
+    let entry = manifest.games.get("Foo");
+    let plan = super::super::prepare(&staged, &targets, &vars, entry, &[], &[], &[]).unwrap();
+    assert!(plan.skipped.is_empty(), "{plan:?}");
+    let stage_root = tmp.path().join("pre-restore");
+    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+
+    assert_applied(&report);
+    // Nothing existed at the targets.
+    assert!(report.safety_backup.is_none());
+    assert_eq!(read(&win.app_data.join("Foo/save.dat")), "proton");
+    assert_eq!(read(&win.documents.join("My Games/Foo/slot1.sav")), "slot");
+}
+
+#[test]
+fn prefix_registry_restores_into_other_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let source = make_prefix(&tmp.path().join("source"), "me");
+    user_reg(&source, "a");
+    write(
+        &source.join("drive_c/users/me/AppData/Roaming/Foo/save.dat"),
+        "a",
+    );
+    let manifest = crate::manifest::parse_yaml(
+        "Foo:\n  files:\n    <winAppData>/Foo: {}\n  registry:\n    \
+         HKEY_CURRENT_USER/Software/Foo: {}\n",
+    )
+    .unwrap();
+    let roots = vec![Root {
+        path: source,
+        kind: RootKind::WinePrefix,
+    }];
+    let env = Environment {
+        native: None,
+        steam_roots: vec![],
+    };
+    let staged = back_up_and_fetch(&mut storage, tmp.path(), &manifest, &config(roots), &env);
+    assert_eq!(staged.registry, Some(foo_registry("a")));
+
+    // Another prefix and user, with its own `Foo` (and a subkey) next to an unrelated key.
+    let other = make_prefix(&tmp.path().join("other"), "steamuser");
+    write(
+        &other.join("user.reg"),
+        "WINE REGISTRY Version 2\n\n[Software\\\\Foo] 1\n#time=0\n\"v\"=\"b\"\n\n\
+         [Software\\\\Foo\\\\Old] 1\n#time=0\n\n[Software\\\\Other] 1\n#time=0\n\"keep\"=\"me\"\n",
+    );
+    let targets = Targets {
+        linux: None,
+        win: Some(in_prefix(&other, "steamuser")),
+    };
+    let vars = GameVars::new("Foo", vec![], &[], None);
+    let entry = manifest.games.get("Foo");
+    let plan = super::super::prepare(&staged, &targets, &vars, entry, &[], &[], &[]).unwrap();
+    let stage_root = tmp.path().join("pre-restore");
+    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+
+    assert_applied(&report);
+    assert!(report.registry.is_some());
+    // The subtree is replaced, `Old` included; the unrelated key stays.
+    assert_eq!(reg(&other, FOO), foo_registry("a"));
+    let kept = reg(&other, "HKEY_CURRENT_USER\\Software\\Other");
+    assert_eq!(kept.keys.len(), 1);
+    assert!(!other.join("user.reg.salvajocs-tmp").exists());
+    let save = other.join("drive_c/users/steamuser/AppData/Roaming/Foo/save.dat");
+    assert_eq!(read(&save), "a");
+
+    // The safety backup holds the other prefix's old subtree.
+    let info = report.safety_backup.expect("a safety backup");
+    let dir = tmp.path().join("restored");
+    let path = format!("/salvajocs/{}", crate::slug::slug("Foo"));
+    storage.restore_path(&info.id, &path, &dir).unwrap();
+    let old: RegistryExport =
+        serde_json::from_slice(&fs::read(dir.join(REGISTRY_FILE)).unwrap()).unwrap();
+    let keys: Vec<&str> = old.keys.keys().map(String::as_str).collect();
+    assert_eq!(keys, [FOO, "HKEY_CURRENT_USER\\Software\\Foo\\Old"]);
+    assert_eq!(old.keys[FOO], foo_registry("b").keys[FOO]);
 }
