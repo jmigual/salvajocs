@@ -603,6 +603,74 @@ fn staged_symlink_not_restored() {
     assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "new");
 }
 
+fn tmp_of(target: &Path) -> PathBuf {
+    let mut tmp = target.as_os_str().to_owned();
+    tmp.push(".salvajocs-tmp");
+    tmp.into()
+}
+
+#[test]
+fn leftover_temp_file_is_replaced() {
+    let mut f = fixture();
+    let write_ = f.planned("Game/save.sav", "new");
+    let tmp = write(&tmp_of(&write_.target), "left by a crash");
+
+    let report = f.run(&plan_of(vec![write_.clone()], None), false).unwrap();
+    assert!(report.files[0].is_ok(), "{report:?}");
+    assert_eq!(read(&write_.target), "new");
+    assert!(!tmp.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn leftover_temp_symlink_is_not_followed() {
+    let mut f = fixture();
+    let outside = write(&f.tmp.path().join("outside.txt"), "outside");
+    let write_ = f.planned("Game/save.sav", "new");
+    let tmp = tmp_of(&write_.target);
+    fs::create_dir_all(tmp.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &tmp).unwrap();
+
+    let report = f.run(&plan_of(vec![write_.clone()], None), false).unwrap();
+    assert!(report.files[0].is_ok(), "{report:?}");
+    assert_eq!(read(&write_.target), "new");
+    assert_eq!(read(&outside), "outside");
+    assert!(fs::symlink_metadata(&tmp).is_err());
+}
+
+#[test]
+fn failed_write_leaves_no_temp_file() {
+    let mut f = fixture();
+    let write_ = f.planned("Game/save.sav", "new");
+    // A non-empty directory where the file goes: the rename fails.
+    let inside = write(&write_.target.join("keep.txt"), "keep");
+
+    let report = f.run(&plan_of(vec![write_.clone()], None), false).unwrap();
+    assert!(matches!(report.files[0], Err(ApplyError::Io { .. })));
+    assert!(!tmp_of(&write_.target).exists());
+    assert_eq!(read(&inside), "keep");
+}
+
+#[test]
+fn prefix_without_user_reg_still_restores_files() {
+    let mut f = fixture();
+    fs::remove_file(f.prefix.join("user.reg")).unwrap();
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    let report = f.run(&plan, false).unwrap();
+    let dir = f.restored(created(&report));
+    assert_eq!(read(&dir.join("files/WinAppData/Game/save.sav")), "old");
+    assert!(!dir.join(REGISTRY_FILE).exists());
+    assert!(report.files[0].is_ok(), "{report:?}");
+    assert_eq!(read(&target), "new");
+    assert!(matches!(
+        &report.registry,
+        Some(Err(ApplyError::Io { source, .. })) if source.kind() == io::ErrorKind::NotFound
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_target_file_refused() {
