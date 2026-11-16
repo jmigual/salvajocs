@@ -65,6 +65,38 @@ fn unreadable_repo_is_error_not_missing() {
     assert!(matches!(probe(&location, ""), RepoState::Error(_)));
 }
 
+#[cfg(unix)]
+#[test]
+fn unreadable_local_repo_is_error_not_missing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_dir = tmp.path().join("repo");
+    let location = local(&repo_dir);
+    Storage::init(&location, "", Compression::Default).unwrap();
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root ignores permission bits, so there is nothing to observe.
+    let enforced = fs::exists(repo_dir.join("config")).is_err();
+    let state = probe(&location, "");
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    if enforced {
+        assert!(matches!(state, RepoState::Error(_)));
+    }
+}
+
+#[test]
+fn entry_paths_must_stay_inside_the_destination() {
+    for ok in ["", "a.sav", "sub/b.sav"] {
+        assert!(check_entry_path(Path::new(ok)).is_ok());
+    }
+    for bad in ["..", "../x", "sub/../../x", "/etc/passwd"] {
+        assert!(matches!(
+            check_entry_path(Path::new(bad)),
+            Err(StorageError::UnsafeEntryPath(_))
+        ));
+    }
+}
+
 #[test]
 fn compression_set_at_init_and_changed() {
     let tmp = tempfile::tempdir().unwrap();

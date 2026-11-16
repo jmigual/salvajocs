@@ -1,14 +1,15 @@
 //! Repository storage over `rustic_core` (ADR-0003). The only module that names rustic types.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use rustic_backend::BackendOptions;
+use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to_type_and_path};
 use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
     LsOptions, PathList, Repository, RepositoryBackends, RepositoryOptions, RestoreOptions,
-    RusticError, SnapshotOptions,
+    RusticError, SnapshotOptions, repofile::SnapshotFile,
 };
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
@@ -26,6 +27,9 @@ pub enum StorageError {
     /// A path cannot be passed to the repository because it is not valid UTF-8.
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
+    /// The repository holds an entry whose path would leave the restore destination.
+    #[error("unsafe path in snapshot: {0}")]
+    UnsafeEntryPath(PathBuf),
     /// Any other repository or backend failure, as rustic reports it.
     #[error("repository error: {0}")]
     Backend(String),
@@ -46,6 +50,15 @@ pub struct RepoLocation {
 }
 
 impl RepoLocation {
+    /// The directory holding the repository when it is on the local filesystem, by rustic's own
+    /// parsing of the repository string.
+    fn local_dir(&self) -> Option<PathBuf> {
+        match location_to_type_and_path(&self.repository) {
+            Ok((SupportedBackend::Local, dir)) => Some(PathBuf::from(dir.as_str())),
+            _ => None,
+        }
+    }
+
     fn backends(&self) -> Result<RepositoryBackends, StorageError> {
         BackendOptions::default()
             .repository(&self.repository)
@@ -149,15 +162,13 @@ pub struct SnapshotInfo {
     pub tags: Vec<String>,
 }
 
-impl From<&rustic_core::repofile::SnapshotFile> for SnapshotInfo {
-    fn from(snap: &rustic_core::repofile::SnapshotFile) -> Self {
-        Self {
-            id: snap.id.to_hex().to_string(),
-            time: snap.time.timestamp().into(),
-            host: snap.hostname.clone(),
-            label: snap.label.clone(),
-            tags: snap.tags.iter().cloned().collect(),
-        }
+fn snapshot_info(snap: &SnapshotFile) -> SnapshotInfo {
+    SnapshotInfo {
+        id: snap.id.to_hex().to_string(),
+        time: snap.time.timestamp().into(),
+        host: snap.hostname.clone(),
+        label: snap.label.clone(),
+        tags: snap.tags.iter().cloned().collect(),
     }
 }
 
@@ -172,7 +183,16 @@ pub fn probe(location: &RepoLocation, password: &str) -> RepoState {
         Err(err) => return RepoState::Error(err.to_string()),
     };
     match repo.config_id() {
-        Ok(None) => return RepoState::Missing,
+        // rustic's local backend reports "no config" for any `exists()` failure, such as an
+        // unreadable directory, so ask the filesystem before calling the repository missing.
+        Ok(None) => match location
+            .local_dir()
+            .map(|dir| fs::exists(dir.join("config")))
+        {
+            Some(Ok(false)) | None => return RepoState::Missing,
+            Some(Ok(true)) => {}
+            Some(Err(err)) => return RepoState::Error(err.to_string()),
+        },
         Ok(Some(_)) => {}
         Err(err) => return RepoState::Error(backend(err).to_string()),
     }
@@ -276,6 +296,10 @@ impl Storage {
             .map_err(backend)?
             .sanitize()
             .map_err(|err| StorageError::Backend(err.to_string()))?;
+        debug_assert!(
+            tags.iter().all(|tag| !tag.contains(',')),
+            "rustic splits tags on commas"
+        );
         let snapshot = SnapshotOptions::default()
             .label(label.to_string())
             .add_tags(&tags.join(","))
@@ -290,7 +314,7 @@ impl Storage {
         // A skipped snapshot is never saved, so it keeps the null id.
         let written = !snap.id.is_null();
         self.stale |= written;
-        Ok(written.then(|| SnapshotInfo::from(&snap)))
+        Ok(written.then(|| snapshot_info(&snap)))
     }
 
     /// All snapshots carrying `tag`, newest first.
@@ -300,7 +324,7 @@ impl Storage {
             .get_matching_snapshots(|snap| snap.tags.contains(tag))
             .map_err(backend)?;
         found.sort_by(|a, b| b.time.cmp(&a.time));
-        Ok(found.iter().map(SnapshotInfo::from).collect())
+        Ok(found.iter().map(snapshot_info).collect())
     }
 
     /// Restores `path_in_snapshot` of snapshot `snapshot_id` into `dest_dir`: a directory's
@@ -325,11 +349,19 @@ impl Storage {
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;
         let nodes = repo.ls(&node, &LsOptions::default()).map_err(backend)?;
+        for entry in nodes.clone() {
+            check_entry_path(&entry.map_err(backend)?.0)?;
+        }
         let dest = if node.is_dir() {
             LocalDestination::new(dest_dir, true, false)
         } else {
-            let file = Path::new(dest_dir).join(node.name());
-            LocalDestination::new(&file.to_string_lossy(), true, true)
+            let name = node.name();
+            check_entry_path(Path::new(&name))?;
+            let file = Path::new(dest_dir).join(name);
+            let file = file
+                .to_str()
+                .ok_or_else(|| StorageError::NonUtf8Path(file.clone()))?;
+            LocalDestination::new(file, true, true)
         }
         .map_err(backend)?;
         let options = RestoreOptions::default();
@@ -337,6 +369,19 @@ impl Storage {
             .prepare_restore(&options, nodes.clone(), &dest, false)
             .map_err(backend)?;
         repo.restore(plan, &options, nodes, &dest).map_err(backend)
+    }
+}
+
+/// Rejects an entry path that is not purely relative and descending, so a crafted `..` or
+/// absolute node name cannot make a restore write outside its destination.
+fn check_entry_path(path: &Path) -> Result<(), StorageError> {
+    if path
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        Ok(())
+    } else {
+        Err(StorageError::UnsafeEntryPath(path.to_path_buf()))
     }
 }
 
