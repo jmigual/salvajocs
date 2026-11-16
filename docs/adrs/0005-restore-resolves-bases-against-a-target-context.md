@@ -35,8 +35,13 @@ configured roots (research.md §2).
   resolve to whichever user the target context has. Where a root holds `<osUserName>`, each
   write's tail is the root's rest with `<osUserName>` replaced by the target family's `user`,
   plus the matched remainder, so a mixed restore uses each family's own user (ADR-0004).
-- **A snapshot is untrusted input.** Only files under a recorded root and registry keys under
-  the keys the game's entry declares are restored; anything else is skipped with a reason.
+- **A snapshot is untrusted input.** Its roots are trusted only when they equal the classified
+  glob-free prefix of one of the game's declared templates: the entry's file templates (manifest
+  merged with the custom game), a side of one of its saved pairs, or an engine-rule target of
+  those. Only files under a trusted root and registry keys under the keys the entry declares
+  are restored; anything else is skipped with a reason, and without an entry nothing is.
+  A pre-restore snapshot whose roots came from a per-file override (`Absolute`/`WinAbsolute`)
+  is therefore not restorable through the normal flow; its files show as skipped.
 - **Target choice on restore:** one restore has up to two targets,
   `Targets { linux: Option<LinuxFolders>, win: Option<Context> }`, where `win` is
   `WindowsNative` or `WinePrefix`. Each base resolves against the target that has it, so a

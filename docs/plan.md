@@ -366,20 +366,24 @@ Dependency graph:
   - `StagedGame { root, meta: SnapshotMeta, files: Vec<(Base, tail)>, registry:
     Option<RegistryExport> }`.
   - `Targets { linux: Option<LinuxFolders>, win: Option<Context> }`.
-  - `plan(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[ResolvedMapping]) ->
-    Result<RestorePlan, PlanError>`. The entry is the game's manifest entry with its custom game
-    applied.
+  - `plan(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[Pair], &[ResolvedMapping])
+    -> Result<RestorePlan, PlanError>`. The entry is the game's manifest entry with its custom
+    game applied; the pairs are its saved pairs.
     - Bases resolve against their own family's target. `WinAbsolute` resolves through
       `win_absolute_target`, not `base_dir`.
     - Files of a family with no target go through the mapping.
     - `registry.json` with no `win` target is skipped with "registry: no Windows target".
     - A snapshot is untrusted (ADR-0005): a file under no `SnapshotMeta.roots` entry is skipped
-      with "outside the game's save roots"; only registry keys at or below a key the entry
+      with "outside the game's save roots". A root is validated against the entry: it must
+      equal the classified glob-free prefix of an entry file template, a pair side or an
+      engine-rule target of those, else its files are skipped with "save root not declared for
+      this game" (all of them without an entry). Only registry keys at or below a key the entry
       declares (case-insensitive) are restored, others are skipped with "registry key not
       declared for this game", and without an entry every key is skipped.
     - `<osUserName>` stays literal in the roots and matches exactly one tail component. A
       write's tail is the root's rest (or the mapping target's) with `<osUserName>` replaced by
-      the target family's `user`, plus the matched remainder (ADR-0004).
+      the target family's `user`, plus the matched remainder (ADR-0004). Of two roots matching
+      to the same depth, the one with fewer `<osUserName>` components wins.
     - A mapping whose target is `Absolute`/`WinAbsolute` is skipped as having no target.
     - `RestorePlan { writes, registry, skipped, cross_build: bool, notes }`.
   - `prepare(&StagedGame, &Targets, &GameVars, Option<&GameEntry>, &[Pair],
@@ -424,7 +428,11 @@ Dependency graph:
   - `crafted_root_cannot_read_outside_the_staged_files`;
   - `store_game_id_substituted_into_root`;
   - `snapshot_registry_keys_do_not_declare_themselves`;
-  - `os_user_name_does_not_match_dot_dot`.
+  - `os_user_name_does_not_match_dot_dot`;
+  - `crafted_root_covering_home_is_skipped`;
+  - `declared_root_still_restores`;
+  - `pair_side_root_is_trusted`;
+  - `os_user_name_root_loses_a_tie_to_a_literal_root`.
 
 ## 15. Restore list, fetch, safety backup, apply (depends on 5, 12, 14)
 
