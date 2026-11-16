@@ -100,6 +100,9 @@ pub struct RestorePlan {
     /// Whether a write goes through a cross-build mapping, so the other build's save format
     /// may differ (ADR-0011).
     pub cross_build: bool,
+    /// Facts about the mapping the preview shows, such as the Unity `PlayerPrefs` note; filled
+    /// by [`prepare`].
+    pub notes: Vec<String>,
 }
 
 /// Why [`plan`] failed.
@@ -306,6 +309,7 @@ pub fn plan(
         registry: None,
         skipped: Vec::new(),
         cross_build: false,
+        notes: Vec::new(),
     };
     let files_dir = staged.root.join(layout::FILES_DIR);
     for (base, tail) in &staged.files {
@@ -416,6 +420,7 @@ pub fn prepare(
         _ => None,
     };
     let mut mappings = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     if let Some(family) = target_family {
         // Staged registry keys count like manifest keys for the PlayerPrefs note.
         let mut entry = entry.cloned().unwrap_or_default();
@@ -432,6 +437,12 @@ pub fn prepare(
                 })
                 .count();
         }
+        // Notes reach the preview whether the mapping was automatic or chosen (ADR-0011).
+        for note in entries.iter().flat_map(|mapping| &mapping.notes) {
+            if !notes.contains(note) {
+                notes.push(note.clone());
+            }
+        }
         mappings = match crossbuild::resolve(&entries, choices) {
             Ok(mappings) => mappings,
             Err(ResolveError::MissingChoice { .. }) => {
@@ -442,7 +453,9 @@ pub fn prepare(
             }
         };
     }
-    Ok(plan(staged, targets, vars, &mappings)?)
+    let mut plan = plan(staged, targets, vars, &mappings)?;
+    plan.notes = notes;
+    Ok(plan)
 }
 
 #[cfg(test)]

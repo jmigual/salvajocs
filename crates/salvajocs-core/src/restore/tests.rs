@@ -620,3 +620,22 @@ fn mapped_root_with_os_user_name_covers_file() {
         [Path::new("/home/me/.local/share/me/Game/s.sav")]
     );
 }
+
+#[test]
+fn unity_note_kept_when_mapped_automatically() {
+    let mut staged = staged(
+        &[(Base::WinLocalAppDataLow, "Co/Game")],
+        &[(Base::WinLocalAppDataLow, "Co/Game/save.dat")],
+    );
+    let mut export = RegistryExport::default();
+    export
+        .keys
+        .insert(format!("{HKCU}\\Software\\Co\\Game"), Vec::new());
+    staged.registry = Some(export);
+    let plan = prepare(&staged, &linux_only(), &vars(), None, &[], &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/home/me/.config/unity3d/Co/Game/save.dat")]
+    );
+    assert_eq!(plan.notes, [PLAYER_PREFS_NOTE]);
+}
