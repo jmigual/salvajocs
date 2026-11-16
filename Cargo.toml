@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.91"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+dirs = "7.0.0"
+eframe = "0.37.0"
+egui = "0.37.0"
+egui_kittest = "0.37.0"
+glob = "0.3.4"
+reqwest = "0.13.5"
+rfd = "0.18.0"
+rustic_backend = "=0.7.0"
+rustic_core = "=0.13.0"
+serde = "1.0.229"
+serde-saphyr = "2.1.1"
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
