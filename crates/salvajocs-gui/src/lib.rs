@@ -1,5 +1,6 @@
 //! egui front-end for salvajocs.
 
+pub mod app;
 pub mod env;
 pub mod first_run;
 pub mod job;
@@ -9,18 +10,17 @@ pub mod state;
 pub mod tabs;
 pub mod widgets;
 
+pub use app::App;
+pub use env::Env;
+
 /// Opens the main window and blocks until it is closed.
 pub fn run() -> eframe::Result {
+    let env = Env::system().ok_or_else(|| {
+        eframe::Error::AppCreation("this OS has no config or cache directory".into())
+    })?;
     eframe::run_native(
         "salvajocs",
         eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::<App>::default())),
+        Box::new(move |_cc| Ok(Box::new(App::new(env)))),
     )
-}
-
-#[derive(Default)]
-struct App;
-
-impl eframe::App for App {
-    fn ui(&mut self, _ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {}
 }
