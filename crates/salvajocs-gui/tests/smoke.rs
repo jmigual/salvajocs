@@ -25,8 +25,16 @@ fn smoke_renders_every_tab() {
             "{} is on the strip",
             tab.label()
         );
+        // Only Settings has content so far; the others are empty panels.
+        for section in ["Repository", "Compression", "Roots"] {
+            assert_eq!(
+                shows(&harness, section),
+                tab == Tab::Settings,
+                "{section} belongs to Settings only, checked on {}",
+                tab.label()
+            );
+        }
     }
-    assert!(shows(&harness, "Repository"), "Settings shows its sections");
     assert!(!shows(&harness, "Welcome to salvajocs"));
 }
 

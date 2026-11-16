@@ -4,7 +4,7 @@ use std::mem;
 
 use eframe::egui::{self, Color32, Ui};
 use salvajocs_core::config::AppConfig;
-use salvajocs_core::storage::Storage;
+use salvajocs_core::storage::{Storage, StorageError};
 
 use crate::env::Env;
 use crate::first_run::Connect;
@@ -18,7 +18,8 @@ use crate::tabs::{Tab, settings::SettingsTab};
 enum Stage {
     /// Before the first frame: jobs need the egui context.
     Starting,
-    /// The config file exists but cannot be read; nothing is overwritten.
+    /// The config file exists but cannot be read. Every tab stays empty, so nothing can
+    /// overwrite the file.
     ConfigUnreadable(String),
     /// No config yet: the first-run dialog is open.
     FirstRun(Box<Connect>),
@@ -55,7 +56,9 @@ impl App {
                 Stage::Starting
             }
             Ok(None) => Stage::FirstRun(Box::new(Connect::first_run())),
-            Err(err) => Stage::ConfigUnreadable(err.to_string()),
+            Err(err) => {
+                Stage::ConfigUnreadable(format!("{} ({err})", state.env.config_dir.display()))
+            }
         };
         Self {
             state,
@@ -137,7 +140,7 @@ impl App {
                 });
                 match connected {
                     Some(connected) => {
-                        self.state.adopt(connected);
+                        self.state.adopt(connected, &ctx);
                         self.settings.reset();
                         Stage::Ready
                     }
@@ -165,6 +168,14 @@ impl App {
             }
             Stage::Opening(mut job, credentials) => match job.take_result() {
                 None => Stage::Opening(job, credentials),
+                Some(Err(err))
+                    if matches!(
+                        err.downcast_ref::<StorageError>(),
+                        Some(StorageError::WrongPassword)
+                    ) =>
+                {
+                    Stage::Prompt(SecretPrompt::wrong_password(credentials))
+                }
                 Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
                 Some(Ok(storage)) => {
                     self.state.credentials = credentials;
@@ -189,7 +200,7 @@ impl App {
             Stage::ConfigUnreadable(error) => {
                 ui.colored_label(
                     Color32::LIGHT_RED,
-                    format!("The config file cannot be read: {error}"),
+                    format!("The config file in {error} cannot be read"),
                 );
             }
             Stage::Resolving(_) | Stage::Opening(..) => {
@@ -272,11 +283,19 @@ impl eframe::App for App {
             ui.add_space(4.0);
         });
 
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            // Placeholders until steps 17 to 19.
-            Tab::Backup | Tab::Restore | Tab::CustomGames => {}
-            Tab::Settings => self.settings.ui(ui, &mut self.state),
-        });
+        let adopted = egui::CentralPanel::default()
+            .show(ui, |ui| match (&self.stage, self.tab) {
+                (Stage::ConfigUnreadable(_), _) => false,
+                // Placeholders until steps 17 to 19.
+                (_, Tab::Backup | Tab::Restore | Tab::CustomGames) => false,
+                (_, Tab::Settings) => self.settings.ui(ui, &mut self.state),
+            })
+            .inner;
+        if adopted {
+            // A repository chosen in Settings replaces whatever startup was still doing.
+            self.stage = Stage::Ready;
+            ctx.request_repaint();
+        }
 
         self.advance(ui);
     }

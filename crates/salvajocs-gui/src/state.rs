@@ -89,15 +89,18 @@ impl State {
         }
     }
 
-    /// Makes a repository the user just connected the current one.
-    pub fn adopt(&mut self, connected: Connected) {
+    /// Makes a repository the user just connected the current one and saves the config. Roots and
+    /// custom games come from the current config, which may have changed since the form was built.
+    pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
-            config,
+            mut config,
             credentials,
             storage,
             warnings,
         } = connected;
         if let Some(old) = &self.config {
+            config.roots = old.roots.clone();
+            config.custom_games = old.custom_games.clone();
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }
         self.session = Some(Session {
@@ -107,6 +110,7 @@ impl State {
         self.config = Some(config);
         self.credentials = credentials;
         self.notices.extend(warnings);
+        self.save_config(ctx);
     }
 
     /// Writes the config in the background. A save already running is followed by another, so

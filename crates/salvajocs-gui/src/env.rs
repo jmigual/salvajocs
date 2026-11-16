@@ -2,7 +2,9 @@
 //! download. Tests substitute their own so nothing touches the real keyring or the network.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use salvajocs_core::config;
 use salvajocs_core::manifest::fetch::{self, FetchError, Freshness};
@@ -35,14 +37,16 @@ impl SecretStore for SystemSecrets {
     }
 }
 
-/// A store that keeps secrets in memory, for tests. [`MemorySecrets::full`] refuses every write
-/// the way the Windows store refuses an over-long value.
+/// A store that keeps secrets in memory. [`MemorySecrets::full`] refuses every write the way the
+/// Windows store refuses an over-long value.
+#[cfg(test)]
 #[derive(Default)]
 pub struct MemorySecrets {
     entries: Mutex<Vec<(String, SecretKey, String)>>,
     full: bool,
 }
 
+#[cfg(test)]
 impl MemorySecrets {
     /// An empty store.
     pub fn new() -> Self {
@@ -58,6 +62,7 @@ impl MemorySecrets {
     }
 }
 
+#[cfg(test)]
 impl SecretStore for MemorySecrets {
     fn get(&self, scope: &str, key: &SecretKey) -> Result<Option<String>, SecretError> {
         let entries = self

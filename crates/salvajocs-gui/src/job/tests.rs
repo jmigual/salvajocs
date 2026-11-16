@@ -30,10 +30,15 @@ fn a_finished_job_hands_back_its_value() {
 #[test]
 fn a_failed_job_hands_back_its_error() {
     let ctx = egui::Context::default();
-    let mut job: Job<()> = Job::spawn(&ctx, || Err(anyhow::anyhow!("no repository was given")));
+    let mut job: Job<()> = Job::spawn(&ctx, || {
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound).into())
+    });
 
     let error = wait_for(&mut job).expect_err("the work failed");
-    assert!(error.to_string().contains("no repository"));
+    let io = error
+        .downcast_ref::<std::io::Error>()
+        .expect("the error keeps its type");
+    assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
 }
 
 /// The result is taken, not observed: a tab that has already shown an error

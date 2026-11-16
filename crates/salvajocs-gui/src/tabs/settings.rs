@@ -68,19 +68,22 @@ impl SettingsTab {
         self.compression_error = None;
     }
 
-    /// Draws the tab.
-    pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.repository_ui(ui, state);
-            ui.separator();
-            self.compression_ui(ui, state);
-            ui.separator();
-            self.roots_ui(ui, state);
-            self.cleanup_ui(ui, state);
-        });
+    /// Draws the tab. Returns whether the user connected a different repository.
+    pub fn ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
+        egui::ScrollArea::vertical()
+            .show(ui, |ui| {
+                let adopted = self.repository_ui(ui, state);
+                ui.separator();
+                self.compression_ui(ui, state);
+                ui.separator();
+                self.roots_ui(ui, state);
+                self.cleanup_ui(ui, state);
+                adopted
+            })
+            .inner
     }
 
-    fn repository_ui(&mut self, ui: &mut Ui, state: &mut State) {
+    fn repository_ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
         ui.heading("Repository");
         if let Some(config) = &state.config {
             ui.label(format!("Current: {}", config.repository));
@@ -94,9 +97,11 @@ impl SettingsTab {
             None => Connect::first_run(),
         });
         if let Some(connected) = connect.ui(ui, &state.env) {
-            state.adopt(connected);
+            state.adopt(connected, ui.ctx());
             self.reset();
+            return true;
         }
+        false
     }
 
     fn compression_ui(&mut self, ui: &mut Ui, state: &mut State) {

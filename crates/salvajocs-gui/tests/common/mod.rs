@@ -6,18 +6,52 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use eframe::egui::Vec2;
+use eframe::egui::{Key, Modifiers, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::secret::{SecretError, SecretKey};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
-use salvajocs_gui::env::{MemorySecrets, SecretStore};
+use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
+
+/// A keyring that keeps secrets in memory.
+#[derive(Default)]
+pub struct MemorySecrets(Mutex<Vec<(String, SecretKey, String)>>);
+
+impl MemorySecrets {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl SecretStore for MemorySecrets {
+    fn get(&self, scope: &str, key: &SecretKey) -> Result<Option<String>, SecretError> {
+        let entries = self.0.lock().unwrap();
+        Ok(entries
+            .iter()
+            .find(|(s, k, _)| s == scope && k == key)
+            .map(|(_, _, value)| value.clone()))
+    }
+
+    fn set(&self, scope: &str, key: &SecretKey, value: &str) -> Result<(), SecretError> {
+        self.delete(scope, key)?;
+        let mut entries = self.0.lock().unwrap();
+        entries.push((scope.to_string(), key.clone(), value.to_string()));
+        Ok(())
+    }
+
+    fn delete(&self, scope: &str, key: &SecretKey) -> Result<(), SecretError> {
+        let mut entries = self.0.lock().unwrap();
+        entries.retain(|(s, k, _)| !(s == scope && k == key));
+        Ok(())
+    }
+}
 
 /// A manifest download that never touches the network.
 fn offline(_cache_dir: &Path) -> Result<Freshness, FetchError> {
@@ -62,11 +96,30 @@ pub fn local_config(repository: &str) -> AppConfig {
 
 /// Creates an empty repository without a password at `repository`.
 pub fn init_repo(repository: &str) {
+    init_repo_with(repository, "", Compression::Default);
+}
+
+/// Creates an empty repository at `repository`.
+pub fn init_repo_with(repository: &str, password: &str, compression: Compression) {
     let location = RepoLocation {
         repository: repository.to_string(),
         options: Default::default(),
     };
-    Storage::init(&location, "", Compression::Default).unwrap();
+    Storage::init(&location, password, compression).unwrap();
+}
+
+/// Where the tests keep a second repository.
+pub fn other_repo_dir(tmp: &TempDir) -> String {
+    tmp.path().join("other").to_str().unwrap().to_string()
+}
+
+/// Replaces the text of the field named `label`, which `type_text` alone would append to.
+pub fn replace_text(harness: &mut Harness<'static, App>, label: &str, text: &str) {
+    let field = harness.get_by_label(label);
+    field.focus();
+    harness.key_combination_modifiers(Modifiers::COMMAND, &[Key::A]);
+    harness.get_by_label(label).type_text(text);
+    harness.run();
 }
 
 /// Drives the app the way eframe does, for as many frames as the test needs.

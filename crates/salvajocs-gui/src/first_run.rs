@@ -7,8 +7,6 @@ use std::mem;
 use anyhow::Result;
 use eframe::egui::{self, Color32, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
-use salvajocs_core::layout::Root;
-use salvajocs_core::manifest::CustomGame;
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, probe};
 
@@ -18,9 +16,10 @@ use crate::startup::Credentials;
 use crate::widgets::backend::BackendForm;
 use crate::widgets::{compression, labelled_edit};
 
-/// A repository the user chose and that is now open, with its config already saved.
+/// A repository the user chose and that is now open. The config is not saved yet:
+/// `State::adopt` saves it with the current roots and custom games.
 pub struct Connected {
-    /// The saved config.
+    /// The config of the new repository; its roots and custom games are empty.
     pub config: AppConfig,
     /// The password and secret option values of this session.
     pub credentials: Credentials,
@@ -54,8 +53,6 @@ pub struct Connect {
     compression: String,
     password: String,
     remember: bool,
-    roots: Vec<Root>,
-    custom_games: Vec<CustomGame>,
     submit: &'static str,
     step: Step,
 }
@@ -68,27 +65,23 @@ impl Connect {
             compression: String::new(),
             password: String::new(),
             remember: true,
-            roots: Vec::new(),
-            custom_games: Vec::new(),
             submit: "Continue",
             step: Step::Editing(None),
         }
     }
 
-    /// A form showing the current repository; roots and custom games carry over to the new config.
+    /// A form showing the current repository.
     pub fn editing(config: &AppConfig, credentials: &Credentials) -> Self {
         Self {
             form: BackendForm::from_config(config, &credentials.options),
             password: credentials.password.clone(),
             remember: config.password == PasswordMode::Keyring,
-            roots: config.roots.clone(),
-            custom_games: config.custom_games.clone(),
             submit: "Apply",
             ..Self::first_run()
         }
     }
 
-    /// Draws the form and the current step. Returns the repository once it is open and saved.
+    /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
         let editing = matches!(self.step, Step::Editing(_));
         let mut parsed = None;
@@ -193,8 +186,8 @@ impl Connect {
             repository: self.form.repository(),
             repository_options: self.form.options(),
             password,
-            roots: self.roots.clone(),
-            custom_games: self.custom_games.clone(),
+            roots: Vec::new(),
+            custom_games: Vec::new(),
         };
         let credentials = Credentials {
             password: self.password.clone(),
@@ -235,8 +228,8 @@ fn finishing(ctx: &egui::Context, env: &Env, attempt: Attempt, create: bool) -> 
     Step::Finishing(Job::spawn(ctx, move || finish(&env, attempt, create)))
 }
 
-/// Creates or opens the repository, then keeps its secrets and saves the config. The config is
-/// written last, so a failure leaves nothing that points at a repository that did not open.
+/// Creates or opens the repository, then keeps its secrets. Nothing is written to the config
+/// before the repository opened, so a failure leaves nothing that points at it.
 fn finish(env: &Env, attempt: Attempt, create: bool) -> Result<Connected> {
     let Attempt {
         mut config,
@@ -251,7 +244,6 @@ fn finish(env: &Env, attempt: Attempt, create: bool) -> Result<Connected> {
         Storage::open(&location, &credentials.password)?
     });
     let warnings = persist_secrets(env.secrets.as_ref(), &mut config, &credentials, remember);
-    config.save(&env.config_dir)?;
     Ok(Connected {
         config,
         credentials,
