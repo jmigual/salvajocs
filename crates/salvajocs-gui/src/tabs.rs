@@ -1,5 +1,6 @@
-//! One module per screen. Backup and Restore are empty until their steps land.
+//! One module per screen. Restore is empty until its step lands.
 
+pub mod backup;
 pub mod custom_games;
 pub mod settings;
 
