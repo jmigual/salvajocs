@@ -654,3 +654,23 @@ fn apply_choices_replaces_pair_spelled_differently() {
         [pair("<xdgConfig>/Foo", "<winAppData>/New")]
     );
 }
+
+#[test]
+fn validate_pair_accepts_placeholder_templates_and_names_the_bad_side() {
+    assert_eq!(
+        validate_pair(&pair("<xdgData>/Foo", "<winAppData>/Foo")),
+        Ok(())
+    );
+    for (linux, windows, side) in [
+        ("<winAppData>/Foo", "<winAppData>/Foo", Family::Linux),
+        ("<xdgData>/Foo", "<xdgData>/Foo", Family::Windows),
+        ("/home/me/Foo", "<winAppData>/Foo", Family::Linux),
+        ("<xdgData>/Foo/*.sav", "<winAppData>/Foo", Family::Linux),
+        ("<xdgData>/../Foo", "<winAppData>/Foo", Family::Linux),
+        ("<xdgData>/Foo", "C:/Users/me/Foo", Family::Windows),
+        ("", "<winAppData>/Foo", Family::Linux),
+    ] {
+        let error = validate_pair(&pair(linux, windows)).unwrap_err();
+        assert_eq!(error.side, side, "{linux} / {windows}");
+    }
+}

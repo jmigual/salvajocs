@@ -188,6 +188,33 @@ fn classify_choice(template: &str, family: Family) -> Option<(Base, String)> {
     (!real_path && layout::glob_free_prefix(template) == template).then_some(classified)
 }
 
+/// A side of a [`Pair`] that is not a glob-free placeholder template of its OS family.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("not a placeholder template of the {side:?} side: {template}")]
+pub struct PairError {
+    /// The side that was rejected.
+    pub side: Family,
+    /// The rejected template.
+    pub template: String,
+}
+
+/// Checks that `pair` has the same form [`resolve`] demands of a typed target: each side a
+/// glob-free placeholder template of its own family, not a real path.
+///
+/// # Errors
+/// [`PairError`] for the first side that does not classify, Linux before Windows.
+pub fn validate_pair(pair: &Pair) -> Result<(), PairError> {
+    [Family::Linux, Family::Windows]
+        .into_iter()
+        .find(|&side| classify_choice(pair_side(pair, side), side).is_none())
+        .map_or(Ok(()), |side| {
+            Err(PairError {
+                side,
+                template: pair_side(pair, side).to_owned(),
+            })
+        })
+}
+
 fn pair_side(pair: &Pair, family: Family) -> &str {
     match family {
         Family::Linux => &pair.linux,
