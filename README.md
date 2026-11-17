@@ -227,8 +227,10 @@ their own licenses, and the installers and release archives ship their texts:
 - Atkinson Hyperlegible Next: [SIL Open Font License 1.1](crates/salvajocs-gui/assets/fonts/OFL.txt).
 - A subset of Phosphor Icons: [MIT](crates/salvajocs-gui/assets/fonts/Phosphor-LICENSE.txt).
 - egui's default fonts, from its `epaint_default_fonts` dependency: Ubuntu Light under the
-  [Ubuntu Font Licence 1.0](crates/salvajocs-gui/assets/fonts/Ubuntu-font-LICENSE.txt), and Hack
-  under [MIT and the Bitstream Vera License](crates/salvajocs-gui/assets/fonts/Hack-LICENSE.txt).
+  [Ubuntu Font Licence 1.0](crates/salvajocs-gui/assets/fonts/Ubuntu-font-LICENSE.txt), Hack
+  under [MIT and the Bitstream Vera License](crates/salvajocs-gui/assets/fonts/Hack-LICENSE.txt),
+  and egui-icons, a subset of emoji-icon-font, under
+  [MIT](crates/salvajocs-gui/assets/fonts/emoji-icon-font-LICENSE.txt).
 
 ## Credits
 

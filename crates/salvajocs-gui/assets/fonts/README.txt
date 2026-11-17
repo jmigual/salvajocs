@@ -30,10 +30,12 @@ Regenerate with:
         --no-hinting --desubroutinize --layout-features='' \
         --output-file=salvajocs-icons.ttf
 
-The binary also embeds egui's default fonts Ubuntu Light and Hack, from the
+The binary also embeds egui's default fonts Ubuntu Light, Hack and egui-icons, from the
 epaint_default_fonts 0.37.0 crate (https://github.com/emilk/egui, crates/epaint_default_fonts).
 Their license texts are copied from that crate's fonts/ folder:
 
-    Ubuntu-font-LICENSE.txt   fonts/UFL.txt, the Ubuntu Font Licence 1.0, for Ubuntu-Light.ttf
-    Hack-LICENSE.txt          fonts/Hack-Regular.txt, MIT and the Bitstream Vera License, for
-                              Hack-Regular.ttf
+    Ubuntu-font-LICENSE.txt       fonts/UFL.txt, the Ubuntu Font Licence 1.0, for Ubuntu-Light.ttf
+    Hack-LICENSE.txt              fonts/Hack-Regular.txt, MIT and the Bitstream Vera License, for
+                                  Hack-Regular.ttf
+    emoji-icon-font-LICENSE.txt   fonts/emoji-icon-font-mit-license.txt, MIT, for egui-icons.ttf,
+                                  a subset of emoji-icon-font

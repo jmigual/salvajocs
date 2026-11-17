@@ -39,7 +39,7 @@ modules:
       - install -Dm644 crates/salvajocs-gui/assets/io.github.jmigual.salvajocs.svg -t /app/share/icons/hicolor/scalable/apps
       - install -Dm644 crates/salvajocs-gui/assets/io.github.jmigual.salvajocs.png -t /app/share/icons/hicolor/256x256/apps
       # The licenses of the fonts embedded in the binary.
-      - install -Dm644 -t /app/share/licenses/io.github.jmigual.salvajocs crates/salvajocs-gui/assets/fonts/OFL.txt crates/salvajocs-gui/assets/fonts/Phosphor-LICENSE.txt crates/salvajocs-gui/assets/fonts/Ubuntu-font-LICENSE.txt crates/salvajocs-gui/assets/fonts/Hack-LICENSE.txt
+      - install -Dm644 -t /app/share/licenses/io.github.jmigual.salvajocs crates/salvajocs-gui/assets/fonts/OFL.txt crates/salvajocs-gui/assets/fonts/Phosphor-LICENSE.txt crates/salvajocs-gui/assets/fonts/Ubuntu-font-LICENSE.txt crates/salvajocs-gui/assets/fonts/Hack-LICENSE.txt crates/salvajocs-gui/assets/fonts/emoji-icon-font-LICENSE.txt
     sources:
       # Local build. The Flathub copy of this manifest uses a git source; see README.md.
       - type: dir
