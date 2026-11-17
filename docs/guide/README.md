@@ -7,7 +7,7 @@ It describes the app as it is today. For the project overview, go back to the
 
 | Page | What it covers |
 | --- | --- |
-| [Installation](installation.md) | Build salvajocs from source on Linux or Windows. |
+| [Installation](installation.md) | Install salvajocs on Linux or Windows: AppImage, Windows zip, cargo or Flatpak. |
 | [First run](first-run.md) | Choose where backups are stored, the compression level and the password. |
 | [Backup](backup.md) | Scan for games and back them up. |
 | [Restore](restore.md) | Pick a snapshot, check the preview, restore, and undo. |
@@ -16,6 +16,7 @@ It describes the app as it is today. For the project overview, go back to the
 | [Settings](settings.md) | Change the repository, the compression level, the game folders and the Wine prefixes. |
 | [Using the repository with restic](restic-interop.md) | Read the repository with the restic command line. |
 | [Troubleshooting](troubleshooting.md) | Common problems, with cause and fix. |
+| [Releasing](releasing.md) | For maintainers: publish a version. |
 
 New to salvajocs? Read [Installation](installation.md), then [First run](first-run.md), then
 [Backup](backup.md).

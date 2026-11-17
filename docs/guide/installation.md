@@ -1,11 +1,66 @@
 # Installation
 
-salvajocs has no releases, installers or packages yet. You build it from source with Rust. This
-page lists what you need and the two ways to build. Back to the [guide index](README.md).
+Pick one of the options below, in order of effort. Back to the [guide index](README.md).
 
-## What you need
+## AppImage (Linux)
 
-- Rust 1.95 or newer, from [rustup](https://rustup.rs).
+Download `salvajocs-<version>-x86_64.AppImage` from the
+[latest release](https://github.com/jmigual/salvajocs/releases/latest), then:
+
+```sh
+chmod +x salvajocs-*-x86_64.AppImage
+./salvajocs-*-x86_64.AppImage
+```
+
+It needs glibc 2.35 or newer (Ubuntu 22.04 or later), OpenGL and FUSE 2. Without FUSE 2, run it
+with `--appimage-extract-and-run`.
+
+The file embeds update information that points at the latest GitHub release. Open it in
+[Gear Lever](https://github.com/mijorus/gearlever) or run
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) on it. Both download only the
+blocks that changed, using the `.zsync` file next to each release.
+
+## Windows
+
+Download `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the
+[latest release](https://github.com/jmigual/salvajocs/releases/latest), extract it and run
+`salvajocs.exe`. There is no installer and no automatic update.
+
+## cargo-binstall
+
+```sh
+cargo binstall salvajocs
+```
+
+This downloads the Linux (`x86_64-unknown-linux-gnu`) or Windows (`x86_64-pc-windows-msvc`)
+archive of the latest release and installs `salvajocs` in cargo's bin folder. On any other target
+it falls back to building from source.
+
+## Install with cargo
+
+Needs Rust 1.95 or newer, from [rustup](https://rustup.rs), and the build requirements below.
+
+```sh
+cargo install --locked salvajocs
+```
+
+`--locked` makes cargo use the dependency versions the project tested with. For the latest
+unreleased code:
+
+```sh
+cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
+```
+
+## Flatpak
+
+Not on Flathub yet; a submission is planned. You can build and install it locally. See
+[packaging/flatpak/README.md](../../packaging/flatpak/README.md).
+
+## Build requirements
+
+These apply to `cargo install` and to building from a checkout. The release downloads need none of
+them.
+
 - A C compiler. Two dependencies build C code: `zstd-sys` and, on Linux, a vendored copy of
   libdbus used for the keyring. On Windows the default MSVC toolchain is enough.
 - On Linux, OpenGL at run time. The window is drawn with the `glow` (OpenGL) renderer of egui.
@@ -14,15 +69,6 @@ page lists what you need and the two ways to build. Back to the [guide index](RE
 The project's CI builds and tests on a stock `ubuntu-latest` runner and on `windows-latest`
 without installing any extra package. Supported systems are Linux and Windows. macOS is not
 supported.
-
-## Install with cargo
-
-```sh
-cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
-```
-
-The command installs a program called `salvajocs`. `--locked` makes cargo use the dependency
-versions the project tested with.
 
 ## Build from a checkout
 
