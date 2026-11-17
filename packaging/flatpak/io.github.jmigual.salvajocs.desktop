@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=salvajocs
+Name=Salvajocs
 Comment=Back up and restore game saves
 Exec=salvajocs
 Icon=io.github.jmigual.salvajocs

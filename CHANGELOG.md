@@ -6,6 +6,10 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The app menu name is now "Salvajocs".
+
 ### Removed
 
 - Support for running inside a Flatpak sandbox: game folders from the host's `HOST_XDG_*`
