@@ -75,6 +75,25 @@ fn both_palettes_meet_the_contrast_floors() {
     }
 }
 
+/// egui draws keyboard focus with the active visuals, so a focused primary button needs an
+/// outline that stands out from its pressed fill (WCAG 2.4.7, 1.4.11).
+#[test]
+fn a_focused_primary_button_shows_its_outline() {
+    for (name, p, base) in [
+        ("dark", &DARK, Visuals::dark()),
+        ("light", &LIGHT, Visuals::light()),
+    ] {
+        let mut widgets = visuals(p, base).widgets;
+        primary_widgets(p, &mut widgets);
+        let active = widgets.active;
+        let ratio = contrast(active.bg_stroke.color, active.weak_bg_fill);
+        assert!(
+            ratio >= 3.0,
+            "{name}: focus stroke on accent_fill_pressed is {ratio:.2}:1"
+        );
+    }
+}
+
 #[test]
 fn the_fonts_define_the_semibold_family_after_the_defaults() {
     let fonts = fonts();

@@ -8,7 +8,7 @@ use eframe::egui::{
     self, Align, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions,
     FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect, Response, RichText,
     ScrollArea, Sense, Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
-    WidgetText,
+    WidgetText, style::Widgets,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -302,17 +302,7 @@ pub fn primary(ui: &mut Ui, enabled: bool, glyph: Option<&'static str>, label: &
     let palette = palette(ui);
     ui.scope(|ui| {
         // Scoped visuals rather than `Button::fill`, which would drop the hover and press fills.
-        let widgets = &mut ui.visuals_mut().widgets;
-        for (state, fill) in [
-            (&mut widgets.inactive, palette.accent_fill),
-            (&mut widgets.hovered, palette.accent_fill_hover),
-            (&mut widgets.active, palette.accent_fill_pressed),
-        ] {
-            state.weak_bg_fill = fill;
-            state.bg_fill = fill;
-            state.fg_stroke.color = Color32::WHITE;
-        }
-        widgets.inactive.bg_stroke.color = palette.accent_fill;
+        primary_widgets(palette, &mut ui.visuals_mut().widgets);
         let label = semibold(ui, label);
         let button = match glyph {
             Some(glyph) => Button::new((icon(glyph), label)),
@@ -321,6 +311,22 @@ pub fn primary(ui: &mut Ui, enabled: bool, glyph: Option<&'static str>, label: &
         ui.add_enabled(enabled, button)
     })
     .inner
+}
+
+/// `widgets` turned into those of a [`primary`] button: the accent fills under white text.
+fn primary_widgets(palette: &Palette, widgets: &mut Widgets) {
+    for (state, fill) in [
+        (&mut widgets.inactive, palette.accent_fill),
+        (&mut widgets.hovered, palette.accent_fill_hover),
+        (&mut widgets.active, palette.accent_fill_pressed),
+    ] {
+        state.weak_bg_fill = fill;
+        state.bg_fill = fill;
+        state.fg_stroke.color = Color32::WHITE;
+    }
+    widgets.inactive.bg_stroke.color = palette.accent_fill;
+    // Keyboard focus draws the active outline; the selection green vanishes on the green fill.
+    widgets.active.bg_stroke.color = Color32::WHITE;
 }
 
 /// `base` with the colors of `palette`.
