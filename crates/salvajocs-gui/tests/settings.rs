@@ -264,6 +264,22 @@ fn settings_shows_the_open_repository_compression() {
 }
 
 #[test]
+fn without_roots_settings_says_which_folders_are_found_anyway() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env.clone());
+    assert!(shows(&harness, "No roots yet."));
+
+    fill(&mut harness, "Root folder", "/games");
+    harness.get_by_label("Add root").click();
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "No roots yet."));
+}
+
+#[test]
 fn applying_a_new_location_keeps_roots_added_since_the_form_was_built() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);

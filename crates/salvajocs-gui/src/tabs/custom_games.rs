@@ -3,12 +3,12 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, PairError, SkipError};
 use salvajocs_core::manifest::{CustomGame, FileRule, Integration, Pair, Tag};
 
 use crate::state::State;
-use crate::theme;
+use crate::theme::{self, icons};
 use crate::widgets::labelled_edit;
 
 fn integration_label(integration: Integration) -> &'static str {
@@ -218,11 +218,32 @@ fn labelled_lines(ui: &mut Ui, label: &str, text: &mut String) {
         .labelled_by(label.id);
 }
 
-/// A label and a single-line field linked to it, side by side.
+/// A label and a single-line field linked to it, side by side, narrow enough for two of them
+/// and a button on a row of the content column.
 fn inline_edit(ui: &mut Ui, label: String, text: &mut String, hint: &str) {
     let label = ui.label(label);
-    ui.add(TextEdit::singleline(text).hint_text(hint))
-        .labelled_by(label.id);
+    ui.add(
+        TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(260.0),
+    )
+    .labelled_by(label.id);
+}
+
+/// `items` as the rows of a boxed list, each drawn by `row` in a horizontal layout; nothing
+/// when there are none.
+fn rows<T>(ui: &mut Ui, items: &mut [T], mut row: impl FnMut(&mut Ui, usize, &mut T)) {
+    if items.is_empty() {
+        return;
+    }
+    theme::group(ui, |ui| {
+        for (index, item) in items.iter_mut().enumerate() {
+            if index > 0 {
+                theme::row_separator(ui);
+            }
+            ui.horizontal(|ui| row(ui, index, item));
+        }
+    });
 }
 
 /// How a custom game relates to the manifest, for the list. A title the manifest lacks is a
@@ -242,26 +263,24 @@ impl Form {
         ui.heading("Linux and Windows pairs");
         ui.weak("The same saves in the native Linux build and in the Windows build.");
         let mut remove = None;
-        for (index, row) in self.pairs.iter_mut().enumerate() {
+        rows(ui, &mut self.pairs, |ui, index, row| {
             let number = index + 1;
-            ui.horizontal(|ui| {
-                inline_edit(
-                    ui,
-                    format!("Linux {number}"),
-                    &mut row.linux,
-                    "<xdgData>/Game",
-                );
-                inline_edit(
-                    ui,
-                    format!("Windows {number}"),
-                    &mut row.windows,
-                    "<winAppData>/Game",
-                );
-                if ui.button("Remove pair").clicked() {
-                    remove = Some(index);
-                }
-            });
-        }
+            inline_edit(
+                ui,
+                format!("Linux {number}"),
+                &mut row.linux,
+                "<xdgData>/Game",
+            );
+            inline_edit(
+                ui,
+                format!("Windows {number}"),
+                &mut row.windows,
+                "<winAppData>/Game",
+            );
+            if ui.button("Remove pair").clicked() {
+                remove = Some(index);
+            }
+        });
         if let Some(index) = remove {
             self.pairs.remove(index);
         }
@@ -276,19 +295,17 @@ impl Form {
         ui.heading("Skipped folders");
         ui.weak("Folders a restore on the other OS leaves out.");
         let mut remove = None;
-        for (index, skip) in self.skips.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                inline_edit(
-                    ui,
-                    format!("Skipped folder {}", index + 1),
-                    skip,
-                    "<xdgData>/Game",
-                );
-                if ui.button("Remove skipped folder").clicked() {
-                    remove = Some(index);
-                }
-            });
-        }
+        rows(ui, &mut self.skips, |ui, index, skip| {
+            inline_edit(
+                ui,
+                format!("Skipped folder {}", index + 1),
+                skip,
+                "<xdgData>/Game",
+            );
+            if ui.button("Remove skipped folder").clicked() {
+                remove = Some(index);
+            }
+        });
         if let Some(index) = remove {
             self.skips.remove(index);
         }
@@ -303,46 +320,52 @@ impl Form {
         } else {
             "New custom game"
         });
-        egui::Grid::new("custom_game_form")
-            .num_columns(2)
-            .show(ui, |ui| {
-                labelled_edit(ui, "Name", &mut self.name, false);
-                ui.end_row();
-                let label = ui.label("Integration");
-                egui::ComboBox::from_id_salt("custom_game_integration")
-                    .selected_text(integration_label(self.integration))
-                    .show_ui(ui, |ui| {
-                        theme::pill_list(ui);
-                        for integration in [Integration::Extend, Integration::Override] {
-                            ui.selectable_value(
-                                &mut self.integration,
-                                integration,
-                                integration_label(integration),
-                            );
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
-                ui.end_row();
-                labelled_lines(ui, "Files", &mut self.files);
-                ui.end_row();
-                labelled_lines(ui, "Registry keys", &mut self.registry);
-                ui.end_row();
-                labelled_edit(ui, "Wine prefix", &mut self.wine_prefix, false);
-                ui.end_row();
-            });
-        ui.weak(
-            "One path template per line, such as <winDocuments>/My Game/*.sav. Editing a line \
-             resets its OS condition; use a pair instead.",
-        );
+        theme::group(ui, |ui| {
+            egui::Grid::new("custom_game_form")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    labelled_edit(ui, "Name", &mut self.name, false);
+                    ui.end_row();
+                    let label = ui.label("Integration");
+                    egui::ComboBox::from_id_salt("custom_game_integration")
+                        .selected_text(integration_label(self.integration))
+                        .show_ui(ui, |ui| {
+                            theme::pill_list(ui);
+                            for integration in [Integration::Extend, Integration::Override] {
+                                ui.selectable_value(
+                                    &mut self.integration,
+                                    integration,
+                                    integration_label(integration),
+                                );
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id);
+                    ui.end_row();
+                    labelled_lines(ui, "Files", &mut self.files);
+                    ui.end_row();
+                    labelled_lines(ui, "Registry keys", &mut self.registry);
+                    ui.end_row();
+                    labelled_edit(ui, "Wine prefix", &mut self.wine_prefix, false);
+                    ui.end_row();
+                });
+            ui.weak(
+                "One path template per line, such as <winDocuments>/My Game/*.sav. Editing a \
+                 line resets its OS condition; use a pair instead.",
+            );
+        });
+        ui.add_space(16.0);
         self.pairs_ui(ui);
+        ui.add_space(16.0);
         self.skips_ui(ui);
         if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+            let color = ui.visuals().error_fg_color;
+            theme::status(ui, icons::X_CIRCLE, color, error.to_string());
         }
         let mut action = None;
-        ui.horizontal(|ui| {
-            if ui.button("Save game").clicked() {
+        // Right to left: the primary action ends the row.
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if theme::primary(ui, true, Some(icons::FLOPPY_DISK), "Save game").clicked() {
                 action = Some(Action::Save);
             }
             if ui.button("Cancel").clicked() {
@@ -373,17 +396,37 @@ impl CustomGamesTab {
             };
             let mut changed = false;
             let (mut edit, mut remove) = (None, None);
-            for (index, game) in config.custom_games.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    let in_manifest = manifest.is_some_and(|m| m.games.contains_key(&game.name));
-                    ui.label(format!("{} ({})", game.name, relation(game, in_manifest)));
-                    // One form at a time, so opening another cannot drop unsaved edits.
-                    let idle = self.form.is_none();
-                    if ui.add_enabled(idle, egui::Button::new("Edit")).clicked() {
-                        edit = Some(index);
-                    }
-                    if ui.button("Remove").clicked() {
-                        remove = Some(index);
+            if config.custom_games.is_empty() {
+                ui.weak(
+                    "No custom games. Add one for a game the manifest misses, or to change where \
+                     a known game keeps its saves.",
+                );
+            } else {
+                theme::group(ui, |ui| {
+                    for (index, game) in config.custom_games.iter().enumerate() {
+                        if index > 0 {
+                            theme::row_separator(ui);
+                        }
+                        // Right to left: the row's actions sit at its end.
+                        ui.horizontal(|ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button("Remove").clicked() {
+                                    remove = Some(index);
+                                }
+                                // One form at a time, so opening another cannot drop unsaved
+                                // edits.
+                                let idle = self.form.is_none();
+                                if ui.add_enabled(idle, egui::Button::new("Edit")).clicked() {
+                                    edit = Some(index);
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    let in_manifest =
+                                        manifest.is_some_and(|m| m.games.contains_key(&game.name));
+                                    let relation = relation(game, in_manifest);
+                                    ui.label(format!("{} ({relation})", game.name));
+                                });
+                            });
+                        });
                     }
                 });
             }
@@ -406,7 +449,7 @@ impl CustomGamesTab {
                 self.form = Some(Form::new());
             }
             if let Some(form) = &mut self.form {
-                ui.separator();
+                ui.add_space(16.0);
                 match form.ui(ui) {
                     Some(Action::Save) => match form.build(&config.custom_games) {
                         Ok(game) => {

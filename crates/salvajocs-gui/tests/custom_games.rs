@@ -150,6 +150,13 @@ fn pair(linux: &str, windows: &str) -> Pair {
 }
 
 #[test]
+fn custom_games_without_games_says_what_they_are_for() {
+    let (harness, _env, _tmp) = open_tab(Vec::new(), &[]);
+    assert!(shows(&harness, "No custom games."));
+    assert!(harness.query_by_label("Add game").is_some());
+}
+
+#[test]
 fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
     let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
 

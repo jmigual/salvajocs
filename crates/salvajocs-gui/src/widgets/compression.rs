@@ -1,9 +1,10 @@
 //! The compression field: one integer, validated by `Compression::from_field` (ADR-0009).
 
-use eframe::egui::Ui;
+use eframe::egui::{Label, RichText, Ui};
 use salvajocs_core::storage::{Compression, StorageError};
 
 use super::labelled_edit;
+use crate::theme::{self, icons};
 
 /// Why the text of a compression field is not a compression setting.
 #[derive(Debug, thiserror::Error)]
@@ -36,16 +37,24 @@ pub fn format(compression: Compression) -> String {
     }
 }
 
-/// Draws the field as a grid row (label, field, hint) and the error below it when the text is
-/// not valid. Returns the parsed setting, or the error that is shown.
+/// Draws the field as grid rows (label and field, then the hint) and the error below them when
+/// the text is not valid. Returns the parsed setting, or the error that is shown.
 pub fn ui(ui: &mut Ui, label: &str, text: &mut String) -> Result<Compression, FieldError> {
     labelled_edit(ui, label, text, false);
-    ui.weak("Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.");
+    ui.end_row();
+    ui.label("");
+    // As wide as the field, so the hint does not widen the grid's column.
+    ui.scope(|ui| {
+        ui.set_max_width(ui.spacing().text_edit_width);
+        let hint = "Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.";
+        ui.add(Label::new(RichText::new(hint).weak()).wrap());
+    });
     ui.end_row();
     let parsed = parse(text);
     if let Err(err) = &parsed {
         ui.label("");
-        ui.colored_label(ui.visuals().error_fg_color, err.to_string());
+        let color = ui.visuals().error_fg_color;
+        theme::status(ui, icons::X_CIRCLE, color, err.to_string());
         ui.end_row();
     }
     parsed

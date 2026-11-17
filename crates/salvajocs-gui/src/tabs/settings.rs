@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::anyhow;
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, Align, Layout, Ui};
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::layout::{Root, RootKind};
 use salvajocs_core::storage::Compression;
@@ -11,7 +11,7 @@ use salvajocs_core::storage::Compression;
 use crate::first_run::Connect;
 use crate::job::Job;
 use crate::state::State;
-use crate::theme;
+use crate::theme::{self, icons};
 use crate::widgets::{compression, labelled_edit};
 
 /// The roots offered in the picker, in order.
@@ -81,9 +81,9 @@ impl SettingsTab {
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
         theme::page(ui, |ui| {
             let adopted = self.repository_ui(ui, state);
-            ui.separator();
+            ui.add_space(16.0);
             self.compression_ui(ui, state);
-            ui.separator();
+            ui.add_space(16.0);
             self.roots_ui(ui, state);
             updates_ui(ui, state);
             self.cleanup_ui(ui, state);
@@ -93,27 +93,39 @@ impl SettingsTab {
 
     fn repository_ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
         ui.heading("Repository");
-        if let Some(config) = &state.config {
-            ui.label(format!("Current: {}", config.repository));
-            ui.label(format!(
-                "Password: {}",
-                password_mode_label(config.password)
-            ));
-        }
-        let connect = self.connect.get_or_insert_with(|| match &state.config {
-            Some(config) => Connect::editing(config, &state.credentials),
-            None => Connect::first_run(),
-        });
-        if let Some(connected) = connect.ui(ui, &state.env) {
-            state.adopt(connected, ui.ctx());
-            self.reset();
-            return true;
-        }
-        false
+        theme::group(ui, |ui| {
+            if let Some(config) = &state.config {
+                ui.label(format!("Current: {}", config.repository));
+                let glyph = match config.password {
+                    PasswordMode::None => icons::LOCK_SIMPLE_OPEN,
+                    PasswordMode::Keyring | PasswordMode::Ask => icons::LOCK_SIMPLE,
+                };
+                let muted = ui.visuals().weak_text_color();
+                let password = format!("Password: {}", password_mode_label(config.password));
+                theme::icon_label(ui, glyph, muted, password);
+                theme::row_separator(ui);
+            }
+            let connect = self.connect.get_or_insert_with(|| match &state.config {
+                Some(config) => Connect::editing(config, &state.credentials),
+                None => Connect::first_run(),
+            });
+            match connect.ui(ui, &state.env) {
+                Some(connected) => {
+                    state.adopt(connected, ui.ctx());
+                    self.reset();
+                    true
+                }
+                None => false,
+            }
+        })
     }
 
     fn compression_ui(&mut self, ui: &mut Ui, state: &mut State) {
         ui.heading("Compression");
+        theme::group(ui, |ui| self.compression_group_ui(ui, state));
+    }
+
+    fn compression_group_ui(&mut self, ui: &mut Ui, state: &mut State) {
         let Some(session) = &mut state.session else {
             ui.label("The repository is not open.");
             return;
@@ -139,7 +151,8 @@ impl SettingsTab {
             .show(ui, |ui| compression::ui(ui, "Compression", text))
             .inner;
         if let Some(error) = &self.compression_error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            let color = ui.visuals().error_fg_color;
+            theme::status(ui, icons::X_CIRCLE, color, error);
         }
         let new = parsed.ok().filter(|new| *new != session.compression);
         let apply = ui.add_enabled(
@@ -160,24 +173,39 @@ impl SettingsTab {
 
     fn roots_ui(&mut self, ui: &mut Ui, state: &mut State) {
         ui.heading("Roots");
+        theme::group(ui, |ui| self.roots_group_ui(ui, state));
+    }
+
+    fn roots_group_ui(&mut self, ui: &mut Ui, state: &mut State) {
         let Some(config) = &mut state.config else {
             ui.label("Choose a repository first.");
             return;
         };
         let mut changed = false;
         let mut remove = None;
+        if config.roots.is_empty() {
+            ui.weak(
+                "No roots yet. salvajocs finds the default Steam folders by itself. Add other \
+                 Steam libraries, games folders or Wine prefixes here.",
+            );
+        }
         for (index, root) in config.roots.iter().enumerate() {
+            if index > 0 {
+                theme::row_separator(ui);
+            }
             ui.horizontal(|ui| {
-                ui.label(format!(
-                    "{} ({})",
-                    root.path.display(),
-                    root_kind_label(root.kind)
-                ));
-                if ui.button("Remove").clicked() {
-                    remove = Some(index);
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let kind = root_kind_label(root.kind);
+                        ui.label(format!("{} ({kind})", root.path.display()));
+                    });
+                });
             });
         }
+        theme::row_separator(ui);
         if let Some(index) = remove {
             config.roots.remove(index);
             changed = true;
@@ -243,7 +271,7 @@ impl SettingsTab {
         if state.stale.is_none() {
             return;
         }
-        ui.separator();
+        ui.add_space(16.0);
         ui.label("Delete the keyring entries of the previous repository?");
         ui.horizontal(|ui| {
             if ui.button("Delete entries").clicked()
@@ -272,12 +300,12 @@ fn updates_ui(ui: &mut Ui, state: &mut State) {
     if state.env.check_update.is_none() {
         return;
     }
-    ui.separator();
+    ui.add_space(16.0);
     ui.heading("Updates");
-    if ui
-        .checkbox(&mut config.check_updates, "Check for updates at start")
-        .changed()
-    {
+    let checkbox = theme::group(ui, |ui| {
+        ui.checkbox(&mut config.check_updates, "Check for updates at start")
+    });
+    if checkbox.changed() {
         state.save_config(ui.ctx());
     }
 }

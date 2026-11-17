@@ -131,7 +131,9 @@ pub fn replace_text(harness: &mut Harness<'static, App>, label: &str, text: &str
 /// Drives the app the way eframe does, for as many frames as the test needs.
 pub fn harness(env: Env) -> Harness<'static, App> {
     Harness::builder()
-        .with_size(Vec2::new(1000.0, 900.0))
+        // Tall enough that the longest page, Settings, needs no scrolling: clicks land on the
+        // center of a widget, which must be on screen.
+        .with_size(Vec2::new(1000.0, 1400.0))
         .build_ui_state(
             |ui, app| {
                 let mut frame = eframe::Frame::_new_kittest();
