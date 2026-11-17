@@ -1,0 +1,50 @@
+app-id: io.github.jmigual.salvajocs
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: salvajocs
+finish-args:
+  # Downloads the game manifest and reaches remote repository backends (REST, rclone, OpenDAL).
+  - --share=network
+  # X11 shared memory; needed for X11 rendering without a performance penalty.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # OpenGL rendering (glow).
+  - --device=dri
+  # Game saves, Wine prefixes and Steam libraries can be anywhere in the home folder.
+  - --filesystem=home
+  # External drives that hold Steam libraries, Wine prefixes or the backup repository.
+  - --filesystem=/run/media
+  - --filesystem=/mnt
+  # The Steam Flatpak keeps its libraries and Proton prefixes here, which --filesystem=home
+  # does not expose; restore writes into them.
+  - --filesystem=~/.var/app/com.valvesoftware.Steam:rw
+  # Repository password in the Secret Service keyring.
+  - --talk-name=org.freedesktop.secrets
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/salvajocs/cargo
+modules:
+  - name: salvajocs
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked --bin salvajocs
+      - install -Dm755 target/release/salvajocs -t /app/bin
+      - install -Dm644 packaging/flatpak/io.github.jmigual.salvajocs.desktop -t /app/share/applications
+      - install -Dm644 packaging/flatpak/io.github.jmigual.salvajocs.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 crates/salvajocs-gui/assets/io.github.jmigual.salvajocs.svg -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm644 crates/salvajocs-gui/assets/io.github.jmigual.salvajocs.png -t /app/share/icons/hicolor/256x256/apps
+    sources:
+      # Local build. The Flathub copy of this manifest uses a git source; see README.md.
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .claude
+          - .flatpak-builder
+          - target
+      - cargo-sources.json
