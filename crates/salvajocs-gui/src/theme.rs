@@ -7,7 +7,7 @@ use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
     FontId, FontTweak, Frame, Label, Margin, Modal, Rect, Response, RichText, ScrollArea, Sense,
-    Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
+    Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals, WidgetText,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -207,12 +207,21 @@ fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
     }
 }
 
-/// A line of `text` in `color` after the icon `glyph`, for warnings, errors and results.
-pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
-    ui.horizontal(|ui| {
-        mark(ui, glyph, 16.0, color);
-        ui.add(Label::new(RichText::new(text).color(color)).wrap());
+/// A line of `text` after the icon `glyph` in `color`, for results. It is as tall as its text,
+/// not as a row of controls.
+pub fn icon_label(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<WidgetText>) {
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 0.0;
+        ui.horizontal(|ui| {
+            mark(ui, glyph, 16.0, color);
+            ui.add(Label::new(text).wrap());
+        });
     });
+}
+
+/// A line of `text` in `color` after the icon `glyph`, for warnings and errors.
+pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
+    icon_label(ui, glyph, color, RichText::new(text).color(color));
 }
 
 /// A modal dialog in the window frame: 20 px margins and the dialog corner radius, rather than
@@ -356,7 +365,7 @@ fn style(style: &mut Style) {
     let spacing = &mut style.spacing;
     spacing.item_spacing = Vec2::new(8.0, 8.0);
     spacing.button_padding = Vec2::new(12.0, 6.0);
-    spacing.interact_size = Vec2::new(40.0, 24.0);
+    spacing.interact_size = Vec2::new(40.0, 32.0);
     spacing.indent = 24.0;
     spacing.window_margin = Margin::same(20);
     spacing.menu_margin = Margin::same(6);

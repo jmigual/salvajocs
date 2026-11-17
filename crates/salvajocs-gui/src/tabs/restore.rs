@@ -710,10 +710,8 @@ impl RestoreTab {
                     Some(_) => "",
                 };
                 ui.label(source);
-                ui.horizontal(|ui| {
-                    theme::mark(ui, icons::ARROW_RIGHT, 16.0, muted);
-                    ui.label(format!("{}{flag}", write.target.display()));
-                });
+                let target = format!("{}{flag}", write.target.display());
+                theme::icon_label(ui, icons::ARROW_RIGHT, muted, target);
                 ui.horizontal(|ui| {
                     let label = ui.weak(format!("Override target {number}"));
                     let field = TextEdit::singleline(&mut preview.overrides[index])
@@ -878,10 +876,7 @@ impl RestoreTab {
             if *failed {
                 theme::status(ui, icons::X_CIRCLE, error_color, line);
             } else {
-                ui.horizontal(|ui| {
-                    theme::mark(ui, icons::CHECK_CIRCLE, 16.0, accent);
-                    ui.label(line);
-                });
+                theme::icon_label(ui, icons::CHECK_CIRCLE, accent, line);
             }
         }
     }

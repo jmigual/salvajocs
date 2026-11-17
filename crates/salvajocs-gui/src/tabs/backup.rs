@@ -325,6 +325,7 @@ impl BackupTab {
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().interact_size.y = 24.0;
             for (index, game) in report.games.iter().enumerate() {
                 if index > 0 {
                     theme::row_separator(ui);
@@ -489,10 +490,7 @@ impl BackupTab {
                     continue;
                 }
             };
-            ui.horizontal(|ui| {
-                theme::mark(ui, icons::CHECK_CIRCLE, 16.0, accent);
-                ui.label(text);
-            });
+            theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
         }
     }
 }
