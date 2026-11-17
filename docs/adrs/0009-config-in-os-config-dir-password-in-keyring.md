@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-17: named backend fields and rclone remotes replace the bare option
+list; compression is a dropdown.
 
 ## Context
 
@@ -29,25 +31,35 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `custom_games`.
   Compression is **not** stored here: it lives in the repository config (ADR-0003).
 - **Generic backend UI:**
-  - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone" and
-    "OpenDAL service" (a dropdown of the services rustic_backend builds for this OS, minus the
-    four below).
+  - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone remote"
+    and one entry per opendal service that rustic_backend builds for this OS, minus the four
+    below, by a friendly name ("WebDAV", "Amazon S3 (or compatible)"). The stored repository
+    string stays `opendal:<service>`.
   - Hidden services, because each is a trap in a backup picker (`config::tests` compares the
     list with opendal's registry):
     - `memory`: data vanishes when the process exits;
     - `http`: read-only;
     - `ghac`: works only inside GitHub Actions;
     - `fs`: duplicates "Local folder".
-  - Then the location string and a key/value list for options. No per-service forms.
-  - Any option can be ticked "secret". Its value then goes to the keyring and the config keeps
-    only the key.
+  - Local, REST and rclone show a location. rclone also lists its remotes
+    (`rclone listremotes`) in a dropdown that fills the start of the location.
+  - An opendal service shows named fields from `config::opendal_fields`: label, placeholder,
+    hint, required and secret per key. Required fields gate Continue/Apply. A test checks every
+    key against opendal's config structs, which ignore unknown keys.
+  - "Advanced options" holds a key/value list for any other option, with a link to the service's
+    opendal config page. Any option can be ticked "secret". Its value then goes to the keyring
+    and the config keeps only the key.
+  - Named fields use the same `repository_options` list as Advanced rows, so the config format
+    did not change. On load an option goes to a field only when its key and secret flag both
+    match, so the flag and the keyring scope never change. A key set twice blocks the form.
   - The picker states that `opendal:sftp` is missing on Windows builds, and that `rclone` needs
     the `rclone` binary.
 - **First run:** when the config file is missing, the GUI opens a modal with the backend picker,
-  a compression field, a password field and a "remember"
-  checkbox. Confirming probes the repo (ADR-0003). The compression field is one integer, where
-  empty = zstd default, `0` = off, and `1..=22` or `-7..=-1` are levels. Core validates the
-  range before init.
+  a compression dropdown, an encryption password field and a "remember"
+  checkbox. Confirming probes the repo (ADR-0003). The dropdown offers Off, Fast (1), Default
+  (3), Smaller (9), Smallest (19) and Custom level, a number field where `0` = off and
+  `1..=22` or `-7..=-1` are levels. A stored level without a preset selects Custom level. Core
+  validates the range before init.
   - `Ready` → use it; the compression control is ignored and the repo's own level is shown.
   - `Missing` → ask "Create a new repository at <location>?" and init (with the chosen
     compression) only when the user confirms. A typo must not silently create an empty repo.
@@ -83,13 +95,16 @@ secrets (access keys, tokens) must not sit in the config in plain text.
 
 - **Password file next to the config:** simplest, but the password sits in plain text on disk.
 - **Ask every launch only:** safe but annoying. Kept as the fallback and as the user's choice.
-- **One form per backend service:** nicer for s3/b2, but about 25 services. The generic
-  key/value list matches rustic_backend's own options map.
+- **One hand-written form per backend service:** about 25 services. A data table of fields per
+  opendal service gives the same form without the code, and a test keeps it honest.
+- **Only the generic key/value list** (the first version): users could not tell which keys a
+  service needs.
 - **TOML config:** an extra dependency when YAML is already needed for the manifest.
 
 ## Consequences
 
 - On Linux without a Secret Service daemon the app asks per session.
 - Changing the repository in Settings re-runs the same probe as first run.
-- Users of remote backends must know the option keys their service needs (opendal's names).
-  The picker links to rustic's backend docs.
+- An opendal upgrade can rename keys; `named_field_keys_are_opendal_config_keys` fails then.
+- Options without a field are set under Advanced, where the user needs opendal's key names; the
+  form links to the service's option page.

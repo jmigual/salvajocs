@@ -18,13 +18,23 @@ The **Backend** list offers:
 | --- | --- | --- |
 | Local folder | A folder on this machine or a mounted drive. | The default. **Browse** opens a folder picker. |
 | REST server | The URL of a rustic or restic REST server. | |
-| rclone remote | `remote:path` | Needs the `rclone` program on your `PATH`. |
-| OpenDAL: `<service>` | None. Set the service's options below. | Services: azblob, azdls, azfile, b2, cos, dropbox, ftp, gcs, gdrive, ipmfs, obs, onedrive, oss, pcloud, s3, sftp, swift, webdav, webhdfs, yandex-disk. |
+| rclone remote | `remote:path` | Needs the `rclone` program on your `PATH`. A **Remote** list shows the remotes from `rclone listremotes`; picking one fills the start of the location. |
+| A service by name | None. Fill in the fields of the service. | Amazon S3 (or compatible), Backblaze B2, WebDAV, SFTP, Google Drive, Dropbox, OneDrive, pCloud, FTP, Azure Blob Storage, Azure Data Lake Storage, Azure Files, Google Cloud Storage, Tencent Cloud COS, Huawei Cloud OBS, Alibaba Cloud OSS, OpenStack Swift, Hadoop WebHDFS, IPFS (MFS) and Yandex Disk. |
 
-For an OpenDAL service, add **options** such as a bucket or a root. The dialog links to the option
-names. Tick **secret** on an option that holds a key or token. Its value is never written to the config
-file. With **Remember in the system keyring** ticked it goes to the keyring. Otherwise salvajocs
-asks for it each session.
+Each service shows its own fields, such as **Server URL**, **Bucket** or **Access key ID**.
+Fields marked **Required.** must be filled before **Continue** is enabled. Secret fields such as
+keys and tokens are masked, and their values are never written to the config file. With
+**Remember in the system keyring** ticked they go to the keyring. Otherwise salvajocs asks for
+them each session.
+
+**Advanced options** holds a free list of key and value pairs for settings that have no field,
+such as a retry count. The **Option reference** link opens the list of keys of the service. Tick
+**secret** on an option that holds a key or token. Options saved by an earlier version open
+with the list expanded.
+
+If `rclone` is not installed, the rclone entry says so and you can still type the location. The
+Flatpak sandbox has no `rclone` on its `PATH`, so the remote list stays empty there and the rclone
+backend does not run.
 
 `sftp` does not exist in Windows builds. If you use two machines and one runs Windows, pick another
 backend. See [Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
