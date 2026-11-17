@@ -52,6 +52,13 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.3.1" date="2026-11-17">
+      <description>
+        <p>The app is called Salvajocs. On Wayland, the task bar and title bar show the app icon
+        when an AppImage tool installed the app under another name. Support for running inside
+        a Flatpak sandbox is removed.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-17">
       <description>
         <p>Each storage backend has its own named fields and a help link to its docs page. Other
