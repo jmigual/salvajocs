@@ -27,11 +27,19 @@ rfd = { workspace = true, features = ["xdg-portal"] }
 salvajocs-core.workspace = true
 thiserror.workspace = true
 
-[dev-dependencies]
-# `tests/appearance.rs` renders screens to PNGs for the README: `wgpu` provides `Harness::render`,
-# `snapshot` the PNG encoding. An adapter is needed only when that ignored test runs with
+[features]
+# Dev-only: builds `tests/appearance.rs`, which renders the README screenshots. `wgpu` provides
+# `Harness::render`, `snapshot` the PNG encoding; both pull in the whole wgpu stack, so they stay
+# off in normal builds and CI. An adapter is needed only when the ignored tests run with
 # SALVAJOCS_SCREENSHOTS set.
-egui_kittest = { workspace = true, features = ["snapshot", "wgpu"] }
+screenshots = ["egui_kittest/snapshot", "egui_kittest/wgpu"]
+
+[[test]]
+name = "appearance"
+required-features = ["screenshots"]
+
+[dev-dependencies]
+egui_kittest.workspace = true
 # Used by `tests/appearance.rs` alone, to give fixture snapshots a made-up host and time, which
 # `salvajocs_core::storage::Storage` cannot (it stamps this machine's host and the current time).
 rustic_backend.workspace = true

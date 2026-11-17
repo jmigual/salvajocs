@@ -209,7 +209,7 @@ runner has no Secret Service.
 To regenerate the screenshots in `docs/images` (Linux only):
 
 ```sh
-SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs --test appearance -- --ignored
+SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs --features screenshots --test appearance -- --ignored
 ```
 
 `salvajocs-core` is published as a library on [crates.io](https://crates.io/crates/salvajocs-core),
