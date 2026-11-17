@@ -6136,6 +6136,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "salvajocs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 7.0.0",
+ "eframe",
+ "egui_kittest",
+ "rfd",
+ "rustic_backend",
+ "rustic_core",
+ "salvajocs-core",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "salvajocs-core"
 version = "0.1.0"
 dependencies = [
@@ -6154,22 +6170,6 @@ dependencies = [
  "thiserror 2.0.21",
  "windows-native-keyring-store",
  "windows-registry",
-]
-
-[[package]]
-name = "salvajocs-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs 7.0.0",
- "eframe",
- "egui_kittest",
- "rfd",
- "rustic_backend",
- "rustic_core",
- "salvajocs-core",
- "tempfile",
- "thiserror 2.0.21",
 ]
 
 [[package]]

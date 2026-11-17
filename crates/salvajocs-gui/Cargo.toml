@@ -1,6 +1,10 @@
 [package]
-name = "salvajocs-gui"
-version = "0.1.0"
+name = "salvajocs"
+version.workspace = true
+description = "Desktop app that backs up and restores game saves in a restic-format repository, across Linux, Wine/Proton and Windows"
+readme = "../../README.md"
+keywords = ["backup", "restic", "game-saves", "wine", "proton"]
+categories = ["filesystem", "games", "gui"]
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +24,7 @@ dirs.workspace = true
 # glow instead of the default wgpu: a lighter renderer that needs no GPU stack at build time.
 eframe = { workspace = true, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "system_fonts", "wayland", "x11"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
-salvajocs-core = { path = "../salvajocs-core" }
+salvajocs-core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -1,6 +1,9 @@
 [package]
 name = "salvajocs-core"
-version = "0.1.0"
+version.workspace = true
+description = "Game-save scanning, backup and cross-OS restore into a restic-format repository"
+keywords = ["backup", "restic", "game-saves", "wine", "proton"]
+categories = ["filesystem", "games"]
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
