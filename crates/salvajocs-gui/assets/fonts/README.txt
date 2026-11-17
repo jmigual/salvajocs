@@ -5,7 +5,8 @@ SIL Open Font License 1.1 (see OFL.txt):
     sha256 5a455d1cfa099b601ab70751bb9673e8fe1854dc4500c80e1a220d0d75e31745
 
 salvajocs-icons.ttf is a subset of the Phosphor Icons regular font (MIT, see
-Phosphor-LICENSE.txt), holding only the icons the app draws:
+Phosphor-LICENSE.txt), holding the 22 icons picked for the app. It draws 13 of them, the ones in
+theme::icons; the others are spare:
 
     https://raw.githubusercontent.com/phosphor-icons/web/v2.1.2/src/regular/Phosphor.ttf
     sha256 06b91e022b7ee899a63efced879392a74f0bacbda54e4467e9f663220d173a10
