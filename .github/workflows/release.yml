@@ -7,8 +7,11 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  publish:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -16,6 +19,54 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "salvajocs") | .version')
           test "v$version" = "$GITHUB_REF_NAME"
+
+  binaries:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest runner image: the binary links the runner's glibc, so older is more compatible.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin salvajocs --target ${{ matrix.target }}
+      # Named and laid out as cargo-binstall expects by default, so `cargo binstall salvajocs`
+      # needs no [package.metadata.binstall]: <name>-<target>-v<version>.<ext> holding a
+      # <name>-<target>-v<version>/ directory.
+      - name: Package
+        run: |
+          dir="salvajocs-${{ matrix.target }}-$GITHUB_REF_NAME"
+          mkdir "$dir"
+          cp LICENSE README.md "$dir/"
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp "target/${{ matrix.target }}/release/salvajocs.exe" "$dir/"
+            7z a "$dir.zip" "$dir"
+          else
+            cp "target/${{ matrix.target }}/release/salvajocs" "$dir/"
+            tar czf "$dir.tgz" "$dir"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            salvajocs-*.tgz
+            salvajocs-*.zip
+          if-no-files-found: error
+
+  crates:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - run: cargo publish --workspace --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_KEY }}
