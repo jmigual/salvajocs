@@ -17,6 +17,7 @@ use crate::tabs::{
     Tab, backup::BackupTab, custom_games::CustomGamesTab, restore::RestoreTab,
     settings::SettingsTab,
 };
+use crate::theme;
 use crate::update::Updater;
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
@@ -302,6 +303,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if !mem::replace(&mut self.started, true) {
+            // Here rather than in eframe's creation hook, which the test harnesses do not run.
+            theme::apply(&ctx);
+            // `ui` was styled before `apply`, and the panels below inherit its style.
+            ui.set_style(ctx.global_style());
             self.start(&ctx);
         }
         self.poll_manifest();

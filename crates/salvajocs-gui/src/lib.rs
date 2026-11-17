@@ -8,6 +8,7 @@ pub mod prompt;
 pub mod startup;
 pub mod state;
 pub mod tabs;
+pub mod theme;
 pub mod update;
 pub mod widgets;
 

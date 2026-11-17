@@ -221,7 +221,9 @@ before opening an ADR. The implementation plan is [docs/plan.md](docs/plan.md).
 
 ## License
 
-[MIT](LICENSE).
+The code is [MIT](LICENSE). The app embeds fonts under their own licenses: Atkinson Hyperlegible
+Next under the [SIL Open Font License 1.1](crates/salvajocs-gui/assets/fonts/OFL.txt), and egui's
+default fonts Ubuntu Light (Ubuntu Font Licence 1.0) and Hack (MIT and Bitstream Vera).
 
 ## Credits
 
