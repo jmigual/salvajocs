@@ -2,6 +2,8 @@
 //! snapshot format (ADR-0004, ADR-0005, ADR-0008).
 
 use std::ffi::OsStr;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use serde::{Deserialize, Serialize};
@@ -149,16 +151,47 @@ pub struct LinuxFolders {
 }
 
 impl LinuxFolders {
-    /// The current user's folders, honouring `XDG_*`. `None` if one cannot be determined.
+    /// The current user's folders, honouring `XDG_*`; in a Flatpak sandbox the host's
+    /// (ADR-0012). `None` if one cannot be determined.
     #[cfg(unix)]
     pub fn native() -> Option<Self> {
+        Self::native_with(in_flatpak(), |name| std::env::var_os(name))
+    }
+
+    /// [`LinuxFolders::native`] with the sandbox state and the environment given. The sandbox
+    /// points `XDG_*` into the app's own dir, so the host's `HOST_XDG_*` (set by Flatpak) or
+    /// the XDG defaults under `$HOME` are used instead.
+    #[cfg(unix)]
+    fn native_with(sandboxed: bool, var: impl Fn(&str) -> Option<OsString>) -> Option<Self> {
+        let home = dirs::home_dir()?;
+        // Relative values are ignored, as `dirs` does for `XDG_*`.
+        let host = |name: &str, default: &str| {
+            var(name)
+                .map(PathBuf::from)
+                .filter(|dir| dir.is_absolute())
+                .unwrap_or_else(|| home.join(default))
+        };
+        let (xdg_data, xdg_config) = if sandboxed {
+            (
+                host("HOST_XDG_DATA_HOME", ".local/share"),
+                host("HOST_XDG_CONFIG_HOME", ".config"),
+            )
+        } else {
+            (dirs::data_dir()?, dirs::config_dir()?)
+        };
         Some(Self {
             user: os_user(),
-            home: dirs::home_dir()?,
-            xdg_data: dirs::data_dir()?,
-            xdg_config: dirs::config_dir()?,
+            home,
+            xdg_data,
+            xdg_config,
         })
     }
+}
+
+/// Whether the app runs in a Flatpak sandbox, which hides the host's `XDG_*` dirs and
+/// processes (ADR-0012).
+pub fn in_flatpak() -> bool {
+    cfg!(target_os = "linux") && Path::new("/.flatpak-info").exists()
 }
 
 /// The OS user name from `USER` or `USERNAME`; empty when neither is set.

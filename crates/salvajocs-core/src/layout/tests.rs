@@ -619,3 +619,47 @@ mod windows_absolute {
         assert_eq!(base_dir(Base::Absolute, &native(), &no_roots_vars()), None);
     }
 }
+
+/// An environment where only `host` is set.
+#[cfg(unix)]
+fn sandbox_env(host: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+    let vars = host.to_vec();
+    move |name| {
+        (vars.iter())
+            .find(|(n, _)| *n == name)
+            .map(|(_, value)| (*value).into())
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sandboxed_folders_come_from_the_host_vars() {
+    let host = [
+        ("HOST_XDG_DATA_HOME", "/host/data"),
+        ("HOST_XDG_CONFIG_HOME", "/host/config"),
+    ];
+    let folders = LinuxFolders::native_with(true, sandbox_env(&host)).unwrap();
+    assert_eq!(folders.xdg_data, Path::new("/host/data"));
+    assert_eq!(folders.xdg_config, Path::new("/host/config"));
+}
+
+#[cfg(unix)]
+#[test]
+fn sandboxed_folders_fall_back_to_the_home_defaults() {
+    let home = dirs::home_dir().unwrap();
+    for host in [&[][..], &[("HOST_XDG_DATA_HOME", "relative/data")][..]] {
+        let folders = LinuxFolders::native_with(true, sandbox_env(host)).unwrap();
+        assert_eq!(folders.home, home);
+        assert_eq!(folders.xdg_data, home.join(".local/share"));
+        assert_eq!(folders.xdg_config, home.join(".config"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unsandboxed_folders_ignore_the_host_vars() {
+    let host = [("HOST_XDG_DATA_HOME", "/host/data")];
+    let folders = LinuxFolders::native_with(false, sandbox_env(&host)).unwrap();
+    assert_eq!(Some(folders.xdg_data), dirs::data_dir());
+    assert_eq!(Some(folders.xdg_config), dirs::config_dir());
+}
