@@ -39,6 +39,9 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "salvajocs.exe"; Flags: igno
 Source: "..\..\crates\salvajocs-gui\assets\salvajocs.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\crates\salvajocs-gui\assets\fonts\OFL.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\crates\salvajocs-gui\assets\fonts\Phosphor-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\crates\salvajocs-gui\assets\fonts\Ubuntu-font-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\crates\salvajocs-gui\assets\fonts\Hack-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\salvajocs"; Filename: "{app}\salvajocs.exe"; IconFilename: "{app}\salvajocs.ico"
