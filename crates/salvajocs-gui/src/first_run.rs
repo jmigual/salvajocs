@@ -93,7 +93,7 @@ impl Connect {
         let editing = matches!(self.step, Step::Editing(_));
         ui.add_enabled_ui(editing, |ui| {
             form_grid("connect_form").show(ui, |ui| {
-                self.form.ui(ui);
+                self.form.ui(ui, env);
                 labelled_edit(ui, "Encryption password", &mut self.password, true);
                 ui.end_row();
                 ui.label("");

@@ -68,6 +68,7 @@ fn state_with(store: crate::env::MemorySecrets) -> State {
         check_update: None,
         installed_by_installer: || false,
         run_installer: |_| panic!("tests never start an installer"),
+        rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
     });
     state.config = Some(config("/backups", PasswordMode::Keyring, false));
     state.credentials.password = "right".to_string();

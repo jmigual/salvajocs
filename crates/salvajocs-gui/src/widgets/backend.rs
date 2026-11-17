@@ -3,12 +3,14 @@
 //! option can be marked secret.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::path::PathBuf;
 
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendField, BackendKind, RepoOption};
 
 use super::{field_hint, labelled_edit};
+use crate::env::Env;
 use crate::job::Job;
 use crate::theme::{self, icons};
 
@@ -30,6 +32,13 @@ struct Entry<'a> {
     secret: bool,
 }
 
+/// The rclone remotes: not asked for yet, being listed, or the answer.
+enum Remotes {
+    Unasked,
+    Listing(Job<io::Result<Vec<String>>>),
+    Listed(io::Result<Vec<String>>),
+}
+
 /// The state of the backend picker.
 pub struct BackendForm {
     kind: BackendKind,
@@ -39,6 +48,7 @@ pub struct BackendForm {
     /// The Advanced options.
     options: Vec<OptionRow>,
     advanced_open: bool,
+    remotes: Remotes,
     picker: Option<Job<Option<PathBuf>>>,
 }
 
@@ -50,6 +60,7 @@ impl Default for BackendForm {
             named: BTreeMap::new(),
             options: Vec::new(),
             advanced_open: false,
+            remotes: Remotes::Unasked,
             picker: None,
         }
     }
@@ -126,6 +137,7 @@ impl BackendForm {
             named,
             advanced_open: !options.is_empty(),
             options,
+            remotes: Remotes::Unasked,
             picker: None,
         }
     }
@@ -216,8 +228,9 @@ impl BackendForm {
             .collect()
     }
 
-    /// Draws the picker as rows of a two-column grid.
-    pub fn ui(&mut self, ui: &mut Ui) {
+    /// Draws the picker as rows of a two-column grid. `env` lists the rclone remotes, once, the
+    /// first time that kind is shown.
+    pub fn ui(&mut self, ui: &mut Ui, env: &Env) {
         if let Some(job) = &mut self.picker
             && let Some(result) = job.take_result()
         {
@@ -240,6 +253,14 @@ impl BackendForm {
         ui.end_row();
 
         if !matches!(self.kind, BackendKind::OpenDal(_)) {
+            if self.kind == BackendKind::Rclone {
+                self.poll_remotes(ui.ctx(), env);
+                if let Some(note) = self.remotes_note() {
+                    ui.label("");
+                    field_hint(ui, &note);
+                    ui.end_row();
+                }
+            }
             ui.label("");
             field_hint(
                 ui,
@@ -250,6 +271,9 @@ impl BackendForm {
                 },
             );
             ui.end_row();
+            if self.kind == BackendKind::Rclone {
+                self.remote_ui(ui);
+            }
             labelled_edit(ui, "Location", &mut self.location, false);
             if self.kind == BackendKind::Local
                 && ui.button("Browse").clicked()
@@ -270,6 +294,73 @@ impl BackendForm {
         }
         self.duplicate_ui(ui);
         self.advanced_ui(ui);
+    }
+
+    /// Starts listing the remotes on first use and collects the answer.
+    fn poll_remotes(&mut self, ctx: &egui::Context, env: &Env) {
+        match &mut self.remotes {
+            Remotes::Unasked => {
+                let list = env.rclone_remotes;
+                self.remotes = Remotes::Listing(Job::spawn(ctx, move || Ok(list())));
+            }
+            Remotes::Listing(job) => {
+                if let Some(result) = job.take_result() {
+                    self.remotes = Remotes::Listed(
+                        result.unwrap_or_else(|err| Err(io::Error::other(format!("{err:#}")))),
+                    );
+                }
+            }
+            Remotes::Listed(_) => {}
+        }
+    }
+
+    /// Why there is no remote to choose from, once the listing is back.
+    fn remotes_note(&self) -> Option<String> {
+        match &self.remotes {
+            Remotes::Listed(Err(err)) if err.kind() == io::ErrorKind::NotFound => {
+                Some("rclone is not installed or not on the PATH.".to_string())
+            }
+            Remotes::Listed(Err(err)) => Some(format!("Could not list rclone remotes: {err}")),
+            Remotes::Listed(Ok(list)) if list.is_empty() => {
+                Some("rclone has no remotes yet. Run rclone config first.".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// The Remote dropdown, when rclone listed any. Choosing one replaces the part of Location
+    /// before the first `:`, which stays the one place the repository is kept.
+    fn remote_ui(&mut self, ui: &mut Ui) {
+        let Remotes::Listed(Ok(list)) = &self.remotes else {
+            return;
+        };
+        if list.is_empty() {
+            return;
+        }
+        let (current, path) = match self.location.split_once(':') {
+            Some((remote, path)) => (remote, path),
+            None => (self.location.as_str(), ""),
+        };
+        let current = list.iter().find(|remote| remote.as_str() == current);
+        let label = ui.label("Remote");
+        let mut chosen = None;
+        egui::ComboBox::from_id_salt("rclone_remote")
+            .selected_text(current.map_or("Choose a remote", String::as_str))
+            .show_ui(ui, |ui| {
+                theme::pill_list(ui);
+                for remote in list {
+                    let selected = current == Some(remote);
+                    if ui.selectable_label(selected, remote).clicked() && !selected {
+                        chosen = Some(format!("{remote}:{path}"));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        if let Some(location) = chosen {
+            self.location = location;
+        }
     }
 
     /// A named field: its edit, then a hint row when it has a hint or is required.

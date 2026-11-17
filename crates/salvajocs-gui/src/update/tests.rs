@@ -34,6 +34,7 @@ fn state(dir: &Path) -> State {
         check_update: None,
         installed_by_installer: || true,
         run_installer: fake_installer,
+        rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
     })
 }
 

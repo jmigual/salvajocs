@@ -257,6 +257,56 @@ fn webdav_needs_its_server_url() {
 }
 
 #[test]
+fn choosing_an_rclone_remote_sets_the_start_of_the_location() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(&tmp);
+    env.rclone_remotes = || Ok(vec!["gdrive".to_string(), "nas".to_string()]);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    choose(&mut harness, "Backend", "rclone remote");
+    run_until(&mut harness, "the remote list", |h| {
+        h.query_all_by_label("Remote").next().is_some()
+    });
+    choose(&mut harness, "Remote", "nas");
+    assert_eq!(
+        harness.get_by_label("Location").value().as_deref(),
+        Some("nas:")
+    );
+
+    fill(&mut harness, "Location", "games");
+    choose(&mut harness, "Remote", "gdrive");
+    assert_eq!(
+        harness.get_by_label("Location").value().as_deref(),
+        Some("gdrive:games"),
+        "the path after the colon is kept"
+    );
+}
+
+#[test]
+fn a_missing_rclone_is_said_and_the_location_still_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    choose(&mut harness, "Backend", "rclone remote");
+    run_until(&mut harness, "the rclone note", |h| {
+        shows(h, "rclone is not installed")
+    });
+
+    assert!(harness.query_all_by_label("Remote").next().is_none());
+    fill(&mut harness, "Location", "nas:games");
+    assert!(
+        !egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+            .is_disabled()
+    );
+}
+
+#[test]
 fn applying_an_untouched_form_keeps_the_free_options() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);

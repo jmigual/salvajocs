@@ -2,6 +2,7 @@
 //! download and the update check. Tests substitute their own so nothing touches the real keyring
 //! or the network.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(test)]
@@ -130,6 +131,8 @@ pub struct Env {
     pub installed_by_installer: fn() -> bool,
     /// Starts a downloaded installer (`update::run_installer`).
     pub run_installer: fn(&Path) -> Result<(), UpdateError>,
+    /// Lists the rclone remotes (`config::rclone_remotes`).
+    pub rclone_remotes: fn() -> io::Result<Vec<String>>,
 }
 
 impl Env {
@@ -145,6 +148,7 @@ impl Env {
             check_update: cfg!(windows).then_some(update::check as CheckUpdate),
             installed_by_installer,
             run_installer: update::run_installer,
+            rclone_remotes: config::rclone_remotes,
         })
     }
 }
