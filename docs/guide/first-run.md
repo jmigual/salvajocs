@@ -1,7 +1,7 @@
 # First run
 
 The first time salvajocs starts it asks where to store backups, how much to compress them and
-whether to protect them with a password. This page explains each choice. Back to the
+whether to protect them with an encryption password. This page explains each choice. Back to the
 [guide index](README.md).
 
 ![The first-run dialog](../images/first-run.png)
@@ -49,16 +49,16 @@ it uses the same one. You set it when the repository is created. To change it la
 [Settings](settings.md#compression). If the repository already exists, the field in this dialog is
 ignored and the repository's own level is kept.
 
-## Password and keyring
+## Encryption password and keyring
 
-The password encrypts the repository. Three modes exist, and the dialog picks one from what you
+The encryption password encrypts the repository. It is not the login of your server or storage account. Three modes exist, and the dialog picks one from what you
 type:
 
 | You do | Mode |
 | --- | --- |
-| Leave the password empty | No password. Anyone who can reach the repository can read it. The dialog warns you. |
-| Type a password and tick **Remember in the system keyring** | Stored in the keyring (Secret Service on Linux, Credential Manager on Windows). |
-| Type a password and untick it | Asked once each time you start the app. |
+| Leave the encryption password empty | No password. Anyone who can reach the repository can read it. The dialog warns you. |
+| Type an encryption password and tick **Remember in the system keyring** | Stored in the keyring (Secret Service on Linux, Credential Manager on Windows). |
+| Type an encryption password and untick it | Asked once each time you start the app. |
 
 If the keyring is missing or refuses the value, salvajocs shows a warning and asks for the secret
 each session instead. On Linux, without a Secret Service daemon it always asks. The Windows
@@ -67,7 +67,7 @@ Credential Manager rejects values longer than 2560 bytes, which also falls back 
 At each start salvajocs asks, in a **Repository secrets** dialog, only for the secrets it cannot
 find in the keyring.
 
-Keep the password safe. Without it nobody can read the backups, including you.
+Keep the encryption password safe. Without it nobody can read the backups, including you.
 
 ## Creating or opening
 

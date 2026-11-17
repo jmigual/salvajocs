@@ -8,7 +8,7 @@ It describes the app as it is today. For the project overview, go back to the
 | Page | What it covers |
 | --- | --- |
 | [Installation](installation.md) | Install salvajocs on Linux or Windows: AppImage, Windows zip, cargo or Flatpak. |
-| [First run](first-run.md) | Choose where backups are stored, the compression level and the password. |
+| [First run](first-run.md) | Choose where backups are stored, the compression level and the encryption password. |
 | [Backup](backup.md) | Scan for games and back them up. |
 | [Restore](restore.md) | Pick a snapshot, check the preview, restore, and undo. |
 | [Cross-OS restore](cross-os-restore.md) | Move saves between Wine/Proton on Linux and Windows. |

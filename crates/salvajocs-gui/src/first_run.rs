@@ -15,7 +15,7 @@ use crate::job::Job;
 use crate::startup::Credentials;
 use crate::theme::{self, icons};
 use crate::widgets::backend::BackendForm;
-use crate::widgets::{compression, form_grid, labelled_edit};
+use crate::widgets::{compression, field_hint, form_grid, labelled_edit};
 
 /// A repository the user chose and that is now open. The config is not saved yet:
 /// `State::adopt` saves it with the current roots and custom games.
@@ -94,7 +94,13 @@ impl Connect {
         ui.add_enabled_ui(editing, |ui| {
             form_grid("connect_form").show(ui, |ui| {
                 self.form.ui(ui);
-                labelled_edit(ui, "Password", &mut self.password, true);
+                labelled_edit(ui, "Encryption password", &mut self.password, true);
+                ui.end_row();
+                ui.label("");
+                field_hint(
+                    ui,
+                    "Encrypts the backups. Not the login of your server or storage account.",
+                );
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(&mut self.remember, "Remember in the system keyring");
@@ -108,7 +114,7 @@ impl Connect {
                             ui,
                             icons::WARNING,
                             warn,
-                            "No password: the repository will not be encrypted.",
+                            "No encryption password: the repository will not be encrypted.",
                         );
                         ui.add_space(8.0);
                     });
@@ -230,7 +236,7 @@ fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env
     match state {
         RepoState::Ready => finishing(ctx, env, attempt, false),
         RepoState::Missing => Step::Confirm(attempt),
-        RepoState::WrongPassword => Step::Editing(Some("Wrong repository password.".to_string())),
+        RepoState::WrongPassword => Step::Editing(Some("Wrong encryption password.".to_string())),
         RepoState::Error(message) => Step::Editing(Some(message)),
     }
 }

@@ -30,7 +30,7 @@ impl SecretPrompt {
     /// A prompt for the password alone, after the one that was tried did not open the repository.
     pub fn wrong_password(found: Credentials) -> Self {
         Self {
-            error: Some("Wrong repository password."),
+            error: Some("Wrong encryption password."),
             ..Self::new(found, vec![SecretKey::Password])
         }
     }
@@ -53,7 +53,7 @@ impl SecretPrompt {
             .show(ui, |ui| {
                 for (key, answer) in &mut self.answers {
                     let label = match key {
-                        SecretKey::Password => "Repository password".to_string(),
+                        SecretKey::Password => "Encryption password".to_string(),
                         SecretKey::Option(key) => format!("Option {key}"),
                     };
                     labelled_edit(ui, &label, answer, true);

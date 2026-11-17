@@ -133,7 +133,7 @@ fn backend_option_marked_secret_not_written_to_config() {
     });
 
     fill(&mut harness, "Location", &repository);
-    fill(&mut harness, "Password", "pw-1");
+    fill(&mut harness, "Encryption password", "pw-1");
     harness.get_by_label("Add option").click();
     run_settled(&mut harness);
     fill(&mut harness, "Option 1 key", "access_key");
@@ -185,7 +185,7 @@ fn startup_prompts_for_missing_secret_option() {
 
     assert!(shows(&harness, "Option access_key"));
     assert!(
-        !shows(&harness, "Repository password"),
+        !shows(&harness, "Encryption password"),
         "only the missing secrets are asked for"
     );
 }
@@ -205,9 +205,9 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
     let mut harness = harness(env);
 
     run_until(&mut harness, "the password prompt", |h| {
-        shows(h, "Wrong repository password")
+        shows(h, "Wrong encryption password")
     });
-    fill(&mut harness, "Repository password", "right");
+    fill(&mut harness, "Encryption password", "right");
     harness.get_by_label("Open repository").click();
 
     run_until(&mut harness, "the repository to open", |h| {

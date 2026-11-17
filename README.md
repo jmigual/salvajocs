@@ -49,7 +49,7 @@ other way round.
 | Storage | One repository for every machine: a local folder, a REST server, an rclone remote or an OpenDAL service (S3, WebDAV, Google Drive and more), through the embedded rustic library. The Restore tab lists the backups of all machines. |
 | Readable data | The repository is plain restic format. You can list and copy files out of it with the restic command line. |
 | Compression | zstd, chosen when the repository is created: off, default, levels 1 to 22 or -7 to -1. Changeable in Settings. |
-| Password | Optional. Kept in the OS keyring (Secret Service on Linux, Credential Manager on Windows) or asked once per session. |
+| Encryption password | Optional. Kept in the OS keyring (Secret Service on Linux, Credential Manager on Windows) or asked once per session. |
 | Backup | One snapshot per game, deduplicated by the repository. A game that did not change adds no snapshot. |
 | Restore | Preview of every file and registry key first, per-file target override, a safety backup of what would be overwritten, undo. |
 | Cross-OS | Files are stored under named folders, not absolute paths, and the Windows user name is never stored. A Proton save restores on Windows and the other way round. Games with a native Linux build and a Windows build map through saved pairs, engine rules (Unity, Godot), the manifest, or a dialog. Choices are remembered. |
@@ -62,7 +62,7 @@ other way round.
 | ![The Backup tab with a scan result](docs/images/backup.png) | ![The Restore tab with the plan for a snapshot](docs/images/restore.png) |
 | **Mapping dialog: where each folder goes on the other build** | **Custom games: a game's paths, pairs and skipped folders** |
 | ![The restore mapping dialog](docs/images/mapping-dialog.png) | ![The Custom games tab with the game form](docs/images/custom-games.png) |
-| **Settings: repository, compression and roots** | **First run: repository, compression and password** |
+| **Settings: repository, compression and roots** | **First run: repository, compression and encryption password** |
 | ![The Settings tab](docs/images/settings.png) | ![The first-run dialog](docs/images/first-run.png) |
 
 ## How it works
@@ -114,7 +114,7 @@ supported.
 ## Quick start
 
 1. Start `salvajocs`. On first run, choose where backups go (a folder is the default), an optional
-   compression level and an optional password. salvajocs asks before it creates a new repository.
+   compression level and an optional encryption password. salvajocs asks before it creates a new repository.
 2. Open the **Backup** tab and click **Scan for games**. Tick the games and click
    **Back up N games**.
 3. On the machine you want to restore to, start salvajocs and connect to the same repository.
@@ -133,7 +133,7 @@ You play a game with Proton on Linux and want its save on your Windows PC.
 2. **Back up on Linux.** Scan, tick the game, **Back up 1 game**. The save files come from the
    Proton prefix, and the game's registry keys come from the prefix's `user.reg`.
 3. **Connect on Windows.** Start salvajocs, choose the same backend and location, and type the same
-   password.
+   encryption password.
 4. **Restore on Windows.** **Load backups**, choose the game and the snapshot from the Linux
    machine, **Preview**. The plan lists each file in your Windows folders and the registry keys. Click **Restore files**.
 
@@ -182,7 +182,7 @@ for what was tested.
 The [user guide](docs/guide/README.md) covers the app tab by tab:
 
 - [Installation](docs/guide/installation.md)
-- [First run](docs/guide/first-run.md): repository, compression, password and keyring
+- [First run](docs/guide/first-run.md): repository, compression, encryption password and keyring
 - [Backup](docs/guide/backup.md)
 - [Restore](docs/guide/restore.md): targets, preview, overrides, safety backup, undo
 - [Cross-OS restore](docs/guide/cross-os-restore.md): Wine/Proton and Windows, the mapping dialog

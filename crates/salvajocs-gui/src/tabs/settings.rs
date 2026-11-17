@@ -27,7 +27,7 @@ fn root_kind_label(kind: RootKind) -> &'static str {
 
 fn password_mode_label(mode: PasswordMode) -> &'static str {
     match mode {
-        PasswordMode::None => "No password",
+        PasswordMode::None => "None",
         PasswordMode::Keyring => "Stored in the system keyring",
         PasswordMode::Ask => "Asked once per session",
     }
@@ -97,7 +97,7 @@ impl SettingsTab {
             if let Some(config) = &state.config {
                 ui.label(format!("Current: {}", config.repository));
                 ui.label(format!(
-                    "Password: {}",
+                    "Encryption password: {}",
                     password_mode_label(config.password)
                 ));
                 theme::row_separator(ui);

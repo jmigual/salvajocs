@@ -15,12 +15,12 @@ processes, so it asks you to close every Wine and Proton program and confirm ins
 Backing up is not blocked. What the scan reads from `user.reg` can be up to 30 seconds old if a
 game is running.
 
-## Wrong password
+## Wrong encryption password
 
-The prompt shows "Wrong repository password." Type the password again. If you stored it in the
+The prompt shows "Wrong encryption password." Type the encryption password again. If you stored it in the
 keyring and later changed it, the prompt asks again and stores the new one.
 
-If you lost the password, the repository cannot be opened. Without a password the data is
+If you lost the encryption password, the repository cannot be opened. Without it the data is
 unreadable.
 
 ## "The repository could not be opened"

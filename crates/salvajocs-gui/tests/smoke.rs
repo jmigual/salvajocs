@@ -47,7 +47,11 @@ fn first_run_modal_shown_without_config() {
         shows(h, "Welcome to salvajocs")
     });
 
-    for label in ["Location", "Password", "Compression (new repository)"] {
+    for label in [
+        "Location",
+        "Encryption password",
+        "Compression (new repository)",
+    ] {
         assert!(shows(&harness, label), "{label} is asked on the first run");
     }
 }

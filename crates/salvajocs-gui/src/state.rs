@@ -171,7 +171,7 @@ impl State {
             if let (Err(err), Some(config)) = (result, &mut self.config) {
                 config.password = PasswordMode::Ask;
                 self.notices.push(format!(
-                    "Could not store the password in the keyring ({err:#}); it will be asked each session."
+                    "Could not store the encryption password in the keyring ({err:#}); it will be asked each session."
                 ));
                 self.save_config(ctx);
             }
