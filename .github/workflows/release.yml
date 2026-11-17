@@ -68,6 +68,9 @@ jobs:
     env:
       APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
       APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      # Pinned so the runtime baked into the AppImage is not whatever appimagetool downloads.
+      RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+      RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
       # The runner may lack FUSE; run appimagetool by extracting it instead.
       APPIMAGE_EXTRACT_AND_RUN: 1
     steps:
@@ -78,10 +81,11 @@ jobs:
       - name: Build the AppImage
         run: |
           id=io.github.jmigual.salvajocs
-          sudo apt-get install -y zsync
           curl -fsSL -o appimagetool "$APPIMAGETOOL_URL"
           echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum --check
           chmod +x appimagetool
+          curl -fsSL -o runtime-x86_64 "$RUNTIME_URL"
+          echo "$RUNTIME_SHA256  runtime-x86_64" | sha256sum --check
 
           tar xzf salvajocs-*.tgz --strip-components=1 --wildcards '*/salvajocs'
           install -Dm755 salvajocs AppDir/usr/bin/salvajocs
@@ -97,9 +101,10 @@ jobs:
 
           # AppImageUpdate (and Gear Lever) read this to find newer releases and their .zsync.
           # --no-appstream: skip validating the metainfo, the runner's appstreamcli is old.
-          ARCH=x86_64 ./appimagetool --no-appstream \
+          ARCH=x86_64 ./appimagetool --no-appstream --runtime-file runtime-x86_64 \
             -u 'gh-releases-zsync|jmigual|salvajocs|latest|salvajocs-*-x86_64.AppImage.zsync' \
             AppDir "salvajocs-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          test -f "salvajocs-${GITHUB_REF_NAME#v}-x86_64.AppImage.zsync"
       - uses: actions/upload-artifact@v7
         with:
           name: appimage
