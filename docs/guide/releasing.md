@@ -4,10 +4,8 @@ For maintainers. Back to the [guide index](README.md).
 
 1. Set `version` in the root `Cargo.toml`. It is shared by both crates, `salvajocs` and
    `salvajocs-core`, including the `salvajocs-core` dependency entry.
-2. If `Cargo.lock` changed, regenerate `packaging/flatpak/cargo-sources.json` with the command in
-   [packaging/flatpak/README.md](../../packaging/flatpak/README.md#regenerate-cargo-sourcesjson).
-3. Add a `<release version="X.Y.Z" date="...">` to `packaging/flatpak/io.github.jmigual.salvajocs.metainfo.xml`.
-4. Commit and push, then push the tag `vX.Y.Z`, where `X.Y.Z` is the `version`.
+2. Add a `<release version="X.Y.Z" date="...">` to `packaging/flatpak/io.github.jmigual.salvajocs.metainfo.xml`.
+3. Commit and push, then push the tag `vX.Y.Z`, where `X.Y.Z` is the `version`.
 
 The release workflow (`.github/workflows/release.yml`) then:
 

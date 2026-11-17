@@ -93,8 +93,7 @@ cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
 
 ## Flatpak
 
-Not on Flathub yet; a submission is planned. You can build and install it locally. See
-[packaging/flatpak/README.md](../../packaging/flatpak/README.md).
+Not on Flathub yet; a submission is planned.
 
 ## Build requirements
 
