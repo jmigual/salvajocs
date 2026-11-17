@@ -6,8 +6,8 @@ use std::sync::Arc;
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
-    FontId, FontTweak, Margin, Response, RichText, Stroke, Style, TextStyle, Theme, Ui, Vec2,
-    Visuals,
+    FontId, FontTweak, Label, Margin, Rect, Response, RichText, Sense, Stroke, Style, TextStyle,
+    Theme, Ui, Vec2, Visuals,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -23,6 +23,10 @@ pub mod icons {
     pub const GAME_CONTROLLER: &str = "\u{E26E}";
     pub const GEAR_SIX: &str = "\u{E272}";
     pub const MAGNIFYING_GLASS: &str = "\u{E30C}";
+    pub const WARNING: &str = "\u{E4E0}";
+    pub const X_CIRCLE: &str = "\u{E4F8}";
+    pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
+    pub const ARROW_CIRCLE_UP: &str = "\u{E030}";
 }
 
 /// The colors of one theme. Contrast floors (WCAG) are checked by the tests.
@@ -176,16 +180,35 @@ pub fn semibold(ui: &Ui, text: impl Into<String>) -> RichText {
 /// accessible name stays its label.
 pub fn icon(glyph: &'static str) -> Atom<'static> {
     Atom::paint(Vec2::splat(16.0), move |ui, args| {
-        if let Some(family) = family(ui.ctx(), ICONS) {
-            ui.painter().text(
-                args.rect.center(),
-                Align2::CENTER_CENTER,
-                glyph,
-                FontId::new(16.0, family),
-                args.fallback_text_color,
-            );
-        }
+        paint_icon(ui, args.rect, glyph, args.fallback_text_color);
     })
+}
+
+/// A 16 px icon of [`icons`] in `color`, as a widget of its own.
+pub fn mark(ui: &mut Ui, glyph: &'static str, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+    paint_icon(ui, rect, glyph, color);
+    response
+}
+
+fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
+    if let Some(family) = family(ui.ctx(), ICONS) {
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::new(16.0, family),
+            color,
+        );
+    }
+}
+
+/// A line of `text` in `color` after the icon `glyph`, for warnings, errors and results.
+pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
+    ui.horizontal(|ui| {
+        mark(ui, glyph, color);
+        ui.add(Label::new(RichText::new(text).color(color)).wrap());
+    });
 }
 
 /// A button filled with the accent color, for the one main action of a screen, with an optional

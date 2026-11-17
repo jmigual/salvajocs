@@ -3,7 +3,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, Margin, Stroke, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
@@ -17,7 +17,7 @@ use crate::tabs::{
     Tab, backup::BackupTab, custom_games::CustomGamesTab, restore::RestoreTab,
     settings::SettingsTab,
 };
-use crate::theme;
+use crate::theme::{self, icons};
 use crate::update::Updater;
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
@@ -240,10 +240,30 @@ impl App {
         }
     }
 
+    /// The tab strip: the selected tab is a pill, the others show a frame only when hovered.
+    fn tabs_ui(&mut self, ui: &mut Ui) {
+        ui.scope(|ui| {
+            // No outline around the pills; a focused tab keeps the active outline.
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.bg_stroke = Stroke::NONE;
+            widgets.hovered.bg_stroke = Stroke::NONE;
+            for tab in Tab::ALL {
+                let selected = self.tab == tab;
+                let label = theme::semibold(ui, tab.label());
+                let button = egui::Button::selectable(selected, (theme::icon(tab.icon()), label));
+                if ui.add(button).clicked() {
+                    self.tab = tab;
+                }
+            }
+        });
+    }
+
     fn status_ui(&mut self, ui: &mut Ui) {
         match &self.stage {
             Stage::ConfigUnreadable(error) => {
-                ui.colored_label(
+                theme::status(
+                    ui,
+                    icons::X_CIRCLE,
                     ui.visuals().error_fg_color,
                     format!("The config file in {error} cannot be read"),
                 );
@@ -257,7 +277,9 @@ impl App {
             Stage::OpenFailed(error) => {
                 let error = error.clone();
                 ui.horizontal(|ui| {
-                    ui.colored_label(
+                    theme::status(
+                        ui,
+                        icons::X_CIRCLE,
                         ui.visuals().error_fg_color,
                         format!("The repository could not be opened: {error}"),
                     );
@@ -269,7 +291,9 @@ impl App {
             _ => {}
         }
         if let Some(error) = &self.manifest_error {
-            ui.colored_label(
+            theme::status(
+                ui,
+                icons::X_CIRCLE,
                 ui.visuals().error_fg_color,
                 format!("The game manifest could not be updated: {error}"),
             );
@@ -277,7 +301,7 @@ impl App {
         let mut dismissed = None;
         for (index, notice) in self.state.notices.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.colored_label(ui.visuals().warn_fg_color, notice);
+                theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
                 if ui.button("Dismiss").clicked() {
                     dismissed = Some(index);
                 }
@@ -312,12 +336,10 @@ impl eframe::App for App {
         self.poll_manifest();
         self.state.poll(&ctx);
 
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(4.0);
+        let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 8));
+        egui::Panel::top("tabs").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for tab in Tab::ALL {
-                    ui.selectable_value(&mut self.tab, tab, tab.label());
-                }
+                self.tabs_ui(ui);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     match (&self.state.manifest, &self.manifest) {
                         (Some(manifest), _) => {
@@ -330,7 +352,6 @@ impl eframe::App for App {
                 });
             });
             self.status_ui(ui);
-            ui.add_space(4.0);
         });
 
         let adopted = egui::CentralPanel::default()

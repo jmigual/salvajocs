@@ -7,6 +7,7 @@ use salvajocs_core::update::{self, Release};
 
 use crate::job::Job;
 use crate::state::State;
+use crate::theme::{self, icons};
 
 /// The running version, which the release is compared with.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -70,18 +71,21 @@ impl Updater {
             ui.label("Downloading the update");
             ui.spinner();
         } else if self.ready.is_some() {
-            ui.label("Update ready, installs when the running task finishes");
+            ui.weak("Update ready, installs when the running task finishes");
         } else if self.installed {
-            if ui.button("Update now").clicked() {
+            if theme::primary(ui, true, None, "Update now").clicked() {
                 let (release, dir) = (release.clone(), state.env.cache_dir.join("update"));
                 self.downloading = Some(Job::spawn(ui.ctx(), move || {
                     Ok(update::download_installer(&release, VERSION, &dir)?)
                 }));
             }
         } else {
+            // Right to left: the icon goes first to follow the link.
+            theme::mark(ui, icons::ARROW_SQUARE_OUT, ui.visuals().hyperlink_color);
             ui.hyperlink_to("Release page", &release.html_url);
         }
         ui.label(format!("Update available: v{}", release.version));
+        theme::mark(ui, icons::ARROW_CIRCLE_UP, theme::palette(ui).accent);
     }
 
     /// Starts the downloaded installer and closes the window, unless `busy`: closing would cut

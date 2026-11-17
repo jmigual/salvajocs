@@ -1,5 +1,7 @@
 //! One module per screen.
 
+use crate::theme::icons;
+
 pub mod backup;
 pub mod custom_games;
 pub mod restore;
@@ -26,6 +28,16 @@ impl Tab {
             Tab::Restore => "Restore",
             Tab::CustomGames => "Custom games",
             Tab::Settings => "Settings",
+        }
+    }
+
+    /// The icon before the label on the tab strip.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::Backup => icons::FLOPPY_DISK,
+            Tab::Restore => icons::CLOCK_COUNTER_CLOCKWISE,
+            Tab::CustomGames => icons::GAME_CONTROLLER,
+            Tab::Settings => icons::GEAR_SIX,
         }
     }
 }
