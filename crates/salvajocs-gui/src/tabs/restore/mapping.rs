@@ -4,6 +4,8 @@
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, Confidence, MappingEntry, SnapshotRoot};
 
+use crate::tabs::count;
+
 /// One root of the game.
 struct Row {
     entry: MappingEntry,
@@ -111,7 +113,8 @@ impl Dialog {
         // The whole row waits for a running confirm, whose plan was made for these targets.
         ui.add_enabled_ui(!busy, |ui| {
             ui.horizontal(|ui| {
-                let confirm = ui.add_enabled(choices.is_some(), egui::Button::new("Confirm"));
+                let confirm =
+                    ui.add_enabled(choices.is_some(), egui::Button::new("Use these folders"));
                 if confirm.clicked() {
                     action = choices.map(DialogAction::Confirm);
                 }
@@ -130,9 +133,9 @@ impl Dialog {
 fn row_ui(ui: &mut Ui, number: usize, row: &mut Row) {
     let entry = &row.entry;
     ui.strong(format!(
-        "{} ({} files)",
+        "{} ({})",
         crossbuild::root_template(&entry.root),
-        entry.files
+        count(entry.files, "file")
     ));
     ui.label(confidence_label(entry));
     let mut edited = false;

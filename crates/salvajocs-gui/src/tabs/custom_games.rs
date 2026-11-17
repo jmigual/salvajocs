@@ -238,7 +238,8 @@ impl Form {
     /// The Linux/Windows pairs, each editable and removable, including those the restore
     /// mapping dialog saved.
     fn pairs_ui(&mut self, ui: &mut Ui) {
-        ui.label("Pairs: the same saves on a native Linux build and on a Windows build");
+        ui.heading("Linux and Windows pairs");
+        ui.weak("The same saves in the native Linux build and in the Windows build.");
         let mut remove = None;
         for (index, row) in self.pairs.iter_mut().enumerate() {
             let number = index + 1;
@@ -271,7 +272,8 @@ impl Form {
     /// The root templates a cross-build restore leaves out, each editable and removable,
     /// including those the restore mapping dialog saved.
     fn skips_ui(&mut self, ui: &mut Ui) {
-        ui.label("Skipped folders: roots a restore on the other OS leaves out");
+        ui.heading("Skipped folders");
+        ui.weak("Folders a restore on the other OS leaves out.");
         let mut remove = None;
         for (index, skip) in self.skips.iter_mut().enumerate() {
             ui.horizontal(|ui| {
@@ -362,7 +364,6 @@ impl CustomGamesTab {
     /// Draws the tab. Saving or removing a game saves the config.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Custom games");
             let manifest = state.manifest.as_ref();
             let Some(config) = &mut state.config else {
                 ui.label("Choose a repository first.");

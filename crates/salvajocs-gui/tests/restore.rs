@@ -559,29 +559,29 @@ fn restore_mapping_dialog_prefills_known_roots_and_blocks_unknown() {
     let (mut harness, _env) = mix(&tmp);
 
     assert!(shows(&harness, "Where should the saves of Mix go?"));
-    assert!(shows(&harness, "<winLocalAppDataLow>/Co/Mix (1 files)"));
-    assert!(shows(&harness, "<winAppData>/Mix (1 files)"));
+    assert!(shows(&harness, "<winLocalAppDataLow>/Co/Mix (1 file)"));
+    assert!(shows(&harness, "<winAppData>/Mix (1 file)"));
     assert_eq!(value(&harness, "Target 1"), "<xdgConfig>/unity3d/Co/Mix");
     assert_eq!(value(&harness, "Target 2"), "");
     assert!(
-        disabled(&harness, "Confirm"),
+        disabled(&harness, "Use these folders"),
         "the unknown root has no choice"
     );
     assert!(disabled(&harness, "Restore files"));
 
     replace_text(&mut harness, "Target 1", "<xdgData>/Other");
     assert_eq!(value(&harness, "Target 1"), "<xdgData>/Other");
-    assert!(disabled(&harness, "Confirm"));
+    assert!(disabled(&harness, "Use these folders"));
 
     click(&mut harness, "Skip 2");
-    assert!(!disabled(&harness, "Confirm"));
+    assert!(!disabled(&harness, "Use these folders"));
     click(&mut harness, "Skip 2");
-    assert!(disabled(&harness, "Confirm"));
+    assert!(disabled(&harness, "Use these folders"));
     // The manifest's Linux saves are offered for the unknown root.
     click(&mut harness, "Candidates 2");
     click(&mut harness, "<xdgConfig>/MixCfg");
     assert_eq!(value(&harness, "Target 2"), "<xdgConfig>/MixCfg");
-    assert!(!disabled(&harness, "Confirm"));
+    assert!(!disabled(&harness, "Use these folders"));
 }
 
 #[test]
@@ -604,7 +604,7 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
     let (mut harness, env) = mix(&tmp);
     replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
 
-    harness.get_by_label("Confirm").click();
+    harness.get_by_label("Use these folders").click();
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
 
     assert!(!shows(&harness, "Where should the saves"));
@@ -628,7 +628,7 @@ fn restore_dialog_skip_is_saved() {
     let (mut harness, env) = mix(&tmp);
     click(&mut harness, "Skip 2");
 
-    harness.get_by_label("Confirm").click();
+    harness.get_by_label("Use these folders").click();
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write (1)"));
 
     let games = run_until_saved(&mut harness, &env, |games| {
@@ -644,7 +644,7 @@ fn restore_typed_template_that_does_not_classify_shows_error() {
     // A real path, and a template of the snapshot's own OS: neither is a Linux template.
     for typed in ["/home/me/Mix", "<winAppData>/Mix"] {
         replace_text(&mut harness, "Target 2", typed);
-        harness.get_by_label("Confirm").click();
+        harness.get_by_label("Use these folders").click();
         run_until(&mut harness, "the refusal", |h| {
             shows(h, "is not a placeholder template of this OS")
         });

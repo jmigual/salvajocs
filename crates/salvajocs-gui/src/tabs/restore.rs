@@ -267,7 +267,6 @@ impl RestoreTab {
         }
         self.poll(ui.ctx(), state);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Restore");
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
                 return;
@@ -458,7 +457,7 @@ impl RestoreTab {
         let mut changed = self.snapshot != before;
         if let Some(pick) = &mut self.pick {
             changed |= pick.ui(ui);
-            if pick.windows.is_none() && ui.button("Choose prefix").clicked() {
+            if pick.windows.is_none() && ui.button("Browse").clicked() {
                 self.picking = Some(Job::spawn(ui.ctx(), || {
                     Ok(rfd::FileDialog::new().pick_folder())
                 }));

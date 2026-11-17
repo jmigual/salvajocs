@@ -47,17 +47,18 @@ A game with unreadable paths shows how many, because its backup may be incomplet
 
 ## Choose and back up
 
-Each game found has a checkbox and a line such as `3 files, 1.2 MiB, registry: no`. Open the
-line to see the files. New games start selected. **Select all** and **Deselect all** change
+Each game found has a checkbox and a line such as `3 files, 1.2 MiB, plus registry keys`. Open
+the line to see the files. New games start selected. **Select all** and **Deselect all** change
 every game at once.
 
-Click **Back up selected (N)**. The tab scans again first, so a save written since the last scan
-is included. It then backs up the games one by one and shows the result per game:
+Click **Back up N games**. The tab scans again first, so a save written since the last scan
+is included. It then backs up the games one by one and shows the result per game under
+**Last backup**:
 
 | Result | Meaning |
 | --- | --- |
-| new snapshot | The save changed and a snapshot was stored. |
-| unchanged | The save is the same as in the last snapshot, so nothing was stored. |
+| backed up | The save changed and a snapshot was stored. |
+| up to date | The save is the same as in the last snapshot, so nothing was stored. |
 | failed | The game could not be backed up. The reason follows. |
 
 The repository removes duplicate data, so repeated backups of a large save that changed little

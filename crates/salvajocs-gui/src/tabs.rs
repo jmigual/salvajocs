@@ -2,6 +2,12 @@
 
 use crate::theme::icons;
 
+/// `count` and `noun`, with an `s` unless `count` is one: `1 file`, `2 files`.
+pub(crate) fn count(count: usize, noun: &str) -> String {
+    let s = if count == 1 { "" } else { "s" };
+    format!("{count} {noun}{s}")
+}
+
 pub mod backup;
 pub mod custom_games;
 pub mod restore;

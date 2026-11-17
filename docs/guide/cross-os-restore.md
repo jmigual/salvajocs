@@ -96,7 +96,7 @@ that is not valid shows an error in the row.
 If you are on Linux and the backup holds Windows folders, **Restore into a Wine prefix instead**
 switches the restore to a prefix.
 
-Click **Confirm**. The plan appears in the normal preview.
+Click **Use these folders**. The plan appears in the normal preview.
 
 ### Choices are remembered
 

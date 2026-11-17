@@ -12,6 +12,7 @@ use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::count;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,23 +70,16 @@ fn format_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-/// What the scan found for a game: file count and size, registry, and unreadable paths.
 fn summary(game: &GameScan) -> String {
     let size: u64 = game.files.iter().map(|file| file.size).sum();
-    let registry = if game.registry_source.is_some() {
-        "yes"
-    } else {
-        "no"
-    };
-    let mut text = format!(
-        "{} files, {}, registry: {registry}",
-        game.files.len(),
-        format_size(size)
-    );
+    let mut text = format!("{}, {}", count(game.files.len(), "file"), format_size(size));
+    if game.registry_source.is_some() {
+        text += ", plus registry keys";
+    }
     if !game.unreadable.is_empty() {
         text += &format!(
-            ", {} unreadable paths (the files may be incomplete)",
-            game.unreadable.len()
+            ", {} (the files may be incomplete)",
+            count(game.unreadable.len(), "unreadable path")
         );
     }
     text
@@ -140,7 +134,6 @@ impl BackupTab {
     pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         self.poll();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Backup");
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
                 return;
@@ -248,7 +241,7 @@ impl BackupTab {
             }
         }
         ui.separator();
-        ui.label(format!("{} games found", report.games.len()));
+        ui.label(format!("{} found", count(report.games.len(), "game")));
         ui.horizontal(|ui| {
             if ui.button("Select all").clicked() {
                 self.selected = report.games.iter().map(|g| g.title.clone()).collect();
@@ -271,7 +264,7 @@ impl BackupTab {
         ui.separator();
         let selected = self.selected.len();
         let ready = state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
-        let button = egui::Button::new(format!("Back up selected ({selected})"));
+        let button = egui::Button::new(format!("Back up {}", count(selected, "game")));
         let clicked = ui.add_enabled(ready, button).clicked();
         if state.session.is_none() {
             ui.weak("The repository is not open.");
@@ -330,9 +323,9 @@ impl BackupTab {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(format!(
-                    "Backing up: {} of {}",
+                    "Backed up {} of {}",
                     progress.done.len(),
-                    progress.total
+                    count(progress.total, "game")
                 ));
             });
         }
@@ -346,11 +339,11 @@ impl BackupTab {
             return;
         }
         ui.separator();
-        ui.heading("Results");
+        ui.heading("Last backup");
         for GameResult { title, outcome } in &progress.done {
             match outcome {
-                Outcome::Saved => ui.label(format!("{title}: new snapshot")),
-                Outcome::Unchanged => ui.label(format!("{title}: unchanged")),
+                Outcome::Saved => ui.label(format!("{title}: backed up")),
+                Outcome::Unchanged => ui.label(format!("{title}: up to date")),
                 Outcome::Failed(error) => ui.colored_label(
                     ui.visuals().error_fg_color,
                     format!("{title}: failed: {error}"),

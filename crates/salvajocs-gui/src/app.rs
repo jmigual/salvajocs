@@ -166,7 +166,7 @@ impl App {
             Stage::FirstRun(mut connect) => {
                 let connected = dialog(&ctx, "first_run", |ui| {
                     ui.heading("Welcome to salvajocs");
-                    ui.label("Choose where backups are saved, and restored from.");
+                    ui.label("Pick a folder or server for your backups. You can change it later in Settings.");
                     connect.ui(ui, &self.state.env)
                 });
                 match connected {

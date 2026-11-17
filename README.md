@@ -116,7 +116,7 @@ supported.
 1. Start `salvajocs`. On first run, choose where backups go (a folder is the default), an optional
    compression level and an optional password. salvajocs asks before it creates a new repository.
 2. Open the **Backup** tab and click **Scan for games**. Tick the games and click
-   **Back up selected**.
+   **Back up N games**.
 3. On the machine you want to restore to, start salvajocs and connect to the same repository.
 4. Open the **Restore** tab, click **Load backups**, choose a game and a snapshot, pick the
    target, click **Preview**, and then **Restore files**.
@@ -130,7 +130,7 @@ You play a game with Proton on Linux and want its save on your Windows PC.
 
 1. **Share the repository.** Pick a backend that both machines can reach and that Windows builds
    have (see [Limitations](#limitations)), such as a REST server or an rclone remote.
-2. **Back up on Linux.** Scan, tick the game, **Back up selected**. The save files come from the
+2. **Back up on Linux.** Scan, tick the game, **Back up 1 game**. The save files come from the
    Proton prefix, and the game's registry keys come from the prefix's `user.reg`.
 3. **Connect on Windows.** Start salvajocs, choose the same backend and location, and type the same
    password.

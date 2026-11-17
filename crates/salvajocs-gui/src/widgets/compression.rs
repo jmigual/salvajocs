@@ -40,7 +40,7 @@ pub fn format(compression: Compression) -> String {
 /// not valid. Returns the parsed setting, or the error that is shown.
 pub fn ui(ui: &mut Ui, label: &str, text: &mut String) -> Result<Compression, FieldError> {
     labelled_edit(ui, label, text, false);
-    ui.weak("empty = default, 0 = off, 1 to 22 or -7 to -1");
+    ui.weak("Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.");
     ui.end_row();
     let parsed = parse(text);
     if let Err(err) = &parsed {

@@ -233,7 +233,7 @@ fn windows_prefix(tmp: &TempDir) -> PathBuf {
 }
 
 /// The Backup tab after a scan and two backups: the first saved everything, then one game's
-/// save changed, so the second run reports one new snapshot and the rest unchanged.
+/// save changed, so the second run reports one game backed up and the rest up to date.
 fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
@@ -252,23 +252,20 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
 
     harness.get_by_label("Scan for games").click();
     run_until(&mut harness, "the scan", |h| shows(h, "5 games found"));
-    harness.get_by_label("Back up selected (5)").click();
+    harness.get_by_label("Back up 5 games").click();
     run_until(&mut harness, "the first backup", |h| {
-        shows(h, "Terraria: new snapshot")
+        shows(h, "Terraria: backed up")
     });
 
     let saves = prefix.join("drive_c/users/steamuser/AppData/Roaming/StardewValley/Saves");
     write_file(&saves.join("Ines_372841905/SaveGameInfo"), 3_300);
     harness.get_by_label("Terraria").click();
     run_settled(&mut harness);
-    harness.get_by_label("Back up selected (4)").click();
+    harness.get_by_label("Back up 4 games").click();
     run_until(&mut harness, "the second backup", |h| {
-        shows(h, "Stardew Valley: new snapshot")
+        shows(h, "Stardew Valley: backed up")
     });
-    for summary in [
-        "3 files, 807.0 KiB, registry: yes",
-        "2 files, 1.2 MiB, registry: no",
-    ] {
+    for summary in ["3 files, 807.0 KiB, plus registry keys", "2 files, 1.2 MiB"] {
         harness.get_by_label(summary).click();
     }
     capture(&mut harness, dir, name);

@@ -55,11 +55,20 @@ fn sizes_use_binary_units() {
 fn summary_names_files_registry_and_unreadable_paths() {
     assert_eq!(
         summary(&game(&[1024, 2048], true, 0)),
-        "2 files, 3.0 KiB, registry: yes"
+        "2 files, 3.0 KiB, plus registry keys"
     );
     assert_eq!(
         summary(&game(&[], false, 2)),
-        "0 files, 0 B, registry: no, 2 unreadable paths (the files may be incomplete)"
+        "0 files, 0 B, 2 unreadable paths (the files may be incomplete)"
+    );
+}
+
+#[test]
+fn summary_counts_one_file_and_one_path_in_the_singular() {
+    assert_eq!(summary(&game(&[3], false, 0)), "1 file, 3 B");
+    assert_eq!(
+        summary(&game(&[3], false, 1)),
+        "1 file, 3 B, 1 unreadable path (the files may be incomplete)"
     );
 }
 
@@ -146,7 +155,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
     );
     harness.step();
     assert!(!is_disabled(&harness, "Scan for games"));
-    assert!(!is_disabled(&harness, "Back up selected (1)"));
+    assert!(!is_disabled(&harness, "Back up 1 game"));
 
     let (release, hold) = mpsc::channel::<()>();
     let report = ScanReport {
@@ -163,7 +172,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
     harness.step();
     harness.step();
     assert!(is_disabled(&harness, "Scan for games"));
-    assert!(is_disabled(&harness, "Back up selected (1)"));
+    assert!(is_disabled(&harness, "Back up 1 game"));
     drop(release);
 }
 

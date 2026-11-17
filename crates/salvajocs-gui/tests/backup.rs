@@ -129,9 +129,9 @@ fn backup_scan_job_lists_games_with_file_counts() {
 
     assert!(shows(&harness, "Alpha"));
     assert!(shows(&harness, "Beta"));
-    assert!(shows(&harness, "1 files, 3 B, registry: yes"));
-    assert!(shows(&harness, "1 files, 5 B, registry: no"));
-    assert!(shows(&harness, "Back up selected (2)"));
+    assert!(shows(&harness, "1 file, 3 B, plus registry keys"));
+    assert!(shows(&harness, "1 file, 5 B"));
+    assert!(shows(&harness, "Back up 2 games"));
 }
 
 #[test]
@@ -163,10 +163,10 @@ fn backup_reports_new_then_unchanged_per_game() {
 
     harness.get_by_label("Beta").click();
     run_settled(&mut harness);
-    assert!(shows(&harness, "Back up selected (1)"));
-    harness.get_by_label("Back up selected (1)").click();
+    assert!(shows(&harness, "Back up 1 game"));
+    harness.get_by_label("Back up 1 game").click();
     run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Alpha: new snapshot")
+        shows(h, "Alpha: backed up")
     });
     assert!(!shows(&harness, "Beta:"), "a deselected game is left out");
     assert_eq!(
@@ -174,11 +174,11 @@ fn backup_reports_new_then_unchanged_per_game() {
         1
     );
 
-    harness.get_by_label("Back up selected (1)").click();
+    harness.get_by_label("Back up 1 game").click();
     run_until(&mut harness, "the second backup to finish", |h| {
-        shows(h, "Alpha: unchanged")
+        shows(h, "Alpha: up to date")
     });
-    assert!(!shows(&harness, "new snapshot"));
+    assert!(!shows(&harness, ": backed up"));
 }
 
 #[test]
@@ -191,9 +191,9 @@ fn backup_failing_game_does_not_stop_the_others() {
     fs::create_dir_all(env.cache_dir.join("stage")).unwrap();
     fs::write(env.cache_dir.join("stage").join(slug("Alpha")), "").unwrap();
 
-    harness.get_by_label("Back up selected (2)").click();
+    harness.get_by_label("Back up 2 games").click();
     run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Beta: new snapshot")
+        shows(h, "Beta: backed up")
     });
 
     assert!(shows(&harness, "Alpha: failed:"));
@@ -207,7 +207,7 @@ fn backup_selection_survives_a_rescan() {
     scan(&mut harness, "2 games found");
     harness.get_by_label("Beta").click();
     run_settled(&mut harness);
-    assert!(shows(&harness, "Back up selected (1)"));
+    assert!(shows(&harness, "Back up 1 game"));
 
     harness.get_by_label("Scan for games").click();
     harness.step();
@@ -215,10 +215,7 @@ fn backup_selection_survives_a_rescan() {
         !shows(h, "Scanning")
     });
 
-    assert!(
-        shows(&harness, "Back up selected (1)"),
-        "Beta stays deselected"
-    );
+    assert!(shows(&harness, "Back up 1 game"), "Beta stays deselected");
 }
 
 #[test]
@@ -240,9 +237,9 @@ fn backup_includes_a_save_made_since_the_scan() {
     let saves = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
     fs::write(saves.join("later.dat"), "xy").unwrap();
 
-    harness.get_by_label("Back up selected (2)").click();
+    harness.get_by_label("Back up 2 games").click();
     run_until(&mut harness, "the list to follow the backup", |h| {
-        shows(h, "2 files, 5 B, registry: yes")
+        shows(h, "2 files, 5 B, plus registry keys")
     });
 
     let staged = env
