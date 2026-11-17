@@ -18,7 +18,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use common::{
     env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until, run_until_ready,
@@ -233,20 +233,29 @@ fn windows_prefix(tmp: &TempDir) -> PathBuf {
     prefix
 }
 
+/// Where the repository of the screens that show its path lives: a fixed path that names no
+/// user, the same in every image.
+const DEMO_ROOT: &str = "/tmp/salvajocs-demo";
+
+/// A new, empty repository at `DEMO_ROOT/backups`, held until the guard drops; the tests that
+/// show the path take turns on it.
+fn demo_repository() -> (MutexGuard<'static, ()>, String) {
+    static TURN: Mutex<()> = Mutex::new(());
+    let turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    let _ = fs::remove_dir_all(DEMO_ROOT);
+    let repository = format!("{DEMO_ROOT}/backups");
+    init_repo(&repository);
+    (turn, repository)
+}
+
 /// The Backup tab after a scan and two backups: the first saved everything, then one game's
 /// save changed, so the second run reports one game backed up and the rest up to date.
 fn backup_tab(dir: &Path, theme: Theme, name: &str) {
-    // The repository path is on screen, so it is a fixed one that names no user, which the dark
-    // and light runs take in turn.
-    static REPOSITORY: Mutex<()> = Mutex::new(());
-    let _turn = REPOSITORY.lock().unwrap_or_else(PoisonError::into_inner);
-    let repository = "/tmp/salvajocs-backups";
-    let _ = fs::remove_dir_all(repository);
+    let (_turn, repository) = demo_repository();
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
     let prefix = windows_prefix(&tmp);
-    init_repo(repository);
-    let mut config = local_config(repository);
+    let mut config = local_config(&repository);
     config.roots = vec![Root {
         path: prefix.clone(),
         kind: RootKind::WinePrefix,
@@ -275,7 +284,7 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
         .get_by_label("3 files, 807.0 KiB, plus registry keys")
         .click();
     capture(&mut harness, dir, name);
-    fs::remove_dir_all(repository).unwrap();
+    fs::remove_dir_all(DEMO_ROOT).unwrap();
 }
 
 #[test]
@@ -649,13 +658,9 @@ fn custom_games_tab() {
 #[ignore = "renders the README screenshots; needs a wgpu adapter and SALVAJOCS_SCREENSHOTS=1"]
 fn settings_tab() {
     let Some(dir) = output_dir() else { return };
+    let (_turn, repository) = demo_repository();
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
-    // The repository path is on screen, so it is a fixed one that names no user.
-    let root = PathBuf::from("/tmp/salvajocs-demo");
-    let _ = fs::remove_dir_all(&root);
-    let repository = root.join("backups").to_str().unwrap().to_string();
-    init_repo(&repository);
     let mut config = local_config(&repository);
     config.roots = vec![
         Root {
@@ -668,11 +673,11 @@ fn settings_tab() {
         },
     ];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, Theme::Dark, 780.0);
+    let mut harness = shot_harness(env, Theme::Dark, 810.0);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::Settings);
     capture(&mut harness, &dir, "settings");
-    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(DEMO_ROOT).unwrap();
 }
 
 #[test]
