@@ -14,8 +14,8 @@ other way round.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/backup.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmigual/salvajocs/main/docs/images/backup.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/jmigual/salvajocs/main/docs/images/hero-light.png">
     <img alt="The salvajocs Backup tab, listing the games found on this machine" src="docs/images/hero-light.png" width="860">
   </picture>
 </p>
