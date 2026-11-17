@@ -524,7 +524,7 @@ fn restore_tab() {
             pre_restore: false,
         },
     ];
-    let mut harness = restore_app(&tmp, &snapshots, "Hades", 660.0);
+    let mut harness = restore_app(&tmp, &snapshots, "Hades", 760.0);
 
     harness.get_by_label("Hollow Knight").click();
     run_until(&mut harness, "the default targets", |h| {

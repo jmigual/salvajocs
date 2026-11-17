@@ -1,10 +1,11 @@
 //! The cross-build mapping dialog: where each snapshot root of the other OS's build goes in this
 //! one, shown only while a root is unknown (ADR-0011).
 
-use eframe::egui::{self, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, Confidence, MappingEntry, SnapshotRoot};
 
 use crate::tabs::count;
+use crate::theme::{self, icons};
 
 /// One root of the game.
 struct Row {
@@ -91,7 +92,7 @@ impl Dialog {
         error: Option<&str>,
     ) -> Option<DialogAction> {
         ui.heading(format!("Where should the saves of {title} go?"));
-        ui.label(
+        ui.weak(
             "This snapshot holds folders of the other OS's build. Choose where each goes in \
              this build, or skip it. The choices are saved with the game and can be changed in \
              Custom games.",
@@ -99,30 +100,34 @@ impl Dialog {
         egui::ScrollArea::vertical()
             .max_height(480.0)
             .show(ui, |ui| {
-                for (index, row) in self.rows.iter_mut().enumerate() {
-                    ui.separator();
-                    row_ui(ui, index + 1, row);
-                }
+                theme::group(ui, |ui| {
+                    for (index, row) in self.rows.iter_mut().enumerate() {
+                        if index > 0 {
+                            theme::row_separator(ui);
+                        }
+                        row_ui(ui, index + 1, row);
+                    }
+                });
             });
-        ui.separator();
         if let Some(error) = error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            let color = ui.visuals().error_fg_color;
+            theme::status(ui, icons::X_CIRCLE, color, error);
         }
         let choices = self.choices();
         let mut action = None;
         // The whole row waits for a running confirm, whose plan was made for these targets.
         ui.add_enabled_ui(!busy, |ui| {
-            ui.horizontal(|ui| {
-                let confirm =
-                    ui.add_enabled(choices.is_some(), egui::Button::new("Use these folders"));
-                if confirm.clicked() {
+            // Right to left: the primary action ends the row.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let primary = theme::primary(ui, choices.is_some(), None, "Use these folders");
+                if primary.clicked() {
                     action = choices.map(DialogAction::Confirm);
-                }
-                if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
-                    action = Some(DialogAction::UsePrefix);
                 }
                 if ui.button("Cancel").clicked() {
                     action = Some(DialogAction::Cancel);
+                }
+                if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
+                    action = Some(DialogAction::UsePrefix);
                 }
             });
         });
@@ -137,7 +142,14 @@ fn row_ui(ui: &mut Ui, number: usize, row: &mut Row) {
         crossbuild::root_template(&entry.root),
         count(entry.files, "file")
     ));
-    ui.label(confidence_label(entry));
+    let confidence = confidence_label(entry);
+    if entry.confidence == Confidence::Unknown {
+        // The one that needs the user's choice.
+        let warn = ui.visuals().warn_fg_color;
+        theme::status(ui, icons::WARNING, warn, confidence);
+    } else {
+        ui.weak(confidence);
+    }
     let mut edited = false;
     ui.horizontal(|ui| {
         let label = ui.label(format!("Target {number}"));
@@ -162,12 +174,14 @@ fn row_ui(ui: &mut Ui, number: usize, row: &mut Row) {
             .changed();
     });
     for note in &row.entry.notes {
-        ui.colored_label(ui.visuals().warn_fg_color, note);
+        let warn = ui.visuals().warn_fg_color;
+        theme::status(ui, icons::WARNING, warn, note);
     }
     if edited {
         row.error = None;
     }
     if let Some(error) = &row.error {
-        ui.colored_label(ui.visuals().error_fg_color, error);
+        let color = ui.visuals().error_fg_color;
+        theme::status(ui, icons::X_CIRCLE, color, error);
     }
 }

@@ -109,6 +109,35 @@ fn listing_waits_for_the_manifest_to_load() {
     assert!(is_disabled(&harness, "Load backups"));
 }
 
+/// The listing is the one action before and after it runs, and an empty repository says so.
+#[test]
+fn an_empty_repository_says_it_has_no_backups_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new_ui_state(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (RestoreTab::default(), state(dir.path())),
+    );
+    harness.step();
+    assert_eq!(harness.query_all_by_label("Load backups").count(), 1);
+    assert!(harness.query_by_label("Restore files").is_none());
+
+    harness.get_by_label("Load backups").click();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.repository.is_none() || harness.state().0.listing.is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the listing never ended"
+        );
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.step();
+
+    assert_eq!(harness.query_all_by_label("Load backups").count(), 1);
+    let empty = harness.query_all_by_label_contains("has no backups yet");
+    assert_eq!(empty.count(), 1);
+}
+
 /// A fetched game from `storage` with no files and no targets.
 fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
     Arc::new(Fetched {

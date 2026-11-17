@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
-use eframe::egui::{self, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, Response, TextEdit, Ui, Vec2};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::manifest::{GameEntry, Pair};
@@ -23,7 +23,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
-use crate::theme;
+use crate::theme::{self, icons};
 
 mod mapping;
 
@@ -267,24 +267,35 @@ impl RestoreTab {
             self.error = None;
         }
         self.poll(ui.ctx(), state);
-        theme::page(ui, |ui| {
-            if state.config.is_none() {
-                ui.label("Choose a repository first.");
-                return;
-            }
-            let busy = self.busy();
-            // `default_targets` looks the game's Steam id up in the manifest.
-            let idle = !busy && !manifest_loading;
-            ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state, manifest_loading));
-            if busy {
-                ui.spinner();
-            }
-            if let Some(error) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            self.preview_ui(ui, state);
-            self.restored_ui(ui);
-        });
+        let busy = self.busy();
+        // `default_targets` looks the game's Steam id up in the manifest.
+        let idle = !busy && !manifest_loading;
+        if state.config.is_none() {
+            theme::page(ui, |ui| ui.label("Choose a repository first."));
+        } else if self.untouched() {
+            theme::page(ui, |ui| {
+                ui.add_enabled_ui(idle, |ui| self.empty_ui(ui, state, manifest_loading));
+                self.error_ui(ui);
+            });
+        } else {
+            let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(12);
+            egui::Panel::left("restore_games")
+                .exact_size(240.0)
+                .resizable(false)
+                .frame(frame)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state));
+                });
+            theme::page(ui, |ui| {
+                ui.add_enabled_ui(idle, |ui| self.game_ui(ui, state, manifest_loading));
+                if busy {
+                    ui.spinner();
+                }
+                self.error_ui(ui);
+                self.preview_ui(ui, state);
+                self.restored_ui(ui);
+            });
+        }
         self.mapping_ui(ui.ctx(), state);
         self.confirm_wine_ui(ui.ctx(), state);
     }
@@ -296,6 +307,22 @@ impl RestoreTab {
             || self.picking.is_some()
             || self.preparing.is_some()
             || self.restoring.is_some()
+    }
+
+    /// Whether the tab has nothing to show yet: no list loaded or loading, and no plan or report.
+    fn untouched(&self) -> bool {
+        self.repository.is_none()
+            && !self.busy()
+            && self.preview.is_none()
+            && self.mapping.is_none()
+            && self.restored.is_none()
+    }
+
+    fn error_ui(&self, ui: &mut Ui) {
+        if let Some(error) = &self.error {
+            let color = ui.visuals().error_fg_color;
+            theme::status(ui, icons::X_CIRCLE, color, error);
+        }
     }
 
     /// Drops the plan and the dialog, which no longer match the chosen game or targets, and the
@@ -415,47 +442,89 @@ impl RestoreTab {
         }));
     }
 
-    fn games_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
-        let refresh = ui.add_enabled(state.session.is_some(), egui::Button::new("Load backups"));
-        if refresh.clicked() {
-            self.error = None;
-            self.forget_plan();
-            self.start_listing(ui.ctx(), state);
+    /// Before the first listing: what the tab is for and the listing as its one action.
+    fn empty_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(48.0);
+            ui.weak("See the games in your repository and their snapshots.");
+            ui.add_space(8.0);
+            let session = state.session.is_some();
+            if theme::primary(ui, session, None, "Load backups").clicked() {
+                self.load(ui.ctx(), state);
+            }
+            if !session {
+                ui.weak("The repository is not open.");
+            }
+            if manifest_loading {
+                ui.weak("The game manifest is loading.");
+            }
+        });
+    }
+
+    fn load(&mut self, ctx: &egui::Context, state: &State) {
+        self.error = None;
+        self.forget_plan();
+        self.start_listing(ctx, state);
+    }
+
+    /// The sidebar: the listing button and the games of the repository.
+    fn games_ui(&mut self, ui: &mut Ui, state: &State) {
+        let load = egui::Button::new("Load backups").min_size(Vec2::new(ui.available_width(), 0.0));
+        if ui.add_enabled(state.session.is_some(), load).clicked() {
+            self.load(ui.ctx(), state);
         }
         if state.session.is_none() {
             ui.weak("The repository is not open.");
         }
-        let mut chosen = None;
-        for game in &self.games {
-            let selected = self.selected.as_ref() == Some(&game.slug);
-            if ui.selectable_label(selected, &game.title).clicked() && !selected {
-                chosen = Some(game.clone());
-            }
+        if self.games.is_empty() {
+            return;
         }
+        let mut chosen = None;
+        theme::group(ui, |ui| {
+            theme::pill_list(ui);
+            for game in &self.games {
+                let selected = self.selected.as_ref() == Some(&game.slug);
+                let row = egui::Button::selectable(selected, &game.title)
+                    .min_size(Vec2::new(ui.available_width(), 0.0));
+                if ui.add(row).clicked() && !selected {
+                    chosen = Some(game.clone());
+                }
+            }
+        });
         if let Some(game) = chosen {
             self.choose(ui.ctx(), state, &game);
+        }
+    }
+
+    /// The chosen game: its snapshot, the build to restore into and the preview button.
+    fn game_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        let listed = self.repository.is_some() && self.listing.is_none();
+        if listed && self.games.is_empty() && self.error.is_none() {
+            ui.weak("The repository has no backups yet. Back up your games in the Backup tab.");
         }
         let selected = (self.games.iter()).find(|game| Some(&game.slug) == self.selected.as_ref());
         let Some(game) = selected.cloned() else {
             return;
         };
-        ui.separator();
         ui.heading(&game.title);
         let before = self.snapshot;
-        let label = ui.label("Snapshot");
-        egui::ComboBox::from_id_salt("restore_snapshot")
-            .selected_text(
-                (self.snapshot.and_then(|index| game.snapshots.get(index)))
-                    .map_or_else(|| "Choose a snapshot".to_owned(), snapshot_label),
-            )
-            .show_ui(ui, |ui| {
-                theme::pill_list(ui);
-                for (index, snapshot) in game.snapshots.iter().enumerate() {
-                    ui.selectable_value(&mut self.snapshot, Some(index), snapshot_label(snapshot));
-                }
-            })
-            .response
-            .labelled_by(label.id);
+        ui.horizontal(|ui| {
+            let label = ui.label("Snapshot");
+            egui::ComboBox::from_id_salt("restore_snapshot")
+                .selected_text(
+                    (self.snapshot.and_then(|index| game.snapshots.get(index)))
+                        .map_or_else(|| "Choose a snapshot".to_owned(), snapshot_label),
+                )
+                .show_ui(ui, |ui| {
+                    theme::pill_list(ui);
+                    for (index, snapshot) in game.snapshots.iter().enumerate() {
+                        let label = snapshot_label(snapshot);
+                        ui.selectable_value(&mut self.snapshot, Some(index), label);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
         let mut changed = self.snapshot != before;
         if let Some(pick) = &mut self.pick {
             changed |= pick.ui(ui);
@@ -568,7 +637,7 @@ impl RestoreTab {
         let Some((fetched, dialog)) = &mut self.mapping else {
             return;
         };
-        let action = egui::Modal::new(egui::Id::unique("restore_mapping"))
+        let action = theme::modal(ctx, "restore_mapping")
             .show(ctx, |ui| {
                 ui.set_width(720.0);
                 let offer_prefix = fetched.targets.win.is_none();
@@ -602,55 +671,66 @@ impl RestoreTab {
     fn preview_ui(&mut self, ui: &mut Ui, state: &State) {
         let busy = self.busy();
         let Some(preview) = &mut self.preview else {
-            ui.add_enabled(false, egui::Button::new("Restore files"));
+            right_aligned(ui, |ui| restore_button(ui, false));
             return;
         };
-        ui.separator();
+        ui.add_space(16.0);
         ui.heading("Plan");
+        let (warn, error_color) = (ui.visuals().warn_fg_color, ui.visuals().error_fg_color);
+        let muted = ui.visuals().weak_text_color();
         if preview.plan.cross_build {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
+            theme::status(
+                ui,
+                icons::WARNING,
+                warn,
                 "Cross-build restore: the other build may use a different save format. The \
                  safety backup lets you undo it.",
             );
         }
         for note in &preview.plan.notes {
-            ui.colored_label(ui.visuals().warn_fg_color, format!("Note: {note}"));
+            theme::status(ui, icons::WARNING, warn, format!("Note: {note}"));
         }
         ui.label(format!("Files to write ({})", preview.plan.writes.len()));
         let files = preview.fetched.staged.root.join(FILES_DIR);
         let mut overridden = None;
-        for (index, write) in preview.plan.writes.iter().enumerate() {
-            let number = index + 1;
-            // `<Base>/<tail>` with `/` on every OS, as the snapshot stores it.
-            let source = write.source.strip_prefix(&files).unwrap_or(&write.source);
-            let source = (source.iter().map(|part| part.to_string_lossy()))
-                .collect::<Vec<_>>()
-                .join("/");
-            let flag = match &write.target_file {
-                None => " (overridden for this restore)",
-                Some((Base::Absolute | Base::WinAbsolute, _)) => " (absolute path)",
-                Some(_) => "",
-            };
-            ui.label(format!(
-                "{number}. {source} -> {}{flag}",
-                write.target.display()
-            ));
-            ui.horizontal(|ui| {
-                let label = ui.label(format!("Override target {number}"));
-                let field = TextEdit::singleline(&mut preview.overrides[index])
-                    .hint_text("an absolute path, for this restore only");
-                ui.add(field).labelled_by(label.id);
-                let button = egui::Button::new(format!("Override {number}"));
-                if ui.add_enabled(!busy, button).clicked() {
-                    overridden = Some(index);
+        theme::group(ui, |ui| {
+            for (index, write) in preview.plan.writes.iter().enumerate() {
+                if index > 0 {
+                    theme::row_separator(ui);
                 }
-            });
-            if let Some((_, error)) = (preview.override_error.as_ref()).filter(|(i, _)| *i == index)
-            {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                let number = index + 1;
+                // `<Base>/<tail>` with `/` on every OS, as the snapshot stores it.
+                let source = write.source.strip_prefix(&files).unwrap_or(&write.source);
+                let source = (source.iter().map(|part| part.to_string_lossy()))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let flag = match &write.target_file {
+                    None => " (overridden for this restore)",
+                    Some((Base::Absolute | Base::WinAbsolute, _)) => " (absolute path)",
+                    Some(_) => "",
+                };
+                ui.label(source);
+                ui.horizontal(|ui| {
+                    theme::mark(ui, icons::ARROW_RIGHT, 16.0, muted);
+                    ui.label(format!("{}{flag}", write.target.display()));
+                });
+                ui.horizontal(|ui| {
+                    let label = ui.weak(format!("Override target {number}"));
+                    let field = TextEdit::singleline(&mut preview.overrides[index])
+                        .hint_text("an absolute path, for this restore only");
+                    ui.add(field).labelled_by(label.id);
+                    let button = egui::Button::new(format!("Override {number}"));
+                    if ui.add_enabled(!busy, button).clicked() {
+                        overridden = Some(index);
+                    }
+                });
+                if let Some((_, error)) =
+                    (preview.override_error.as_ref()).filter(|(i, _)| *i == index)
+                {
+                    theme::status(ui, icons::X_CIRCLE, error_color, error);
+                }
             }
-        }
+        });
         if let Some(index) = overridden {
             let target = PathBuf::from(preview.overrides[index].trim());
             preview.override_error = (preview.plan.override_target(index, target))
@@ -682,18 +762,17 @@ impl RestoreTab {
             });
         if let Some(index) = unapplied {
             let number = index + 1;
-            ui.colored_label(
-                ui.visuals().error_fg_color,
+            theme::status(
+                ui,
+                icons::X_CIRCLE,
+                error_color,
                 format!(
                     "Override target {number} is not applied: click Override {number} or clear it."
                 ),
             );
         }
         let ready = !busy && state.session.is_some() && unapplied.is_none();
-        if ui
-            .add_enabled(ready, egui::Button::new("Restore files"))
-            .clicked()
-        {
+        if right_aligned(ui, |ui| restore_button(ui, ready)).clicked() {
             let into_prefix =
                 matches!(preview.plan.registry, Some((_, Context::WinePrefix { .. })));
             if into_prefix && (state.env.wineserver_running)().is_none() {
@@ -710,7 +789,7 @@ impl RestoreTab {
         if !self.confirm_wine {
             return;
         }
-        let (confirm, cancel) = egui::Modal::new(egui::Id::unique("restore_wine"))
+        let (confirm, cancel) = theme::modal(ctx, "restore_wine")
             .show(ctx, |ui| {
                 ui.set_width(480.0);
                 ui.label(
@@ -791,17 +870,32 @@ impl RestoreTab {
         let Some(restored) = &self.restored else {
             return;
         };
-        ui.separator();
+        ui.add_space(16.0);
         ui.heading(format!("Restored {}", restored.title));
         ui.label(&restored.safety_backup);
+        let (accent, error_color) = (theme::palette(ui).accent, ui.visuals().error_fg_color);
         for (line, failed) in &restored.lines {
             if *failed {
-                ui.colored_label(ui.visuals().error_fg_color, line);
+                theme::status(ui, icons::X_CIRCLE, error_color, line);
             } else {
-                ui.label(line);
+                ui.horizontal(|ui| {
+                    theme::mark(ui, icons::CHECK_CIRCLE, 16.0, accent);
+                    ui.label(line);
+                });
             }
         }
     }
+}
+
+/// `add` at the right edge of the column.
+fn right_aligned<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.with_layout(Layout::top_down(Align::Max), add).inner
+}
+
+/// The primary button that runs the previewed plan.
+fn restore_button(ui: &mut Ui, enabled: bool) -> Response {
+    let glyph = Some(icons::CLOCK_COUNTER_CLOCKWISE);
+    theme::primary(ui, enabled, glyph, "Restore files")
 }
 
 /// What a failed restore job tells the user; nothing was written.

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
-    FontId, FontTweak, Frame, Label, Margin, Rect, Response, RichText, ScrollArea, Sense,
+    FontId, FontTweak, Frame, Label, Margin, Modal, Rect, Response, RichText, ScrollArea, Sense,
     Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
 };
 
@@ -28,6 +28,7 @@ pub mod icons {
     pub const CHECK_CIRCLE: &str = "\u{E184}";
     pub const LOCK_SIMPLE: &str = "\u{E308}";
     pub const LOCK_SIMPLE_OPEN: &str = "\u{E30A}";
+    pub const ARROW_RIGHT: &str = "\u{E06C}";
     pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
     pub const ARROW_CIRCLE_UP: &str = "\u{E030}";
 }
@@ -212,6 +213,12 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
         mark(ui, glyph, 16.0, color);
         ui.add(Label::new(RichText::new(text).color(color)).wrap());
     });
+}
+
+/// A modal dialog in the window frame: 20 px margins and the dialog corner radius, rather than
+/// the smaller popup frame egui gives modals.
+pub fn modal(ctx: &egui::Context, id: &str) -> Modal {
+    Modal::new(egui::Id::unique(id)).frame(Frame::window(&ctx.global_style()))
 }
 
 /// Drops the outline of the buttons in `ui` at rest and under the pointer, for lists of

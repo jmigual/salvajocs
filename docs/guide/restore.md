@@ -43,8 +43,8 @@ both existing.
 
 The Plan shows:
 
-- **Files to write (N).** Each line reads `n. <Folder>/<path> -> <real path on this machine>`. A
-  tag such as `(absolute path)` marks a path that was saved as a plain path.
+- **Files to write (N).** Each file shows `<Folder>/<path>` and, under it, the real path on this
+  machine. A tag such as `(absolute path)` marks a path that was saved as a plain path.
 - **Registry.** The number of registry keys and the prefix or the Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A yellow **Cross-build restore** warning when the plan maps folders from the other build. The
