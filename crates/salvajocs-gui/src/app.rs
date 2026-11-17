@@ -3,7 +3,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
@@ -244,7 +244,7 @@ impl App {
         match &self.stage {
             Stage::ConfigUnreadable(error) => {
                 ui.colored_label(
-                    Color32::LIGHT_RED,
+                    ui.visuals().error_fg_color,
                     format!("The config file in {error} cannot be read"),
                 );
             }
@@ -258,7 +258,7 @@ impl App {
                 let error = error.clone();
                 ui.horizontal(|ui| {
                     ui.colored_label(
-                        Color32::LIGHT_RED,
+                        ui.visuals().error_fg_color,
                         format!("The repository could not be opened: {error}"),
                     );
                     if ui.button("Retry").clicked() {
@@ -270,14 +270,14 @@ impl App {
         }
         if let Some(error) = &self.manifest_error {
             ui.colored_label(
-                Color32::LIGHT_RED,
+                ui.visuals().error_fg_color,
                 format!("The game manifest could not be updated: {error}"),
             );
         }
         let mut dismissed = None;
         for (index, notice) in self.state.notices.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::YELLOW, notice);
+                ui.colored_label(ui.visuals().warn_fg_color, notice);
                 if ui.button("Dismiss").clicked() {
                     dismissed = Some(index);
                 }

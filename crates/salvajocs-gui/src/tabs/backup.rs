@@ -6,7 +6,7 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::backup::{self, GameBackup};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 
@@ -147,7 +147,10 @@ impl BackupTab {
             }
             self.scan_ui(ui, state, manifest_loading);
             if let Some(error) = &self.scan_error {
-                ui.colored_label(Color32::LIGHT_RED, format!("The scan failed: {error}"));
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("The scan failed: {error}"),
+                );
             }
             self.games_ui(ui, state, manifest_loading);
             self.results_ui(ui);
@@ -237,11 +240,11 @@ impl BackupTab {
         if !report.problems.is_empty() {
             ui.separator();
             ui.colored_label(
-                Color32::YELLOW,
+                ui.visuals().warn_fg_color,
                 format!("Scan problems ({})", report.problems.len()),
             );
             for problem in &report.problems {
-                ui.colored_label(Color32::YELLOW, describe_problem(problem));
+                ui.colored_label(ui.visuals().warn_fg_color, describe_problem(problem));
             }
         }
         ui.separator();
@@ -334,7 +337,10 @@ impl BackupTab {
             });
         }
         if let Some(error) = &self.run_error {
-            ui.colored_label(Color32::LIGHT_RED, format!("The backup failed: {error}"));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("The backup failed: {error}"),
+            );
         }
         if progress.done.is_empty() {
             return;
@@ -345,9 +351,10 @@ impl BackupTab {
             match outcome {
                 Outcome::Saved => ui.label(format!("{title}: new snapshot")),
                 Outcome::Unchanged => ui.label(format!("{title}: unchanged")),
-                Outcome::Failed(error) => {
-                    ui.colored_label(Color32::LIGHT_RED, format!("{title}: failed: {error}"))
-                }
+                Outcome::Failed(error) => ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("{title}: failed: {error}"),
+                ),
             };
         }
     }

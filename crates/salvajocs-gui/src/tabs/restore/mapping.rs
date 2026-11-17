@@ -1,7 +1,7 @@
 //! The cross-build mapping dialog: where each snapshot root of the other OS's build goes in this
 //! one, shown only while a root is unknown (ADR-0011).
 
-use eframe::egui::{self, Color32, TextEdit, Ui};
+use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, Confidence, MappingEntry, SnapshotRoot};
 
 /// One root of the game.
@@ -104,7 +104,7 @@ impl Dialog {
             });
         ui.separator();
         if let Some(error) = error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
         let choices = self.choices();
         let mut action = None;
@@ -159,12 +159,12 @@ fn row_ui(ui: &mut Ui, number: usize, row: &mut Row) {
             .changed();
     });
     for note in &row.entry.notes {
-        ui.colored_label(Color32::YELLOW, note);
+        ui.colored_label(ui.visuals().warn_fg_color, note);
     }
     if edited {
         row.error = None;
     }
     if let Some(error) = &row.error {
-        ui.colored_label(Color32::LIGHT_RED, error);
+        ui.colored_label(ui.visuals().error_fg_color, error);
     }
 }

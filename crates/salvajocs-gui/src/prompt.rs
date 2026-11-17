@@ -1,6 +1,6 @@
 //! The startup prompt for secrets the keyring does not hold (ADR-0009).
 
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::secret::SecretKey;
 
 use crate::startup::Credentials;
@@ -44,7 +44,7 @@ impl SecretPrompt {
     /// Draws one field per missing secret. Returns all credentials once the user confirms.
     pub fn ui(&mut self, ui: &mut Ui) -> Option<Credentials> {
         if let Some(error) = self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
         egui::Grid::new("secret_prompt")
             .num_columns(2)

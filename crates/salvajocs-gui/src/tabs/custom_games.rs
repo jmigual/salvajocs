@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Color32, TextEdit, Ui};
+use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, PairError, SkipError};
 use salvajocs_core::manifest::{CustomGame, FileRule, Integration, Pair, Tag};
 
@@ -334,7 +334,7 @@ impl Form {
         self.pairs_ui(ui);
         self.skips_ui(ui);
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error.to_string());
+            ui.colored_label(ui.visuals().error_fg_color, error.to_string());
         }
         let mut action = None;
         ui.horizontal(|ui| {

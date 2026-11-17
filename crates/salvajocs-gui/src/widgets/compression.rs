@@ -1,6 +1,6 @@
 //! The compression field: one integer, validated by `Compression::from_field` (ADR-0009).
 
-use eframe::egui::{self, Ui};
+use eframe::egui::Ui;
 use salvajocs_core::storage::{Compression, StorageError};
 
 use super::labelled_edit;
@@ -45,7 +45,7 @@ pub fn ui(ui: &mut Ui, label: &str, text: &mut String) -> Result<Compression, Fi
     let parsed = parse(text);
     if let Err(err) = &parsed {
         ui.label("");
-        ui.colored_label(egui::Color32::LIGHT_RED, err.to_string());
+        ui.colored_label(ui.visuals().error_fg_color, err.to_string());
         ui.end_row();
     }
     parsed

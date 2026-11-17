@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
-use eframe::egui::{self, Color32, TextEdit, Ui};
+use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::manifest::{GameEntry, Pair};
@@ -280,7 +280,7 @@ impl RestoreTab {
                 ui.spinner();
             }
             if let Some(error) = &self.error {
-                ui.colored_label(Color32::LIGHT_RED, error);
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
             self.preview_ui(ui, state);
             self.restored_ui(ui);
@@ -608,13 +608,13 @@ impl RestoreTab {
         ui.heading("Plan");
         if preview.plan.cross_build {
             ui.colored_label(
-                Color32::YELLOW,
+                ui.visuals().warn_fg_color,
                 "Cross-build restore: the other build may use a different save format. The \
                  safety backup lets you undo it.",
             );
         }
         for note in &preview.plan.notes {
-            ui.colored_label(Color32::YELLOW, format!("Note: {note}"));
+            ui.colored_label(ui.visuals().warn_fg_color, format!("Note: {note}"));
         }
         ui.label(format!("Files to write ({})", preview.plan.writes.len()));
         let files = preview.fetched.staged.root.join(FILES_DIR);
@@ -647,7 +647,7 @@ impl RestoreTab {
             });
             if let Some((_, error)) = (preview.override_error.as_ref()).filter(|(i, _)| *i == index)
             {
-                ui.colored_label(Color32::LIGHT_RED, error);
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
         }
         if let Some(index) = overridden {
@@ -682,7 +682,7 @@ impl RestoreTab {
         if let Some(index) = unapplied {
             let number = index + 1;
             ui.colored_label(
-                Color32::LIGHT_RED,
+                ui.visuals().error_fg_color,
                 format!(
                     "Override target {number} is not applied: click Override {number} or clear it."
                 ),
@@ -795,7 +795,7 @@ impl RestoreTab {
         ui.label(&restored.safety_backup);
         for (line, failed) in &restored.lines {
             if *failed {
-                ui.colored_label(Color32::LIGHT_RED, line);
+                ui.colored_label(ui.visuals().error_fg_color, line);
             } else {
                 ui.label(line);
             }

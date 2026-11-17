@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::anyhow;
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::layout::{Root, RootKind};
 use salvajocs_core::storage::Compression;
@@ -140,7 +140,7 @@ impl SettingsTab {
             .show(ui, |ui| compression::ui(ui, "Compression", text))
             .inner;
         if let Some(error) = &self.compression_error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
         let new = parsed.ok().filter(|new| *new != session.compression);
         let apply = ui.add_enabled(

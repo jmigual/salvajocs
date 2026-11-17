@@ -5,7 +5,7 @@
 use std::mem;
 
 use anyhow::Result;
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, probe};
@@ -103,7 +103,7 @@ impl Connect {
                     if self.password.is_empty() {
                         ui.label("");
                         ui.colored_label(
-                            Color32::YELLOW,
+                            ui.visuals().warn_fg_color,
                             "No password: the repository will not be encrypted.",
                         );
                         ui.end_row();
@@ -120,7 +120,7 @@ impl Connect {
         match mem::replace(&mut self.step, Step::Editing(None)) {
             Step::Editing(error) => {
                 if let Some(error) = &error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 let ready = self.form.has_location() && compression.is_some();
                 let go = ui
