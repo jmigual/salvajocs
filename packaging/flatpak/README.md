@@ -42,16 +42,16 @@ flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo <repo-dir>
 `<repo-dir>` is the directory given to `flatpak-builder --repo=<repo-dir>`. On a local build the
 repo lint reports `appstream-screenshots-not-mirrored-in-ostree` and
 `appstream-external-screenshot-url`; Flathub's build mirrors the screenshots, so they go away
-there. Before the `v0.2.0` tag exists the screenshot URLs return 404.
+there. Before the `v0.3.0` tag exists the screenshot URLs return 404.
 
 ## Submit to Flathub
 
 Steps from <https://docs.flathub.org/docs/for-app-authors/submission>.
 
-1. Use the latest release tag, for example `v0.2.0` (see
+1. Use the latest release tag, for example `v0.3.0` (see
    [releasing](../../docs/guide/releasing.md)). The metainfo screenshot URLs point at that tag,
    so `docs/images/*.png` must exist in it.
-2. Get its commit: `git rev-parse v0.2.0^{commit}`.
+2. Get its commit: `git rev-parse v0.3.0^{commit}`.
 3. Fork <https://github.com/flathub/flathub> with "Copy the master branch only" unticked, and
    clone your fork on the `new-pr` branch:
    `git clone --branch=new-pr git@github.com:<you>/flathub.git && cd flathub && git checkout -b salvajocs new-pr`.
@@ -63,12 +63,12 @@ Steps from <https://docs.flathub.org/docs/for-app-authors/submission>.
    sources:
      - type: git
        url: https://github.com/jmigual/salvajocs.git
-       tag: v0.2.0
-       commit: <commit of v0.2.0>
+       tag: v0.3.0
+       commit: <commit of v0.3.0>
      - cargo-sources.json
    ```
 
-   `<commit of v0.2.0>` is the 40-character hash from step 2. Flathub requires it next to the
+   `<commit of v0.3.0>` is the 40-character hash from step 2. Flathub requires it next to the
    tag.
 6. Commit, push the branch and open a pull request against the `new-pr` branch of
    `flathub/flathub`. Flathub's bot builds it and posts the result; comment `bot, build` to
