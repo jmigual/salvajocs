@@ -307,6 +307,27 @@ fn a_missing_rclone_is_said_and_the_location_still_works() {
 }
 
 #[test]
+fn a_server_password_does_not_follow_the_user_to_another_service() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    choose(&mut harness, "Backend", "WebDAV");
+    fill(&mut harness, "Server password", "hunter2");
+    choose(&mut harness, "Backend", "pCloud");
+    fill(&mut harness, "API endpoint", "https://api.pcloud.com");
+    fill(&mut harness, "Account email", "me@example.com");
+
+    assert!(
+        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+            .is_disabled(),
+        "the pCloud account password is required and was not typed"
+    );
+}
+
+#[test]
 fn applying_an_untouched_form_keeps_the_free_options() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);

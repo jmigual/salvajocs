@@ -177,13 +177,38 @@ impl BackendForm {
         named.chain(advanced).collect()
     }
 
-    /// A key that would be saved twice, which `location()` would resolve by dropping one.
+    /// The key of the field that `key` stands for: itself, or the key opendal reads an alias as.
+    fn canonical_key<'a>(&self, key: &'a str) -> &'a str {
+        fields_of(self.kind)
+            .iter()
+            .find(|field| field.key == key || field.aliases.contains(&key))
+            .map_or(key, |field| field.key)
+    }
+
+    /// A key that would be saved twice, which `location()` would resolve by dropping one and
+    /// opendal rejects when an alias and its key are both set.
     fn duplicate_key(&self) -> Option<String> {
         let mut seen = BTreeSet::new();
         self.entries()
             .into_iter()
-            .find(|entry| !seen.insert(entry.key))
-            .map(|entry| entry.key.to_string())
+            .map(|entry| self.canonical_key(entry.key))
+            .find(|key| !seen.insert(*key))
+            .map(str::to_string)
+    }
+
+    /// The error shown for a duplicate key, saying where the two are.
+    fn duplicate_message(&self) -> Option<String> {
+        let key = self.duplicate_key()?;
+        let in_field = fields_of(self.kind).iter().any(|field| field.key == key)
+            && self
+                .named
+                .get(&key)
+                .is_some_and(|value| !value.trim().is_empty());
+        Some(if in_field {
+            format!("\"{key}\" is set in both a field and Advanced options. Remove one.")
+        } else {
+            format!("\"{key}\" is set twice in Advanced options. Remove one.")
+        })
     }
 
     /// Whether the form describes a repository: a location for local, REST and rclone; a value
@@ -200,13 +225,23 @@ impl BackendForm {
                     .iter()
                     .filter(|field| field.required)
                     .all(|field| {
-                        entries
-                            .iter()
-                            .any(|entry| entry.key == field.key && !entry.value.trim().is_empty())
+                        entries.iter().any(|entry| {
+                            self.canonical_key(entry.key) == field.key
+                                && !entry.value.trim().is_empty()
+                        })
                     })
             }
             _ => !self.location.trim().is_empty(),
         }
+    }
+
+    /// Changes the kind. The secrets typed for the old kind are dropped, so a server password
+    /// never reaches another service.
+    fn switch_kind(&mut self, kind: BackendKind) {
+        for field in fields_of(self.kind).iter().filter(|field| field.secret) {
+            self.named.remove(field.key);
+        }
+        self.kind = kind;
     }
 
     /// The options as the config keeps them: a secret option has no value.
@@ -242,17 +277,24 @@ impl BackendForm {
             }
         }
         let label = ui.label("Backend");
+        let mut chosen = None;
         egui::ComboBox::from_id_salt("backend_kind")
             .selected_text(kind_label(self.kind))
             .show_ui(ui, |ui| {
                 theme::pill_list(ui);
                 for kind in config::backend_kinds() {
-                    ui.selectable_value(&mut self.kind, kind, kind_label(kind));
+                    let selected = self.kind == kind;
+                    if ui.selectable_label(selected, kind_label(kind)).clicked() && !selected {
+                        chosen = Some(kind);
+                    }
                 }
             })
             .response
             .labelled_by(label.id);
         ui.end_row();
+        if let Some(kind) = chosen {
+            self.switch_kind(kind);
+        }
 
         if !matches!(self.kind, BackendKind::OpenDal(_)) {
             if self.kind == BackendKind::Rclone {
@@ -390,13 +432,8 @@ impl BackendForm {
 
     /// The error row for a key that would be saved twice.
     fn duplicate_ui(&self, ui: &mut Ui) {
-        let Some(key) = self.duplicate_key() else {
+        let Some(message) = self.duplicate_message() else {
             return;
-        };
-        let message = if fields_of(self.kind).iter().any(|field| field.key == key) {
-            format!("\"{key}\" is set in both a field and Advanced options. Remove one.")
-        } else {
-            format!("\"{key}\" is set twice in Advanced options. Remove one.")
         };
         ui.label("");
         let color = ui.visuals().error_fg_color;
@@ -700,6 +737,97 @@ mod tests {
         assert!(!local.is_complete(), "a local repository needs a location");
         local.location = "/backups".to_string();
         assert!(local.is_complete());
+    }
+
+    #[test]
+    fn a_required_key_stored_under_an_alias_counts() {
+        let original = config(
+            "opendal:s3",
+            vec![option("bucket_name", Some("games"), false)],
+        );
+        let mut form = BackendForm::from_config(&original, &BTreeMap::new());
+
+        assert!(
+            form.is_complete(),
+            "bucket_name worked before the named fields"
+        );
+        assert_eq!(
+            option_set(form.options()),
+            option_set(original.repository_options.clone())
+        );
+        form.set_named("bucket", "other");
+        assert!(
+            !form.is_complete(),
+            "opendal rejects the alias and the key together"
+        );
+        assert_eq!(form.duplicate_key().as_deref(), Some("bucket"));
+    }
+
+    #[test]
+    fn azfile_needs_no_account_name_next_to_its_endpoint() {
+        let mut form =
+            BackendForm::from_config(&config("opendal:azfile", Vec::new()), &BTreeMap::new());
+        form.set_named("share_name", "saves");
+        form.set_named("endpoint", "https://myaccount.file.core.windows.net");
+        assert!(form.is_complete());
+    }
+
+    #[test]
+    fn the_duplicate_message_says_where_the_keys_are() {
+        let mut form =
+            BackendForm::from_config(&config("opendal:webdav", Vec::new()), &BTreeMap::new());
+        assert_eq!(form.duplicate_message(), None);
+
+        form.push_option("username", "a", false);
+        form.push_option("username", "b", false);
+        let twice = form.duplicate_message().unwrap();
+        assert!(twice.contains("twice in Advanced"), "{twice}");
+
+        form.options.pop();
+        form.set_named("username", "c");
+        let both = form.duplicate_message().unwrap();
+        assert!(both.contains("both a field and Advanced"), "{both}");
+    }
+
+    #[test]
+    fn changing_the_kind_drops_secrets_but_keeps_plain_values() {
+        let mut form =
+            BackendForm::from_config(&config("opendal:webdav", Vec::new()), &BTreeMap::new());
+        form.set_named("endpoint", "https://dav.example.com");
+        form.set_named("password", "hunter2");
+
+        form.switch_kind(BackendKind::OpenDal("pcloud"));
+
+        assert_eq!(
+            form.named.get("endpoint").map(String::as_str),
+            Some("https://dav.example.com")
+        );
+        assert!(!form.named.contains_key("password"));
+        assert!(form.secrets().is_empty());
+    }
+
+    #[test]
+    fn remotes_note_says_why_there_is_nothing_to_choose() {
+        let mut form = BackendForm::default();
+        assert_eq!(
+            form.remotes_note(),
+            None,
+            "nothing is said before the answer"
+        );
+
+        form.remotes = Remotes::Listed(Err(io::ErrorKind::NotFound.into()));
+        assert!(form.remotes_note().unwrap().contains("not installed"));
+
+        form.remotes = Remotes::Listed(Err(io::Error::other("config is locked")));
+        let note = form.remotes_note().unwrap();
+        assert!(note.contains("config is locked"), "{note}");
+        assert!(!note.contains("not installed"));
+
+        form.remotes = Remotes::Listed(Ok(Vec::new()));
+        assert!(form.remotes_note().unwrap().contains("rclone config"));
+
+        form.remotes = Remotes::Listed(Ok(vec!["nas".to_string()]));
+        assert_eq!(form.remotes_note(), None);
     }
 
     #[test]
