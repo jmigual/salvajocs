@@ -406,7 +406,11 @@ impl BackendForm {
     /// because a `CollapsingHeader` cannot span the rows of a grid.
     fn advanced_ui(&mut self, ui: &mut Ui) {
         ui.label("");
-        ui.toggle_value(&mut self.advanced_open, "Advanced options");
+        // A framed button, so it reads as a button while closed; selected while open.
+        let toggle = egui::Button::new("Advanced options").selected(self.advanced_open);
+        if ui.add(toggle).clicked() {
+            self.advanced_open = !self.advanced_open;
+        }
         ui.end_row();
         if !self.advanced_open {
             return;
