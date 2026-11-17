@@ -48,6 +48,9 @@ pub struct BackendForm {
     /// The Advanced options.
     options: Vec<OptionRow>,
     advanced_open: bool,
+    /// The secret named values of the services the user switched away from, by service, so they
+    /// come back with that service and are never shown in another.
+    stashed: BTreeMap<&'static str, BTreeMap<String, String>>,
     remotes: Remotes,
     picker: Option<Job<Option<PathBuf>>>,
 }
@@ -60,6 +63,7 @@ impl Default for BackendForm {
             named: BTreeMap::new(),
             options: Vec::new(),
             advanced_open: false,
+            stashed: BTreeMap::new(),
             remotes: Remotes::Unasked,
             picker: None,
         }
@@ -138,6 +142,7 @@ impl BackendForm {
             location: location.to_string(),
             named,
             advanced_open: !options.is_empty(),
+            stashed: BTreeMap::new(),
             options,
             remotes: Remotes::Unasked,
             picker: None,
@@ -235,13 +240,23 @@ impl BackendForm {
         }
     }
 
-    /// Changes the kind. The secrets typed for the old kind are dropped, so a server password
-    /// never reaches another service.
+    /// Changes the kind. The secrets of the old kind are set aside, so a server password never
+    /// reaches another service, and come back when the user returns to it.
     fn switch_kind(&mut self, kind: BackendKind) {
-        for field in fields_of(self.kind).iter().filter(|field| field.secret) {
-            self.named.remove(field.key);
+        if let BackendKind::OpenDal(service) = self.kind {
+            let secrets = fields_of(self.kind)
+                .iter()
+                .filter(|field| field.secret)
+                .filter_map(|field| Some((field.key.to_string(), self.named.remove(field.key)?)))
+                .collect();
+            self.stashed.insert(service, secrets);
         }
         self.kind = kind;
+        if let BackendKind::OpenDal(service) = kind
+            && let Some(secrets) = self.stashed.remove(service)
+        {
+            self.named.extend(secrets);
+        }
     }
 
     /// The options as the config keeps them: a secret option has no value.
@@ -806,6 +821,29 @@ mod tests {
         );
         assert!(!form.named.contains_key("password"));
         assert!(form.secrets().is_empty());
+    }
+
+    #[test]
+    fn a_secret_comes_back_when_the_user_returns_to_its_service() {
+        let secrets = BTreeMap::from([("password".to_string(), "hunter2".to_string())]);
+        let original = config(
+            "opendal:webdav",
+            vec![
+                option("endpoint", Some("https://dav.example.com"), false),
+                option("password", None, true),
+            ],
+        );
+        let mut form = BackendForm::from_config(&original, &secrets);
+
+        form.switch_kind(BackendKind::OpenDal("pcloud"));
+        assert!(form.secrets().is_empty(), "not shown under pCloud");
+        form.switch_kind(BackendKind::OpenDal("webdav"));
+
+        assert_eq!(form.secrets(), secrets);
+        assert_eq!(
+            option_set(form.options()),
+            option_set(original.repository_options.clone())
+        );
     }
 
     #[test]

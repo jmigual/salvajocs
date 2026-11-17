@@ -27,7 +27,10 @@ pub fn form_grid(id: &str) -> Grid {
 /// A warning or error line in a cell of a grid row, as tall as its wrapped text. Bare
 /// `theme::status` in a cell reports one line, and the next row is drawn over the rest.
 pub fn field_status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
-    ui.vertical(|ui| theme::status(ui, glyph, color, text));
+    ui.vertical(|ui| {
+        ui.set_max_width(ui.spacing().text_edit_width);
+        theme::status(ui, glyph, color, text);
+    });
 }
 
 /// A muted hint under the field of the grid row above, as wide as a field. Lays out one cell of
