@@ -19,6 +19,7 @@ fn config(repository: &str, password: PasswordMode, secret_option: bool) -> AppC
         password,
         roots: Vec::new(),
         custom_games: Vec::new(),
+        check_updates: true,
     }
 }
 

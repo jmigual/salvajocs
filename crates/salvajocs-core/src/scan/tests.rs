@@ -29,6 +29,7 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         password: PasswordMode::None,
         roots,
         custom_games,
+        check_updates: true,
     }
 }
 

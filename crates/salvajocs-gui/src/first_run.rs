@@ -188,6 +188,7 @@ impl Connect {
             password,
             roots: Vec::new(),
             custom_games: Vec::new(),
+            check_updates: true,
         };
         let credentials = Credentials {
             password: self.password.clone(),

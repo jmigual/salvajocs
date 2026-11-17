@@ -32,6 +32,7 @@ fn sample() -> AppConfig {
             pairs: Vec::new(),
             skips: Vec::new(),
         }],
+        check_updates: false,
     }
 }
 
@@ -49,6 +50,17 @@ fn save_then_load_is_equal() {
     config.save(&dir).unwrap();
     assert_eq!(AppConfig::load(&dir).unwrap(), Some(config));
     assert!(!dir.join("config.yaml.tmp").exists());
+}
+
+#[test]
+fn config_without_check_updates_checks_for_updates() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\n",
+    )
+    .unwrap();
+    assert!(AppConfig::load(tmp.path()).unwrap().unwrap().check_updates);
 }
 
 #[test]

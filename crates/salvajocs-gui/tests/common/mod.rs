@@ -93,6 +93,7 @@ pub fn local_config(repository: &str) -> AppConfig {
         password: PasswordMode::None,
         roots: Vec::new(),
         custom_games: Vec::new(),
+        check_updates: true,
     }
 }
 

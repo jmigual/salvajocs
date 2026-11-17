@@ -799,6 +799,7 @@ fn config(roots: Vec<Root>) -> AppConfig {
         password: PasswordMode::None,
         roots,
         custom_games: vec![],
+        check_updates: true,
     }
 }
 

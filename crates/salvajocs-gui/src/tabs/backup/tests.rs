@@ -108,6 +108,7 @@ fn state(dir: &Path) -> State {
         password: PasswordMode::None,
         roots: Vec::new(),
         custom_games: Vec::new(),
+        check_updates: true,
     });
     let location = RepoLocation {
         repository: dir.join("repo").to_str().unwrap().to_string(),

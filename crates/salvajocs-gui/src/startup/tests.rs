@@ -39,6 +39,7 @@ fn config(password: PasswordMode) -> AppConfig {
         password,
         roots: Vec::new(),
         custom_games: Vec::new(),
+        check_updates: true,
     }
 }
 

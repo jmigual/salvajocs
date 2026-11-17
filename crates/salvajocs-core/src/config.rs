@@ -138,6 +138,13 @@ pub struct AppConfig {
     /// Games defined or adjusted by the user (ADR-0008).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_games: Vec<CustomGame>,
+    /// Whether the app asks GitHub for a newer release at start (ADR-0013).
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// The salvajocs directory inside the OS config dir, or `None` when the OS has none.
