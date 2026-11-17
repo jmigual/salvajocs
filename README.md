@@ -4,13 +4,17 @@ Back up and restore game saves in a restic-format repository, from a desktop app
 Windows. A save backed up from a Wine/Proton prefix on Linux restores on native Windows, and the
 other way round.
 
+[![crates.io](https://img.shields.io/crates/v/salvajocs.svg)](https://crates.io/crates/salvajocs)
+[![docs.rs](https://img.shields.io/docsrs/salvajocs-core)](https://docs.rs/salvajocs-core)
 [![CI](https://github.com/jmigual/salvajocs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jmigual/salvajocs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV 1.95](https://img.shields.io/badge/MSRV-1.95-orange.svg)](Cargo.toml)
 [![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#install)
 
-> **Status: pre-release.** The app works and is tested on Linux and Windows, but there are no
-> releases or binaries yet. You build it from source (see [Install](#install)).
+> **Status: early (0.x).** The app works and is tested on Linux and Windows. Releases are on
+> [crates.io](https://crates.io/crates/salvajocs) and
+> [GitHub Releases](https://github.com/jmigual/salvajocs/releases). Behavior and the library API
+> can change between minor versions.
 
 <p align="center">
   <picture>
@@ -89,29 +93,19 @@ nothing is restored.
 
 ## Install
 
-Build from source with Rust 1.95 or newer:
+- **AppImage (Linux):** download `salvajocs-<version>-x86_64.AppImage` from the
+  [latest release](https://github.com/jmigual/salvajocs/releases/latest), run `chmod +x` on it and
+  start it. Gear Lever or AppImageUpdate update it in place.
+- **Windows:** download `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the same page,
+  extract it and run `salvajocs.exe`.
+- **cargo-binstall:** `cargo binstall salvajocs`.
+- **cargo:** `cargo install --locked salvajocs` (Rust 1.95 or newer).
+- **Latest from `main`:** `cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs`.
+- **Flatpak:** [build it locally](packaging/flatpak/README.md). A Flathub listing is planned, not
+  available yet.
 
-```sh
-cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
-```
-
-This installs the `salvajocs` program. To run it from a checkout instead:
-
-```sh
-git clone https://github.com/jmigual/salvajocs
-cd salvajocs
-cargo run --release -p salvajocs
-```
-
-Build and run requirements:
-
-- A C compiler. `zstd-sys` builds C code, and on Linux the keyring support builds libdbus from
-  source.
-- On Linux, OpenGL at run time (X11 or Wayland).
-- On Windows, the default MSVC toolchain.
-
-CI builds and tests on `ubuntu-latest` and `windows-latest` without extra packages. macOS is not
-supported. See the [installation guide](docs/guide/installation.md) for details.
+Requirements and details are in the [installation guide](docs/guide/installation.md). macOS is not
+supported.
 
 ## Quick start
 
@@ -153,7 +147,7 @@ Proton program closed. Games with a separate native Linux build need the mapping
 | Storage | restic-format repository, local or remote | Not a restic repository | restic-format repository |
 | Moving saves between operating systems | Automatic for Wine/Proton and Windows; rules and a dialog for native Linux builds | Redirects you set up, and a [guide to transferring between operating systems](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/transfer-between-operating-systems.md) | Not aware of games |
 | Launcher discovery on Linux | Steam/Proton, prefixes you add, custom games | Wider: also reads Heroic and Lutris | Not applicable |
-| Releases | None yet | Yes | Yes |
+| Releases | Early (0.x) | Yes | Yes |
 | Command line | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/command-line.md) | Yes |
 | Retention of old backups | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/backup-retention.md) | Yes (`forget`, `prune`) |
 
@@ -213,6 +207,10 @@ To regenerate the screenshots in `docs/images` (Linux only):
 ```sh
 SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs --test appearance -- --ignored
 ```
+
+`salvajocs-core` is published as a library on [crates.io](https://crates.io/crates/salvajocs-core),
+with docs on [docs.rs](https://docs.rs/salvajocs-core), for building other tools on it. Its API is
+0.x. See its [README](crates/salvajocs-core/README.md).
 
 Design decisions are in the ADR index, [docs/adrs/README.md](docs/adrs/README.md). Read the index
 before opening an ADR. The implementation plan is [docs/plan.md](docs/plan.md).
