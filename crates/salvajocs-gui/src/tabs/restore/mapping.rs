@@ -113,7 +113,7 @@ impl Dialog {
             let color = ui.visuals().error_fg_color;
             theme::status(ui, icons::X_CIRCLE, color, error);
         }
-        let choices = self.choices();
+        let mut choices = self.choices();
         let mut action = None;
         // The whole row waits for a running confirm, whose plan was made for these targets.
         ui.add_enabled_ui(!busy, |ui| {
@@ -126,7 +126,7 @@ impl Dialog {
                 }
                 let primary = theme::primary(ui, choices.is_some(), None, "Use these folders");
                 if primary.clicked() {
-                    action = choices.map(DialogAction::Confirm);
+                    action = choices.take().map(DialogAction::Confirm);
                 }
             });
         });

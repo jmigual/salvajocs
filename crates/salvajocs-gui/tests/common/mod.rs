@@ -130,17 +130,20 @@ pub fn replace_text(harness: &mut Harness<'static, App>, label: &str, text: &str
 
 /// Drives the app the way eframe does, for as many frames as the test needs.
 pub fn harness(env: Env) -> Harness<'static, App> {
-    Harness::builder()
-        // Tall enough that the longest page, Settings, needs no scrolling: clicks land on the
-        // center of a widget, which must be on screen.
-        .with_size(Vec2::new(1000.0, 1400.0))
-        .build_ui_state(
-            |ui, app| {
-                let mut frame = eframe::Frame::_new_kittest();
-                eframe::App::ui(app, ui, &mut frame);
-            },
-            App::new(env),
-        )
+    // Tall enough that the longest page, Settings, needs no scrolling: clicks land on the center
+    // of a widget, which must be on screen.
+    harness_sized(env, Vec2::new(1000.0, 1400.0))
+}
+
+/// Like `harness`, in a window of `size`.
+pub fn harness_sized(env: Env, size: Vec2) -> Harness<'static, App> {
+    Harness::builder().with_size(size).build_ui_state(
+        |ui, app| {
+            let mut frame = eframe::Frame::_new_kittest();
+            eframe::App::ui(app, ui, &mut frame);
+        },
+        App::new(env),
+    )
 }
 
 /// Whether any node's label contains `text`, which is how these tests ask "is this on screen".

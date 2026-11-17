@@ -7,8 +7,8 @@ use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Align, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions,
     FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect, Response, RichText,
-    ScrollArea, Sense, Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
-    WidgetText, style::Widgets,
+    ScrollArea, Sense, Separator, Stroke, Style, TextStyle, TextWrapMode, Theme, Ui, UiBuilder,
+    Vec2, Visuals, WidgetText, style::Widgets,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -238,38 +238,41 @@ pub fn modal(ctx: &egui::Context, id: &str) -> Modal {
 
 /// A row of `end` against the right edge, such as a dialog's or form's buttons with the primary
 /// one last. See [`row`].
-pub fn row_end<R>(ui: &mut Ui, end: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn row_end<R>(ui: &mut Ui, end: impl FnMut(&mut Ui) -> R) -> R {
     row(ui, |_| {}, end)
 }
 
-/// A row with `start` from the left edge and `end` against the right edge. Both are added left to
-/// right, so keyboard focus and screen readers follow the screen. `start` gets the width `end`
-/// leaves, which is measured; a change of it redraws the frame before it is shown.
-pub fn row<R>(ui: &mut Ui, start: impl FnOnce(&mut Ui), end: impl FnOnce(&mut Ui) -> R) -> R {
-    // The id of the row widget itself: a scope id can repeat between sibling rows.
-    let id = ui.next_auto_id().with("row_end_width");
+/// A row with `start` from the left edge and `end` against the right edge, both added left to
+/// right so keyboard focus and screen readers follow the screen. `start` gets the width `end`
+/// leaves and truncates its text to it.
+///
+/// `end` runs twice a frame: first in an invisible, disabled sizing pass that measures it, which
+/// draws nothing, reports nothing to screen readers and takes no input, then for real.
+pub fn row<R>(ui: &mut Ui, start: impl FnOnce(&mut Ui), mut end: impl FnMut(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
-        let end_width: f32 = ui.data(|data| data.get_temp(id)).unwrap_or(0.0);
+        let layout = Layout::left_to_right(Align::Center);
+        let measure = UiBuilder::new()
+            .id_salt("theme::row measure")
+            .layout(layout)
+            .sizing_pass()
+            .invisible();
+        let mut sizing = ui.new_child(measure);
+        end(&mut sizing);
+        let end_width = sizing.min_rect().width();
         let gap = ui.spacing().item_spacing.x;
         let start_width = (ui.available_width() - end_width - gap).max(0.0);
         let left = ui.cursor().min.x;
         ui.allocate_ui_with_layout(
             // As tall as a row of controls, so `start` centers on the same line as `end`.
             Vec2::new(start_width, ui.spacing().interact_size.y),
-            Layout::left_to_right(Align::Center),
-            start,
+            layout,
+            |ui| {
+                ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
+                start(ui);
+            },
         );
         ui.add_space((left + start_width + gap - ui.cursor().min.x).max(0.0));
-        let end_left = ui.cursor().min.x;
-        let inner = end(ui);
-        let measured = ui.min_rect().max.x - end_left;
-        if (measured - end_width).abs() > 0.5 {
-            ui.data_mut(|data| data.insert_temp(id, measured));
-            // egui may decline a further pass; the next frame then lays out with the width.
-            ui.ctx().request_discard("theme::row measured its end");
-            ui.ctx().request_repaint();
-        }
-        inner
+        end(ui)
     })
     .inner
 }

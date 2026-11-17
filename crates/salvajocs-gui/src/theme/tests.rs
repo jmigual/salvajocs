@@ -1,4 +1,4 @@
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
 
@@ -126,4 +126,42 @@ fn a_primary_button_with_an_icon_is_named_by_its_label() {
     harness.get_by_label("Scan for games").click();
     harness.run();
     assert_eq!(*harness.state(), 1);
+}
+
+/// When a dialog's buttons change, as from Continue to Back and Create on first run, they are in
+/// place on the frame they appear, so a click on what that frame shows lands on the button. The
+/// dialog keeps its height, so it does not re-center.
+#[test]
+fn a_new_button_row_is_in_place_on_its_first_frame() {
+    let mut harness = harness(
+        |ui, confirm: &mut bool| {
+            let confirm = *confirm;
+            modal(ui.ctx(), "dialog").show(ui.ctx(), |ui| {
+                ui.set_width(400.0);
+                ui.label("A dialog");
+                row_end(ui, |ui| {
+                    if confirm {
+                        let _ = ui.button("Back");
+                        primary(ui, true, None, "Create");
+                    } else {
+                        primary(ui, true, None, "Continue");
+                    }
+                });
+            });
+        },
+        false,
+    );
+    harness.run();
+    *harness.state_mut() = true;
+    harness.step();
+    let first = harness
+        .get_by_label("Create")
+        .accesskit_node()
+        .bounding_box();
+    harness.run();
+    let settled = harness
+        .get_by_label("Create")
+        .accesskit_node()
+        .bounding_box();
+    assert_eq!(first, settled);
 }

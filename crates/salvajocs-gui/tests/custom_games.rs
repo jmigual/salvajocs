@@ -5,11 +5,12 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{
-    env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
-    run_until_ready, save_config, shows,
+    env, harness, harness_sized, init_repo, local_config, replace_text, repo_dir, run_settled,
+    run_until, run_until_ready, save_config, shows,
 };
+use eframe::egui::Vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
 use salvajocs_core::layout::Base;
@@ -147,6 +148,34 @@ fn pair(linux: &str, windows: &str) -> Pair {
         linux: linux.into(),
         windows: windows.into(),
     }
+}
+
+/// A game name wider than the window does not push its Remove button off screen.
+#[test]
+fn custom_games_long_name_keeps_its_remove_button_on_screen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.custom_games = vec![dialog_game(&"A Very Long Game Title ".repeat(6))];
+    save_config(&env, &config);
+    let width = 400.0;
+    let mut harness = harness_sized(env, Vec2::new(width, 900.0));
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+
+    let remove = harness
+        .get_by_label("Remove")
+        .accesskit_node()
+        .bounding_box();
+    let remove = remove.expect("the Remove button has bounds");
+    assert!(
+        remove.x1 <= f64::from(width),
+        "Remove ends at {}",
+        remove.x1
+    );
 }
 
 #[test]
