@@ -48,8 +48,9 @@ there. Before the `v0.1.0` tag exists the screenshot URLs return 404.
 
 Steps from <https://docs.flathub.org/docs/for-app-authors/submission>.
 
-1. Tag the release and push the tag: `git tag v0.1.0 && git push origin v0.1.0`. The metainfo
-   screenshot URLs point at that tag, so `docs/images/*.png` must exist in it.
+1. Tag the release and push the tag: `git tag v0.1.0 && git push origin v0.1.0`. Push it only
+   after the manual `cargo publish` of both crates. The metainfo screenshot URLs point at that
+   tag, so `docs/images/*.png` must exist in it.
 2. Get its commit: `git rev-parse v0.1.0^{commit}`.
 3. Fork <https://github.com/flathub/flathub> with "Copy the master branch only" unticked, and
    clone your fork on the `new-pr` branch:
