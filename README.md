@@ -1,4 +1,4 @@
-# salvajocs
+# <img src="crates/salvajocs-gui/assets/io.github.jmigual.salvajocs.svg" width="40" alt=""> salvajocs
 
 Back up and restore game saves in a restic-format repository, from a desktop app for Linux and
 Windows. A save backed up from a Wine/Proton prefix on Linux restores on native Windows, and the
