@@ -47,9 +47,9 @@ The Plan shows:
   machine. A tag such as `(absolute path)` marks a path that was saved as a plain path.
 - **Registry.** The number of registry keys and the prefix or the Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.
-- A yellow **Cross-build restore** warning when the plan maps folders from the other build. The
+- A **Cross-build restore** warning when the plan maps folders from the other build. The
   other build may use a different save format.
-- Yellow **Note** lines, for example about Unity settings. See
+- **Note** lines, for example about Unity settings. See
   [Cross-OS restore](cross-os-restore.md#the-unity-playerprefs-limit).
 
 ### Why an item is skipped

@@ -36,12 +36,12 @@ Wildcards such as `*` and `?` match as in a shell. A folder matches everything i
 ignored, and `<storeUserId>` matches any value. Editing a line resets its OS condition. If a
 game needs different paths per build, use a pair.
 
-### Pairs
+### Linux and Windows pairs
 
 A pair tells salvajocs which Linux folder and which Windows folder hold the same saves, for
 cross-build restores. A pair has a **Linux** side such as `<xdgData>/Game` and a **Windows** side
 such as `<winAppData>/Game`. Both sides must be placeholder templates without wildcards. The
-mapping dialog adds pairs here when you confirm it. You can edit or remove them.
+mapping dialog adds pairs here when you click **Use these folders**. You can edit or remove them.
 
 ### Skipped folders
 
