@@ -5,12 +5,25 @@ use std::sync::Arc;
 
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
-    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak, Margin,
-    Stroke, Style, TextStyle, Theme, Vec2, Visuals,
+    self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
+    FontId, FontTweak, Margin, Response, RichText, Stroke, Style, TextStyle, Theme, Ui, Vec2,
+    Visuals,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
 const SEMIBOLD: &str = "semibold";
+/// The named font family of the icon subset; not in the proportional fallbacks, so a
+/// private-use codepoint in plain text never turns into an icon.
+const ICONS: &str = "icons";
+
+/// Phosphor icon codepoints in `assets/fonts/salvajocs-icons.ttf`.
+pub mod icons {
+    pub const FLOPPY_DISK: &str = "\u{E248}";
+    pub const CLOCK_COUNTER_CLOCKWISE: &str = "\u{E1A0}";
+    pub const GAME_CONTROLLER: &str = "\u{E26E}";
+    pub const GEAR_SIX: &str = "\u{E272}";
+    pub const MAGNIFYING_GLASS: &str = "\u{E30C}";
+}
 
 /// The colors of one theme. Contrast floors (WCAG) are checked by the tests.
 pub struct Palette {
@@ -124,7 +137,82 @@ fn fonts() -> FontDefinitions {
             .chain(fallbacks)
             .collect(),
     );
+    fonts.font_data.insert(
+        ICONS.to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/salvajocs-icons.ttf"
+        ))),
+    );
     fonts
+        .families
+        .insert(FontFamily::Name(ICONS.into()), vec![ICONS.to_owned()]);
+    fonts
+}
+
+/// The palette of the theme `ui` is drawn in.
+pub fn palette(ui: &Ui) -> &'static Palette {
+    if ui.visuals().dark_mode {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+/// The family `name` if the fonts define it. Screens drawn without [`apply`], as in tab-level
+/// tests, have only egui's fonts, and a family without fonts cannot draw anything.
+fn family(ctx: &egui::Context, name: &str) -> Option<FontFamily> {
+    let family = FontFamily::Name(name.into());
+    ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family))
+        .then_some(family)
+}
+
+/// `text` in the semibold face.
+pub fn semibold(ui: &Ui, text: impl Into<String>) -> RichText {
+    let family = family(ui.ctx(), SEMIBOLD).unwrap_or(FontFamily::Proportional);
+    RichText::new(text).family(family)
+}
+
+/// A 16 px icon of [`icons`] in the widget's text color. It is painted, not text, so the widget's
+/// accessible name stays its label.
+pub fn icon(glyph: &'static str) -> Atom<'static> {
+    Atom::paint(Vec2::splat(16.0), move |ui, args| {
+        if let Some(family) = family(ui.ctx(), ICONS) {
+            ui.painter().text(
+                args.rect.center(),
+                Align2::CENTER_CENTER,
+                glyph,
+                FontId::new(16.0, family),
+                args.fallback_text_color,
+            );
+        }
+    })
+}
+
+/// A button filled with the accent color, for the one main action of a screen, with an optional
+/// icon of [`icons`] before its semibold `label`.
+pub fn primary(ui: &mut Ui, enabled: bool, glyph: Option<&'static str>, label: &str) -> Response {
+    let palette = palette(ui);
+    ui.scope(|ui| {
+        // Scoped visuals rather than `Button::fill`, which would drop the hover and press fills.
+        let widgets = &mut ui.visuals_mut().widgets;
+        for (state, fill) in [
+            (&mut widgets.inactive, palette.accent_fill),
+            (&mut widgets.hovered, palette.accent_fill_hover),
+            (&mut widgets.active, palette.accent_fill_pressed),
+        ] {
+            state.weak_bg_fill = fill;
+            state.bg_fill = fill;
+            state.fg_stroke.color = Color32::WHITE;
+        }
+        widgets.inactive.bg_stroke.color = palette.accent_fill;
+        let label = semibold(ui, label);
+        let button = match glyph {
+            Some(glyph) => Button::new((icon(glyph), label)),
+            None => Button::new(label),
+        };
+        ui.add_enabled(enabled, button)
+    })
+    .inner
 }
 
 /// `base` with the colors of `palette`.
