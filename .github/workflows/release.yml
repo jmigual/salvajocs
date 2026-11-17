@@ -19,6 +19,8 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "salvajocs") | .version')
           test "v$version" = "$GITHUB_REF_NAME"
+      - name: CHANGELOG.md must have a section for the version
+        run: grep -qF -- "## [${GITHUB_REF_NAME#v}] " CHANGELOG.md
 
   binaries:
     needs: check
@@ -174,6 +176,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -185,4 +191,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
+        # The notes are the version's CHANGELOG.md section; --generate-notes appends the compare link.
+        run: |
+          awk -v h="## [${GITHUB_REF_NAME#v}]" '/^## \[/ { p = index($0, h) == 1; next } /^\[.*\]: / { p = 0 } p' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --notes-file notes.md --generate-notes --verify-tag
