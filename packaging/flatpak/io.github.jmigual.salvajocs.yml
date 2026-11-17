@@ -47,4 +47,5 @@ modules:
           - .claude
           - .flatpak-builder
           - target
+          - tmp
       - cargo-sources.json

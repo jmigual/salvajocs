@@ -11,7 +11,7 @@ Run from the repository root, on a clean checkout (the `dir` source copies the w
 flatpak install --user flathub org.flatpak.Builder org.freedesktop.Sdk//26.08 \
   org.freedesktop.Sdk.Extension.rust-stable//26.08
 flatpak run org.flatpak.Builder --user --force-clean --install --install-deps-from=flathub \
-  --state-dir=/tmp/salvajocs-flatpak/state /tmp/salvajocs-flatpak/build \
+  --state-dir=tmp/flatpak/state tmp/flatpak/build \
   packaging/flatpak/io.github.jmigual.salvajocs.yml
 flatpak run io.github.jmigual.salvajocs
 ```
