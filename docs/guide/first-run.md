@@ -33,7 +33,7 @@ such as a retry count. The **Option reference** link opens the list of keys of t
 with the list expanded.
 
 If `rclone` is not installed, the rclone entry says so and you can still type the location. The
-Flatpak sandbox has no `rclone` on its `PATH`, so the remote list stays empty there and the rclone
+Flatpak sandbox has no `rclone` on its `PATH`, so the rclone entry shows that note there and the rclone
 backend does not run.
 
 `sftp` does not exist in Windows builds. If you use two machines and one runs Windows, pick another

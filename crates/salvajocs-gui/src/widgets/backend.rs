@@ -116,10 +116,12 @@ impl BackendForm {
             }
             .unwrap_or_default();
             // An option moves into a field only when key and secret flag both match, so the flag,
-            // and with it the keyring scope, is never flipped. Anything else stays Advanced.
+            // and with it the keyring scope, is never flipped. Anything else stays Advanced,
+            // including an empty value, which a field would not save.
             let in_field = fields
                 .iter()
                 .any(|field| field.key == option.key && field.secret == option.secret)
+                && !value.trim().is_empty()
                 && !named.contains_key(&option.key);
             if in_field {
                 named.insert(option.key.clone(), value);
@@ -593,6 +595,30 @@ mod tests {
         let form = BackendForm::from_config(&original, &BTreeMap::new());
 
         assert_eq!(keys(&form.options), ["password"]);
+        assert_eq!(
+            option_set(form.options()),
+            option_set(original.repository_options.clone())
+        );
+        let saved = AppConfig {
+            repository_options: form.options(),
+            ..original.clone()
+        };
+        assert_eq!(saved.secret_scope(), original.secret_scope());
+    }
+
+    #[test]
+    fn an_option_with_an_empty_value_stays_advanced_and_is_kept() {
+        let original = config(
+            "opendal:webdav",
+            vec![
+                option("endpoint", Some("https://dav.example.com"), false),
+                option("root", Some(""), false),
+                option("password", None, true),
+            ],
+        );
+        let form = BackendForm::from_config(&original, &BTreeMap::new());
+
+        assert_eq!(keys(&form.options), ["root", "password"]);
         assert_eq!(
             option_set(form.options()),
             option_set(original.repository_options.clone())
