@@ -96,13 +96,10 @@ impl SettingsTab {
         theme::group(ui, |ui| {
             if let Some(config) = &state.config {
                 ui.label(format!("Current: {}", config.repository));
-                let glyph = match config.password {
-                    PasswordMode::None => icons::LOCK_SIMPLE_OPEN,
-                    PasswordMode::Keyring | PasswordMode::Ask => icons::LOCK_SIMPLE,
-                };
-                let muted = ui.visuals().weak_text_color();
-                let password = format!("Password: {}", password_mode_label(config.password));
-                theme::icon_label(ui, glyph, muted, password);
+                ui.label(format!(
+                    "Password: {}",
+                    password_mode_label(config.password)
+                ));
                 theme::row_separator(ui);
             }
             let connect = self.connect.get_or_insert_with(|| match &state.config {
