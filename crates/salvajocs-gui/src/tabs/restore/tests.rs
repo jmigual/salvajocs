@@ -13,6 +13,7 @@ use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use super::*;
 use crate::env::{Env, MemorySecrets};
 use crate::state::Session;
+use crate::theme;
 
 fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
@@ -80,7 +81,7 @@ fn is_disabled(harness: &Harness<'_, (RestoreTab, State)>, label: &str) -> bool 
 #[test]
 fn listing_waits_while_a_job_runs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (RestoreTab::default(), state(dir.path())),
     );
@@ -101,7 +102,7 @@ fn listing_waits_while_a_job_runs() {
 #[test]
 fn listing_waits_for_the_manifest_to_load() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, true),
         (RestoreTab::default(), state(dir.path())),
     );
@@ -113,7 +114,7 @@ fn listing_waits_for_the_manifest_to_load() {
 #[test]
 fn an_empty_repository_says_it_has_no_backups_yet() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (RestoreTab::default(), state(dir.path())),
     );
@@ -243,7 +244,7 @@ type TabHarness = Harness<'static, (RestoreTab, State)>;
 fn tab_harness(dir: &Path, tab: impl FnOnce(&SharedStorage) -> RestoreTab) -> TabHarness {
     let state = state(dir);
     let tab = tab(&state.session.as_ref().unwrap().storage);
-    Harness::new_ui_state(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state))
+    theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state))
 }
 
 fn storage(harness: &TabHarness) -> SharedStorage {

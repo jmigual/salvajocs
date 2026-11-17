@@ -9,6 +9,7 @@ use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::update::UpdateError;
 
 use crate::env::{Env, MemorySecrets};
+use crate::theme;
 
 use super::*;
 
@@ -47,7 +48,7 @@ fn closed(harness: &Harness<'_, (Updater, State, bool)>) -> bool {
 #[test]
 fn downloaded_update_waits_for_backup_or_restore_to_end() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (updater, state, busy)| {
             updater.ui(ui, state);
             updater.install_when_idle(ui.ctx(), state, *busy);

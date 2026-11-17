@@ -11,6 +11,7 @@ use salvajocs_core::scan::{FoundFile, RegistrySource};
 use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
 
 use crate::env::{Env, MemorySecrets};
+use crate::theme;
 
 use super::*;
 use crate::state::Session;
@@ -149,7 +150,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
         ..BackupTab::default()
     };
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (tab, state(dir.path())),
     );
@@ -179,7 +180,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
 #[test]
 fn scan_waits_for_the_manifest_to_load() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, true),
         (BackupTab::default(), state(dir.path())),
     );
@@ -192,7 +193,7 @@ fn scan_waits_for_the_manifest_to_load() {
 #[test]
 fn before_a_scan_the_only_action_is_one_enabled_scan() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (BackupTab::default(), state(dir.path())),
     );
@@ -218,7 +219,7 @@ fn a_scan_that_found_nothing_says_where_to_add_games() {
         ..BackupTab::default()
     };
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (tab, state(dir.path())),
     );
@@ -247,7 +248,7 @@ fn select_all_and_deselect_all_change_every_game() {
         ..BackupTab::default()
     };
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = Harness::new_ui_state(
+    let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (tab, state(dir.path())),
     );
@@ -279,8 +280,7 @@ fn the_save_bar_says_whether_the_repository_is_encrypted() {
         let dir = tempfile::tempdir().unwrap();
         let mut state = state(dir.path());
         state.config.as_mut().unwrap().password = password;
-        let mut harness =
-            Harness::new_ui_state(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+        let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
         harness.step();
         assert!(harness.query_by_label(shown).is_some(), "{password:?}");
         assert!(harness.query_by_label(hidden).is_none(), "{password:?}");

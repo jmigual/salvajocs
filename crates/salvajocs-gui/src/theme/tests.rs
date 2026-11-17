@@ -1,4 +1,3 @@
-use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 use super::*;
@@ -114,9 +113,8 @@ fn the_icons_have_their_own_family_only() {
 /// The icon is painted, so tests and screen readers find the button by its label alone.
 #[test]
 fn a_primary_button_with_an_icon_is_named_by_its_label() {
-    let mut harness = Harness::new_ui_state(
+    let mut harness = harness(
         |ui, clicks: &mut usize| {
-            apply(ui.ctx());
             if primary(ui, true, Some(icons::MAGNIFYING_GLASS), "Scan for games").clicked() {
                 *clicks += 1;
             }

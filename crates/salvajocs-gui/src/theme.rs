@@ -167,18 +167,9 @@ pub fn palette(ui: &Ui) -> &'static Palette {
     }
 }
 
-/// The family `name` if the fonts define it. Screens drawn without [`apply`], as in tab-level
-/// tests, have only egui's fonts, and a family without fonts cannot draw anything.
-fn family(ctx: &egui::Context, name: &str) -> Option<FontFamily> {
-    let family = FontFamily::Name(name.into());
-    ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family))
-        .then_some(family)
-}
-
-/// `text` in the semibold face.
-pub fn semibold(ui: &Ui, text: impl Into<String>) -> RichText {
-    let family = family(ui.ctx(), SEMIBOLD).unwrap_or(FontFamily::Proportional);
-    RichText::new(text).family(family)
+/// `text` in the semibold face, which [`apply`] installs.
+pub fn semibold(text: impl Into<String>) -> RichText {
+    RichText::new(text).family(FontFamily::Name(SEMIBOLD.into()))
 }
 
 /// A 16 px icon of [`icons`] in the widget's text color. It is painted, not text, so the widget's
@@ -196,16 +187,30 @@ pub fn mark(ui: &mut Ui, glyph: &'static str, size: f32, color: Color32) -> Resp
     response
 }
 
+/// Paints `glyph` from the icon font, which [`apply`] installs.
 fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
-    if let Some(family) = family(ui.ctx(), ICONS) {
-        ui.painter().text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            glyph,
-            FontId::new(rect.height(), family),
-            color,
-        );
-    }
+    let font = FontId::new(rect.height(), FontFamily::Name(ICONS.into()));
+    ui.painter()
+        .text(rect.center(), Align2::CENTER_CENTER, glyph, font, color);
+}
+
+/// A test harness that installs the theme before its first frame draws anything, as the app
+/// does: without it the semibold and icon families have no fonts.
+#[cfg(test)]
+pub(crate) fn harness<'a, S>(
+    mut app: impl FnMut(&mut Ui, &mut S) + 'a,
+    state: S,
+) -> egui_kittest::Harness<'a, S> {
+    let mut applied = false;
+    egui_kittest::Harness::new_ui_state(
+        move |ui, state| {
+            if !std::mem::replace(&mut applied, true) {
+                apply(ui.ctx());
+            }
+            app(ui, state);
+        },
+        state,
+    )
 }
 
 /// A line of `text` after the icon `glyph` in `color`, for results. It is as tall as its text,
@@ -330,7 +335,7 @@ pub fn primary(ui: &mut Ui, enabled: bool, glyph: Option<&'static str>, label: &
     ui.scope(|ui| {
         // Scoped visuals rather than `Button::fill`, which would drop the hover and press fills.
         primary_widgets(palette, &mut ui.visuals_mut().widgets);
-        let label = semibold(ui, label);
+        let label = semibold(label);
         let button = match glyph {
             Some(glyph) => Button::new((icon(glyph), label)),
             None => Button::new(label),

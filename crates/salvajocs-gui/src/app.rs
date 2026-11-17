@@ -246,7 +246,7 @@ impl App {
             theme::pill_list(ui);
             for tab in Tab::ALL {
                 let selected = self.tab == tab;
-                let label = theme::semibold(ui, tab.label());
+                let label = theme::semibold(tab.label());
                 let button = egui::Button::selectable(selected, (theme::icon(tab.icon()), label));
                 if ui.add(button).clicked() {
                     self.tab = tab;
