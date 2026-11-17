@@ -18,8 +18,8 @@ All notable changes to salvajocs. The format follows
 
 ### Fixed
 
-- On KDE Wayland the task bar shows the app icon when the AppImage's desktop file was installed
-  under another name, such as `salvajocs.desktop`.
+- On Wayland the task bar and title bar show the app icon when an AppImage integrator (Gear
+  Lever, AppImageLauncher, appimaged) installed the desktop file under another name.
 
 ## [0.3.0] - 2026-11-17
 
