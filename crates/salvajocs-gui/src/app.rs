@@ -3,7 +3,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use eframe::egui::{self, Margin, Stroke, Ui};
+use eframe::egui::{self, Margin, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
@@ -243,10 +243,7 @@ impl App {
     /// The tab strip: the selected tab is a pill, the others show a frame only when hovered.
     fn tabs_ui(&mut self, ui: &mut Ui) {
         ui.scope(|ui| {
-            // No outline around the pills; a focused tab keeps the active outline.
-            let widgets = &mut ui.visuals_mut().widgets;
-            widgets.inactive.bg_stroke = Stroke::NONE;
-            widgets.hovered.bg_stroke = Stroke::NONE;
+            theme::pill_list(ui);
             for tab in Tab::ALL {
                 let selected = self.tab == tab;
                 let label = theme::semibold(ui, tab.label());

@@ -214,6 +214,14 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
     });
 }
 
+/// Drops the outline of the buttons in `ui` at rest and under the pointer, for lists of
+/// selectable pills such as tabs and menus. A focused pill keeps its outline.
+pub fn pill_list(ui: &mut Ui) {
+    let widgets = &mut ui.visuals_mut().widgets;
+    widgets.inactive.bg_stroke = Stroke::NONE;
+    widgets.hovered.bg_stroke = Stroke::NONE;
+}
+
 /// Lays `add` out in the content column: at most 920 px wide and centered, like libadwaita's
 /// clamp, with at least 24 px on each side.
 pub fn column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {

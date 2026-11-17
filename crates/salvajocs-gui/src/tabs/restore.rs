@@ -449,6 +449,7 @@ impl RestoreTab {
                     .map_or_else(|| "Choose a snapshot".to_owned(), snapshot_label),
             )
             .show_ui(ui, |ui| {
+                theme::pill_list(ui);
                 for (index, snapshot) in game.snapshots.iter().enumerate() {
                     ui.selectable_value(&mut self.snapshot, Some(index), snapshot_label(snapshot));
                 }

@@ -9,6 +9,7 @@ use salvajocs_core::config::{self, AppConfig, BackendKind, RepoOption};
 
 use super::labelled_edit;
 use crate::job::Job;
+use crate::theme;
 
 /// Where the options of each backend are documented.
 const OPTIONS_DOCS: &str = "https://docs.rs/rustic_backend/0.7.0/rustic_backend/";
@@ -141,6 +142,7 @@ impl BackendForm {
         egui::ComboBox::from_id_salt("backend_kind")
             .selected_text(kind_label(self.kind))
             .show_ui(ui, |ui| {
+                theme::pill_list(ui);
                 for kind in config::backend_kinds() {
                     ui.selectable_value(&mut self.kind, kind, kind_label(kind));
                 }

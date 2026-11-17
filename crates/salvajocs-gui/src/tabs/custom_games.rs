@@ -312,6 +312,7 @@ impl Form {
                 egui::ComboBox::from_id_salt("custom_game_integration")
                     .selected_text(integration_label(self.integration))
                     .show_ui(ui, |ui| {
+                        theme::pill_list(ui);
                         for integration in [Integration::Extend, Integration::Override] {
                             ui.selectable_value(
                                 &mut self.integration,

@@ -195,6 +195,7 @@ impl SettingsTab {
             egui::ComboBox::from_id_salt("root_kind")
                 .selected_text(root_kind_label(self.root_kind))
                 .show_ui(ui, |ui| {
+                    theme::pill_list(ui);
                     for kind in ROOT_KINDS {
                         ui.selectable_value(&mut self.root_kind, kind, root_kind_label(kind));
                     }
