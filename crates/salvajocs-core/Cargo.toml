@@ -18,9 +18,11 @@ keyring-core.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 rustic_backend.workspace = true
 rustic_core.workspace = true
+semver.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

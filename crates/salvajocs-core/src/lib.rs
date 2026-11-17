@@ -12,3 +12,4 @@ pub mod scan;
 pub mod secret;
 pub mod slug;
 pub mod storage;
+pub mod update;
