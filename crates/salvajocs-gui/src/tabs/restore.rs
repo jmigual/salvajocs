@@ -23,6 +23,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::theme;
 
 mod mapping;
 
@@ -266,7 +267,7 @@ impl RestoreTab {
             self.error = None;
         }
         self.poll(ui.ctx(), state);
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        theme::page(ui, |ui| {
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
                 return;

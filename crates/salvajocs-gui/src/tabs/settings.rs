@@ -11,6 +11,7 @@ use salvajocs_core::storage::Compression;
 use crate::first_run::Connect;
 use crate::job::Job;
 use crate::state::State;
+use crate::theme;
 use crate::widgets::{compression, labelled_edit};
 
 /// The roots offered in the picker, in order.
@@ -78,18 +79,16 @@ impl SettingsTab {
 
     /// Draws the tab. Returns whether the user connected a different repository.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
-        egui::ScrollArea::vertical()
-            .show(ui, |ui| {
-                let adopted = self.repository_ui(ui, state);
-                ui.separator();
-                self.compression_ui(ui, state);
-                ui.separator();
-                self.roots_ui(ui, state);
-                updates_ui(ui, state);
-                self.cleanup_ui(ui, state);
-                adopted
-            })
-            .inner
+        theme::page(ui, |ui| {
+            let adopted = self.repository_ui(ui, state);
+            ui.separator();
+            self.compression_ui(ui, state);
+            ui.separator();
+            self.roots_ui(ui, state);
+            updates_ui(ui, state);
+            self.cleanup_ui(ui, state);
+            adopted
+        })
     }
 
     fn repository_ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {

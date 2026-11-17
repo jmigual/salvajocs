@@ -8,6 +8,7 @@ use salvajocs_core::crossbuild::{self, PairError, SkipError};
 use salvajocs_core::manifest::{CustomGame, FileRule, Integration, Pair, Tag};
 
 use crate::state::State;
+use crate::theme;
 use crate::widgets::labelled_edit;
 
 fn integration_label(integration: Integration) -> &'static str {
@@ -363,7 +364,7 @@ pub struct CustomGamesTab {
 impl CustomGamesTab {
     /// Draws the tab. Saving or removing a game saves the config.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        theme::page(ui, |ui| {
             let manifest = state.manifest.as_ref();
             let Some(config) = &mut state.config else {
                 ui.label("Choose a repository first.");

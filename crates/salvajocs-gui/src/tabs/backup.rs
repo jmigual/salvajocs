@@ -13,6 +13,7 @@ use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
+use crate::theme;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -133,7 +134,7 @@ impl BackupTab {
     /// `manifest_loading` is whether the manifest job is still running.
     pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         self.poll();
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        theme::page(ui, |ui| {
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
                 return;

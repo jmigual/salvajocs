@@ -6,8 +6,8 @@ use std::sync::Arc;
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
     self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
-    FontId, FontTweak, Label, Margin, Rect, Response, RichText, Sense, Stroke, Style, TextStyle,
-    Theme, Ui, Vec2, Visuals,
+    FontId, FontTweak, Frame, Label, Margin, Rect, Response, RichText, ScrollArea, Sense,
+    Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -209,6 +209,52 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
         mark(ui, glyph, color);
         ui.add(Label::new(RichText::new(text).color(color)).wrap());
     });
+}
+
+/// Lays `add` out in the content column: at most 920 px wide and centered, like libadwaita's
+/// clamp, with at least 24 px on each side.
+pub fn column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let available = ui.available_rect_before_wrap();
+    let width = (available.width() - 48.0).clamp(0.0, 920.0);
+    let rect = available.shrink2(Vec2::new((available.width() - width) / 2.0, 0.0));
+    ui.scope_builder(UiBuilder::new().max_rect(rect), add).inner
+}
+
+/// A vertically scrolling page holding the content [`column`], 16 px below the top bar. The
+/// scroll bar stays at the window edge.
+pub fn page<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ScrollArea::vertical()
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            column(ui, |ui| {
+                ui.add_space(16.0);
+                let inner = add(ui);
+                ui.add_space(16.0);
+                inner
+            })
+        })
+        .inner
+}
+
+/// A boxed list: one rounded container on the surface color. Separate its rows with
+/// [`row_separator`]; only the container is rounded.
+pub fn group<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let visuals = ui.visuals();
+    Frame::new()
+        .fill(visuals.window_fill)
+        .stroke(visuals.widgets.noninteractive.bg_stroke)
+        .corner_radius(10)
+        .inner_margin(Margin::symmetric(12, 4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+/// The hairline between two rows of a [`group`], from edge to edge.
+pub fn row_separator(ui: &mut Ui) {
+    ui.add(Separator::default().grow(12.0));
 }
 
 /// A button filled with the accent color, for the one main action of a screen, with an optional

@@ -354,7 +354,9 @@ impl eframe::App for App {
             self.status_ui(ui);
         });
 
+        // No margin: the tabs center their own column, and side and bottom bars reach the edges.
         let adopted = egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(ui.style()).inner_margin(0))
             .show(ui, |ui| match (&self.stage, self.tab) {
                 (Stage::ConfigUnreadable(_), _) => false,
                 (_, Tab::Backup) => {
