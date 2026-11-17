@@ -276,10 +276,8 @@ impl BackupTab {
         let Some(report) = &self.report else {
             return;
         };
-        let (games, titles): (usize, Vec<String>) = (
-            report.games.len(),
-            report.games.iter().map(|game| game.title.clone()).collect(),
-        );
+        let games = report.games.len();
+        let mut select_all = false;
         theme::row(
             ui,
             |ui| {
@@ -288,9 +286,7 @@ impl BackupTab {
             |ui| {
                 // Frameless until hovered, so the scan reads as the header's main action.
                 let quiet = |text| egui::Button::new(text).frame_when_inactive(false);
-                if ui.add(quiet("Select all")).clicked() {
-                    self.selected = titles.into_iter().collect();
-                }
+                select_all = ui.add(quiet("Select all")).clicked();
                 if ui.add(quiet("Deselect all")).clicked() {
                     self.selected.clear();
                 }
@@ -301,6 +297,9 @@ impl BackupTab {
         let Some(report) = &self.report else {
             return;
         };
+        if select_all {
+            self.selected = report.games.iter().map(|g| g.title.clone()).collect();
+        }
         if !report.problems.is_empty() {
             let warn = ui.visuals().warn_fg_color;
             theme::status(

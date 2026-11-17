@@ -233,6 +233,34 @@ fn a_scan_that_found_nothing_says_where_to_add_games() {
     );
 }
 
+#[test]
+fn select_all_and_deselect_all_change_every_game() {
+    let named = |title: &str| GameScan {
+        title: title.into(),
+        ..game(&[1], false, 0)
+    };
+    let tab = BackupTab {
+        report: Some(ScanReport {
+            games: vec![named("Alpha"), named("Beta")],
+            problems: Vec::new(),
+        }),
+        ..BackupTab::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new_ui_state(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (tab, state(dir.path())),
+    );
+    harness.run();
+    harness.get_by_label("Select all").click();
+    harness.run();
+    let all = BTreeSet::from(["Alpha".to_owned(), "Beta".to_owned()]);
+    assert_eq!(harness.state().0.selected, all);
+    harness.get_by_label("Deselect all").click();
+    harness.run();
+    assert!(harness.state().0.selected.is_empty());
+}
+
 /// The save bar marks the repository encrypted exactly when it has a password.
 #[test]
 fn the_save_bar_says_whether_the_repository_is_encrypted() {
