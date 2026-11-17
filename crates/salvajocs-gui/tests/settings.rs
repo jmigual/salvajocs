@@ -28,6 +28,8 @@ fn fill(harness: &mut Harness<'static, App>, label: &str, text: &str) {
 
 /// Opens the dropdown named `label` and picks `entry`.
 fn choose(harness: &mut Harness<'static, App>, label: &str, entry: &str) {
+    // A dropdown that just appeared (after a `run_until`) can still move; click where it settles.
+    run_settled(harness);
     harness.get_by_label(label).click();
     run_settled(harness);
     // The long lists scroll; a click lands on the center of the entry, which must be on screen.
