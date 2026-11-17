@@ -181,6 +181,18 @@ fn shows_path(harness: &Harness<'static, App>, text: &str) -> bool {
     harness.query_all(by().predicate(shown)).next().is_some()
 }
 
+/// The text of the label right after the label `source`, in screen order: in a plan row, where
+/// that file goes. `\` reads as `/`, as in `shows_path`.
+fn target_of(harness: &Harness<'static, App>, source: &str) -> Option<String> {
+    let labels: Vec<String> = harness
+        .query_all(by().role(Role::Label))
+        .filter_map(|node| node.accesskit_node().value())
+        .map(|text| text.replace('\\', "/"))
+        .collect();
+    let row = labels.iter().position(|text| text == source)?;
+    labels.get(row + 1).cloned()
+}
+
 fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
@@ -291,9 +303,12 @@ fn restore_preview_lists_writes_and_skips() {
     preview(&mut harness);
 
     assert!(shows(&harness, "Files to write (2)"));
-    let target = saves.join("save.dat");
-    assert!(shows(&harness, "WinAppData/Alpha/save.dat"));
-    assert!(shows_path(&harness, &target.display().to_string()));
+    // Each file's row names its own target.
+    for file in ["save.dat", "slot2.dat"] {
+        let target = saves.join(file).display().to_string().replace('\\', "/");
+        let source = format!("WinAppData/Alpha/{file}");
+        assert_eq!(target_of(&harness, &source), Some(target), "{source}");
+    }
     assert!(shows(&harness, "Skipped (1)"));
     assert!(shows(
         &harness,
