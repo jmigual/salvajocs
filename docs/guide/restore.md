@@ -89,7 +89,8 @@ The result lists each file as restored or failed, and the registry result.
 
 One thing blocks a restore: a restore that includes registry keys for a Wine prefix is refused
 while any `wineserver` is running, because Wine would overwrite the change. Close every Wine and
-Proton game and try again. Nothing is written in that case.
+Proton game and try again. Nothing is written in that case. The Flatpak build cannot check this,
+so it asks you to close them and confirm; Cancel writes nothing.
 
 ## Undo
 
