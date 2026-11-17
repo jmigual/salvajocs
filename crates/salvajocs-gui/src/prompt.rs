@@ -4,6 +4,7 @@ use eframe::egui::{self, Ui};
 use salvajocs_core::secret::SecretKey;
 
 use crate::startup::Credentials;
+use crate::theme::{self, icons};
 use crate::widgets::labelled_edit;
 
 /// Asks for exactly the secrets that are missing.
@@ -44,7 +45,8 @@ impl SecretPrompt {
     /// Draws one field per missing secret. Returns all credentials once the user confirms.
     pub fn ui(&mut self, ui: &mut Ui) -> Option<Credentials> {
         if let Some(error) = self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            let color = ui.visuals().error_fg_color;
+            theme::status(ui, icons::X_CIRCLE, color, error);
         }
         egui::Grid::new("secret_prompt")
             .num_columns(2)
@@ -58,7 +60,8 @@ impl SecretPrompt {
                     ui.end_row();
                 }
             });
-        if !ui.button("Open repository").clicked() {
+        let open = theme::row_end(ui, |ui| theme::primary(ui, true, None, "Open repository"));
+        if !open.clicked() {
             return None;
         }
         let mut credentials = self.found.clone();

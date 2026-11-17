@@ -1,7 +1,7 @@
 //! The cross-build mapping dialog: where each snapshot root of the other OS's build goes in this
 //! one, shown only while a root is unknown (ADR-0011).
 
-use eframe::egui::{self, Align, Layout, TextEdit, Ui};
+use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, Confidence, MappingEntry, SnapshotRoot};
 
 use crate::tabs::count;
@@ -117,8 +117,7 @@ impl Dialog {
         let mut action = None;
         // The whole row waits for a running confirm, whose plan was made for these targets.
         ui.add_enabled_ui(!busy, |ui| {
-            // Right to left: the primary action ends the row.
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            theme::row_end(ui, |ui| {
                 let primary = theme::primary(ui, choices.is_some(), None, "Use these folders");
                 if primary.clicked() {
                     action = choices.map(DialogAction::Confirm);

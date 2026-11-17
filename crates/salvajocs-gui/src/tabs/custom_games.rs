@@ -363,8 +363,7 @@ impl Form {
             theme::status(ui, icons::X_CIRCLE, color, error.to_string());
         }
         let mut action = None;
-        // Right to left: the primary action ends the row.
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        theme::row_end(ui, |ui| {
             if theme::primary(ui, true, Some(icons::FLOPPY_DISK), "Save game").clicked() {
                 action = Some(Action::Save);
             }

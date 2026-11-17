@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
-use eframe::egui::{self, Align, Layout, Response, TextEdit, Ui, Vec2};
+use eframe::egui::{self, Response, TextEdit, Ui, Vec2};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::manifest::{GameEntry, Pair};
@@ -671,7 +671,7 @@ impl RestoreTab {
     fn preview_ui(&mut self, ui: &mut Ui, state: &State) {
         let busy = self.busy();
         let Some(preview) = &mut self.preview else {
-            right_aligned(ui, |ui| restore_button(ui, false));
+            theme::row_end(ui, |ui| restore_button(ui, false));
             return;
         };
         ui.add_space(16.0);
@@ -770,7 +770,7 @@ impl RestoreTab {
             );
         }
         let ready = !busy && state.session.is_some() && unapplied.is_none();
-        if right_aligned(ui, |ui| restore_button(ui, ready)).clicked() {
+        if theme::row_end(ui, |ui| restore_button(ui, ready)).clicked() {
             let into_prefix =
                 matches!(preview.plan.registry, Some((_, Context::WinePrefix { .. })));
             if into_prefix && (state.env.wineserver_running)().is_none() {
@@ -880,11 +880,6 @@ impl RestoreTab {
             }
         }
     }
-}
-
-/// `add` at the right edge of the column.
-fn right_aligned<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.with_layout(Layout::top_down(Align::Max), add).inner
 }
 
 /// The primary button that runs the previewed plan.

@@ -13,6 +13,7 @@ use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, pro
 use crate::env::{Env, SecretStore};
 use crate::job::Job;
 use crate::startup::Credentials;
+use crate::theme::{self, icons};
 use crate::widgets::backend::BackendForm;
 use crate::widgets::{compression, labelled_edit};
 
@@ -102,8 +103,11 @@ impl Connect {
                     ui.end_row();
                     if self.password.is_empty() {
                         ui.label("");
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
+                        let warn = ui.visuals().warn_fg_color;
+                        theme::status(
+                            ui,
+                            icons::WARNING,
+                            warn,
                             "No password: the repository will not be encrypted.",
                         );
                         ui.end_row();
@@ -120,12 +124,12 @@ impl Connect {
         match mem::replace(&mut self.step, Step::Editing(None)) {
             Step::Editing(error) => {
                 if let Some(error) = &error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    let color = ui.visuals().error_fg_color;
+                    theme::status(ui, icons::X_CIRCLE, color, error);
                 }
                 let ready = self.form.has_location() && compression.is_some();
-                let go = ui
-                    .add_enabled(ready, egui::Button::new(self.submit))
-                    .clicked();
+                let go =
+                    theme::row_end(ui, |ui| theme::primary(ui, ready, None, self.submit)).clicked();
                 self.step = match compression {
                     Some(compression) if go => self.begin(ui.ctx(), compression),
                     _ => Step::Editing(error),
@@ -150,8 +154,8 @@ impl Connect {
                     attempt.location.repository
                 ));
                 let mut choice = None;
-                ui.horizontal(|ui| {
-                    if ui.button("Create").clicked() {
+                theme::row_end(ui, |ui| {
+                    if theme::primary(ui, true, None, "Create").clicked() {
                         choice = Some(true);
                     }
                     if ui.button("Back").clicked() {

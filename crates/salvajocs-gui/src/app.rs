@@ -166,7 +166,7 @@ impl App {
             Stage::FirstRun(mut connect) => {
                 let connected = dialog(&ctx, "first_run", |ui| {
                     ui.heading("Welcome to salvajocs");
-                    ui.label("Pick a folder or server for your backups. You can change it later in Settings.");
+                    ui.weak("Pick a folder or server for your backups. You can change it later in Settings.");
                     connect.ui(ui, &self.state.env)
                 });
                 match connected {
@@ -312,9 +312,9 @@ impl App {
 
 /// Shows `content` in a modal dialog.
 fn dialog<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut Ui) -> R) -> R {
-    egui::Modal::new(egui::Id::unique(id))
+    theme::modal(ctx, id)
         .show(ctx, |ui| {
-            ui.set_width(480.0);
+            ui.set_width(560.0);
             content(ui)
         })
         .inner

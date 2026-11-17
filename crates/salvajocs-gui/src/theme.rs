@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
-    self, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
-    FontId, FontTweak, Frame, Label, Margin, Modal, Rect, Response, RichText, ScrollArea, Sense,
-    Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals, WidgetText,
+    self, Align, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions,
+    FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect, Response, RichText,
+    ScrollArea, Sense, Separator, Stroke, Style, TextStyle, Theme, Ui, UiBuilder, Vec2, Visuals,
+    WidgetText,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -228,6 +229,17 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
 /// the smaller popup frame egui gives modals.
 pub fn modal(ctx: &egui::Context, id: &str) -> Modal {
     Modal::new(egui::Id::unique(id)).frame(Frame::window(&ctx.global_style()))
+}
+
+/// A row laid out right to left from its end, as tall as its contents: a dialog's or form's
+/// buttons, the primary one added first so it ends the row.
+pub fn row_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    // The horizontal row bounds the height a right-to-left layout would otherwise take whole.
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), add)
+            .inner
+    })
+    .inner
 }
 
 /// Drops the outline of the buttons in `ui` at rest and under the pointer, for lists of
