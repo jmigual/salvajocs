@@ -6,7 +6,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -115,11 +115,18 @@ pub fn rclone_remotes() -> io::Result<Vec<String>> {
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+        return Err(failure(&output));
     }
     Ok(parse_remotes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The error for a failed `rclone`: its stderr, or its exit status when it said nothing.
+fn failure(output: &Output) -> io::Error {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match stderr.trim() {
+        "" => io::Error::other(format!("rclone {}", output.status)),
+        message => io::Error::other(message),
+    }
 }
 
 /// The remote names of `rclone listremotes` output: one `name:` per line.

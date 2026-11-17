@@ -163,6 +163,24 @@ fn listremotes_output_is_one_remote_per_line() {
     assert!(parse_remotes("").is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_failed_rclone_is_described_by_its_stderr_or_else_its_status() {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    let output = |stderr: &str| Output {
+        status: ExitStatus::from_raw(1 << 8),
+        stdout: Vec::new(),
+        stderr: stderr.as_bytes().to_vec(),
+    };
+    assert_eq!(
+        failure(&output("  config is locked\n")).to_string(),
+        "config is locked"
+    );
+    assert!(failure(&output("")).to_string().contains("exit status: 1"));
+}
+
 #[test]
 fn every_offered_service_has_named_fields_and_a_label() {
     for service in OPENDAL_SERVICES {

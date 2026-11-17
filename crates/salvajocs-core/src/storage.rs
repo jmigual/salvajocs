@@ -27,7 +27,7 @@ pub enum StorageError {
     #[error("compression level {0} is out of range")]
     InvalidCompression(i32),
     /// The password does not unlock the repository.
-    #[error("wrong repository password")]
+    #[error("wrong encryption password")]
     WrongPassword,
     /// A path cannot be passed to the repository because it is not valid UTF-8.
     #[error("path is not valid UTF-8: {0}")]
