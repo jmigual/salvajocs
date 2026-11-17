@@ -173,36 +173,50 @@ fn every_offered_service_has_named_fields_and_a_label() {
     assert_eq!(opendal_label("memory"), None);
 }
 
-/// The keys of opendal's config struct for `service`, which ignores unknown keys when it is
-/// built, so a typo in the table would otherwise only show at runtime.
-fn config_keys(service: &str) -> Vec<String> {
+/// What opendal's config struct for `service` reads from `input`, as JSON; `null` is its
+/// default. The struct ignores unknown keys when it is built, so a typo in the table would
+/// otherwise only show at runtime.
+fn config_value(service: &str, input: serde_json::Value) -> serde_json::Value {
     use opendal::services::*;
-    let value = match service {
-        "azblob" => serde_json::to_value(AzblobConfig::default()),
-        "azdls" => serde_json::to_value(AzdlsConfig::default()),
-        "azfile" => serde_json::to_value(AzfileConfig::default()),
-        "b2" => serde_json::to_value(B2Config::default()),
-        "cos" => serde_json::to_value(CosConfig::default()),
-        "dropbox" => serde_json::to_value(DropboxConfig::default()),
-        "ftp" => serde_json::to_value(FtpConfig::default()),
-        "gcs" => serde_json::to_value(GcsConfig::default()),
-        "gdrive" => serde_json::to_value(GdriveConfig::default()),
-        "ipmfs" => serde_json::to_value(IpmfsConfig::default()),
-        "obs" => serde_json::to_value(ObsConfig::default()),
-        "onedrive" => serde_json::to_value(OnedriveConfig::default()),
-        "oss" => serde_json::to_value(OssConfig::default()),
-        "pcloud" => serde_json::to_value(PcloudConfig::default()),
-        "s3" => serde_json::to_value(S3Config::default()),
+    macro_rules! read {
+        ($config:ty) => {
+            serde_json::to_value(if input.is_null() {
+                <$config>::default()
+            } else {
+                serde_json::from_value::<$config>(input).expect("the config struct reads it")
+            })
+            .expect("a config struct serializes")
+        };
+    }
+    match service {
+        "azblob" => read!(AzblobConfig),
+        "azdls" => read!(AzdlsConfig),
+        "azfile" => read!(AzfileConfig),
+        "b2" => read!(B2Config),
+        "cos" => read!(CosConfig),
+        "dropbox" => read!(DropboxConfig),
+        "ftp" => read!(FtpConfig),
+        "gcs" => read!(GcsConfig),
+        "gdrive" => read!(GdriveConfig),
+        "ipmfs" => read!(IpmfsConfig),
+        "obs" => read!(ObsConfig),
+        "onedrive" => read!(OnedriveConfig),
+        "oss" => read!(OssConfig),
+        "pcloud" => read!(PcloudConfig),
+        "s3" => read!(S3Config),
         #[cfg(not(windows))]
-        "sftp" => serde_json::to_value(SftpConfig::default()),
-        "swift" => serde_json::to_value(SwiftConfig::default()),
-        "webdav" => serde_json::to_value(WebdavConfig::default()),
-        "webhdfs" => serde_json::to_value(WebhdfsConfig::default()),
-        "yandex-disk" => serde_json::to_value(YandexDiskConfig::default()),
+        "sftp" => read!(SftpConfig),
+        "swift" => read!(SwiftConfig),
+        "webdav" => read!(WebdavConfig),
+        "webhdfs" => read!(WebhdfsConfig),
+        "yandex-disk" => read!(YandexDiskConfig),
         other => panic!("no config struct is listed for {other}"),
-    };
-    value
-        .expect("a config struct serializes")
+    }
+}
+
+/// The keys of opendal's config struct for `service`.
+fn config_keys(service: &str) -> Vec<String> {
+    config_value(service, serde_json::Value::Null)
         .as_object()
         .expect("a config struct serializes to an object")
         .keys()
@@ -223,6 +237,51 @@ fn named_field_keys_are_opendal_config_keys() {
                 field.key
             );
         }
+    }
+}
+
+/// Fails when a table alias is not one opendal reads as the field's key.
+#[test]
+fn field_aliases_are_read_by_opendal_as_the_field() {
+    for service in OPENDAL_SERVICES {
+        for field in service.fields {
+            for alias in field.aliases {
+                // The other required fields are there, for structs that have no default for them.
+                let mut input = serde_json::Map::new();
+                for other in service.fields.iter().filter(|f| f.required) {
+                    input.insert(other.key.to_string(), "y".into());
+                }
+                input.remove(field.key);
+                input.insert(alias.to_string(), "x".into());
+                let value = config_value(service.name, input.into());
+                assert_eq!(
+                    value[field.key], "x",
+                    "{} `{alias}` is not `{}`",
+                    service.name, field.key
+                );
+            }
+        }
+    }
+}
+
+/// Required fields of these services have a fallback or an alias that works on main, so the
+/// table must not demand them under the canonical key alone.
+#[test]
+fn required_fields_leave_out_what_opendal_derives() {
+    let required = |service: &str| -> Vec<&str> {
+        opendal_fields(service)
+            .iter()
+            .filter(|field| field.required)
+            .map(|field| field.key)
+            .collect()
+    };
+    assert_eq!(required("azfile"), ["share_name", "endpoint"]);
+    for service in ["s3", "gcs", "azblob"] {
+        let fields = opendal_fields(service);
+        assert!(
+            fields.iter().any(|f| f.required && !f.aliases.is_empty()),
+            "{service} names the aliases of its required fields"
+        );
     }
 }
 

@@ -8,6 +8,8 @@ pub struct BackendField {
     pub key: &'static str,
     /// The label in the form.
     pub label: &'static str,
+    /// Other keys opendal reads as this one. An option stored under one counts as this field's.
+    pub aliases: &'static [&'static str],
     /// Whether the service cannot be built without a value and has no fallback to the
     /// environment.
     pub required: bool,
@@ -24,11 +26,17 @@ impl BackendField {
         Self {
             key,
             label,
+            aliases: &[],
             required: false,
             secret: false,
             example: "",
             hint: "",
         }
+    }
+
+    const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
+        self
     }
 
     const fn required(mut self) -> Self {
@@ -86,9 +94,11 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         label: "Azure Blob Storage",
         fields: &[
             BackendField::new("container", "Container")
+                .aliases(&["azure_container_name", "container_name"])
                 .required()
                 .example("backups"),
             BackendField::new("endpoint", "Endpoint")
+                .aliases(&["azure_storage_endpoint", "azure_endpoint"])
                 .required()
                 .example("https://myaccount.blob.core.windows.net"),
             BackendField::new("account_name", "Account name"),
@@ -120,7 +130,8 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
             BackendField::new("endpoint", "Endpoint")
                 .required()
                 .example("https://myaccount.file.core.windows.net"),
-            BackendField::new("account_name", "Account name").required(),
+            BackendField::new("account_name", "Account name")
+                .hint("Read from an Azure endpoint when empty."),
             BackendField::new("account_key", "Account key").secret(),
             ROOT,
         ],
@@ -172,7 +183,9 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         name: "gcs",
         label: "Google Cloud Storage",
         fields: &[
-            BackendField::new("bucket", "Bucket").required(),
+            BackendField::new("bucket", "Bucket")
+                .aliases(&["google_bucket", "google_bucket_name", "bucket_name"])
+                .required(),
             BackendField::new("credential", "Service account key")
                 .secret()
                 .hint("Base64 of the JSON key. Or use the key file below."),
@@ -246,7 +259,9 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         name: "s3",
         label: "Amazon S3 (or compatible)",
         fields: &[
-            BackendField::new("bucket", "Bucket").required(),
+            BackendField::new("bucket", "Bucket")
+                .aliases(&["aws_bucket", "aws_bucket_name", "bucket_name"])
+                .required(),
             BackendField::new("region", "Region")
                 .example("us-east-1")
                 .hint("AWS needs it. Other providers often accept auto or us-east-1."),
