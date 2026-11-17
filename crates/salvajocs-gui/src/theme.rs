@@ -25,6 +25,9 @@ pub mod icons {
     pub const MAGNIFYING_GLASS: &str = "\u{E30C}";
     pub const WARNING: &str = "\u{E4E0}";
     pub const X_CIRCLE: &str = "\u{E4F8}";
+    pub const CHECK_CIRCLE: &str = "\u{E184}";
+    pub const LOCK_SIMPLE: &str = "\u{E308}";
+    pub const LOCK_SIMPLE_OPEN: &str = "\u{E30A}";
     pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
     pub const ARROW_CIRCLE_UP: &str = "\u{E030}";
 }
@@ -184,9 +187,9 @@ pub fn icon(glyph: &'static str) -> Atom<'static> {
     })
 }
 
-/// A 16 px icon of [`icons`] in `color`, as a widget of its own.
-pub fn mark(ui: &mut Ui, glyph: &'static str, color: Color32) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+/// An icon of [`icons`], `size` px and in `color`, as a widget of its own.
+pub fn mark(ui: &mut Ui, glyph: &'static str, size: f32, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     paint_icon(ui, rect, glyph, color);
     response
 }
@@ -197,7 +200,7 @@ fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
             rect.center(),
             Align2::CENTER_CENTER,
             glyph,
-            FontId::new(16.0, family),
+            FontId::new(rect.height(), family),
             color,
         );
     }
@@ -206,7 +209,7 @@ fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
 /// A line of `text` in `color` after the icon `glyph`, for warnings, errors and results.
 pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
     ui.horizontal(|ui| {
-        mark(ui, glyph, color);
+        mark(ui, glyph, 16.0, color);
         ui.add(Label::new(RichText::new(text).color(color)).wrap());
     });
 }
@@ -338,7 +341,7 @@ fn style(style: &mut Style) {
     let spacing = &mut style.spacing;
     spacing.item_spacing = Vec2::new(8.0, 8.0);
     spacing.button_padding = Vec2::new(12.0, 6.0);
-    spacing.interact_size = Vec2::new(40.0, 32.0);
+    spacing.interact_size = Vec2::new(40.0, 24.0);
     spacing.indent = 24.0;
     spacing.window_margin = Margin::same(20);
     spacing.menu_margin = Margin::same(6);

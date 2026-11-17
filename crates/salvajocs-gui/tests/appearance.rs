@@ -18,6 +18,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use common::{
     env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until, run_until_ready,
@@ -235,18 +236,23 @@ fn windows_prefix(tmp: &TempDir) -> PathBuf {
 /// The Backup tab after a scan and two backups: the first saved everything, then one game's
 /// save changed, so the second run reports one game backed up and the rest up to date.
 fn backup_tab(dir: &Path, theme: Theme, name: &str) {
+    // The repository path is on screen, so it is a fixed one that names no user, which the dark
+    // and light runs take in turn.
+    static REPOSITORY: Mutex<()> = Mutex::new(());
+    let _turn = REPOSITORY.lock().unwrap_or_else(PoisonError::into_inner);
+    let repository = "/tmp/salvajocs-backups";
+    let _ = fs::remove_dir_all(repository);
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
     let prefix = windows_prefix(&tmp);
-    let repository = repo_dir(&tmp);
-    init_repo(&repository);
-    let mut config = local_config(&repository);
+    init_repo(repository);
+    let mut config = local_config(repository);
     config.roots = vec![Root {
         path: prefix.clone(),
         kind: RootKind::WinePrefix,
     }];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, theme, 640.0);
+    let mut harness = shot_harness(env, theme, 790.0);
     run_until_ready(&mut harness);
     run_settled(&mut harness);
 
@@ -265,10 +271,11 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     run_until(&mut harness, "the second backup", |h| {
         shows(h, "Stardew Valley: backed up")
     });
-    for summary in ["3 files, 807.0 KiB, plus registry keys", "2 files, 1.2 MiB"] {
-        harness.get_by_label(summary).click();
-    }
+    harness
+        .get_by_label("3 files, 807.0 KiB, plus registry keys")
+        .click();
     capture(&mut harness, dir, name);
+    fs::remove_dir_all(repository).unwrap();
 }
 
 #[test]

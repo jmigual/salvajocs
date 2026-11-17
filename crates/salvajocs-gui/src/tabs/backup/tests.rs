@@ -186,3 +186,48 @@ fn scan_waits_for_the_manifest_to_load() {
     harness.step();
     assert!(is_disabled(&harness, "Scan for games"));
 }
+
+/// Before a scan the empty state's scan is the one action: no second scan button, and no
+/// backup button for zero games.
+#[test]
+fn before_a_scan_the_only_action_is_one_enabled_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new_ui_state(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (BackupTab::default(), state(dir.path())),
+    );
+    harness.step();
+    assert_eq!(harness.query_all_by_label("Scan for games").count(), 1);
+    assert!(!is_disabled(&harness, "Scan for games"));
+    assert!(
+        harness
+            .query_all_by_label_contains("Back up")
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_scan_that_found_nothing_says_where_to_add_games() {
+    let tab = BackupTab {
+        report: Some(ScanReport {
+            games: Vec::new(),
+            problems: Vec::new(),
+        }),
+        ..BackupTab::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new_ui_state(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (tab, state(dir.path())),
+    );
+    harness.step();
+    assert_eq!(harness.query_all_by_label("Scan for games").count(), 1);
+    assert!(harness.query_by_label("0 games found").is_some());
+    assert!(
+        harness
+            .query_all_by_label_contains("No saves found")
+            .next()
+            .is_some()
+    );
+}

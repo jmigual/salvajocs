@@ -93,6 +93,8 @@ fn missing_repo_asks_before_init() {
         "no config is saved before the repository exists"
     );
 
+    // The dialog re-centers on the frame after it grows.
+    run_settled(&mut harness);
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the dialog to close", |h| {
         !shows(h, "Welcome to salvajocs")
@@ -144,6 +146,7 @@ fn backend_option_marked_secret_not_written_to_config() {
     run_until(&mut harness, "the confirmation", |h| {
         shows(h, "Create a new repository at")
     });
+    run_settled(&mut harness);
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the dialog to close", |h| {
         !shows(h, "Welcome to salvajocs")

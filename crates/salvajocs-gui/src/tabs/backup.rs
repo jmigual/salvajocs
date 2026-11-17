@@ -3,17 +3,22 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use eframe::egui::{self, Ui};
+use eframe::egui::emath::Rot2;
+use eframe::egui::{
+    self, Align, Label, Layout, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
+};
 use salvajocs_core::backup::{self, GameBackup};
+use salvajocs_core::config::PasswordMode;
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
-use crate::theme;
+use crate::theme::{self, icons};
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -134,19 +139,30 @@ impl BackupTab {
     /// `manifest_loading` is whether the manifest job is still running.
     pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         self.poll();
+        // Before the page, so the bar takes its height from the bottom first. It waits for a scan
+        // report, so the empty state has one call to action.
+        if state.config.is_some() && self.report.is_some() {
+            self.save_bar_ui(ui, state, manifest_loading);
+        }
         theme::page(ui, |ui| {
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
                 return;
             }
-            self.scan_ui(ui, state, manifest_loading);
+            if self.report.is_some() {
+                self.games_ui(ui, state, manifest_loading);
+            } else {
+                self.empty_ui(ui, state, manifest_loading);
+            }
             if let Some(error) = &self.scan_error {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
+                let color = ui.visuals().error_fg_color;
+                theme::status(
+                    ui,
+                    icons::X_CIRCLE,
+                    color,
                     format!("The scan failed: {error}"),
                 );
             }
-            self.games_ui(ui, state, manifest_loading);
             self.results_ui(ui);
         });
     }
@@ -202,9 +218,33 @@ impl BackupTab {
         self.scanning.is_some() || self.running.is_some()
     }
 
-    fn scan_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+    /// Before the first scan: what the tab is for and the scan as its one action.
+    fn empty_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(48.0);
+            let muted = ui.visuals().weak_text_color();
+            theme::mark(ui, icons::GAME_CONTROLLER, 40.0, muted);
+            ui.heading("Find your saves");
+            ui.weak(
+                "Scan this machine for the games in the ludusavi manifest and your custom games.",
+            );
+            ui.add_space(8.0);
+            self.scan_ui(ui, state, manifest_loading, true);
+            self.scan_notes_ui(ui, state, manifest_loading);
+        });
+    }
+
+    /// The scan button: `primary` in the empty state, the one framed button of the list header
+    /// otherwise.
+    fn scan_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool, primary: bool) {
         let enabled = !manifest_loading && !self.busy();
-        let button = ui.add_enabled(enabled, egui::Button::new("Scan for games"));
+        let glyph = icons::MAGNIFYING_GLASS;
+        let button = if primary {
+            theme::primary(ui, enabled, Some(glyph), "Scan for games")
+        } else {
+            let button = egui::Button::new((theme::icon(glyph), "Scan for games"));
+            ui.add_enabled(enabled, button)
+        };
         if let (true, Some(config)) = (button.clicked(), &state.config) {
             let (manifest, config) = (state.manifest_or_empty(), config.clone());
             let environment = state.env.environment.clone();
@@ -214,6 +254,10 @@ impl BackupTab {
                 Ok(scan::scan(&manifest, &config, &environment))
             }));
         }
+    }
+
+    /// What limits the scan, and whether one runs.
+    fn scan_notes_ui(&self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         if manifest_loading {
             ui.weak("The game manifest is loading.");
         } else if state.manifest.is_none() {
@@ -227,51 +271,146 @@ impl BackupTab {
         }
     }
 
+    /// The scan report: its problems, a header with the count and the selection buttons, and the
+    /// games as a boxed list.
     fn games_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         let Some(report) = &self.report else {
             return;
         };
+        let (games, titles): (usize, Vec<String>) = (
+            report.games.len(),
+            report.games.iter().map(|game| game.title.clone()).collect(),
+        );
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.scan_ui(ui, state, manifest_loading, false);
+                // Frameless until hovered, so the scan reads as the header's main action.
+                let quiet = |text| egui::Button::new(text).frame_when_inactive(false);
+                if ui.add(quiet("Deselect all")).clicked() {
+                    self.selected.clear();
+                }
+                if ui.add(quiet("Select all")).clicked() {
+                    self.selected = titles.into_iter().collect();
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(format!("{} found", count(games, "game")));
+                });
+            });
+        });
+        self.scan_notes_ui(ui, state, manifest_loading);
+        let Some(report) = &self.report else {
+            return;
+        };
         if !report.problems.is_empty() {
-            ui.separator();
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
+            let warn = ui.visuals().warn_fg_color;
+            theme::status(
+                ui,
+                icons::WARNING,
+                warn,
                 format!("Scan problems ({})", report.problems.len()),
             );
-            for problem in &report.problems {
-                ui.colored_label(ui.visuals().warn_fg_color, describe_problem(problem));
-            }
+            ui.indent("scan_problems", |ui| {
+                for problem in &report.problems {
+                    ui.colored_label(warn, describe_problem(problem));
+                }
+            });
         }
-        ui.separator();
-        ui.label(format!("{} found", count(report.games.len(), "game")));
-        ui.horizontal(|ui| {
-            if ui.button("Select all").clicked() {
-                self.selected = report.games.iter().map(|g| g.title.clone()).collect();
-            }
-            if ui.button("Deselect all").clicked() {
-                self.selected.clear();
+        if report.games.is_empty() {
+            ui.weak(
+                "No saves found. Add the folders where your games live in Settings, or add a \
+                 custom game.",
+            );
+            return;
+        }
+        theme::group(ui, |ui| {
+            // A game's title and its summary read as one row.
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for (index, game) in report.games.iter().enumerate() {
+                if index > 0 {
+                    theme::row_separator(ui);
+                }
+                let mut checked = self.selected.contains(&game.title);
+                if ui.checkbox(&mut checked, &game.title).changed() {
+                    if checked {
+                        self.selected.insert(game.title.clone());
+                    } else {
+                        self.selected.remove(&game.title);
+                    }
+                }
+                // Under the title, without the indent line: the row already groups them.
+                ui.scope(|ui| {
+                    ui.visuals_mut().indent_has_left_vline = false;
+                    ui.indent(&game.title, |ui| files_ui(ui, game));
+                });
             }
         });
-        for game in &report.games {
-            let mut checked = self.selected.contains(&game.title);
-            if ui.checkbox(&mut checked, &game.title).changed() {
-                if checked {
-                    self.selected.insert(game.title.clone());
-                } else {
-                    self.selected.remove(&game.title);
-                }
+    }
+
+    /// The bar along the bottom: where backups go and the backup button, or while a backup runs,
+    /// the autosave mark and its progress.
+    fn save_bar_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        let visuals = ui.visuals();
+        let frame = egui::Frame::new()
+            .fill(visuals.window_fill)
+            .inner_margin(egui::Margin::symmetric(0, 12));
+        let bar = egui::Panel::bottom("save_bar")
+            .frame(frame)
+            .resizable(false)
+            .show(ui, |ui| {
+                theme::column(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        self.save_bar_contents(ui, state, manifest_loading);
+                    });
+                });
+            });
+        let progress = lock(&self.progress);
+        if self.running.is_some() && progress.total > 0 {
+            let done = progress.done.len() as f32 / progress.total as f32;
+            let rect = bar.response.rect;
+            let rule = Rect::from_min_size(rect.left_top(), Vec2::new(rect.width() * done, 3.0));
+            ui.painter()
+                .rect_filled(rule, 0.0, theme::palette(ui).accent);
+        }
+    }
+
+    fn save_bar_contents(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let selected = self.selected.len();
+            let ready =
+                state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
+            let label = format!("Back up {}", count(selected, "game"));
+            if theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label).clicked() {
+                self.start_backup(ui.ctx(), state);
             }
-            ui.indent(&game.title, |ui| files_ui(ui, game));
-        }
-        ui.separator();
-        let selected = self.selected.len();
-        let ready = state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
-        let button = egui::Button::new(format!("Back up {}", count(selected, "game")));
-        let clicked = ui.add_enabled(ready, button).clicked();
-        if state.session.is_none() {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                self.save_bar_status(ui, state);
+            });
+        });
+    }
+
+    /// The left of the save bar: the repository and whether it is encrypted, or the running
+    /// backup's progress.
+    fn save_bar_status(&self, ui: &mut Ui, state: &State) {
+        let muted = ui.visuals().weak_text_color();
+        if self.running.is_some() {
+            autosave_mark(ui);
+            let progress = lock(&self.progress);
+            ui.label(format!(
+                "Backed up {} of {}",
+                progress.done.len(),
+                count(progress.total, "game")
+            ));
+        } else if let (Some(config), Some(_)) = (&state.config, &state.session) {
+            let (glyph, encryption) = match config.password {
+                PasswordMode::None => (icons::LOCK_SIMPLE_OPEN, "Not encrypted"),
+                PasswordMode::Keyring | PasswordMode::Ask => (icons::LOCK_SIMPLE, "Encrypted"),
+            };
+            theme::mark(ui, glyph, 16.0, muted)
+                .on_hover_text(encryption)
+                .widget_info(|| WidgetInfo::labeled(Role::Image, true, encryption));
+            ui.add(Label::new(RichText::new(&config.repository).color(muted)).truncate());
+        } else {
             ui.weak("The repository is not open.");
-        }
-        if clicked {
-            self.start_backup(ui.ctx(), state);
         }
     }
 
@@ -320,38 +459,69 @@ impl BackupTab {
 
     fn results_ui(&self, ui: &mut Ui) {
         let progress = lock(&self.progress);
-        if self.running.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(format!(
-                    "Backed up {} of {}",
-                    progress.done.len(),
-                    count(progress.total, "game")
-                ));
-            });
-        }
+        let error_color = ui.visuals().error_fg_color;
         if let Some(error) = &self.run_error {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
+            theme::status(
+                ui,
+                icons::X_CIRCLE,
+                error_color,
                 format!("The backup failed: {error}"),
             );
         }
         if progress.done.is_empty() {
             return;
         }
-        ui.separator();
+        ui.add_space(16.0);
         ui.heading("Last backup");
+        ui.spacing_mut().item_spacing.y = 4.0;
+        let accent = theme::palette(ui).accent;
         for GameResult { title, outcome } in &progress.done {
-            match outcome {
-                Outcome::Saved => ui.label(format!("{title}: backed up")),
-                Outcome::Unchanged => ui.label(format!("{title}: up to date")),
-                Outcome::Failed(error) => ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("{title}: failed: {error}"),
-                ),
+            let text = match outcome {
+                Outcome::Saved => format!("{title}: backed up"),
+                Outcome::Unchanged => format!("{title}: up to date"),
+                Outcome::Failed(error) => {
+                    theme::status(
+                        ui,
+                        icons::X_CIRCLE,
+                        error_color,
+                        format!("{title}: failed: {error}"),
+                    );
+                    continue;
+                }
             };
+            ui.horizontal(|ui| {
+                theme::mark(ui, icons::CHECK_CIRCLE, 16.0, accent);
+                ui.label(text);
+            });
         }
     }
+}
+
+/// The app icon's save mark, the arc with its arrowhead, turning once every 1.2 s in the accent
+/// green while a backup runs: the "saving, do not turn off" sign of games.
+fn autosave_mark(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
+    // The icon's mark spans about 92 of its 128 units; its arc is centered on (64, 63).
+    let scale = rect.width() / 92.0;
+    let turn = ui.input(|input| input.time) as f32 * TAU / 1.2;
+    let rotation = Rot2::from_angle(turn);
+    let at = |x: f32, y: f32| rect.center() + rotation * (Vec2::new(x, y) * scale);
+    // 270° from the top, clockwise, ending on the left where the arrowhead sits.
+    let arc = (0..=24)
+        .map(|step| {
+            let angle = -FRAC_PI_2 + 1.5 * PI * step as f32 / 24.0;
+            at(39.0 * angle.cos(), 39.0 * angle.sin())
+        })
+        .collect();
+    let accent = theme::palette(ui).accent;
+    let painter = ui.painter();
+    painter.add(Shape::line(arc, Stroke::new(11.0 * scale, accent)));
+    painter.add(Shape::convex_polygon(
+        vec![at(-53.0, 2.0), at(-25.0, 2.0), at(-39.0, -18.0)],
+        accent,
+        Stroke::NONE,
+    ));
+    ui.ctx().request_repaint();
 }
 
 fn lock(progress: &Mutex<Progress>) -> MutexGuard<'_, Progress> {
@@ -377,11 +547,12 @@ fn files_ui(ui: &mut Ui, game: &GameScan) {
         ui.weak(summary);
         return;
     }
+    let summary = RichText::new(summary).color(ui.visuals().weak_text_color());
     egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
         .show(ui, |ui| {
             for file in &game.files {
-                ui.label(format!("{}/{}", file.base.dir_name(), file.tail));
+                ui.weak(format!("{}/{}", file.base.dir_name(), file.tail));
             }
         });
 }

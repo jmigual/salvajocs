@@ -81,11 +81,16 @@ impl Updater {
             }
         } else {
             // Right to left: the icon goes first to follow the link.
-            theme::mark(ui, icons::ARROW_SQUARE_OUT, ui.visuals().hyperlink_color);
+            theme::mark(
+                ui,
+                icons::ARROW_SQUARE_OUT,
+                16.0,
+                ui.visuals().hyperlink_color,
+            );
             ui.hyperlink_to("Release page", &release.html_url);
         }
         ui.label(format!("Update available: v{}", release.version));
-        theme::mark(ui, icons::ARROW_CIRCLE_UP, theme::palette(ui).accent);
+        theme::mark(ui, icons::ARROW_CIRCLE_UP, 16.0, theme::palette(ui).accent);
     }
 
     /// Starts the downloaded installer and closes the window, unless `busy`: closing would cut
