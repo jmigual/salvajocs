@@ -121,15 +121,6 @@ fn wineserver_is_found_by_process_name() {
 }
 
 #[test]
-fn a_sandbox_cannot_tell_whether_wineserver_runs() {
-    let proc_dir = tempfile::tempdir().unwrap();
-    fs::create_dir(proc_dir.path().join("200")).unwrap();
-    fs::write(proc_dir.path().join("200/comm"), "wineserver\n").unwrap();
-    assert_eq!(wineserver_state(false, proc_dir.path()), Some(true));
-    assert_eq!(wineserver_state(true, proc_dir.path()), None);
-}
-
-#[test]
 fn steamuser_match_is_case_insensitive() {
     let dir = tempfile::tempdir().unwrap();
     let prefix = make_prefix(dir.path(), &["SteamUser", "deck"]);

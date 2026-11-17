@@ -123,8 +123,8 @@ pub struct Env {
     /// The machine scans and restores look at; `None` detects it (`Environment::detect`) in
     /// the job that needs it.
     pub environment: Option<Environment>,
-    /// Whether a wineserver runs; `None` when the app cannot tell (`prefix::wineserver_running`).
-    pub wineserver_running: fn() -> Option<bool>,
+    /// Whether a wineserver runs (`prefix::wineserver_running`).
+    pub wineserver_running: fn() -> bool,
     /// Looks for a newer release at start; `None` skips it, as on every OS but Windows (ADR-0013).
     pub check_update: Option<CheckUpdate>,
     /// Whether the Windows installer installed the running app, so it can update itself.

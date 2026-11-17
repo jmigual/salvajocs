@@ -455,7 +455,7 @@ fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
 
 /// The tab previewing a registry restore into a prefix under `dir`, where the wineserver check
 /// answers `wineserver_running`.
-fn registry_restore(dir: &Path, wineserver_running: fn() -> Option<bool>) -> TabHarness {
+fn registry_restore(dir: &Path, wineserver_running: fn() -> bool) -> TabHarness {
     let prefix = dir.join("pfx");
     fs::create_dir_all(prefix.join("drive_c/users/me")).unwrap();
     fs::write(prefix.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
@@ -489,49 +489,14 @@ fn registry_restore(dir: &Path, wineserver_running: fn() -> Option<bool>) -> Tab
     harness
 }
 
-fn click_and_step(harness: &mut TabHarness, label: &str) {
-    harness.get_by_label(label).click();
+#[test]
+fn a_running_wineserver_blocks_a_registry_restore_into_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = registry_restore(dir.path(), || true);
+
+    harness.get_by_label("Restore files").click();
     harness.step();
     harness.step();
-}
-
-const ASK_TO_CLOSE_WINE: &str = "cannot check if Wine or Proton runs";
-
-#[test]
-fn a_sandbox_asks_to_close_wine_before_a_registry_restore_into_a_prefix() {
-    let dir = tempfile::tempdir().unwrap();
-    let user_reg = dir.path().join("pfx/user.reg");
-    let mut harness = registry_restore(dir.path(), || None);
-
-    click_and_step(&mut harness, "Restore files");
-    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_some());
-    click_and_step(&mut harness, "Cancel");
-    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
-    let tab = &harness.state().0;
-    assert!(tab.restoring.is_none() && tab.restored.is_none());
-    assert!(!fs::read_to_string(&user_reg).unwrap().contains("Foo"));
-
-    click_and_step(&mut harness, "Restore files");
-    click_and_step(&mut harness, "Confirm");
-    run_until_restored(&mut harness);
-    let tab = &harness.state().0;
-    assert_eq!(tab.error, None);
-    let restored = tab.restored.as_ref().expect("the restore ran");
-    assert!(
-        restored
-            .lines
-            .contains(&("Registry: restored".into(), false))
-    );
-    assert!(fs::read_to_string(&user_reg).unwrap().contains("Foo"));
-}
-
-#[test]
-fn a_running_wineserver_on_the_host_blocks_without_asking() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut harness = registry_restore(dir.path(), || Some(true));
-
-    click_and_step(&mut harness, "Restore files");
-    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
     run_until_restored(&mut harness);
 
     let tab = &harness.state().0;
@@ -539,28 +504,4 @@ fn a_running_wineserver_on_the_host_blocks_without_asking() {
     assert!(tab.error.as_deref().unwrap().contains("Close the game"));
     let user_reg = fs::read_to_string(dir.path().join("pfx/user.reg")).unwrap();
     assert!(!user_reg.contains("Foo"));
-}
-
-#[test]
-fn a_sandbox_restores_without_asking_when_no_registry_goes_into_a_prefix() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut harness = registry_restore(dir.path(), || None);
-    harness
-        .state_mut()
-        .0
-        .preview
-        .as_mut()
-        .unwrap()
-        .plan
-        .registry = None;
-    // Lays out the button where the plan without the registry line puts it.
-    harness.step();
-
-    click_and_step(&mut harness, "Restore files");
-    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
-    run_until_restored(&mut harness);
-
-    let tab = &harness.state().0;
-    assert_eq!(tab.error, None);
-    assert!(tab.restored.is_some());
 }

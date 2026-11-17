@@ -235,8 +235,6 @@ pub struct RestoreTab {
     preparing: Option<(u64, Job<Prepared>)>,
     mapping: Option<(Arc<Fetched>, Dialog)>,
     preview: Option<Preview>,
-    /// Whether the user is asked to close Wine because the sandbox hides whether it runs.
-    confirm_wine: bool,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
     error: Option<String>,
@@ -297,7 +295,6 @@ impl RestoreTab {
             });
         }
         self.mapping_ui(ui.ctx(), state);
-        self.confirm_wine_ui(ui.ctx(), state);
     }
 
     /// Whether a listing, restore or other job of this tab is running.
@@ -330,7 +327,6 @@ impl RestoreTab {
     fn forget_plan(&mut self) {
         self.preview = None;
         self.mapping = None;
-        self.confirm_wine = false;
         self.generation += 1;
     }
 
@@ -771,43 +767,7 @@ impl RestoreTab {
         }
         let ready = !busy && state.session.is_some() && unapplied.is_none();
         if theme::row_end(ui, |ui| restore_button(ui, ready)).clicked() {
-            let into_prefix =
-                matches!(preview.plan.registry, Some((_, Context::WinePrefix { .. })));
-            if into_prefix && (state.env.wineserver_running)().is_none() {
-                self.confirm_wine = true;
-            } else {
-                self.start_restore(ui.ctx(), state);
-            }
-        }
-    }
-
-    /// Asks the user to close Wine before a registry restore into a prefix when the Flatpak
-    /// sandbox hides whether it runs (ADR-0012); Confirm restores as if none runs.
-    fn confirm_wine_ui(&mut self, ctx: &egui::Context, state: &State) {
-        if !self.confirm_wine {
-            return;
-        }
-        let (confirm, cancel) = theme::modal(ctx, "restore_wine")
-            .show(ctx, |ui| {
-                ui.set_width(480.0);
-                ui.label(
-                    "salvajocs cannot check if Wine or Proton runs (Flatpak sandbox). Close \
-                     every Wine and Proton program, then confirm.",
-                );
-                ui.horizontal(|ui| {
-                    (
-                        ui.button("Confirm").clicked(),
-                        ui.button("Cancel").clicked(),
-                    )
-                })
-                .inner
-            })
-            .inner;
-        if confirm || cancel {
-            self.confirm_wine = false;
-        }
-        if confirm {
-            self.start_restore(ctx, state);
+            self.start_restore(ui.ctx(), state);
         }
     }
 
@@ -828,8 +788,7 @@ impl RestoreTab {
                 &title,
                 &plan,
                 &stage_root,
-                // Checked once the lock is held; `None` (sandbox) was confirmed by the user.
-                wineserver_running().unwrap_or(false),
+                wineserver_running(),
             )?;
             let safety_backup = match report.safety_backup {
                 SafetyBackup::Created(snapshot) => format!(
