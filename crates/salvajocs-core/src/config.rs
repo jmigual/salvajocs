@@ -14,6 +14,11 @@ use crate::manifest::CustomGame;
 use crate::secret::SecretKey;
 use crate::storage::RepoLocation;
 
+mod services;
+
+use services::OPENDAL_SERVICES;
+pub use services::{BackendField, opendal_docs_url, opendal_fields, opendal_label};
+
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";
 
@@ -88,37 +93,15 @@ pub enum BackendKind {
     OpenDal(&'static str),
 }
 
-/// The opendal services offered in the picker: those `rustic_backend` builds for this OS, minus
-/// the ones ADR-0009 hides. `sftp` is Unix-only (ADR-0003).
-const OPENDAL_SERVICES: &[&str] = &[
-    "azblob",
-    "azdls",
-    "azfile",
-    "b2",
-    "cos",
-    "dropbox",
-    "ftp",
-    "gcs",
-    "gdrive",
-    "ipmfs",
-    "obs",
-    "onedrive",
-    "oss",
-    "pcloud",
-    "s3",
-    #[cfg(not(windows))]
-    "sftp",
-    "swift",
-    "webdav",
-    "webhdfs",
-    "yandex-disk",
-];
-
 /// The backend kinds available in this build: local, rest, rclone, then the opendal services.
 pub fn backend_kinds() -> Vec<BackendKind> {
     [BackendKind::Local, BackendKind::Rest, BackendKind::Rclone]
         .into_iter()
-        .chain(OPENDAL_SERVICES.iter().copied().map(BackendKind::OpenDal))
+        .chain(
+            OPENDAL_SERVICES
+                .iter()
+                .map(|service| BackendKind::OpenDal(service.name)),
+        )
         .collect()
 }
 

@@ -130,9 +130,10 @@ fn opendal_services_match_the_built_registry() {
     let built = opendal::OperatorRegistry::get().schemes();
     let listed: std::collections::HashSet<String> = OPENDAL_SERVICES
         .iter()
-        .chain(HIDDEN_SERVICES)
-        .chain(ALIAS_SCHEMES)
-        .map(|service| service.to_string())
+        .map(|service| service.name)
+        .chain(HIDDEN_SERVICES.iter().copied())
+        .chain(ALIAS_SCHEMES.iter().copied())
+        .map(str::to_string)
         .collect();
     assert_eq!(built, listed);
 }
@@ -154,6 +155,75 @@ fn backend_kinds_exclude_sftp_on_windows() {
 #[test]
 fn backend_kinds_include_sftp_off_windows() {
     assert!(backend_kinds().contains(&BackendKind::OpenDal("sftp")));
+}
+
+#[test]
+fn every_offered_service_has_named_fields_and_a_label() {
+    for service in OPENDAL_SERVICES {
+        assert!(!opendal_fields(service.name).is_empty(), "{}", service.name);
+        assert_eq!(opendal_label(service.name), Some(service.label));
+    }
+    assert!(opendal_fields("memory").is_empty());
+    assert_eq!(opendal_label("memory"), None);
+}
+
+/// The keys of opendal's config struct for `service`, which ignores unknown keys when it is
+/// built, so a typo in the table would otherwise only show at runtime.
+fn config_keys(service: &str) -> Vec<String> {
+    use opendal::services::*;
+    let value = match service {
+        "azblob" => serde_json::to_value(AzblobConfig::default()),
+        "azdls" => serde_json::to_value(AzdlsConfig::default()),
+        "azfile" => serde_json::to_value(AzfileConfig::default()),
+        "b2" => serde_json::to_value(B2Config::default()),
+        "cos" => serde_json::to_value(CosConfig::default()),
+        "dropbox" => serde_json::to_value(DropboxConfig::default()),
+        "ftp" => serde_json::to_value(FtpConfig::default()),
+        "gcs" => serde_json::to_value(GcsConfig::default()),
+        "gdrive" => serde_json::to_value(GdriveConfig::default()),
+        "ipmfs" => serde_json::to_value(IpmfsConfig::default()),
+        "obs" => serde_json::to_value(ObsConfig::default()),
+        "onedrive" => serde_json::to_value(OnedriveConfig::default()),
+        "oss" => serde_json::to_value(OssConfig::default()),
+        "pcloud" => serde_json::to_value(PcloudConfig::default()),
+        "s3" => serde_json::to_value(S3Config::default()),
+        #[cfg(not(windows))]
+        "sftp" => serde_json::to_value(SftpConfig::default()),
+        "swift" => serde_json::to_value(SwiftConfig::default()),
+        "webdav" => serde_json::to_value(WebdavConfig::default()),
+        "webhdfs" => serde_json::to_value(WebhdfsConfig::default()),
+        "yandex-disk" => serde_json::to_value(YandexDiskConfig::default()),
+        other => panic!("no config struct is listed for {other}"),
+    };
+    value
+        .expect("a config struct serializes")
+        .as_object()
+        .expect("a config struct serializes to an object")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+/// Fails when an opendal upgrade renames a key the form writes.
+#[test]
+fn named_field_keys_are_opendal_config_keys() {
+    for service in OPENDAL_SERVICES {
+        let keys = config_keys(service.name);
+        for field in service.fields {
+            assert!(
+                keys.iter().any(|key| key == field.key),
+                "{} has no option `{}`",
+                service.name,
+                field.key
+            );
+        }
+    }
+}
+
+#[test]
+fn docs_url_names_the_config_struct() {
+    assert!(opendal_docs_url("yandex-disk").ends_with("struct.YandexDiskConfig.html"));
+    assert!(opendal_docs_url("s3").ends_with("struct.S3Config.html"));
 }
 
 #[test]
