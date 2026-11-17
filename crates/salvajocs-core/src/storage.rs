@@ -14,7 +14,7 @@ use rustic_core::{
 };
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
-const ZSTD_DEFAULT_LEVEL: i32 = 3;
+pub const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 /// How long a backup waits for directory listings to catch up with the files (ADR-0003).
 const LISTING_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);

@@ -15,7 +15,8 @@ use crate::job::Job;
 use crate::startup::Credentials;
 use crate::theme::{self, icons};
 use crate::widgets::backend::BackendForm;
-use crate::widgets::{compression, field_hint, form_grid, labelled_edit};
+use crate::widgets::compression::CompressionField;
+use crate::widgets::{field_hint, form_grid, labelled_edit};
 
 /// A repository the user chose and that is now open. The config is not saved yet:
 /// `State::adopt` saves it with the current roots and custom games.
@@ -51,7 +52,7 @@ enum Step {
 /// The repository form and the state of connecting to what it describes.
 pub struct Connect {
     form: BackendForm,
-    compression: String,
+    compression: CompressionField,
     password: String,
     remember: bool,
     submit: &'static str,
@@ -63,7 +64,7 @@ impl Connect {
     pub fn first_run() -> Self {
         Self {
             form: BackendForm::default(),
-            compression: String::new(),
+            compression: CompressionField::new(Compression::Default),
             password: String::new(),
             remember: true,
             submit: "Continue",
@@ -90,7 +91,6 @@ impl Connect {
     /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
         let editing = matches!(self.step, Step::Editing(_));
-        let mut parsed = None;
         ui.add_enabled_ui(editing, |ui| {
             form_grid("connect_form").show(ui, |ui| {
                 self.form.ui(ui);
@@ -120,14 +120,14 @@ impl Connect {
                     });
                     ui.end_row();
                 }
-                parsed = Some(compression::ui(
+                self.compression.ui(
                     ui,
                     "Compression (new repository)",
-                    &mut self.compression,
-                ));
+                    "Used only when a new repository is created.",
+                );
             });
         });
-        let compression = parsed.and_then(Result::ok);
+        let compression = self.compression.value().ok();
 
         match mem::replace(&mut self.step, Step::Editing(None)) {
             Step::Editing(error) => {

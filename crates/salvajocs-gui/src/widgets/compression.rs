@@ -1,61 +1,152 @@
-//! The compression field: one integer, validated by `Compression::from_field` (ADR-0009).
+//! The compression field: a dropdown of presets and a custom level, validated by
+//! `Compression::from_field` (ADR-0009).
 
-use eframe::egui::Ui;
-use salvajocs_core::storage::{Compression, StorageError};
+use eframe::egui::{ComboBox, Ui};
+use salvajocs_core::storage::{Compression, StorageError, ZSTD_DEFAULT_LEVEL};
 
 use super::{field_hint, labelled_edit};
 use crate::theme::{self, icons};
 
-/// Why the text of a compression field is not a compression setting.
+/// Why the text of the custom level is not a compression setting.
 #[derive(Debug, thiserror::Error)]
 pub enum FieldError {
     /// The text is not an integer.
-    #[error("compression must be a whole number")]
+    #[error("the level must be a whole number")]
     NotANumber,
     /// The integer is outside the levels zstd accepts.
     #[error(transparent)]
     OutOfRange(#[from] StorageError),
 }
 
-/// Reads the field text: empty is the default level, `0` is off, otherwise a zstd level.
+/// Reads the custom level text: `0` is off, otherwise a zstd level.
 pub fn parse(text: &str) -> Result<Compression, FieldError> {
-    let text = text.trim();
-    let field = if text.is_empty() {
-        None
-    } else {
-        Some(text.parse().map_err(|_| FieldError::NotANumber)?)
-    };
-    Ok(Compression::from_field(field)?)
+    let level = text.trim().parse().map_err(|_| FieldError::NotANumber)?;
+    Ok(Compression::from_field(Some(level))?)
 }
 
-/// The field text that [`parse`] reads back as `compression`.
-pub fn format(compression: Compression) -> String {
-    match compression {
-        Compression::Default => String::new(),
-        Compression::Off => "0".to_string(),
-        Compression::Level(level) => level.to_string(),
+/// An entry of the dropdown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Choice {
+    Off,
+    Fast,
+    Default,
+    Smaller,
+    Smallest,
+    Custom,
+}
+
+const CHOICES: [Choice; 6] = [
+    Choice::Off,
+    Choice::Fast,
+    Choice::Default,
+    Choice::Smaller,
+    Choice::Smallest,
+    Choice::Custom,
+];
+
+impl Choice {
+    fn label(self) -> String {
+        match self {
+            Self::Off => "Off".to_string(),
+            Self::Fast => "Fast (level 1)".to_string(),
+            Self::Default => format!("Default (level {ZSTD_DEFAULT_LEVEL})"),
+            Self::Smaller => "Smaller (level 9)".to_string(),
+            Self::Smallest => "Smallest (level 19)".to_string(),
+            Self::Custom => "Custom level".to_string(),
+        }
+    }
+
+    /// The setting of a preset; `None` for [`Choice::Custom`], which has its own text.
+    fn preset(self) -> Option<Compression> {
+        match self {
+            Self::Off => Some(Compression::Off),
+            Self::Fast => Some(Compression::Level(1)),
+            Self::Default => Some(Compression::Default),
+            Self::Smaller => Some(Compression::Level(9)),
+            Self::Smallest => Some(Compression::Level(19)),
+            Self::Custom => None,
+        }
     }
 }
 
-/// Draws the field as grid rows (label and field, then the hint) and the error below them when
-/// the text is not valid. Returns the parsed setting, or the error that is shown.
-pub fn ui(ui: &mut Ui, label: &str, text: &mut String) -> Result<Compression, FieldError> {
-    labelled_edit(ui, label, text, false);
-    ui.end_row();
-    ui.label("");
-    field_hint(
-        ui,
-        "Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.",
-    );
-    ui.end_row();
-    let parsed = parse(text);
-    if let Err(err) = &parsed {
+/// `Level(3)` is what a repository reports after `Default` was stored, so they count as one.
+fn canonical(compression: Compression) -> Compression {
+    match compression {
+        Compression::Level(ZSTD_DEFAULT_LEVEL) => Compression::Default,
+        other => other,
+    }
+}
+
+/// The state of one compression field.
+pub struct CompressionField {
+    choice: Choice,
+    custom: String,
+}
+
+impl CompressionField {
+    /// A field showing `compression`: the preset it equals, else "Custom level" with its number.
+    pub fn new(compression: Compression) -> Self {
+        let compression = canonical(compression);
+        match CHOICES.iter().find(|c| c.preset() == Some(compression)) {
+            Some(&choice) => Self {
+                choice,
+                custom: String::new(),
+            },
+            None => Self {
+                choice: Choice::Custom,
+                custom: match compression {
+                    Compression::Level(level) => level.to_string(),
+                    _ => String::new(),
+                },
+            },
+        }
+    }
+
+    /// The setting the field holds, or why the custom level is not one.
+    pub fn value(&self) -> Result<Compression, FieldError> {
+        match self.choice.preset() {
+            Some(preset) => Ok(preset),
+            None => parse(&self.custom),
+        }
+    }
+
+    /// The field's setting when it is valid and differs from `stored`.
+    pub fn change_from(&self, stored: Compression) -> Option<Compression> {
+        let new = self.value().ok()?;
+        (canonical(new) != canonical(stored)).then_some(new)
+    }
+
+    /// Draws the field as grid rows: the dropdown, the custom level when chosen with its error,
+    /// then `hint`.
+    pub fn ui(&mut self, ui: &mut Ui, label: &str, hint: &str) {
+        let name = ui.label(label);
+        ComboBox::from_id_salt(label)
+            // Taller than the default 200 px, so the six entries need no scrolling.
+            .height(300.0)
+            .selected_text(self.choice.label())
+            .show_ui(ui, |ui| {
+                theme::pill_list(ui);
+                for choice in CHOICES {
+                    ui.selectable_value(&mut self.choice, choice, choice.label());
+                }
+            })
+            .response
+            .labelled_by(name.id);
+        ui.end_row();
+        if self.choice == Choice::Custom {
+            labelled_edit(ui, "Level number", &mut self.custom, false);
+            ui.end_row();
+            if let Err(err) = parse(&self.custom) {
+                ui.label("");
+                let color = ui.visuals().error_fg_color;
+                theme::status(ui, icons::X_CIRCLE, color, err.to_string());
+                ui.end_row();
+            }
+        }
         ui.label("");
-        let color = ui.visuals().error_fg_color;
-        theme::status(ui, icons::X_CIRCLE, color, err.to_string());
+        field_hint(ui, hint);
         ui.end_row();
     }
-    parsed
 }
 
 #[cfg(test)]
@@ -63,36 +154,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_is_default_zero_is_off_and_levels_pass() {
-        assert!(matches!(parse(""), Ok(Compression::Default)));
+    fn zero_is_off_and_levels_pass() {
         assert!(matches!(parse(" 0 "), Ok(Compression::Off)));
         assert!(matches!(parse("19"), Ok(Compression::Level(19))));
         assert!(matches!(parse("-7"), Ok(Compression::Level(-7))));
     }
 
     #[test]
-    fn out_of_range_and_non_numbers_are_rejected() {
+    fn out_of_range_empty_and_non_numbers_are_rejected() {
         for text in ["23", "-8", "100"] {
             assert!(matches!(
                 parse(text),
                 Err(FieldError::OutOfRange(StorageError::InvalidCompression(_)))
             ));
         }
-        assert!(matches!(parse("fast"), Err(FieldError::NotANumber)));
+        for text in ["fast", ""] {
+            assert!(matches!(parse(text), Err(FieldError::NotANumber)));
+        }
     }
 
     #[test]
-    fn format_round_trips_through_parse() {
-        for compression in [
-            Compression::Default,
-            Compression::Off,
-            Compression::Level(-3),
-        ] {
-            let text = format(compression);
-            assert_eq!(
-                format(parse(&text).expect("a formatted setting parses")),
-                text
-            );
+    fn default_and_its_stored_level_select_the_same_entry() {
+        let default = CompressionField::new(Compression::Default);
+        let stored = CompressionField::new(Compression::Level(ZSTD_DEFAULT_LEVEL));
+        assert_eq!(default.choice, Choice::Default);
+        assert_eq!(stored.choice, Choice::Default);
+        assert!(stored.change_from(Compression::Default).is_none());
+    }
+
+    #[test]
+    fn a_level_without_a_preset_selects_the_custom_entry_with_its_number() {
+        for level in [5, 22, -3] {
+            let field = CompressionField::new(Compression::Level(level));
+            assert_eq!(field.choice, Choice::Custom);
+            assert_eq!(field.custom, level.to_string());
+            assert!(matches!(field.value(), Ok(Compression::Level(l)) if l == level));
         }
+    }
+
+    #[test]
+    fn presets_round_trip_and_an_invalid_custom_level_has_no_value() {
+        for compression in [
+            Compression::Off,
+            Compression::Level(1),
+            Compression::Default,
+            Compression::Level(9),
+            Compression::Level(19),
+        ] {
+            let field = CompressionField::new(compression);
+            assert_ne!(field.choice, Choice::Custom);
+            assert_eq!(field.value().unwrap(), compression);
+        }
+        let mut field = CompressionField::new(Compression::Level(5));
+        field.custom = "23".to_string();
+        assert!(field.value().is_err());
+        assert!(field.change_from(Compression::Off).is_none());
     }
 }

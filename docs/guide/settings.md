@@ -20,9 +20,9 @@ repository, the tab offers **Delete entries** to remove the old ones, or **Keep 
 
 ## Compression
 
-The **Compression** field shows the level of the open repository. Change it and click **Apply
-compression**. The values are the same as on first run: `0` is off, `1` to `22` and `-7` to `-1`
-are zstd levels. Clearing the field and applying stores zstd's default level, which is 3.
+The **Compression** dropdown shows the level of the open repository. Change it and click **Apply
+compression**. The entries are the same as on [first run](first-run.md#compression). A level
+without its own entry, such as 5, shows as **Custom level** with the number filled in.
 
 The level is a property of the repository, so the change affects every machine that writes to it.
 

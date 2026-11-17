@@ -48,7 +48,7 @@ other way round.
 | Registry | Backs up and restores registry keys: the live registry on Windows, `user.reg` inside a Wine/Proton prefix. |
 | Storage | One repository for every machine: a local folder, a REST server, an rclone remote or an OpenDAL service (S3, WebDAV, Google Drive and more), through the embedded rustic library. The Restore tab lists the backups of all machines. |
 | Readable data | The repository is plain restic format. You can list and copy files out of it with the restic command line. |
-| Compression | zstd, chosen when the repository is created: off, default, levels 1 to 22 or -7 to -1. Changeable in Settings. |
+| Compression | zstd, chosen when the repository is created: off, a preset (levels 1, 3, 9, 19) or a custom level 1 to 22 or -7 to -1. Changeable in Settings. |
 | Encryption password | Optional. Kept in the OS keyring (Secret Service on Linux, Credential Manager on Windows) or asked once per session. |
 | Backup | One snapshot per game, deduplicated by the repository. A game that did not change adds no snapshot. |
 | Restore | Preview of every file and registry key first, per-file target override, a safety backup of what would be overwritten, undo. |

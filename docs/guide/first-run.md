@@ -35,18 +35,20 @@ folder).
 
 ## Compression
 
-Compression is one whole number.
+Compression is a dropdown.
 
-| Value | Meaning |
+| Entry | Meaning |
 | --- | --- |
-| empty | zstd's default level |
-| `0` | no compression |
-| `1` to `22` | zstd level; higher is smaller and slower |
-| `-7` to `-1` | zstd's fast levels |
+| Off | no compression |
+| Fast (level 1) | zstd level 1 |
+| Default (level 3) | zstd's default level |
+| Smaller (level 9) | zstd level 9 |
+| Smallest (level 19) | zstd level 19; slow, for the smallest backups |
+| Custom level | a number field: `0` is off, `1` to `22` is a zstd level, `-7` to `-1` are zstd's fast levels |
 
-Anything else is rejected. The level is stored in the repository, so every machine that writes to
+A number outside those ranges is rejected. The level is stored in the repository, so every machine that writes to
 it uses the same one. You set it when the repository is created. To change it later, use
-[Settings](settings.md#compression). If the repository already exists, the field in this dialog is
+[Settings](settings.md#compression). If the repository already exists, the dropdown in this dialog is
 ignored and the repository's own level is kept.
 
 ## Encryption password and keyring

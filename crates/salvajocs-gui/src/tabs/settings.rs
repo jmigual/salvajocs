@@ -12,7 +12,8 @@ use crate::first_run::Connect;
 use crate::job::Job;
 use crate::state::State;
 use crate::theme::{self, icons};
-use crate::widgets::{compression, form_grid, labelled_edit};
+use crate::widgets::compression::CompressionField;
+use crate::widgets::{form_grid, labelled_edit};
 
 /// The roots offered in the picker, in order.
 const ROOT_KINDS: [RootKind; 3] = [RootKind::Steam, RootKind::Other, RootKind::WinePrefix];
@@ -36,7 +37,7 @@ fn password_mode_label(mode: PasswordMode) -> &'static str {
 /// The state of the Settings tab.
 pub struct SettingsTab {
     connect: Option<Connect>,
-    compression: Option<String>,
+    compression: Option<CompressionField>,
     compression_job: Option<Job<Compression>>,
     compression_error: Option<String>,
     root_kind: RootKind,
@@ -140,17 +141,21 @@ impl SettingsTab {
                 Err(err) => self.compression_error = Some(format!("{err:#}")),
             }
         }
-        let text = self
+        let field = self
             .compression
-            .get_or_insert_with(|| compression::format(session.compression));
-        let parsed = form_grid("repository_compression")
-            .show(ui, |ui| compression::ui(ui, "Compression", text))
-            .inner;
+            .get_or_insert_with(|| CompressionField::new(session.compression));
+        form_grid("repository_compression").show(ui, |ui| {
+            field.ui(
+                ui,
+                "Compression",
+                "Applies to data written from now on. Higher levels are smaller and slower.",
+            );
+        });
         if let Some(error) = &self.compression_error {
             let color = ui.visuals().error_fg_color;
             theme::status(ui, icons::X_CIRCLE, color, error);
         }
-        let new = parsed.ok().filter(|new| *new != session.compression);
+        let new = field.change_from(session.compression);
         let apply = ui.add_enabled(
             new.is_some() && self.compression_job.is_none(),
             egui::Button::new("Apply compression"),

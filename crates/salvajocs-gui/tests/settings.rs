@@ -14,7 +14,7 @@ use egui_kittest::kittest::Queryable;
 use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption};
 use salvajocs_core::layout::RootKind;
 use salvajocs_core::secret::SecretKey;
-use salvajocs_core::storage::Compression;
+use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
@@ -24,6 +24,22 @@ fn fill(harness: &mut Harness<'static, App>, label: &str, text: &str) {
     field.focus();
     field.type_text(text);
     run_settled(harness);
+}
+
+/// Opens the dropdown named `label` and picks `entry`.
+fn choose(harness: &mut Harness<'static, App>, label: &str, entry: &str) {
+    harness.get_by_label(label).click();
+    run_settled(harness);
+    harness.get_by_label(entry).click();
+    run_settled(harness);
+}
+
+/// Whether the Settings compression dropdown has `entry` selected; the selection is the value
+/// of the node, not a label.
+fn selects(harness: &Harness<'static, App>, entry: &str) -> bool {
+    harness
+        .query_all_by_label("Compression")
+        .any(|node| node.value().as_deref() == Some(entry))
 }
 
 /// Waits until the saved config satisfies `ready`; saving is a background job.
@@ -102,7 +118,40 @@ fn missing_repo_asks_before_init() {
 }
 
 #[test]
-fn compression_field_shows_error_for_out_of_range_level() {
+fn first_run_creates_the_repository_with_the_chosen_compression() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    fill(&mut harness, "Location", &repository);
+    choose(
+        &mut harness,
+        "Compression (new repository)",
+        "Smallest (level 19)",
+    );
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Create a new repository at")
+    });
+    harness.get_by_label("Create").click();
+    run_until(&mut harness, "the dialog to close", |h| {
+        !shows(h, "Welcome to salvajocs")
+    });
+
+    let location = RepoLocation {
+        repository,
+        options: Default::default(),
+    };
+    let reopened = Storage::open(&location, "").unwrap();
+    assert_eq!(reopened.compression(), Compression::Level(19));
+}
+
+#[test]
+fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_continue() {
     let tmp = tempfile::tempdir().unwrap();
     let mut harness = harness(env(&tmp));
     run_until(&mut harness, "the first-run dialog", |h| {
@@ -112,12 +161,21 @@ fn compression_field_shows_error_for_out_of_range_level() {
     fill(&mut harness, "Location", &repo_dir(&tmp));
     assert!(!shows(&harness, "out of range"));
 
-    fill(&mut harness, "Compression (new repository)", "99");
+    choose(&mut harness, "Compression (new repository)", "Custom level");
+    fill(&mut harness, "Level number", "99");
     assert!(shows(&harness, "out of range"), "99 is not a zstd level");
     assert!(
         egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
             .is_disabled(),
         "an invalid level cannot be submitted"
+    );
+
+    replace_text(&mut harness, "Level number", "-7");
+    assert!(!shows(&harness, "out of range"));
+    assert!(
+        !egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+            .is_disabled(),
+        "-7 is a level zstd accepts"
     );
 }
 
@@ -251,12 +309,33 @@ fn settings_shows_the_open_repository_compression() {
     let harness = open_settings(env);
 
     assert!(shows(&harness, &format!("Current: {repository}")));
-    // The heading and the field share the label; only the field has the level as its value.
+    assert!(
+        selects(&harness, "Smallest (level 19)"),
+        "the dropdown shows the repository's level"
+    );
+}
+
+#[test]
+fn settings_shows_a_stored_level_without_a_preset_as_a_custom_level() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo_with(&repository, "", Compression::Level(5));
+    save_config(&env, &local_config(&repository));
+    let harness = open_settings(env);
+
+    assert!(selects(&harness, "Custom level"));
     assert!(
         harness
-            .query_all_by_label("Compression")
-            .any(|node| node.value().as_deref() == Some("19")),
-        "the field shows the repository's level"
+            .get_by_label("Level number")
+            .value()
+            .is_some_and(|value| value == "5"),
+        "the number field holds the stored level"
+    );
+    assert!(
+        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Apply compression"))
+            .is_disabled(),
+        "nothing changed, so there is nothing to apply"
     );
 }
 
