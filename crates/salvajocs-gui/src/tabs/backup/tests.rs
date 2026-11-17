@@ -197,6 +197,7 @@ fn before_a_scan_the_only_action_is_one_enabled_scan() {
         (BackupTab::default(), state(dir.path())),
     );
     harness.step();
+    assert!(harness.query_by_label("Find your saves").is_some());
     assert_eq!(harness.query_all_by_label("Scan for games").count(), 1);
     assert!(!is_disabled(&harness, "Scan for games"));
     assert!(
@@ -230,4 +231,30 @@ fn a_scan_that_found_nothing_says_where_to_add_games() {
             .next()
             .is_some()
     );
+}
+
+/// The save bar marks the repository encrypted exactly when it has a password.
+#[test]
+fn the_save_bar_says_whether_the_repository_is_encrypted() {
+    for (password, shown, hidden) in [
+        (PasswordMode::None, "Not encrypted", "Encrypted"),
+        (PasswordMode::Keyring, "Encrypted", "Not encrypted"),
+        (PasswordMode::Ask, "Encrypted", "Not encrypted"),
+    ] {
+        let tab = BackupTab {
+            report: Some(ScanReport {
+                games: Vec::new(),
+                problems: Vec::new(),
+            }),
+            ..BackupTab::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state(dir.path());
+        state.config.as_mut().unwrap().password = password;
+        let mut harness =
+            Harness::new_ui_state(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+        harness.step();
+        assert!(harness.query_by_label(shown).is_some(), "{password:?}");
+        assert!(harness.query_by_label(hidden).is_none(), "{password:?}");
+    }
 }
