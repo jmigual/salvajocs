@@ -27,7 +27,7 @@ pub fn run() -> eframe::Result {
         eframe::Error::AppCreation("this OS has no config or cache directory".into())
     })?;
     eframe::run_native(
-        "salvajocs",
+        "Salvajocs",
         native_options(app_id())?,
         Box::new(move |_cc| Ok(Box::new(App::new(env)))),
     )

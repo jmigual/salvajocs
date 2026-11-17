@@ -8,7 +8,7 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
-- The app menu name is now "Salvajocs".
+- The app is called "Salvajocs" in the app menu, the window title and the AppStream metadata.
 
 ### Removed
 
