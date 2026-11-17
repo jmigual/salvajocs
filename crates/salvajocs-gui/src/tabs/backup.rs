@@ -8,9 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use eframe::egui::emath::Rot2;
-use eframe::egui::{
-    self, Align, Label, Layout, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
-};
+use eframe::egui::{self, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo};
 use salvajocs_core::backup::{self, GameBackup};
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
@@ -281,22 +279,23 @@ impl BackupTab {
             report.games.len(),
             report.games.iter().map(|game| game.title.clone()).collect(),
         );
-        ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.scan_ui(ui, state, manifest_loading, false);
+        theme::row(
+            ui,
+            |ui| {
+                ui.label(format!("{} found", count(games, "game")));
+            },
+            |ui| {
                 // Frameless until hovered, so the scan reads as the header's main action.
                 let quiet = |text| egui::Button::new(text).frame_when_inactive(false);
-                if ui.add(quiet("Deselect all")).clicked() {
-                    self.selected.clear();
-                }
                 if ui.add(quiet("Select all")).clicked() {
                     self.selected = titles.into_iter().collect();
                 }
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(format!("{} found", count(games, "game")));
-                });
-            });
-        });
+                if ui.add(quiet("Deselect all")).clicked() {
+                    self.selected.clear();
+                }
+                self.scan_ui(ui, state, manifest_loading, false);
+            },
+        );
         self.scan_notes_ui(ui, state, manifest_loading);
         let Some(report) = &self.report else {
             return;
@@ -358,11 +357,7 @@ impl BackupTab {
             .frame(frame)
             .resizable(false)
             .show(ui, |ui| {
-                theme::column(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        self.save_bar_contents(ui, state, manifest_loading);
-                    });
-                });
+                theme::column(ui, |ui| self.save_bar_contents(ui, state, manifest_loading));
             });
         let progress = lock(&self.progress);
         if self.running.is_some() && progress.total > 0 {
@@ -375,18 +370,17 @@ impl BackupTab {
     }
 
     fn save_bar_contents(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let selected = self.selected.len();
-            let ready =
-                state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
-            let label = format!("Back up {}", count(selected, "game"));
-            if theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label).clicked() {
-                self.start_backup(ui.ctx(), state);
-            }
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                self.save_bar_status(ui, state);
-            });
-        });
+        let selected = self.selected.len();
+        let ready = state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
+        let label = format!("Back up {}", count(selected, "game"));
+        let back_up = theme::row(
+            ui,
+            |ui| self.save_bar_status(ui, state),
+            |ui| theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label),
+        );
+        if back_up.clicked() {
+            self.start_backup(ui.ctx(), state);
+        }
     }
 
     /// The left of the save bar: the repository and whether it is encrypted, or the running

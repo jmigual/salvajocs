@@ -231,13 +231,40 @@ pub fn modal(ctx: &egui::Context, id: &str) -> Modal {
     Modal::new(egui::Id::unique(id)).frame(Frame::window(&ctx.global_style()))
 }
 
-/// A row laid out right to left from its end, as tall as its contents: a dialog's or form's
-/// buttons, the primary one added first so it ends the row.
-pub fn row_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    // The horizontal row bounds the height a right-to-left layout would otherwise take whole.
+/// A row of `end` against the right edge, such as a dialog's or form's buttons with the primary
+/// one last. See [`row`].
+pub fn row_end<R>(ui: &mut Ui, end: impl FnOnce(&mut Ui) -> R) -> R {
+    row(ui, |_| {}, end)
+}
+
+/// A row with `start` from the left edge and `end` against the right edge. Both are added left to
+/// right, so keyboard focus and screen readers follow the screen. `start` gets the width `end`
+/// leaves, which is measured; a change of it redraws the frame before it is shown.
+pub fn row<R>(ui: &mut Ui, start: impl FnOnce(&mut Ui), end: impl FnOnce(&mut Ui) -> R) -> R {
+    // The id of the row widget itself: a scope id can repeat between sibling rows.
+    let id = ui.next_auto_id().with("row_end_width");
     ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), add)
-            .inner
+        let end_width: f32 = ui.data(|data| data.get_temp(id)).unwrap_or(0.0);
+        let gap = ui.spacing().item_spacing.x;
+        let start_width = (ui.available_width() - end_width - gap).max(0.0);
+        let left = ui.cursor().min.x;
+        ui.allocate_ui_with_layout(
+            // As tall as a row of controls, so `start` centers on the same line as `end`.
+            Vec2::new(start_width, ui.spacing().interact_size.y),
+            Layout::left_to_right(Align::Center),
+            start,
+        );
+        ui.add_space((left + start_width + gap - ui.cursor().min.x).max(0.0));
+        let end_left = ui.cursor().min.x;
+        let inner = end(ui);
+        let measured = ui.min_rect().max.x - end_left;
+        if (measured - end_width).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(id, measured));
+            // egui may decline a further pass; the next frame then lays out with the width.
+            ui.ctx().request_discard("theme::row measured its end");
+            ui.ctx().request_repaint();
+        }
+        inner
     })
     .inner
 }

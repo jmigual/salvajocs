@@ -184,6 +184,36 @@ fn with_dialog(storage: &SharedStorage) -> RestoreTab {
     }
 }
 
+/// Tab moves through the dialog's buttons in the order they appear, left to right.
+#[test]
+fn the_dialog_buttons_take_focus_left_to_right() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| {
+        let entry = MappingEntry {
+            root: unknown_root(),
+            files: 1,
+            proposed: Some("<xdgData>/Game".into()),
+            confidence: Confidence::Unknown,
+            candidates: Vec::new(),
+            notes: Vec::new(),
+        };
+        RestoreTab {
+            mapping: Some((fetched(storage), Dialog::new(vec![entry]))),
+            ..RestoreTab::default()
+        }
+    });
+    harness.run();
+    harness
+        .get_by_label("Restore into a Wine prefix instead")
+        .focus();
+    harness.run();
+    for next in ["Cancel", "Use these folders"] {
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert!(harness.get_by_label(next).is_focused(), "{next} is next");
+    }
+}
+
 /// A confirm job that hands back a plan for the unknown root once `hold` is released.
 fn confirm_job(
     ctx: &egui::Context,

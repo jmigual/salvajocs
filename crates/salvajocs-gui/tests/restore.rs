@@ -165,6 +165,8 @@ fn preview(harness: &mut Harness<'static, App>) {
     run_until(harness, "the preview", |h| {
         shows(h, "Files to write") || shows(h, "Where should the saves")
     });
+    // A new dialog lays its button row out once it has measured it.
+    run_settled(harness);
 }
 
 /// Like `shows`, but `\` counts as `/`: on Windows a path joined from `/`-separated parts

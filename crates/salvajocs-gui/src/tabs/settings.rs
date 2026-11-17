@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::anyhow;
-use eframe::egui::{self, Align, Layout, Ui};
+use eframe::egui::{self, Ui};
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::layout::{Root, RootKind};
 use salvajocs_core::storage::Compression;
@@ -189,17 +189,18 @@ impl SettingsTab {
             if index > 0 {
                 theme::row_separator(ui);
             }
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            theme::row(
+                ui,
+                |ui| {
+                    let kind = root_kind_label(root.kind);
+                    ui.label(format!("{} ({kind})", root.path.display()));
+                },
+                |ui| {
                     if ui.button("Remove").clicked() {
                         remove = Some(index);
                     }
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let kind = root_kind_label(root.kind);
-                        ui.label(format!("{} ({kind})", root.path.display()));
-                    });
-                });
-            });
+                },
+            );
         }
         theme::row_separator(ui);
         if let Some(index) = remove {

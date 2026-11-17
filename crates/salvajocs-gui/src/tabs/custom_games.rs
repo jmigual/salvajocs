@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Align, Layout, TextEdit, Ui};
+use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, PairError, SkipError};
 use salvajocs_core::manifest::{CustomGame, FileRule, Integration, Pair, Tag};
 
@@ -364,14 +364,14 @@ impl Form {
         }
         let mut action = None;
         theme::row_end(ui, |ui| {
-            if theme::primary(ui, true, Some(icons::FLOPPY_DISK), "Save game").clicked() {
-                action = Some(Action::Save);
+            if self.error == Some(FormError::Changed) && ui.button("Reload").clicked() {
+                action = Some(Action::Reload);
             }
             if ui.button("Cancel").clicked() {
                 action = Some(Action::Cancel);
             }
-            if self.error == Some(FormError::Changed) && ui.button("Reload").clicked() {
-                action = Some(Action::Reload);
+            if theme::primary(ui, true, Some(icons::FLOPPY_DISK), "Save game").clicked() {
+                action = Some(Action::Save);
             }
         });
         action
@@ -406,26 +406,26 @@ impl CustomGamesTab {
                         if index > 0 {
                             theme::row_separator(ui);
                         }
-                        // Right to left: the row's actions sit at its end.
-                        ui.horizontal(|ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.button("Remove").clicked() {
-                                    remove = Some(index);
-                                }
+                        let in_manifest =
+                            manifest.is_some_and(|m| m.games.contains_key(&game.name));
+                        let relation = relation(game, in_manifest);
+                        theme::row(
+                            ui,
+                            |ui| {
+                                ui.label(format!("{} ({relation})", game.name));
+                            },
+                            |ui| {
                                 // One form at a time, so opening another cannot drop unsaved
                                 // edits.
                                 let idle = self.form.is_none();
                                 if ui.add_enabled(idle, egui::Button::new("Edit")).clicked() {
                                     edit = Some(index);
                                 }
-                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                    let in_manifest =
-                                        manifest.is_some_and(|m| m.games.contains_key(&game.name));
-                                    let relation = relation(game, in_manifest);
-                                    ui.label(format!("{} ({relation})", game.name));
-                                });
-                            });
-                        });
+                                if ui.button("Remove").clicked() {
+                                    remove = Some(index);
+                                }
+                            },
+                        );
                     }
                 });
             }

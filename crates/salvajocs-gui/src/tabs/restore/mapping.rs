@@ -118,15 +118,15 @@ impl Dialog {
         // The whole row waits for a running confirm, whose plan was made for these targets.
         ui.add_enabled_ui(!busy, |ui| {
             theme::row_end(ui, |ui| {
-                let primary = theme::primary(ui, choices.is_some(), None, "Use these folders");
-                if primary.clicked() {
-                    action = choices.map(DialogAction::Confirm);
+                if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
+                    action = Some(DialogAction::UsePrefix);
                 }
                 if ui.button("Cancel").clicked() {
                     action = Some(DialogAction::Cancel);
                 }
-                if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
-                    action = Some(DialogAction::UsePrefix);
+                let primary = theme::primary(ui, choices.is_some(), None, "Use these folders");
+                if primary.clicked() {
+                    action = choices.map(DialogAction::Confirm);
                 }
             });
         });

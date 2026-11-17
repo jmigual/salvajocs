@@ -79,6 +79,8 @@ fn missing_repo_asks_before_init() {
     run_until(&mut harness, "the confirmation", |h| {
         shows(h, "Create a new repository at")
     });
+    // The new button row measures itself on its first frame.
+    run_settled(&mut harness);
 
     assert!(
         shows(&harness, &repository),
@@ -144,6 +146,8 @@ fn backend_option_marked_secret_not_written_to_config() {
     run_until(&mut harness, "the confirmation", |h| {
         shows(h, "Create a new repository at")
     });
+    // The new button row measures itself on its first frame.
+    run_settled(&mut harness);
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the dialog to close", |h| {
         !shows(h, "Welcome to salvajocs")

@@ -157,11 +157,11 @@ impl Connect {
                 ));
                 let mut choice = None;
                 theme::row_end(ui, |ui| {
-                    if theme::primary(ui, true, None, "Create").clicked() {
-                        choice = Some(true);
-                    }
                     if ui.button("Back").clicked() {
                         choice = Some(false);
+                    }
+                    if theme::primary(ui, true, None, "Create").clicked() {
+                        choice = Some(true);
                     }
                 });
                 self.step = match choice {
