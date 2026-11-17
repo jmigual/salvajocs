@@ -305,7 +305,7 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "sftp",
         label: "SFTP",
-        hint: "An SSH server. Not available in Windows builds.",
+        hint: "A server reached over SSH.",
         fields: &[
             BackendField::new("endpoint", "Server")
                 .required()
