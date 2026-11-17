@@ -34,7 +34,8 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone remote"
     and one entry per opendal service that rustic_backend builds for this OS, minus the four
     below, by a friendly name ("WebDAV", "Amazon S3 (or compatible)"). The stored repository
-    string stays `opendal:<service>`.
+    string stays `opendal:<service>`. The services are sorted by that name; the three kinds
+    above them stay first.
   - Hidden services, because each is a trap in a backup picker (`config::tests` compares the
     list with opendal's registry):
     - `memory`: data vanishes when the process exits;

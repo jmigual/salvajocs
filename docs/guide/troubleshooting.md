@@ -17,8 +17,8 @@ game is running.
 
 ## Wrong encryption password
 
-The prompt shows "Wrong encryption password." Type the encryption password again. If you stored it in the
-keyring and later changed it, the prompt asks again and stores the new one.
+The prompt shows "Wrong encryption password." Type the encryption password again. If you stored it
+in the keyring and later changed it, the prompt asks again and stores the new one.
 
 If you lost the encryption password, the repository cannot be opened. Without it the data is
 unreadable.

@@ -9,8 +9,8 @@ in for games. This page covers each section. Back to the [guide index](README.md
 
 The top of the tab shows the current repository and the encryption password mode (**None**,
 **Stored in the system keyring** or **Asked once per session**). Below it is the same form as on
-[first run](first-run.md): backend, location or service fields, advanced options, encryption password, **Remember in the system
-keyring**, and compression for a new repository.
+[first run](first-run.md): backend, location or service fields, advanced options, encryption
+password, **Remember in the system keyring**, and compression for a new repository.
 
 Click **Apply** to connect to a different repository. salvajocs checks it the same way as on
 first run, and asks before it creates a new one. The tabs then show the new repository.

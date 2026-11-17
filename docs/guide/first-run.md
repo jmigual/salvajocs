@@ -19,7 +19,7 @@ The **Backend** list offers:
 | Local folder | A folder on this machine or a mounted drive. | The default. **Browse** opens a folder picker. |
 | REST server | The URL of a rustic or restic REST server. | |
 | rclone remote | `remote:path` | Needs the `rclone` program on your `PATH`. A **Remote** list shows the remotes from `rclone listremotes`; picking one fills the start of the location. |
-| A service by name | None. Fill in the fields of the service. | Amazon S3 (or compatible), Backblaze B2, WebDAV, SFTP, Google Drive, Dropbox, OneDrive, pCloud, FTP, Azure Blob Storage, Azure Data Lake Storage, Azure Files, Google Cloud Storage, Tencent Cloud COS, Huawei Cloud OBS, Alibaba Cloud OSS, OpenStack Swift, Hadoop WebHDFS, IPFS (MFS) and Yandex Disk. |
+| A service by name | None. Fill in the fields of the service. | Alibaba Cloud OSS, Amazon S3 (or compatible), Azure Blob Storage, Azure Data Lake Storage, Azure Files, Backblaze B2, Dropbox, FTP, Google Cloud Storage, Google Drive, Hadoop WebHDFS, Huawei Cloud OBS, IPFS (MFS), OneDrive, OpenStack Swift, pCloud, SFTP, Tencent Cloud COS, WebDAV and Yandex Disk. |
 
 Each service shows its own fields, such as **Server URL**, **Bucket** or **Access key ID**.
 Fields marked **Required.** must be filled before **Continue** is enabled. Secret fields such as
@@ -29,12 +29,12 @@ them each session.
 
 **Advanced options** holds a free list of key and value pairs for settings that have no field,
 such as a retry count. The **Option reference** link opens the list of keys of the service. Tick
-**secret** on an option that holds a key or token. Options saved by an earlier version open
-with the list expanded.
+**secret** on an option that holds a key or token. If a saved option has no field of its own, the
+list opens expanded.
 
 If `rclone` is not installed, the rclone entry says so and you can still type the location. The
-Flatpak sandbox has no `rclone` on its `PATH`, so the rclone entry shows that note there and the rclone
-backend does not run.
+Flatpak sandbox has no `rclone` on its `PATH`, so the rclone entry shows that note there and the
+rclone backend does not run.
 
 `sftp` does not exist in Windows builds. If you use two machines and one runs Windows, pick another
 backend. See [Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
@@ -56,15 +56,15 @@ Compression is a dropdown.
 | Smallest (level 19) | zstd level 19; slow, for the smallest backups |
 | Custom level | a number field: `0` is off, `1` to `22` is a zstd level, `-7` to `-1` are zstd's fast levels |
 
-A number outside those ranges is rejected. The level is stored in the repository, so every machine that writes to
-it uses the same one. You set it when the repository is created. To change it later, use
-[Settings](settings.md#compression). If the repository already exists, the dropdown in this dialog is
-ignored and the repository's own level is kept.
+A number outside those ranges is rejected. The level is stored in the repository, so every
+machine that writes to it uses the same one. You set it when the repository is created. To change
+it later, use [Settings](settings.md#compression). If the repository already exists, the dropdown
+in this dialog is ignored and the repository's own level is kept.
 
 ## Encryption password and keyring
 
-The encryption password encrypts the repository. It is not the login of your server or storage account. Three modes exist, and the dialog picks one from what you
-type:
+The encryption password encrypts the repository. It is not the login of your server or storage
+account. Three modes exist, and the dialog picks one from what you type:
 
 | You do | Mode |
 | --- | --- |
