@@ -1,5 +1,6 @@
-//! What the app reads from its surroundings: directories, the credential store and the manifest
-//! download. Tests substitute their own so nothing touches the real keyring or the network.
+//! What the app reads from its surroundings: directories, the credential store, the manifest
+//! download and the update check. Tests substitute their own so nothing touches the real keyring
+//! or the network.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use salvajocs_core::manifest::fetch::{self, FetchError, Freshness};
 use salvajocs_core::prefix;
 use salvajocs_core::scan::Environment;
 use salvajocs_core::secret::{self, SecretError, SecretKey};
+use salvajocs_core::update::{self, Release, UpdateError};
 
 /// The credential store of one repository scope (`AppConfig::secret_scope`).
 pub trait SecretStore: Send + Sync {
@@ -103,6 +105,9 @@ impl SecretStore for MemorySecrets {
 /// Downloads the manifest into a cache directory.
 pub type RefreshManifest = fn(&Path) -> Result<Freshness, FetchError>;
 
+/// Asks for a release newer than the given version (`update::check`).
+pub type CheckUpdate = fn(&str) -> Result<Option<Release>, UpdateError>;
+
 /// Everything a worker thread needs from the environment; cheap to clone.
 #[derive(Clone)]
 pub struct Env {
@@ -119,6 +124,12 @@ pub struct Env {
     pub environment: Option<Environment>,
     /// Whether a wineserver runs; `None` when the app cannot tell (`prefix::wineserver_running`).
     pub wineserver_running: fn() -> Option<bool>,
+    /// Looks for a newer release at start; `None` skips it, as on every OS but Windows (ADR-0013).
+    pub check_update: Option<CheckUpdate>,
+    /// Whether the Windows installer installed the running app, so it can update itself.
+    pub installed_by_installer: fn() -> bool,
+    /// Starts a downloaded installer (`update::run_installer`).
+    pub run_installer: fn(&Path) -> Result<(), UpdateError>,
 }
 
 impl Env {
@@ -131,6 +142,17 @@ impl Env {
             refresh_manifest: fetch::refresh,
             environment: None,
             wineserver_running: prefix::wineserver_running,
+            check_update: cfg!(windows).then_some(update::check as CheckUpdate),
+            installed_by_installer,
+            run_installer: update::run_installer,
         })
     }
+}
+
+fn installed_by_installer() -> bool {
+    std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+        .is_some_and(update::installed_by_installer)
 }

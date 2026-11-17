@@ -17,6 +17,7 @@ use crate::tabs::{
     Tab, backup::BackupTab, custom_games::CustomGamesTab, restore::RestoreTab,
     settings::SettingsTab,
 };
+use crate::update::Updater;
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
 enum Stage {
@@ -52,6 +53,7 @@ pub struct App {
     started: bool,
     manifest: Option<Job<ManifestLoad>>,
     manifest_error: Option<String>,
+    updater: Updater,
 }
 
 impl App {
@@ -79,6 +81,7 @@ impl App {
             started: false,
             manifest: None,
             manifest_error: None,
+            updater: Updater::default(),
         }
     }
 
@@ -87,8 +90,8 @@ impl App {
         self.tab = tab;
     }
 
-    /// Starts the manifest load and, for an existing config, the repository lookup. Needs the
-    /// egui context, so it runs in the first frame.
+    /// Starts the manifest load, the update check and, for an existing config, the repository
+    /// lookup. Needs the egui context, so it runs in the first frame.
     fn start(&mut self, ctx: &egui::Context) {
         let (cache_dir, refresh) = (
             self.state.env.cache_dir.clone(),
@@ -97,6 +100,7 @@ impl App {
         self.manifest = Some(Job::spawn(ctx, move || {
             Ok(startup::load_manifest(&cache_dir, refresh))
         }));
+        self.updater.start(ctx, &self.state);
         if matches!(self.stage, Stage::Starting) {
             self.stage = self.resolve(ctx);
         }
@@ -135,6 +139,21 @@ impl App {
             }
             Err(err) => self.manifest_error = Some(format!("{err:#}")),
         }
+    }
+
+    /// Whether any background job runs; closing the app for an update would cut it short.
+    fn busy(&self) -> bool {
+        let stage = match &self.stage {
+            Stage::Resolving(_) | Stage::Opening(..) => true,
+            Stage::FirstRun(connect) => connect.busy(),
+            _ => false,
+        };
+        stage
+            || self.manifest.is_some()
+            || self.state.busy()
+            || self.backup.busy()
+            || self.restore.busy()
+            || self.settings.busy()
     }
 
     /// Moves the startup stage forward and draws its dialog.
@@ -302,6 +321,7 @@ impl eframe::App for App {
                         (None, Some(_)) => ui.weak("Manifest: loading"),
                         (None, None) => ui.weak("Manifest: not available"),
                     };
+                    self.updater.ui(ui, &mut self.state);
                 });
             });
             self.status_ui(ui);
@@ -332,7 +352,12 @@ impl eframe::App for App {
             self.stage = Stage::Ready;
             ctx.request_repaint();
         }
-
         self.advance(ui);
+        // Last, so a job started in this frame holds the update back.
+        let busy = self.busy();
+        self.updater.install_when_idle(&ctx, &mut self.state, busy);
     }
 }
+
+#[cfg(test)]
+mod tests;

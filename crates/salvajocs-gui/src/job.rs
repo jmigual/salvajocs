@@ -126,5 +126,18 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+/// A job for tests that runs until the returned sender is dropped, then fails.
+#[cfg(test)]
+pub(crate) fn held<T: Send + 'static>(
+    ctx: &egui::Context,
+) -> (std::sync::mpsc::Sender<()>, Job<T>) {
+    let (release, hold) = channel::<()>();
+    let job = Job::spawn(ctx, move || {
+        let _ = hold.recv();
+        Err(anyhow::anyhow!("stopped by the test"))
+    });
+    (release, job)
+}
+
 #[cfg(test)]
 mod tests;

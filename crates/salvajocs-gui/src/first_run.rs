@@ -81,6 +81,11 @@ impl Connect {
         }
     }
 
+    /// Whether a probe or a repository creation is running.
+    pub(crate) fn busy(&self) -> bool {
+        matches!(self.step, Step::Probing(..) | Step::Finishing(_))
+    }
+
     /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
         let editing = matches!(self.step, Step::Editing(_));

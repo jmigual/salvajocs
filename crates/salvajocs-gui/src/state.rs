@@ -104,8 +104,9 @@ impl State {
         self.manifest.clone().unwrap_or_default()
     }
 
-    /// Makes a repository the user just connected the current one and saves the config. Roots and
-    /// custom games come from the current config, which may have changed since the form was built.
+    /// Makes a repository the user just connected the current one and saves the config. Roots,
+    /// custom games and the update setting come from the current config, which may have changed
+    /// since the form was built.
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -116,6 +117,7 @@ impl State {
         if let Some(old) = &self.config {
             config.roots = old.roots.clone();
             config.custom_games = old.custom_games.clone();
+            config.check_updates = old.check_updates;
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }
         self.session = Some(Session {
@@ -153,6 +155,11 @@ impl State {
         self.remembering = Some(Job::spawn(ctx, move || {
             Ok(store.set(&scope, &SecretKey::Password, &password)?)
         }));
+    }
+
+    /// Whether a config save or a keyring write is running.
+    pub(crate) fn busy(&self) -> bool {
+        self.saving.is_some() || self.remembering.is_some()
     }
 
     /// Collects finished background work, reporting failures.

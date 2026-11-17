@@ -49,6 +49,9 @@ fn state(dir: &Path) -> State {
         refresh_manifest: offline,
         environment: None,
         wineserver_running: salvajocs_core::prefix::wineserver_running,
+        check_update: None,
+        installed_by_installer: || false,
+        run_installer: |_| panic!("tests never start an installer"),
     });
     state.config = Some(AppConfig {
         repository: String::new(),

@@ -18,6 +18,9 @@ fn env(secrets: Arc<dyn SecretStore>) -> Env {
         refresh_manifest: offline,
         environment: None,
         wineserver_running: salvajocs_core::prefix::wineserver_running,
+        check_update: None,
+        installed_by_installer: || false,
+        run_installer: |_| panic!("tests never start an installer"),
     }
 }
 

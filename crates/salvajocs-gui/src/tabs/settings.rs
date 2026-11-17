@@ -1,4 +1,4 @@
-//! The Settings tab: repository, compression, password and roots (ADR-0009).
+//! The Settings tab: repository, compression, password, roots (ADR-0009) and updates (ADR-0013).
 
 use std::path::PathBuf;
 
@@ -68,6 +68,14 @@ impl SettingsTab {
         self.compression_error = None;
     }
 
+    /// Whether a repository change, compression change, keyring cleanup or folder picker runs.
+    pub(crate) fn busy(&self) -> bool {
+        self.connect.as_ref().is_some_and(Connect::busy)
+            || self.compression_job.is_some()
+            || self.cleanup.is_some()
+            || self.root_picker.is_some()
+    }
+
     /// Draws the tab. Returns whether the user connected a different repository.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
         egui::ScrollArea::vertical()
@@ -77,6 +85,7 @@ impl SettingsTab {
                 self.compression_ui(ui, state);
                 ui.separator();
                 self.roots_ui(ui, state);
+                updates_ui(ui, state);
                 self.cleanup_ui(ui, state);
                 adopted
             })
@@ -252,5 +261,33 @@ impl SettingsTab {
                 state.stale = None;
             }
         });
+    }
+}
+
+/// The update check toggle, on builds that check at all.
+fn updates_ui(ui: &mut Ui, state: &mut State) {
+    let Some(config) = &mut state.config else {
+        return;
+    };
+    if state.env.check_update.is_none() {
+        return;
+    }
+    ui.separator();
+    ui.heading("Updates");
+    if ui
+        .checkbox(&mut config.check_updates, "Check for updates at start")
+        .changed()
+    {
+        state.save_config(ui.ctx());
+    }
+}
+
+/// Gives the tab a compression change that runs until the returned sender is dropped.
+#[cfg(test)]
+impl SettingsTab {
+    pub(crate) fn hold_compression(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
+        let (release, job) = crate::job::held(ctx);
+        self.compression_job = Some(job);
+        release
     }
 }

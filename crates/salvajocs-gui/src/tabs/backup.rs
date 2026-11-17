@@ -200,7 +200,8 @@ impl BackupTab {
         self.report = Some(report);
     }
 
-    fn busy(&self) -> bool {
+    /// Whether a scan, backup or other job of this tab is running.
+    pub(crate) fn busy(&self) -> bool {
         self.scanning.is_some() || self.running.is_some()
     }
 
@@ -382,6 +383,16 @@ fn files_ui(ui: &mut Ui, game: &GameScan) {
                 ui.label(format!("{}/{}", file.base.dir_name(), file.tail));
             }
         });
+}
+
+/// Gives the tab a backup that runs until the returned sender is dropped.
+#[cfg(test)]
+impl BackupTab {
+    pub(crate) fn hold_backup(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
+        let (release, job) = crate::job::held(ctx);
+        self.running = Some(job);
+        release
+    }
 }
 
 #[cfg(test)]

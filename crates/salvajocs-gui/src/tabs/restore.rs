@@ -289,7 +289,8 @@ impl RestoreTab {
         self.confirm_wine_ui(ui.ctx(), state);
     }
 
-    fn busy(&self) -> bool {
+    /// Whether a listing, restore or other job of this tab is running.
+    pub(crate) fn busy(&self) -> bool {
         self.listing.is_some()
             || self.detecting.is_some()
             || self.picking.is_some()
