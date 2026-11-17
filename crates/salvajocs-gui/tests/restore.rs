@@ -512,7 +512,7 @@ fn restore_engine_rule_mapping_needs_no_dialog() {
 
     assert!(!shows(&harness, "Where should the saves"));
     let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows_path(&harness, &format!("{}", target.display())));
+    assert!(shows_path(&harness, &target.display().to_string()));
     assert!(shows(&harness, "Cross-build restore"));
     assert!(shows(&harness, "Note: Unity settings (PlayerPrefs)"));
 }
@@ -530,14 +530,14 @@ fn restore_prefix_found_but_user_picks_native_linux_mapping() {
 
     // The found prefix is the default, next to the native build.
     preview(&mut harness);
-    assert!(shows_path(&harness, &format!("{}", in_prefix.display())));
+    assert!(shows_path(&harness, &in_prefix.display().to_string()));
     assert!(!shows(&harness, "Cross-build restore"));
 
     click(&mut harness, "Windows build in a Wine/Proton prefix");
     preview(&mut harness);
 
     let native = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows_path(&harness, &format!("{}", native.display())));
+    assert!(shows_path(&harness, &native.display().to_string()));
     assert!(!shows_path(&harness, &in_prefix.display().to_string()));
     assert!(shows(&harness, "Cross-build restore"));
 }
@@ -565,7 +565,7 @@ fn restore_cross_build_warning_shown() {
         &prefix,
         "drive_c/users/steamuser/AppData/Roaming/Pairy/save.dat",
     );
-    assert!(shows_path(&harness, &format!("{}", target.display())));
+    assert!(shows_path(&harness, &target.display().to_string()));
 }
 
 #[test]
@@ -624,7 +624,7 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
 
     assert!(!shows(&harness, "Where should the saves"));
     let target = under(&home(&tmp), ".local/share/Mix/a.sav");
-    assert!(shows_path(&harness, &format!("{}", target.display())));
+    assert!(shows_path(&harness, &target.display().to_string()));
     let games = run_until_saved(&mut harness, &env, |games| {
         games.iter().any(|game| !game.pairs.is_empty())
     });
