@@ -190,7 +190,7 @@ impl LinuxFolders {
 
 /// Whether the app runs in a Flatpak sandbox, which hides the host's `XDG_*` dirs and
 /// processes (ADR-0012).
-pub fn in_flatpak() -> bool {
+pub(crate) fn in_flatpak() -> bool {
     cfg!(target_os = "linux") && Path::new("/.flatpak-info").exists()
 }
 

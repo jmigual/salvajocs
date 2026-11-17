@@ -156,10 +156,15 @@ pub fn proton_prefix(steam_root: &Path, app_id: u64) -> Option<PathBuf> {
     validate_prefix(&pfx).ok().map(|()| pfx)
 }
 
-/// Whether any process is named `wineserver*` (Debian/Ubuntu use `wineserver64`). Reads `/proc/*/comm`, so it is `false` where
-/// there is no procfs (Windows).
-pub fn wineserver_running() -> bool {
-    wineserver_in(Path::new("/proc"))
+/// Whether any process is named `wineserver*` (Debian/Ubuntu use `wineserver64`). Reads `/proc/*/comm`, so it is `Some(false)` where
+/// there is no procfs (Windows). `None` in a Flatpak sandbox, whose `/proc` hides the host's
+/// processes (ADR-0012).
+pub fn wineserver_running() -> Option<bool> {
+    wineserver_state(crate::layout::in_flatpak(), Path::new("/proc"))
+}
+
+fn wineserver_state(sandboxed: bool, proc_dir: &Path) -> Option<bool> {
+    (!sandboxed).then(|| wineserver_in(proc_dir))
 }
 
 fn wineserver_in(proc_dir: &Path) -> bool {

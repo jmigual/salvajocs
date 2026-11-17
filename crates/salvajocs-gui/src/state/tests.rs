@@ -63,6 +63,7 @@ fn state_with(store: crate::env::MemorySecrets) -> State {
         secrets: Arc::new(store),
         refresh_manifest: offline,
         environment: None,
+        wineserver_running: salvajocs_core::prefix::wineserver_running,
     });
     state.config = Some(config("/backups", PasswordMode::Keyring, false));
     state.credentials.password = "right".to_string();

@@ -7,6 +7,7 @@ use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::crossbuild::{Confidence, MappingEntry};
 use salvajocs_core::layout::{SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::registry::{RegData, RegValue, RegistryExport};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
 use super::*;
@@ -47,6 +48,7 @@ fn state(dir: &Path) -> State {
         secrets: Arc::new(MemorySecrets::new()),
         refresh_manifest: offline,
         environment: None,
+        wineserver_running: salvajocs_core::prefix::wineserver_running,
     });
     state.config = Some(AppConfig {
         repository: String::new(),
@@ -190,6 +192,19 @@ fn run_until_prepared(harness: &mut TabHarness) {
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while harness.state().0.preparing.is_some() {
         assert!(std::time::Instant::now() < deadline, "the job never ended");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Runs frames until the tab's restore job is done.
+fn run_until_restored(harness: &mut TabHarness) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.restoring.is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the restore never ended"
+        );
         harness.step();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -364,16 +379,123 @@ fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
         Err(RunError::WineserverRunning.into())
     });
     harness.state_mut().0.restoring = Some(job);
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    while harness.state().0.restoring.is_some() {
-        assert!(std::time::Instant::now() < deadline, "the job never ended");
-        harness.step();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    run_until_restored(&mut harness);
     harness.step();
 
     let tab = &harness.state().0;
     assert!(tab.preview.is_some(), "the plan is kept for another try");
     assert!(tab.error.as_deref().unwrap().contains("Close the game"));
     assert!(!is_disabled(&harness, "Restore files"));
+}
+
+/// The tab previewing a registry restore into a prefix under `dir`, where the wineserver check
+/// answers `wineserver_running`.
+fn registry_restore(dir: &Path, wineserver_running: fn() -> Option<bool>) -> TabHarness {
+    let prefix = dir.join("pfx");
+    fs::create_dir_all(prefix.join("drive_c/users/me")).unwrap();
+    fs::write(prefix.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    let mut export = RegistryExport::default();
+    export.keys.insert(
+        r"HKEY_CURRENT_USER\Software\Foo".into(),
+        vec![RegValue {
+            name: "v".into(),
+            data: RegData::Sz("restored".into()),
+        }],
+    );
+    let folders = WinFolders::for_prefix(&prefix, "me");
+    let registry = Some((export, Context::WinePrefix { prefix, folders }));
+    let mut harness = tab_harness(dir, |storage| RestoreTab {
+        preview: Some(Preview {
+            fetched: fetched(storage),
+            plan: RestorePlan {
+                writes: Vec::new(),
+                registry,
+                skipped: Vec::new(),
+                cross_build: false,
+                notes: Vec::new(),
+            },
+            overrides: Vec::new(),
+            override_error: None,
+        }),
+        ..RestoreTab::default()
+    });
+    harness.state_mut().1.env.wineserver_running = wineserver_running;
+    harness.step();
+    harness
+}
+
+fn click_and_step(harness: &mut TabHarness, label: &str) {
+    harness.get_by_label(label).click();
+    harness.step();
+    harness.step();
+}
+
+const ASK_TO_CLOSE_WINE: &str = "cannot check if Wine or Proton runs";
+
+#[test]
+fn a_sandbox_asks_to_close_wine_before_a_registry_restore_into_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let user_reg = dir.path().join("pfx/user.reg");
+    let mut harness = registry_restore(dir.path(), || None);
+
+    click_and_step(&mut harness, "Restore files");
+    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_some());
+    click_and_step(&mut harness, "Cancel");
+    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
+    let tab = &harness.state().0;
+    assert!(tab.restoring.is_none() && tab.restored.is_none());
+    assert!(!fs::read_to_string(&user_reg).unwrap().contains("Foo"));
+
+    click_and_step(&mut harness, "Restore files");
+    click_and_step(&mut harness, "Confirm");
+    run_until_restored(&mut harness);
+    let tab = &harness.state().0;
+    assert_eq!(tab.error, None);
+    let restored = tab.restored.as_ref().expect("the restore ran");
+    assert!(
+        restored
+            .lines
+            .contains(&("Registry: restored".into(), false))
+    );
+    assert!(fs::read_to_string(&user_reg).unwrap().contains("Foo"));
+}
+
+#[test]
+fn a_running_wineserver_on_the_host_blocks_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = registry_restore(dir.path(), || Some(true));
+
+    click_and_step(&mut harness, "Restore files");
+    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
+    run_until_restored(&mut harness);
+
+    let tab = &harness.state().0;
+    assert!(tab.restored.is_none());
+    assert!(tab.error.as_deref().unwrap().contains("Close the game"));
+    let user_reg = fs::read_to_string(dir.path().join("pfx/user.reg")).unwrap();
+    assert!(!user_reg.contains("Foo"));
+}
+
+#[test]
+fn a_sandbox_restores_without_asking_when_no_registry_goes_into_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = registry_restore(dir.path(), || None);
+    harness
+        .state_mut()
+        .0
+        .preview
+        .as_mut()
+        .unwrap()
+        .plan
+        .registry = None;
+    // Lays out the button where the plan without the registry line puts it.
+    harness.step();
+
+    click_and_step(&mut harness, "Restore files");
+    assert!(harness.query_by_label_contains(ASK_TO_CLOSE_WINE).is_none());
+    run_until_restored(&mut harness);
+
+    let tab = &harness.state().0;
+    assert_eq!(tab.error, None);
+    assert!(tab.restored.is_some());
 }

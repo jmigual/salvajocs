@@ -100,6 +100,7 @@ fn state(dir: &Path) -> State {
         secrets: Arc::new(MemorySecrets::new()),
         refresh_manifest: offline,
         environment: None,
+        wineserver_running: salvajocs_core::prefix::wineserver_running,
     });
     state.config = Some(AppConfig {
         repository: String::new(),

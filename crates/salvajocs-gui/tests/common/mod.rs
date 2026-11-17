@@ -71,6 +71,7 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         secrets,
         refresh_manifest: offline,
         environment: None,
+        wineserver_running: salvajocs_core::prefix::wineserver_running,
     }
 }
 

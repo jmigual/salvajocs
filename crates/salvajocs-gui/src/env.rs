@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use salvajocs_core::config;
 use salvajocs_core::manifest::fetch::{self, FetchError, Freshness};
+use salvajocs_core::prefix;
 use salvajocs_core::scan::Environment;
 use salvajocs_core::secret::{self, SecretError, SecretKey};
 
@@ -116,6 +117,8 @@ pub struct Env {
     /// The machine scans and restores look at; `None` detects it (`Environment::detect`) in
     /// the job that needs it.
     pub environment: Option<Environment>,
+    /// Whether a wineserver runs; `None` when the app cannot tell (`prefix::wineserver_running`).
+    pub wineserver_running: fn() -> Option<bool>,
 }
 
 impl Env {
@@ -127,6 +130,7 @@ impl Env {
             secrets: Arc::new(SystemSecrets),
             refresh_manifest: fetch::refresh,
             environment: None,
+            wineserver_running: prefix::wineserver_running,
         })
     }
 }
