@@ -4,7 +4,7 @@
 use eframe::egui::{ComboBox, Ui};
 use salvajocs_core::storage::{Compression, StorageError, ZSTD_DEFAULT_LEVEL};
 
-use super::{field_hint, labelled_edit};
+use super::{field_hint, field_status, labelled_edit};
 use crate::theme::{self, icons};
 
 /// Why the text of the custom level is not a compression setting.
@@ -16,6 +16,20 @@ pub enum FieldError {
     /// The integer is outside the levels zstd accepts.
     #[error(transparent)]
     OutOfRange(#[from] StorageError),
+}
+
+impl FieldError {
+    /// The error as the form shows it: a sentence that says which levels are valid.
+    pub fn message(&self) -> String {
+        const RANGE: &str = "Use -7 to -1, or 1 to 22 (0 is Off).";
+        match self {
+            Self::NotANumber => format!("Enter a whole number. {RANGE}"),
+            Self::OutOfRange(StorageError::InvalidCompression(level)) => {
+                format!("Level {level} is out of range. {RANGE}")
+            }
+            Self::OutOfRange(other) => other.to_string(),
+        }
+    }
 }
 
 /// Reads the custom level text: `0` is off, otherwise a zstd level.
@@ -139,7 +153,7 @@ impl CompressionField {
             if let Err(err) = parse(&self.custom) {
                 ui.label("");
                 let color = ui.visuals().error_fg_color;
-                theme::status(ui, icons::X_CIRCLE, color, err.to_string());
+                field_status(ui, icons::X_CIRCLE, color, err.message());
                 ui.end_row();
             }
         }
@@ -170,6 +184,22 @@ mod tests {
         }
         for text in ["fast", ""] {
             assert!(matches!(parse(text), Err(FieldError::NotANumber)));
+        }
+    }
+
+    #[test]
+    fn the_error_message_names_the_level_and_the_valid_range() {
+        let out_of_range = parse("99").unwrap_err().message();
+        assert!(
+            out_of_range.starts_with("Level 99 is out of range."),
+            "{out_of_range}"
+        );
+        let not_a_number = parse("fast").unwrap_err().message();
+        for message in [out_of_range, not_a_number] {
+            assert!(
+                message.contains("-7 to -1, or 1 to 22 (0 is Off)"),
+                "{message}"
+            );
         }
     }
 

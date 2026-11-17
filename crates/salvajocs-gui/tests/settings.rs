@@ -166,7 +166,11 @@ fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_continue() 
 
     choose(&mut harness, "Compression (new repository)", "Custom level");
     fill(&mut harness, "Level number", "99");
-    assert!(shows(&harness, "out of range"), "99 is not a zstd level");
+    assert!(
+        shows(&harness, "Level 99 is out of range."),
+        "99 is not a zstd level"
+    );
+    assert!(shows(&harness, "1 to 22"), "the message says what is valid");
     assert!(
         egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
             .is_disabled(),
@@ -239,6 +243,14 @@ fn webdav_needs_its_server_url() {
 
     choose(&mut harness, "Backend", "WebDAV");
     assert!(shows(&harness, "Server URL"));
+    assert!(
+        shows(&harness, "A WebDAV server, such as Nextcloud."),
+        "the hint says what the backend is"
+    );
+    assert!(
+        !shows(&harness, "Windows builds"),
+        "the sftp note belongs to sftp"
+    );
     assert!(
         shows(&harness, "Server password"),
         "the backend login is not called Password"

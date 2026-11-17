@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendField, BackendKind, RepoOption};
 
-use super::{field_hint, labelled_edit};
+use super::{field_hint, field_status, labelled_edit};
 use crate::env::Env;
 use crate::job::Job;
 use crate::theme::{self, icons};
@@ -329,9 +329,11 @@ impl BackendForm {
             }
             ui.end_row();
         } else {
-            ui.label("");
-            field_hint(ui, "opendal:sftp is not available in Windows builds.");
-            ui.end_row();
+            if let BackendKind::OpenDal(service) = self.kind {
+                ui.label("");
+                field_hint(ui, config::opendal_hint(service).unwrap_or_default());
+                ui.end_row();
+            }
             for field in fields_of(self.kind) {
                 self.field_ui(ui, field);
             }
@@ -437,7 +439,7 @@ impl BackendForm {
         };
         ui.label("");
         let color = ui.visuals().error_fg_color;
-        theme::status(ui, icons::X_CIRCLE, color, message);
+        field_status(ui, icons::X_CIRCLE, color, message);
         ui.end_row();
     }
 

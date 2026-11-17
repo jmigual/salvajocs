@@ -1,6 +1,8 @@
 //! Controls shared by several screens.
 
-use eframe::egui::{Grid, Label, Response, RichText, TextEdit, Ui};
+use eframe::egui::{Color32, Grid, Label, Response, RichText, TextEdit, Ui};
+
+use crate::theme;
 
 pub mod backend;
 pub mod compression;
@@ -22,12 +24,17 @@ pub fn form_grid(id: &str) -> Grid {
         .spacing([8.0, 6.0])
 }
 
-/// A muted hint under the field of the grid row above, as wide as a field and with room below
-/// it, so it reads as part of that field. Lays out one cell of a grid row.
+/// A warning or error line in a cell of a grid row, as tall as its wrapped text. Bare
+/// `theme::status` in a cell reports one line, and the next row is drawn over the rest.
+pub fn field_status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<String>) {
+    ui.vertical(|ui| theme::status(ui, glyph, color, text));
+}
+
+/// A muted hint under the field of the grid row above, as wide as a field. Lays out one cell of
+/// a grid row; the gaps to the rows around it are the grid's, the same as between fields.
 pub fn field_hint(ui: &mut Ui, hint: &str) {
     ui.vertical(|ui| {
         ui.set_max_width(ui.spacing().text_edit_width);
         ui.add(Label::new(RichText::new(hint).weak()).wrap());
-        ui.add_space(8.0);
     });
 }
