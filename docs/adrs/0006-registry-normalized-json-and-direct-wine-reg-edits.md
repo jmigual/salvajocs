@@ -46,7 +46,6 @@ for Proton, which cannot restore to Windows.
   the user (`/proc/*/comm`). Reads during backup are allowed; they can be up to 30 s stale.
   Upgrade path: match the specific prefix through the wineserver's server directory (dev/inode of
   the prefix). That mechanism is not in research, so verify it before adopting.
-  In a Flatpak sandbox `/proc` hides the host, so the user confirms instead (ADR-0012).
 - **Escaping (verified in plan step 4):** wineserver writes every UTF-16 unit above 127 as
   `\x<hex>` (surrogate pairs as two escapes), never raw UTF-8; see the `registry::wine` module
   doc for the full rules. The key-name case is verified against a real Proton prefix (an emoji

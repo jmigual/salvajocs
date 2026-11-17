@@ -117,10 +117,10 @@ cargo run --release -p salvajocs
 
 ## Where salvajocs keeps its files
 
-| What | Linux | Linux (Flatpak) | Windows |
-| --- | --- | --- | --- |
-| Settings (`config.yaml`) | `~/.config/salvajocs/` | `~/.var/app/io.github.jmigual.salvajocs/config/salvajocs/` | `%APPDATA%\salvajocs\` |
-| Game list cache and temporary work folders | `~/.cache/salvajocs/` | `~/.var/app/io.github.jmigual.salvajocs/cache/salvajocs/` | `%LOCALAPPDATA%\salvajocs\` |
+| What | Linux | Windows |
+| --- | --- | --- |
+| Settings (`config.yaml`) | `~/.config/salvajocs/` | `%APPDATA%\salvajocs\` |
+| Game list cache and temporary work folders | `~/.cache/salvajocs/` | `%LOCALAPPDATA%\salvajocs\` |
 
 The backups themselves live in the repository you choose on first run.
 

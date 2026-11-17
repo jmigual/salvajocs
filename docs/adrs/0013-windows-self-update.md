@@ -6,7 +6,7 @@
 ## Context
 
 On Windows salvajocs ships as a per-user Inno Setup installer (`{localappdata}\Programs\salvajocs`)
-and as a zip. Linux users update through their package manager, Flatpak, the AppImage or
+and as a zip. Linux users update through their package manager, the AppImage or
 `cargo install`. A running Windows exe cannot overwrite itself, but the installer can replace it
 after the app closes.
 

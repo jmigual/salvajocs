@@ -9,8 +9,7 @@ includes registry keys for a Wine prefix edits `user.reg`. Wine keeps the regist
 saves it again later, which would overwrite the change. salvajocs refuses and writes nothing.
 
 Close every Wine and Proton game, then restore again. salvajocs checks for any `wineserver`
-process on the machine, not only the one of the prefix. The Flatpak build cannot see the host's
-processes, so it asks you to close every Wine and Proton program and confirm instead.
+process on the machine, not only the one of the prefix.
 
 Backing up is not blocked. What the scan reads from `user.reg` can be up to 30 seconds old if a
 game is running.

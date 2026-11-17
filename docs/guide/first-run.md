@@ -32,9 +32,7 @@ such as a retry count. The **Option reference** link opens the list of keys of t
 **secret** on an option that holds a key or token. If a saved option has no field of its own, the
 list opens expanded.
 
-If `rclone` is not installed, the rclone entry says so and you can still type the location. The
-Flatpak sandbox has no `rclone` on its `PATH`, so the rclone entry shows that note there and the
-rclone backend does not run.
+If `rclone` is not installed, the rclone entry says so and you can still type the location.
 
 `sftp` does not exist in Windows builds. If you use two machines and one runs Windows, pick another
 backend. See [Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
