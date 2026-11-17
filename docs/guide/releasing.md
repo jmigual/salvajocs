@@ -14,6 +14,8 @@ The release workflow (`.github/workflows/release.yml`) then:
 - fails unless the tag matches the version;
 - publishes `salvajocs-core` and `salvajocs` to crates.io, skipping a crate that is already
   published, so you can publish by hand first;
-- builds the Linux `.tgz` and the Windows `.zip` (the names `cargo binstall` expects) and the
-  AppImage with its `.zsync` file;
-- creates the GitHub Release with those files.
+- builds the Linux `.tgz` and the Windows `.zip` (the names `cargo binstall` expects), the
+  AppImage with its `.zsync` file and the Windows installer
+  (`salvajocs-<version>-x86_64-setup.exe`, from `packaging/windows/salvajocs.iss`);
+- writes a `SHA256SUMS` file covering every one of those files;
+- creates the GitHub Release with those files and `SHA256SUMS`.

@@ -96,8 +96,12 @@ nothing is restored.
 - **AppImage (Linux):** download `salvajocs-<version>-x86_64.AppImage` from the
   [latest release](https://github.com/jmigual/salvajocs/releases/latest), run `chmod +x` on it and
   start it. Gear Lever or AppImageUpdate update it in place.
-- **Windows:** download `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the same page,
-  extract it and run `salvajocs.exe`.
+- **Windows installer:** download `salvajocs-<version>-x86_64-setup.exe` from the same page and
+  run it. It installs per user, without admin rights, and the app offers updates.
+- **Windows zip:** `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the same page; extract it
+  and run `salvajocs.exe`.
+- **mise:** `mise use -g github:jmigual/salvajocs`, or `mise use -g cargo:salvajocs` for crates.io
+  ([details](docs/guide/installation.md#mise)).
 - **cargo-binstall:** `cargo binstall salvajocs`.
 - **cargo:** `cargo install --locked salvajocs` (Rust 1.95 or newer).
 - **Latest from `main`:** `cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs`.

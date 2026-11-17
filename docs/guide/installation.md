@@ -20,11 +20,51 @@ The file embeds update information that points at the latest GitHub release. Ope
 [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) on it. Both download only the
 blocks that changed, using the `.zsync` file next to each release.
 
-## Windows
+## Windows installer
 
-Download `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the
-[latest release](https://github.com/jmigual/salvajocs/releases/latest), extract it and run
-`salvajocs.exe`. There is no installer and no automatic update.
+Download `salvajocs-<version>-x86_64-setup.exe` from the
+[latest release](https://github.com/jmigual/salvajocs/releases/latest) and run it. It installs for
+your user only, in `%LOCALAPPDATA%\Programs\salvajocs`, needs no administrator rights and adds a
+Start menu shortcut.
+
+The installer is not code-signed, so Windows SmartScreen may show "Windows protected your PC".
+Click **More info**, then **Run anyway**.
+
+To uninstall, use **Settings → Apps → Installed apps**. This removes the program only; your
+settings, cache and backups stay (see [Where salvajocs keeps its files](#where-salvajocs-keeps-its-files)).
+
+The app offers updates when a newer release exists.
+
+## Windows zip
+
+Download `salvajocs-x86_64-pc-windows-msvc-v<version>.zip` from the same page, extract it and run
+`salvajocs.exe`. This copy does not update itself.
+
+## mise
+
+[mise-en-place](https://mise.jdx.dev) can install salvajocs on Linux and Windows. From the GitHub
+release, using the prebuilt archive for your system:
+
+```sh
+mise use -g github:jmigual/salvajocs
+```
+
+mise normally picks the archive by itself. The release also holds an AppImage and the setup
+program, which mise cannot use. If it picks one of them, keep only the archives:
+
+```sh
+mise use -g 'github:jmigual/salvajocs[matching=salvajocs-x86_64-]'
+```
+
+Or build from crates.io with the [cargo backend](https://mise.jdx.dev/dev-tools/backends/cargo.html):
+
+```sh
+mise use -g cargo:salvajocs
+```
+
+With `cargo-binstall` installed (`mise use -g cargo-binstall`) it downloads the same prebuilt
+archive. Without it, mise runs `cargo install` and needs Rust and the
+[build requirements](#build-requirements).
 
 ## cargo-binstall
 
