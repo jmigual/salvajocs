@@ -2,13 +2,23 @@ name: CI
 
 on:
   push:
+    branches: [main, "ci/**"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "packaging/flatpak/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "packaging/flatpak/**"]
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # No debug info: faster builds and a smaller cache; CI never attaches a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   check:
@@ -28,6 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
+        with:
+          # Branch runs reuse main's cache but do not store their own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: runner.os == 'Linux'
+        run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace -- --include-ignored ${{ matrix.test-args }}
