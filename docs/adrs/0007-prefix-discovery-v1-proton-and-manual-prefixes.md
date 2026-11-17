@@ -54,6 +54,6 @@ an `Ambiguous` prefix, are returned typed, never dropped.
 
 - Non-Steam shortcuts in Steam (generated appids) are not matched automatically.
 - Discovery is filesystem-only, so it can be tested with tempdir fixtures.
-- Default roots derive from `$HOME`. In a container with a separate home (the user's distrobox:
-  `$HOME` is `~/Documents/Distrobox/dev`, Steam is at `/home/jmigual/.local/share/Steam`)
+- Default roots derive from `$HOME`. In a container with a separate home (for example a distrobox:
+  `$HOME` is a folder inside the real home, so Steam is not under it)
   auto-detection misses Steam. A Steam root added in Settings covers it.

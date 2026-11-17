@@ -109,7 +109,7 @@ Dependency graph:
 - **Files:** `core/src/registry.rs` (model `RegistryExport`, `RegValue`, JSON (de)serialization),
   `core/src/registry/wine.rs`, `core/src/registry/wine/tests.rs`,
   `core/tests/fixtures/user.reg`. Build it as a trimmed excerpt of a real Proton `user.reg`;
-  there are some under `/home/jmigual/.local/share/Steam/steamapps/compatdata/*/pfx/`. Keep the
+  there are some under `~/.local/share/Steam/steamapps/compatdata/*/pfx/`. Keep the
   header and a few key blocks, and strip anything personal. It must contain at least one
   non-ASCII string, a `hex:` value with line continuation, `str(2):`, `str(7):` and `dword:`.
 - **Content:**
@@ -138,7 +138,7 @@ Dependency graph:
   - `wineserver_running() -> bool` (Linux `/proc/*/comm`; `false` on Windows).
 - **Verified in step 5:** the Flatpak Steam path is confirmed from the flathub sources; the
   Windows default `%ProgramFiles(x86)%\Steam` is only partly verified (see ADR-0007). A real Steam
-  root for manual checks is `/home/jmigual/.local/share/Steam`; the dev `$HOME` (distrobox) is
+  root for manual checks is `~/.local/share/Steam`; the dev `$HOME` (distrobox) is
   different.
 - **Accept:** `cargo test -p salvajocs-core prefix`:
   - `proton_prefix_picks_steamuser`;
@@ -276,7 +276,7 @@ Dependency graph:
     come from `layout::expand`; each match's tail is `tail_of(match, base dir)` with the base dir
     of the pair that produced it.
 - **Measure here:** wall time of a full-manifest scan against one `WinePrefix` root (a real
-  prefix under `/home/jmigual/.local/share/Steam/steamapps/compatdata/`). Record it in
+  prefix under `~/.local/share/Steam/steamapps/compatdata/`). Record it in
   ADR-0008.
 - **Accept:** `cargo test -p salvajocs-core scan`:
   - `proton_game_files_get_win_bases`;
