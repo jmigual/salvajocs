@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=salvajocs
+Comment=Back up and restore game saves
+Exec=salvajocs
+Icon=io.github.jmigual.salvajocs
+Terminal=false
+Categories=Utility;Archiving;
+Keywords=game;save;backup;restore;wine;proton;steam;

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jmigual.salvajocs</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>salvajocs</name>
+  <summary>Back up and restore game saves</summary>
+  <description>
+    <p>
+      Back up and restore game saves in a restic-format repository. A save backed up from a
+      Wine or Proton prefix on Linux restores on native Windows, and the other way round.
+    </p>
+    <p>
+      It finds saves with the ludusavi game manifest, in native folders, Steam Proton prefixes and
+      Wine prefixes you configure, and also backs up registry keys. The repository can be a local
+      folder, a REST server, an rclone remote or an OpenDAL service, and you can read it with the
+      restic command line.
+    </p>
+  </description>
+  <developer id="io.github.jmigual">
+    <name>Joan Marcè i Igual</name>
+  </developer>
+  <launchable type="desktop-id">io.github.jmigual.salvajocs.desktop</launchable>
+  <url type="homepage">https://github.com/jmigual/salvajocs</url>
+  <url type="bugtracker">https://github.com/jmigual/salvajocs/issues</url>
+  <url type="vcs-browser">https://github.com/jmigual/salvajocs</url>
+  <content_rating type="oars-1.1" />
+  <categories>
+    <category>Utility</category>
+    <category>Archiving</category>
+  </categories>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/backup.png</image>
+      <caption>Backup: scan for games and pick the ones to back up</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/restore.png</image>
+      <caption>Restore: preview every file and registry key before anything is written</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/mapping-dialog.png</image>
+      <caption>Mapping dialog: where each folder goes on the other build of a game</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/custom-games.png</image>
+      <caption>Custom games: a game's paths, pairs and skipped folders</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/settings.png</image>
+      <caption>Settings: repository, compression and roots</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-11-17">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
