@@ -252,7 +252,7 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
         kind: RootKind::WinePrefix,
     }];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, theme, 790.0);
+    let mut harness = shot_harness(env, theme, 750.0);
     run_until_ready(&mut harness);
     run_settled(&mut harness);
 
@@ -636,7 +636,7 @@ fn custom_games_tab() {
         ),
     ];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, Theme::Dark, 720.0);
+    let mut harness = shot_harness(env, Theme::Dark, 900.0);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::CustomGames);
     run_settled(&mut harness);
@@ -668,7 +668,7 @@ fn settings_tab() {
         },
     ];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, Theme::Dark, 620.0);
+    let mut harness = shot_harness(env, Theme::Dark, 780.0);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::Settings);
     capture(&mut harness, &dir, "settings");
@@ -680,7 +680,7 @@ fn settings_tab() {
 fn first_run_dialog() {
     let Some(dir) = output_dir() else { return };
     let tmp = tempfile::tempdir().unwrap();
-    let mut harness = shot_harness(demo_env(&tmp), Theme::Dark, 480.0);
+    let mut harness = shot_harness(demo_env(&tmp), Theme::Dark, 600.0);
     run_until(&mut harness, "the first-run dialog", |h| {
         shows(h, "Welcome to salvajocs")
     });
