@@ -158,6 +158,12 @@ fn backend_kinds_include_sftp_off_windows() {
 }
 
 #[test]
+fn listremotes_output_is_one_remote_per_line() {
+    assert_eq!(parse_remotes("gdrive:\r\nnas:\n\n"), ["gdrive", "nas"]);
+    assert!(parse_remotes("").is_empty());
+}
+
+#[test]
 fn every_offered_service_has_named_fields_and_a_label() {
     for service in OPENDAL_SERVICES {
         assert!(!opendal_fields(service.name).is_empty(), "{}", service.name);

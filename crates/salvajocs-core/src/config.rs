@@ -6,6 +6,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +103,32 @@ pub fn backend_kinds() -> Vec<BackendKind> {
                 .iter()
                 .map(|service| BackendKind::OpenDal(service.name)),
         )
+        .collect()
+}
+
+/// The remotes of the user's rclone config, from `rclone listremotes`. A missing `rclone` binary
+/// is an [`io::ErrorKind::NotFound`] error; a failing one carries its stderr.
+pub fn rclone_remotes() -> io::Result<Vec<String>> {
+    // No password prompt and no stdin: an encrypted rclone config would otherwise wait forever.
+    let output = Command::new("rclone")
+        .args(["listremotes", "--ask-password=false"])
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(parse_remotes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The remote names of `rclone listremotes` output: one `name:` per line.
+fn parse_remotes(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(|line| line.trim().trim_end_matches(':'))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
