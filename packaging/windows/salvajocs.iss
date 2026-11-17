@@ -27,7 +27,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 CloseApplicationsFilter=salvajocs.exe
 RestartApplications=no
-SetupIconFile=salvajocs.ico
+SetupIconFile=..\..\crates\salvajocs-gui\assets\salvajocs.ico
 UninstallDisplayIcon={app}\salvajocs.ico
 OutputBaseFilename=salvajocs-{#AppVersion}-x86_64-setup
 WizardStyle=modern
@@ -36,7 +36,7 @@ SolidCompression=yes
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "salvajocs.exe"; Flags: ignoreversion
-Source: "salvajocs.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\crates\salvajocs-gui\assets\salvajocs.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

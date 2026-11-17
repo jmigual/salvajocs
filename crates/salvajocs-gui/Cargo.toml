@@ -27,6 +27,9 @@ rfd = { workspace = true, features = ["xdg-portal"] }
 salvajocs-core.workspace = true
 thiserror.workspace = true
 
+[build-dependencies]
+winresource.workspace = true
+
 [features]
 # Dev-only: builds `tests/appearance.rs`, which renders the README screenshots. `wgpu` provides
 # `Harness::render`, `snapshot` the PNG encoding; both pull in the whole wgpu stack, so they stay
