@@ -31,27 +31,34 @@
   </categories>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/backup.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.2.0/docs/images/backup.png</image>
       <caption>Backup: scan for games and pick the ones to back up</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/restore.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.2.0/docs/images/restore.png</image>
       <caption>Restore: preview every file and registry key before anything is written</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/mapping-dialog.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.2.0/docs/images/mapping-dialog.png</image>
       <caption>Mapping dialog: where each folder goes on the other build of a game</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/custom-games.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.2.0/docs/images/custom-games.png</image>
       <caption>Custom games: a game's paths, pairs and skipped folders</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.1.0/docs/images/settings.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.2.0/docs/images/settings.png</image>
       <caption>Settings: repository, compression and roots</caption>
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.2.0" date="2026-11-17">
+      <description>
+        <p>A new look: green light and dark themes, a more readable font, icons, and a save bar
+        on the Backup tab. Restore lists the games in a sidebar. Labels and messages are plainer,
+        and keyboard and screen reader order follows the screen.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-17">
       <description>
         <p>First release.</p>
