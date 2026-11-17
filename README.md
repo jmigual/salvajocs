@@ -92,7 +92,7 @@ nothing is restored.
 Build from source with Rust 1.95 or newer:
 
 ```sh
-cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs-gui
+cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
 ```
 
 This installs the `salvajocs` program. To run it from a checkout instead:
@@ -100,7 +100,7 @@ This installs the `salvajocs` program. To run it from a checkout instead:
 ```sh
 git clone https://github.com/jmigual/salvajocs
 cd salvajocs
-cargo run --release -p salvajocs-gui
+cargo run --release -p salvajocs
 ```
 
 Build and run requirements:
@@ -195,7 +195,8 @@ The [user guide](docs/guide/README.md) covers the app tab by tab:
 
 ## Development
 
-The workspace has two crates: `salvajocs-core` (all logic) and `salvajocs-gui` (the egui app).
+The workspace has two crates: `salvajocs-core` (all logic) and `salvajocs` (the egui app, in
+`crates/salvajocs-gui`).
 
 ```sh
 cargo fmt --check
@@ -210,7 +211,7 @@ runner has no Secret Service.
 To regenerate the screenshots in `docs/images` (Linux only):
 
 ```sh
-SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs-gui --test appearance -- --ignored
+SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs --test appearance -- --ignored
 ```
 
 Design decisions are in the ADR index, [docs/adrs/README.md](docs/adrs/README.md). Read the index

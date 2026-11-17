@@ -5,7 +5,7 @@
 //! The images land in `docs/images/` and are committed:
 //!
 //! ```text
-//! SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs-gui --test appearance -- --ignored
+//! SALVAJOCS_SCREENSHOTS=1 cargo test -p salvajocs --test appearance -- --ignored
 //! ```
 //!
 //! Everything shown is made up: the user and the home folder are set through the `Env` seam, the

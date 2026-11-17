@@ -527,7 +527,7 @@ Dependency graph:
   - Settings: when the repository location changes, offer to delete the old location's keyring
     entries (`secret::delete` with the old `AppConfig::secret_scope`).
   - Manifest load and refresh in a `Job` on start, with a banner on failure.
-- **Accept:** `cargo test -p salvajocs-gui`:
+- **Accept:** `cargo test -p salvajocs`:
   - `smoke_renders_every_tab`;
   - `first_run_modal_shown_without_config`;
   - `missing_repo_asks_before_init`;
@@ -551,7 +551,7 @@ Dependency graph:
     included), then `backup_games` with staging in `<cache>/salvajocs/stage`. Per-game progress and
     outcomes (new snapshot, unchanged, failed with the error chain) show as each game ends, and the
     list is refreshed from the job's scan.
-- **Accept:** `cargo test -p salvajocs-gui backup`: with a fixture environment, the scan `Job`
+- **Accept:** `cargo test -p salvajocs backup`: with a fixture environment, the scan `Job`
   completes (`Harness::step` loop) and the game rows and file counts are shown; scan problems are
   shown; a backup reports new, then unchanged, per game and leaves deselected games out; a failing
   game does not stop the others; the selection survives a rescan; scan and back up wait while a job
@@ -603,7 +603,7 @@ Dependency graph:
     temp home; the Backup tab uses it too.
 - **Files:** `gui/src/tabs/restore.rs` (+ `restore/tests.rs`), `gui/src/tabs/restore/mapping.rs`,
   `gui/tests/restore.rs`; `core/src/restore/run.rs` (`game_info`, `game_vars`).
-- **Accept:** `cargo test -p salvajocs-gui restore`:
+- **Accept:** `cargo test -p salvajocs restore`:
   - `restore_preview_lists_writes_and_skips`;
   - `restore_only_safety_backups_preselect_no_snapshot`;
   - `restore_apply_disabled_until_plan_loaded`;
@@ -647,7 +647,7 @@ Dependency graph:
     the mapping dialog saved), each editable and removable, validated inline.
   Saved to config.
 - **Files:** `gui/src/tabs/custom_games.rs`, `gui/tests/custom_games.rs`.
-- **Accept:** `cargo test -p salvajocs-gui custom_games`: adding a game with one pair through the
+- **Accept:** `cargo test -p salvajocs custom_games`: adding a game with one pair through the
   UI and saving produces the expected `AppConfig.custom_games` entry; a skip saved by
   `apply_choices` shows in the editor and can be edited and deleted.
 

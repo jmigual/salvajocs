@@ -18,7 +18,7 @@ supported.
 ## Install with cargo
 
 ```sh
-cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs-gui
+cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
 ```
 
 The command installs a program called `salvajocs`. `--locked` makes cargo use the dependency
@@ -29,10 +29,10 @@ versions the project tested with.
 ```sh
 git clone https://github.com/jmigual/salvajocs
 cd salvajocs
-cargo run --release -p salvajocs-gui
+cargo run --release -p salvajocs
 ```
 
-`cargo build --release -p salvajocs-gui` builds `target/release/salvajocs` without starting it.
+`cargo build --release -p salvajocs` builds `target/release/salvajocs` without starting it.
 
 ## Where salvajocs keeps its files
 

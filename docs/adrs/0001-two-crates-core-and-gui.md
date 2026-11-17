@@ -1,4 +1,4 @@
-# ADR-0001: Two crates, `salvajocs-core` and `salvajocs-gui`
+# ADR-0001: Two crates, `salvajocs-core` and `salvajocs`
 
 **Status:** Accepted
 **Date:** 2026-11-16
@@ -19,7 +19,7 @@ A virtual workspace with two crates:
 - `crates/salvajocs-core` (lib): everything that is not drawing — manifest, layout, registry,
   prefix discovery, scan, storage (rustic_core), cross-build mapping, backup, restore, config. Each module owns a `thiserror`
   error type; no `anyhow` in core.
-- `crates/salvajocs-gui` (lib + bin `salvajocs`): egui front-end only (ADR-0002). Uses `anyhow`
+- `crates/salvajocs-gui` (package `salvajocs`, lib + bin `salvajocs`): egui front-end only (ADR-0002). Uses `anyhow`
   at its edge. Depends on core; core never depends on gui.
 
 Workspace `Cargo.toml`: `resolver = "3"`, `edition = "2024"` in `[workspace.package]`, every
