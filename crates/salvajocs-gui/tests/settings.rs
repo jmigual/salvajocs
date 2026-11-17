@@ -30,6 +30,9 @@ fn fill(harness: &mut Harness<'static, App>, label: &str, text: &str) {
 fn choose(harness: &mut Harness<'static, App>, label: &str, entry: &str) {
     harness.get_by_label(label).click();
     run_settled(harness);
+    // The long lists scroll; a click lands on the center of the entry, which must be on screen.
+    harness.get_by_label(entry).scroll_to_me();
+    run_settled(harness);
     harness.get_by_label(entry).click();
     run_settled(harness);
 }
@@ -192,6 +195,8 @@ fn backend_option_marked_secret_not_written_to_config() {
 
     fill(&mut harness, "Location", &repository);
     fill(&mut harness, "Encryption password", "pw-1");
+    harness.get_by_label("Advanced options").click();
+    run_settled(&mut harness);
     harness.get_by_label("Add option").click();
     run_settled(&mut harness);
     fill(&mut harness, "Option 1 key", "access_key");
@@ -222,6 +227,60 @@ fn backend_option_marked_secret_not_written_to_config() {
             .as_deref(),
         Some("hunter2")
     );
+}
+
+#[test]
+fn webdav_needs_its_server_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    choose(&mut harness, "Backend", "WebDAV");
+    assert!(shows(&harness, "Server URL"));
+    assert!(
+        shows(&harness, "Server password"),
+        "the backend login is not called Password"
+    );
+    assert!(
+        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+            .is_disabled(),
+        "the server URL is required"
+    );
+
+    fill(&mut harness, "Server URL", "https://dav.example.com");
+    assert!(
+        !egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+            .is_disabled()
+    );
+}
+
+#[test]
+fn applying_an_untouched_form_keeps_the_free_options() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.repository_options = vec![RepoOption {
+        key: "retry".into(),
+        value: Some("3".into()),
+        secret: false,
+    }];
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    assert!(
+        shows(&harness, "Option 1 key"),
+        "a loaded option is not hidden behind the toggle"
+    );
+    // Only an Apply writes the file again.
+    std::fs::remove_file(env.config_dir.join("config.yaml")).unwrap();
+    harness.get_by_label("Apply").click();
+    run_until_saved(&mut harness, &env, |saved| {
+        saved.repository_options == config.repository_options
+    });
 }
 
 #[test]

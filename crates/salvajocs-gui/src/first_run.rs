@@ -135,7 +135,7 @@ impl Connect {
                     let color = ui.visuals().error_fg_color;
                     theme::status(ui, icons::X_CIRCLE, color, error);
                 }
-                let ready = self.form.has_location() && compression.is_some();
+                let ready = self.form.is_complete() && compression.is_some();
                 let go =
                     theme::row_end(ui, |ui| theme::primary(ui, ready, None, self.submit)).clicked();
                 self.step = match compression {
