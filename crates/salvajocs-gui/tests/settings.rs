@@ -308,6 +308,34 @@ fn startup_prompts_for_missing_secret_option() {
 }
 
 #[test]
+fn startup_names_a_missing_backend_secret_by_its_field() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let mut config = local_config("opendal:webdav");
+    config.repository_options = vec![
+        RepoOption {
+            key: "endpoint".into(),
+            value: Some("https://dav.example.com".into()),
+            secret: false,
+        },
+        RepoOption {
+            key: "password".into(),
+            value: None,
+            secret: true,
+        },
+    ];
+    save_config(&env, &config);
+    let mut harness = harness(env);
+
+    run_until(&mut harness, "the prompt", |h| {
+        shows(h, "Repository secrets")
+    });
+
+    assert!(shows(&harness, "Server password"));
+    assert!(!shows(&harness, "Option password"));
+}
+
+#[test]
 fn a_wrong_keyring_password_prompts_instead_of_looping() {
     let tmp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());

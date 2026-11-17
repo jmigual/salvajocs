@@ -1,28 +1,49 @@
 //! The startup prompt for secrets the keyring does not hold (ADR-0009).
 
 use eframe::egui::{self, Ui};
+use salvajocs_core::config;
 use salvajocs_core::secret::SecretKey;
 
 use crate::startup::Credentials;
 use crate::theme::{self, icons};
 use crate::widgets::labelled_edit;
 
+/// What the prompt calls a secret: a secret option of an opendal service by the label of its
+/// field, else by its key.
+fn secret_label(repository: &str, key: &SecretKey) -> String {
+    match key {
+        SecretKey::Password => "Encryption password".to_string(),
+        SecretKey::Option(key) => repository
+            .strip_prefix("opendal:")
+            .and_then(|service| {
+                config::opendal_fields(service)
+                    .iter()
+                    .find(|f| f.key == *key)
+            })
+            .map_or_else(|| format!("Option {key}"), |field| field.label.to_string()),
+    }
+}
+
 /// Asks for exactly the secrets that are missing.
 pub struct SecretPrompt {
     found: Credentials,
     answers: Vec<(SecretKey, String)>,
+    /// The repository string, to name a secret option by the label of its field.
+    repository: String,
     error: Option<&'static str>,
 }
 
 impl SecretPrompt {
-    /// A prompt for `missing`, on top of the secrets already `found`.
-    pub fn new(found: Credentials, missing: Vec<SecretKey>) -> Self {
+    /// A prompt for `missing`, on top of the secrets already `found`, for the `repository`
+    /// string of the config.
+    pub fn new(found: Credentials, missing: Vec<SecretKey>, repository: &str) -> Self {
         Self {
             found,
             answers: missing
                 .into_iter()
                 .map(|key| (key, String::new()))
                 .collect(),
+            repository: repository.to_string(),
             error: None,
         }
     }
@@ -31,7 +52,7 @@ impl SecretPrompt {
     pub fn wrong_password(found: Credentials) -> Self {
         Self {
             error: Some("Wrong encryption password."),
-            ..Self::new(found, vec![SecretKey::Password])
+            ..Self::new(found, vec![SecretKey::Password], "")
         }
     }
 
@@ -52,11 +73,7 @@ impl SecretPrompt {
             .num_columns(2)
             .show(ui, |ui| {
                 for (key, answer) in &mut self.answers {
-                    let label = match key {
-                        SecretKey::Password => "Encryption password".to_string(),
-                        SecretKey::Option(key) => format!("Option {key}"),
-                    };
-                    labelled_edit(ui, &label, answer, true);
+                    labelled_edit(ui, &secret_label(&self.repository, key), answer, true);
                     ui.end_row();
                 }
             });

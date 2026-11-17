@@ -185,7 +185,8 @@ impl App {
                     self.open(&ctx, found, false)
                 }
                 Some(Ok(Resolved { found, missing })) => {
-                    Stage::Prompt(SecretPrompt::new(found, missing))
+                    let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
+                    Stage::Prompt(SecretPrompt::new(found, missing, repository))
                 }
             },
             Stage::Prompt(mut prompt) => {
