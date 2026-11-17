@@ -74,6 +74,7 @@ fn format_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+/// What the scan found for a game: file count and size, registry, and unreadable paths.
 fn summary(game: &GameScan) -> String {
     let size: u64 = game.files.iter().map(|file| file.size).sum();
     let mut text = format!("{}, {}", count(game.files.len(), "file"), format_size(size));
