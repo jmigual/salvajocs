@@ -60,6 +60,11 @@ Prefixes of Heroic, Lutris and Bottles are not found by themselves. Add them her
 When several prefixes match a game, the game's own prefix (its Proton prefix, or its custom
 `wine_prefix`) comes first, then the Wine prefix roots in the order you added them.
 
+## Updates
+
+On Windows, **Check for updates at start** (on by default) asks GitHub for a newer release each
+time salvajocs starts. Untick it to stop the check. Other systems do not show this setting.
+
 ## Where settings are stored
 
 All settings except the compression level are in `config.yaml`, listed in
