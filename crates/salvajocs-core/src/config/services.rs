@@ -66,6 +66,8 @@ pub(super) struct Service {
     pub name: &'static str,
     /// The name shown in the picker.
     pub label: &'static str,
+    /// One line under the picker saying what the service is.
+    pub hint: &'static str,
     /// The named fields, `root` last.
     pub fields: &'static [BackendField],
 }
@@ -87,11 +89,46 @@ const OAUTH: &[BackendField] = &[
 ];
 
 /// The opendal services offered in the picker: those `rustic_backend` builds for this OS, minus
-/// the ones ADR-0009 hides. `sftp` is Unix-only (ADR-0003).
+/// the ones ADR-0009 hides. `sftp` is Unix-only (ADR-0003). Sorted by label, which is the order
+/// of the picker.
 pub(super) const OPENDAL_SERVICES: &[Service] = &[
+    Service {
+        name: "oss",
+        label: "Alibaba Cloud OSS",
+        hint: "A bucket in Alibaba Cloud Object Storage.",
+        fields: &[
+            BackendField::new("bucket", "Bucket").required(),
+            BackendField::new("endpoint", "Endpoint")
+                .required()
+                .example("https://oss-cn-hangzhou.aliyuncs.com"),
+            BackendField::new("access_key_id", "Access key ID"),
+            BackendField::new("access_key_secret", "Access key secret").secret(),
+            ROOT,
+        ],
+    },
+    Service {
+        name: "s3",
+        label: "Amazon S3 (or compatible)",
+        hint: "A bucket on AWS or an S3-compatible service such as MinIO.",
+        fields: &[
+            BackendField::new("bucket", "Bucket")
+                .aliases(&["aws_bucket", "aws_bucket_name", "bucket_name"])
+                .required(),
+            BackendField::new("region", "Region")
+                .example("us-east-1")
+                .hint("AWS needs it. Other providers often accept auto or us-east-1."),
+            BackendField::new("endpoint", "Endpoint")
+                .example("https://s3.example.com")
+                .hint("Leave empty for AWS."),
+            BackendField::new("access_key_id", "Access key ID"),
+            BackendField::new("secret_access_key", "Secret access key").secret(),
+            ROOT,
+        ],
+    },
     Service {
         name: "azblob",
         label: "Azure Blob Storage",
+        hint: "A container in an Azure storage account.",
         fields: &[
             BackendField::new("container", "Container")
                 .aliases(&["azure_container_name", "container_name"])
@@ -112,6 +149,7 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "azdls",
         label: "Azure Data Lake Storage",
+        hint: "A filesystem in Azure Data Lake Storage Gen2.",
         fields: &[
             BackendField::new("filesystem", "Filesystem").required(),
             BackendField::new("endpoint", "Endpoint")
@@ -125,6 +163,7 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "azfile",
         label: "Azure Files",
+        hint: "A share in Azure Files.",
         fields: &[
             BackendField::new("share_name", "Share name").required(),
             BackendField::new("endpoint", "Endpoint")
@@ -139,6 +178,7 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "b2",
         label: "Backblaze B2",
+        hint: "A bucket in Backblaze B2.",
         fields: &[
             BackendField::new("bucket", "Bucket").required(),
             BackendField::new("bucket_id", "Bucket ID").required(),
@@ -150,26 +190,15 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         ],
     },
     Service {
-        name: "cos",
-        label: "Tencent Cloud COS",
-        fields: &[
-            BackendField::new("bucket", "Bucket").required(),
-            BackendField::new("endpoint", "Endpoint")
-                .required()
-                .example("https://cos.ap-guangzhou.myqcloud.com"),
-            BackendField::new("secret_id", "Secret ID"),
-            BackendField::new("secret_key", "Secret key").secret(),
-            ROOT,
-        ],
-    },
-    Service {
         name: "dropbox",
         label: "Dropbox",
+        hint: "A folder in your Dropbox.",
         fields: OAUTH,
     },
     Service {
         name: "ftp",
         label: "FTP",
+        hint: "An FTP or FTPS server.",
         fields: &[
             BackendField::new("endpoint", "Server URL")
                 .required()
@@ -182,6 +211,7 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "gcs",
         label: "Google Cloud Storage",
+        hint: "A bucket in Google Cloud Storage.",
         fields: &[
             BackendField::new("bucket", "Bucket")
                 .aliases(&["google_bucket", "google_bucket_name", "bucket_name"])
@@ -197,21 +227,26 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     Service {
         name: "gdrive",
         label: "Google Drive",
+        hint: "A folder in your Google Drive.",
         fields: OAUTH,
     },
     Service {
-        name: "ipmfs",
-        label: "IPFS (MFS)",
+        name: "webhdfs",
+        label: "Hadoop WebHDFS",
+        hint: "A Hadoop cluster, through WebHDFS.",
         fields: &[
-            BackendField::new("endpoint", "API endpoint")
-                .example("http://localhost:5001")
+            BackendField::new("endpoint", "Endpoint")
+                .example("http://127.0.0.1:9870")
                 .hint("Empty for the default."),
+            BackendField::new("user_name", "User name"),
+            BackendField::new("delegation", "Delegation token").secret(),
             ROOT,
         ],
     },
     Service {
         name: "obs",
         label: "Huawei Cloud OBS",
+        hint: "A bucket in Huawei Cloud Object Storage.",
         fields: &[
             BackendField::new("bucket", "Bucket").required(),
             BackendField::new("endpoint", "Endpoint")
@@ -223,26 +258,37 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         ],
     },
     Service {
+        name: "ipmfs",
+        label: "IPFS (MFS)",
+        hint: "The mutable file system of an IPFS node.",
+        fields: &[
+            BackendField::new("endpoint", "API endpoint")
+                .example("http://localhost:5001")
+                .hint("Empty for the default."),
+            ROOT,
+        ],
+    },
+    Service {
         name: "onedrive",
         label: "OneDrive",
+        hint: "A folder in your Microsoft OneDrive.",
         fields: OAUTH,
     },
     Service {
-        name: "oss",
-        label: "Alibaba Cloud OSS",
+        name: "swift",
+        label: "OpenStack Swift",
+        hint: "A container in OpenStack Swift.",
         fields: &[
-            BackendField::new("bucket", "Bucket").required(),
-            BackendField::new("endpoint", "Endpoint")
-                .required()
-                .example("https://oss-cn-hangzhou.aliyuncs.com"),
-            BackendField::new("access_key_id", "Access key ID"),
-            BackendField::new("access_key_secret", "Access key secret").secret(),
+            BackendField::new("endpoint", "Endpoint").required(),
+            BackendField::new("container", "Container").required(),
+            BackendField::new("token", "Token").secret(),
             ROOT,
         ],
     },
     Service {
         name: "pcloud",
         label: "pCloud",
+        hint: "A folder in your pCloud account.",
         fields: &[
             BackendField::new("endpoint", "API endpoint")
                 .required()
@@ -255,28 +301,11 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
             ROOT,
         ],
     },
-    Service {
-        name: "s3",
-        label: "Amazon S3 (or compatible)",
-        fields: &[
-            BackendField::new("bucket", "Bucket")
-                .aliases(&["aws_bucket", "aws_bucket_name", "bucket_name"])
-                .required(),
-            BackendField::new("region", "Region")
-                .example("us-east-1")
-                .hint("AWS needs it. Other providers often accept auto or us-east-1."),
-            BackendField::new("endpoint", "Endpoint")
-                .example("https://s3.example.com")
-                .hint("Leave empty for AWS."),
-            BackendField::new("access_key_id", "Access key ID"),
-            BackendField::new("secret_access_key", "Secret access key").secret(),
-            ROOT,
-        ],
-    },
     #[cfg(not(windows))]
     Service {
         name: "sftp",
         label: "SFTP",
+        hint: "An SSH server. Not available in Windows builds.",
         fields: &[
             BackendField::new("endpoint", "Server")
                 .required()
@@ -287,18 +316,23 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         ],
     },
     Service {
-        name: "swift",
-        label: "OpenStack Swift",
+        name: "cos",
+        label: "Tencent Cloud COS",
+        hint: "A bucket in Tencent Cloud Object Storage.",
         fields: &[
-            BackendField::new("endpoint", "Endpoint").required(),
-            BackendField::new("container", "Container").required(),
-            BackendField::new("token", "Token").secret(),
+            BackendField::new("bucket", "Bucket").required(),
+            BackendField::new("endpoint", "Endpoint")
+                .required()
+                .example("https://cos.ap-guangzhou.myqcloud.com"),
+            BackendField::new("secret_id", "Secret ID"),
+            BackendField::new("secret_key", "Secret key").secret(),
             ROOT,
         ],
     },
     Service {
         name: "webdav",
         label: "WebDAV",
+        hint: "A WebDAV server, such as Nextcloud.",
         fields: &[
             BackendField::new("endpoint", "Server URL")
                 .required()
@@ -309,20 +343,9 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         ],
     },
     Service {
-        name: "webhdfs",
-        label: "Hadoop WebHDFS",
-        fields: &[
-            BackendField::new("endpoint", "Endpoint")
-                .example("http://127.0.0.1:9870")
-                .hint("Empty for the default."),
-            BackendField::new("user_name", "User name"),
-            BackendField::new("delegation", "Delegation token").secret(),
-            ROOT,
-        ],
-    },
-    Service {
         name: "yandex-disk",
         label: "Yandex Disk",
+        hint: "A folder on Yandex Disk.",
         fields: &[
             BackendField::new("access_token", "Access token")
                 .required()
@@ -345,6 +368,11 @@ pub fn opendal_fields(service_name: &str) -> &'static [BackendField] {
 /// not offer.
 pub fn opendal_label(service_name: &str) -> Option<&'static str> {
     service(service_name).map(|service| service.label)
+}
+
+/// One line saying what an opendal service is; `None` for a service the picker does not offer.
+pub fn opendal_hint(service_name: &str) -> Option<&'static str> {
+    service(service_name).map(|service| service.hint)
 }
 
 /// The docs.rs page of the opendal config struct of a service, which documents every option key.

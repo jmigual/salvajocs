@@ -286,6 +286,27 @@ fn required_fields_leave_out_what_opendal_derives() {
 }
 
 #[test]
+fn services_are_sorted_by_label_after_the_three_fixed_kinds() {
+    let labels: Vec<String> = OPENDAL_SERVICES
+        .iter()
+        .map(|service| service.label.to_lowercase())
+        .collect();
+    assert!(labels.is_sorted(), "{labels:?}");
+    assert_eq!(
+        backend_kinds()[3],
+        BackendKind::OpenDal(OPENDAL_SERVICES[0].name)
+    );
+}
+
+#[test]
+fn every_service_has_a_hint() {
+    for service in OPENDAL_SERVICES {
+        assert!(!service.hint.is_empty(), "{}", service.name);
+        assert_eq!(opendal_hint(service.name), Some(service.hint));
+    }
+}
+
+#[test]
 fn docs_url_names_the_config_struct() {
     assert!(opendal_docs_url("yandex-disk").ends_with("struct.YandexDiskConfig.html"));
     assert!(opendal_docs_url("s3").ends_with("struct.S3Config.html"));
