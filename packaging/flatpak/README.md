@@ -23,10 +23,10 @@ Remove it with `flatpak uninstall --user io.github.jmigual.salvajocs`.
 Run after every change to `Cargo.lock`.
 
 ```sh
-git clone --depth 1 https://github.com/flatpak/flatpak-builder-tools /tmp/flatpak-builder-tools
-python3 -m venv /tmp/fbt-venv
-/tmp/fbt-venv/bin/pip install aiohttp tomlkit
-/tmp/fbt-venv/bin/python /tmp/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
+git clone --depth 1 https://github.com/flatpak/flatpak-builder-tools tmp/flatpak-builder-tools
+python3 -m venv tmp/fbt-venv
+tmp/fbt-venv/bin/pip install aiohttp tomlkit
+tmp/fbt-venv/bin/python tmp/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
   Cargo.lock -o packaging/flatpak/cargo-sources.json
 ```
 
