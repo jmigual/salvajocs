@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendKind, RepoOption};
 
-use super::labelled_edit;
+use super::{field_hint, labelled_edit};
 use crate::job::Job;
 use crate::theme;
 
@@ -153,11 +153,14 @@ impl BackendForm {
 
         if !matches!(self.kind, BackendKind::OpenDal(_)) {
             ui.label("");
-            ui.weak(match self.kind {
-                BackendKind::Local => "A folder on this machine or a mounted drive.",
-                BackendKind::Rest => "The URL of a rustic or restic REST server.",
-                _ => "remote:path. Needs the rclone binary on the PATH.",
-            });
+            field_hint(
+                ui,
+                match self.kind {
+                    BackendKind::Local => "A folder on this machine or a mounted drive.",
+                    BackendKind::Rest => "The URL of a rustic or restic REST server.",
+                    _ => "remote:path. Needs the rclone binary on the PATH.",
+                },
+            );
             ui.end_row();
             labelled_edit(ui, "Location", &mut self.location, false);
             if self.kind == BackendKind::Local
@@ -177,7 +180,7 @@ impl BackendForm {
             });
             ui.end_row();
             ui.label("");
-            ui.weak("opendal:sftp is not available in Windows builds.");
+            field_hint(ui, "opendal:sftp is not available in Windows builds.");
             ui.end_row();
         }
         self.options_ui(ui);

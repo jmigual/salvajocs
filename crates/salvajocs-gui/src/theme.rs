@@ -212,7 +212,7 @@ fn paint_icon(ui: &Ui, rect: Rect, glyph: &'static str, color: Color32) {
 /// not as a row of controls.
 pub fn icon_label(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<WidgetText>) {
     ui.scope(|ui| {
-        ui.spacing_mut().interact_size.y = 0.0;
+        ui.spacing_mut().interact_size.y = 16.0;
         ui.horizontal(|ui| {
             mark(ui, glyph, 16.0, color);
             ui.add(Label::new(text).wrap());

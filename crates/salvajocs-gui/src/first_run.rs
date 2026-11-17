@@ -15,7 +15,7 @@ use crate::job::Job;
 use crate::startup::Credentials;
 use crate::theme::{self, icons};
 use crate::widgets::backend::BackendForm;
-use crate::widgets::{compression, labelled_edit};
+use crate::widgets::{compression, form_grid, labelled_edit};
 
 /// A repository the user chose and that is now open. The config is not saved yet:
 /// `State::adopt` saves it with the current roots and custom games.
@@ -92,32 +92,34 @@ impl Connect {
         let editing = matches!(self.step, Step::Editing(_));
         let mut parsed = None;
         ui.add_enabled_ui(editing, |ui| {
-            egui::Grid::new("connect_form")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    self.form.ui(ui);
-                    labelled_edit(ui, "Password", &mut self.password, true);
-                    ui.end_row();
+            form_grid("connect_form").show(ui, |ui| {
+                self.form.ui(ui);
+                labelled_edit(ui, "Password", &mut self.password, true);
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut self.remember, "Remember in the system keyring");
+                ui.end_row();
+                if self.password.is_empty() {
                     ui.label("");
-                    ui.checkbox(&mut self.remember, "Remember in the system keyring");
-                    ui.end_row();
-                    if self.password.is_empty() {
-                        ui.label("");
-                        let warn = ui.visuals().warn_fg_color;
+                    let warn = ui.visuals().warn_fg_color;
+                    // Room below, like a field hint, so it reads as part of the password.
+                    ui.vertical(|ui| {
                         theme::status(
                             ui,
                             icons::WARNING,
                             warn,
                             "No password: the repository will not be encrypted.",
                         );
-                        ui.end_row();
-                    }
-                    parsed = Some(compression::ui(
-                        ui,
-                        "Compression (new repository)",
-                        &mut self.compression,
-                    ));
-                });
+                        ui.add_space(8.0);
+                    });
+                    ui.end_row();
+                }
+                parsed = Some(compression::ui(
+                    ui,
+                    "Compression (new repository)",
+                    &mut self.compression,
+                ));
+            });
         });
         let compression = parsed.and_then(Result::ok);
 

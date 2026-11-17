@@ -12,7 +12,7 @@ use crate::first_run::Connect;
 use crate::job::Job;
 use crate::state::State;
 use crate::theme::{self, icons};
-use crate::widgets::{compression, labelled_edit};
+use crate::widgets::{compression, form_grid, labelled_edit};
 
 /// The roots offered in the picker, in order.
 const ROOT_KINDS: [RootKind; 3] = [RootKind::Steam, RootKind::Other, RootKind::WinePrefix];
@@ -143,8 +143,7 @@ impl SettingsTab {
         let text = self
             .compression
             .get_or_insert_with(|| compression::format(session.compression));
-        let parsed = egui::Grid::new("repository_compression")
-            .num_columns(2)
+        let parsed = form_grid("repository_compression")
             .show(ui, |ui| compression::ui(ui, "Compression", text))
             .inner;
         if let Some(error) = &self.compression_error {
@@ -215,7 +214,7 @@ impl SettingsTab {
                 self.root_path = folder.to_string_lossy().into_owned();
             }
         }
-        egui::Grid::new("add_root").num_columns(2).show(ui, |ui| {
+        form_grid("add_root").show(ui, |ui| {
             let label = ui.label("Kind");
             egui::ComboBox::from_id_salt("root_kind")
                 .selected_text(root_kind_label(self.root_kind))

@@ -1,9 +1,9 @@
 //! The compression field: one integer, validated by `Compression::from_field` (ADR-0009).
 
-use eframe::egui::{Label, RichText, Ui};
+use eframe::egui::Ui;
 use salvajocs_core::storage::{Compression, StorageError};
 
-use super::labelled_edit;
+use super::{field_hint, labelled_edit};
 use crate::theme::{self, icons};
 
 /// Why the text of a compression field is not a compression setting.
@@ -43,12 +43,10 @@ pub fn ui(ui: &mut Ui, label: &str, text: &mut String) -> Result<Compression, Fi
     labelled_edit(ui, label, text, false);
     ui.end_row();
     ui.label("");
-    // As wide as the field, so the hint does not widen the grid's column.
-    ui.scope(|ui| {
-        ui.set_max_width(ui.spacing().text_edit_width);
-        let hint = "Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.";
-        ui.add(Label::new(RichText::new(hint).weak()).wrap());
-    });
+    field_hint(
+        ui,
+        "Empty for the default. 0 turns it off; 1 to 22, or -7 to -1 for faster.",
+    );
     ui.end_row();
     let parsed = parse(text);
     if let Err(err) = &parsed {
