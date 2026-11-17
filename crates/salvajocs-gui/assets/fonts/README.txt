@@ -28,3 +28,11 @@ Regenerate with:
         --unicodes=E248,E1A0,E26E,E272,E30C,E256,E3D4,E4A6,E3B4,E4E0,E4F8,E184,E21C,EB02,E692,E06C,E5DE,E030,E40C,E308,E30A,EAD4 \
         --no-hinting --desubroutinize --layout-features='' \
         --output-file=salvajocs-icons.ttf
+
+The binary also embeds egui's default fonts Ubuntu Light and Hack, from the
+epaint_default_fonts 0.37.0 crate (https://github.com/emilk/egui, crates/epaint_default_fonts).
+Their license texts are copied from that crate's fonts/ folder:
+
+    Ubuntu-font-LICENSE.txt   fonts/UFL.txt, the Ubuntu Font Licence 1.0, for Ubuntu-Light.ttf
+    Hack-LICENSE.txt          fonts/Hack-Regular.txt, MIT and the Bitstream Vera License, for
+                              Hack-Regular.ttf

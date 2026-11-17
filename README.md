@@ -221,10 +221,14 @@ before opening an ADR. The implementation plan is [docs/plan.md](docs/plan.md).
 
 ## License
 
-The code is [MIT](LICENSE). The app embeds fonts under their own licenses: Atkinson Hyperlegible
-Next under the [SIL Open Font License 1.1](crates/salvajocs-gui/assets/fonts/OFL.txt), a subset
-of [Phosphor Icons](crates/salvajocs-gui/assets/fonts/Phosphor-LICENSE.txt) (MIT), and egui's
-default fonts Ubuntu Light (Ubuntu Font Licence 1.0) and Hack (MIT and Bitstream Vera).
+The code is [MIT](LICENSE); the `salvajocs` crate is `MIT AND OFL-1.1`. The app embeds fonts under
+their own licenses, and the installers and release archives ship their texts:
+
+- Atkinson Hyperlegible Next: [SIL Open Font License 1.1](crates/salvajocs-gui/assets/fonts/OFL.txt).
+- A subset of Phosphor Icons: [MIT](crates/salvajocs-gui/assets/fonts/Phosphor-LICENSE.txt).
+- egui's default fonts, from its `epaint_default_fonts` dependency: Ubuntu Light under the
+  [Ubuntu Font Licence 1.0](crates/salvajocs-gui/assets/fonts/Ubuntu-font-LICENSE.txt), and Hack
+  under [MIT and the Bitstream Vera License](crates/salvajocs-gui/assets/fonts/Hack-LICENSE.txt).
 
 ## Credits
 

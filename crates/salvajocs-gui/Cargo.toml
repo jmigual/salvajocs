@@ -7,9 +7,9 @@ keywords = ["backup", "restic", "game-saves", "wine", "proton"]
 categories = ["filesystem", "games", "gui"]
 edition.workspace = true
 rust-version.workspace = true
-# The code is MIT; the binary embeds Atkinson Hyperlegible Next (OFL-1.1, assets/fonts) and egui's
-# default fonts Ubuntu Light (Ubuntu-font-1.0) and Hack (MIT, with Bitstream Vera glyphs).
-license = "MIT AND OFL-1.1 AND Ubuntu-font-1.0 AND Bitstream-Vera"
+# The package: MIT code and Phosphor icons, and Atkinson Hyperlegible Next (OFL-1.1). egui's fonts
+# come with the epaint_default_fonts dependency; the metainfo license covers the whole binary.
+license = "MIT AND OFL-1.1"
 repository.workspace = true
 
 [lib]
