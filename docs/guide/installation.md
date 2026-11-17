@@ -91,10 +91,6 @@ unreleased code:
 cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs
 ```
 
-## Flatpak
-
-Not on Flathub yet; a submission is planned.
-
 ## Build requirements
 
 These apply to `cargo install` and to building from a checkout. The release downloads need none of

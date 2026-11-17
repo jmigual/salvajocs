@@ -105,7 +105,6 @@ nothing is restored.
 - **cargo-binstall:** `cargo binstall salvajocs`.
 - **cargo:** `cargo install --locked salvajocs` (Rust 1.95 or newer).
 - **Latest from `main`:** `cargo install --locked --git https://github.com/jmigual/salvajocs salvajocs`.
-- **Flatpak:** not available yet. A Flathub listing is planned.
 
 Requirements and details are in the [installation guide](docs/guide/installation.md). macOS is not
 supported.
