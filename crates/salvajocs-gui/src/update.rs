@@ -40,8 +40,8 @@ impl Updater {
         self.checking = Some(Job::spawn(ctx, move || Ok(check(VERSION)?)));
     }
 
-    /// Collects the check and the download, and draws the notice in a right-to-left layout.
-    pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
+    /// Collects the check and the download.
+    pub fn poll(&mut self, state: &mut State) {
         if let Some(job) = &mut self.checking
             && let Some(result) = job.take_result()
         {
@@ -64,12 +64,18 @@ impl Updater {
                 Err(err) => state.notices.push(format!("The update failed: {err:#}")),
             }
         }
+    }
+
+    /// Draws the notice left to right, once [`Updater::poll`] found a newer release.
+    pub fn ui(&mut self, ui: &mut Ui, state: &State) {
         let Some(release) = &self.release else {
             return;
         };
+        theme::mark(ui, icons::ARROW_CIRCLE_UP, 16.0, theme::palette(ui).accent);
+        ui.label(format!("Update available: v{}", release.version));
         if self.downloading.is_some() {
-            ui.label("Downloading the update");
             ui.spinner();
+            ui.label("Downloading the update");
         } else if self.ready.is_some() {
             ui.weak("Update ready, installs when the running task finishes");
         } else if self.installed {
@@ -80,17 +86,10 @@ impl Updater {
                 }));
             }
         } else {
-            // Right to left: the icon goes first to follow the link.
-            theme::mark(
-                ui,
-                icons::ARROW_SQUARE_OUT,
-                16.0,
-                ui.visuals().hyperlink_color,
-            );
             ui.hyperlink_to("Release page", &release.html_url);
+            let color = ui.visuals().hyperlink_color;
+            theme::mark(ui, icons::ARROW_SQUARE_OUT, 16.0, color);
         }
-        ui.label(format!("Update available: v{}", release.version));
-        theme::mark(ui, icons::ARROW_CIRCLE_UP, 16.0, theme::palette(ui).accent);
     }
 
     /// Starts the downloaded installer and closes the window, unless `busy`: closing would cut

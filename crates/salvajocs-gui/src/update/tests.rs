@@ -50,6 +50,7 @@ fn downloaded_update_waits_for_backup_or_restore_to_end() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
         |ui, (updater, state, busy)| {
+            updater.poll(state);
             updater.ui(ui, state);
             updater.install_when_idle(ui.ctx(), state, *busy);
         },

@@ -240,21 +240,6 @@ impl App {
         }
     }
 
-    /// The tab strip: the selected tab is a pill, the others show a frame only when hovered.
-    fn tabs_ui(&mut self, ui: &mut Ui) {
-        ui.scope(|ui| {
-            theme::pill_list(ui);
-            for tab in Tab::ALL {
-                let selected = self.tab == tab;
-                let label = theme::semibold(tab.label());
-                let button = egui::Button::selectable(selected, (theme::icon(tab.icon()), label));
-                if ui.add(button).clicked() {
-                    self.tab = tab;
-                }
-            }
-        });
-    }
-
     fn status_ui(&mut self, ui: &mut Ui) {
         match &self.stage {
             Stage::ConfigUnreadable(error) => {
@@ -310,6 +295,21 @@ impl App {
     }
 }
 
+/// The tab strip: the selected tab is a pill, the others show a frame only when hovered.
+fn tabs_ui(current: &mut Tab, ui: &mut Ui) {
+    ui.scope(|ui| {
+        theme::pill_list(ui);
+        for tab in Tab::ALL {
+            let selected = *current == tab;
+            let label = theme::semibold(tab.label());
+            let button = egui::Button::selectable(selected, (theme::icon(tab.icon()), label));
+            if ui.add(button).clicked() {
+                *current = tab;
+            }
+        }
+    });
+}
+
 /// Shows `content` in a modal dialog.
 fn dialog<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut Ui) -> R) -> R {
     theme::modal(ctx, id)
@@ -335,19 +335,27 @@ impl eframe::App for App {
 
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 8));
         egui::Panel::top("tabs").frame(frame).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                self.tabs_ui(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    match (&self.state.manifest, &self.manifest) {
+            self.updater.poll(&mut self.state);
+            let (tab, updater, state, loading) = (
+                &mut self.tab,
+                &mut self.updater,
+                &self.state,
+                self.manifest.is_some(),
+            );
+            theme::row(
+                ui,
+                |ui| tabs_ui(tab, ui),
+                |ui| {
+                    updater.ui(ui, state);
+                    match (&state.manifest, loading) {
                         (Some(manifest), _) => {
                             ui.weak(format!("Manifest: {} games", manifest.games.len()))
                         }
-                        (None, Some(_)) => ui.weak("Manifest: loading"),
-                        (None, None) => ui.weak("Manifest: not available"),
+                        (None, true) => ui.weak("Manifest: loading"),
+                        (None, false) => ui.weak("Manifest: not available"),
                     };
-                    self.updater.ui(ui, &mut self.state);
-                });
-            });
+                },
+            );
             self.status_ui(ui);
         });
 
