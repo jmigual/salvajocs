@@ -47,6 +47,7 @@ jobs:
           dir="salvajocs-${{ matrix.target }}-$GITHUB_REF_NAME"
           mkdir "$dir"
           cp LICENSE README.md "$dir/"
+          cp crates/salvajocs-gui/assets/fonts/*LICENSE.txt crates/salvajocs-gui/assets/fonts/OFL.txt "$dir/"
           if [ "${{ runner.os }}" = Windows ]; then
             cp "target/${{ matrix.target }}/release/salvajocs.exe" "$dir/"
             7z a "$dir.zip" "$dir"
@@ -93,6 +94,7 @@ jobs:
           install -Dm644 packaging/flatpak/$id.metainfo.xml AppDir/usr/share/metainfo/$id.metainfo.xml
           install -Dm644 crates/salvajocs-gui/assets/$id.png AppDir/usr/share/icons/hicolor/256x256/apps/$id.png
           install -Dm644 crates/salvajocs-gui/assets/$id.svg AppDir/usr/share/icons/hicolor/scalable/apps/$id.svg
+          install -Dm644 -t AppDir/usr/share/licenses/$id LICENSE crates/salvajocs-gui/assets/fonts/*LICENSE.txt crates/salvajocs-gui/assets/fonts/OFL.txt
           # appimagetool wants the desktop file and icon at the AppDir root.
           ln -s usr/bin/salvajocs AppDir/AppRun
           ln -s usr/share/applications/$id.desktop AppDir/$id.desktop
