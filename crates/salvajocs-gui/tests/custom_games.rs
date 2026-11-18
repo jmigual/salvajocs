@@ -16,7 +16,7 @@ use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
 use salvajocs_core::layout::{Base, Context, LinuxFolders};
 use salvajocs_core::manifest::{
-    self, CustomFile, CustomGame, FileRule, GameEntry, Integration, Manifest, Os, Pair,
+    self, CustomFile, CustomGame, FileRule, GameEntry, InstallDir, Integration, Manifest, Os, Pair,
     RegistryRule, Steam, Tag, When,
 };
 use salvajocs_core::scan::Environment;
@@ -218,11 +218,16 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
     harness.get_by_label("Add file").click();
     run_settled(&mut harness);
     replace_text(&mut harness, "Linux path", "<xdgData>/mygame/*.sav");
+    harness.get_by_label("Add registry key").click();
+    run_settled(&mut harness);
     replace_text(
         &mut harness,
-        "Registry keys",
+        "Registry key 1",
         "HKEY_CURRENT_USER/Software/My Game",
     );
+    harness.get_by_label("Add install folder").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Install folder 1", "My Game Dir");
     replace_text(&mut harness, "Wine prefix", "/prefixes/mygame");
     harness.get_by_label("Save game").click();
     run_settled(&mut harness);
@@ -241,6 +246,7 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
                     "HKEY_CURRENT_USER/Software/My Game".to_owned(),
                     RegistryRule::default(),
                 )]),
+                install_dir: BTreeMap::from([("My Game Dir".to_owned(), InstallDir {})]),
                 ..GameEntry::default()
             },
             integration: Integration::Extend,
@@ -254,6 +260,66 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
         !shows(&harness, "Save game"),
         "the form closes after saving"
     );
+
+    harness.get_by_label("Edit").click();
+    run_settled(&mut harness);
+    for (label, value) in [
+        ("Linux path", "<xdgData>/mygame/*.sav"),
+        ("Registry key 1", "HKEY_CURRENT_USER/Software/My Game"),
+        ("Install folder 1", "My Game Dir"),
+    ] {
+        assert_eq!(
+            harness.get_by_label(label).value().as_deref(),
+            Some(value),
+            "{label}"
+        );
+    }
+    assert!(
+        !shows(&harness, "Saved restore mappings"),
+        "no mappings, no section"
+    );
+}
+
+#[test]
+fn custom_games_install_folder_that_is_a_path_shows_its_error_and_cannot_be_saved() {
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), &[]);
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "My Game");
+    harness.get_by_label("Add install folder").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Install folder 1", "Games/My Game");
+    assert!(shows(&harness, "An install folder is one folder name"));
+    assert!(disabled(&harness, "Save game"));
+    replace_text(&mut harness, "Install folder 1", "My Game");
+    assert!(!disabled(&harness, "Save game"));
+}
+
+#[test]
+fn custom_games_install_folder_makes_a_browsed_folder_base_relative() {
+    let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), &[], |env, tmp| {
+        let steam = tmp.join("steam");
+        let saves = steam.join("steamapps/common/Install Dir/saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let mut environment = linux_environment(&tmp.join("home"));
+        environment.steam_roots = vec![steam];
+        env.environment = Some(environment);
+        pick(env, saves);
+    });
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "My Game");
+    harness.get_by_label("Add install folder").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Install folder 1", "Install Dir");
+    harness.get_by_label("Add file").click();
+    run_settled(&mut harness);
+    harness.query_all_by_label("Browse").next().unwrap().click();
+    run_until(&mut harness, "the picked folder", |h| {
+        h.get_by_label("Linux path").value().as_deref() == Some("<base>/saves")
+    });
 }
 
 #[test]
@@ -317,24 +383,21 @@ fn custom_games_browse_for_a_windows_path_outside_a_prefix_shows_an_error() {
 }
 
 #[test]
-fn custom_games_pair_that_does_not_classify_shows_error_and_is_not_saved() {
-    let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
+fn custom_games_mapping_that_does_not_classify_shows_error_and_is_not_saved() {
+    let game = dialog_game("My Game");
+    let (mut harness, env, _tmp) = open_tab(vec![game.clone()], &[]);
 
-    harness.get_by_label("Add game").click();
-    run_settled(&mut harness);
-    replace_text(&mut harness, "Name", "My Game");
-    harness.get_by_label("Add pair").click();
+    harness.get_by_label("Edit").click();
     run_settled(&mut harness);
     // A Windows template on the Linux side.
     replace_text(&mut harness, "Linux 1", "<winAppData>/mygame");
-    replace_text(&mut harness, "Windows 1", "<winAppData>/mygame");
     harness.get_by_label("Save game").click();
     run_settled(&mut harness);
 
     assert!(shows(&harness, "not a placeholder template"));
     assert!(shows(&harness, "Save game"), "the form stays open");
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
-    assert!(saved.custom_games.is_empty());
+    assert_eq!(saved.custom_games, [game]);
 }
 
 #[test]
@@ -372,7 +435,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     run_settled(&mut harness);
     assert!(shows(&harness, "Edit custom game"));
     replace_text(&mut harness, "Name", "Renamed");
-    harness.get_by_label("Remove pair").click();
+    harness.get_by_label("Remove mapping").click();
     run_settled(&mut harness);
     harness.get_by_label("Save game").click();
     run_settled(&mut harness);
@@ -449,7 +512,7 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
 
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
-    harness.get_by_label("Remove pair").click();
+    harness.get_by_label("Remove mapping").click();
     run_settled(&mut harness);
     harness.get_by_label("Save game").click();
     run_settled(&mut harness);

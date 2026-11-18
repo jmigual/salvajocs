@@ -2,6 +2,7 @@
 //! files as Linux/Windows rows (ADR-0016), and the pairs and skips cross-build restores saved
 //! (ADR-0011).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,8 +10,8 @@ use anyhow::Context as _;
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Family, FileError, PairError, SkipError};
-use salvajocs_core::layout::{Context, GameVars, WinFolders};
-use salvajocs_core::manifest::{CustomFile, CustomGame, Integration, Pair};
+use salvajocs_core::layout::{self, Context, GameVars, WinFolders};
+use salvajocs_core::manifest::{CustomFile, CustomGame, InstallDir, Integration, Pair};
 use salvajocs_core::prefix;
 use salvajocs_core::restore;
 use salvajocs_core::scan::Environment;
@@ -40,6 +41,9 @@ enum FormError {
     /// A file row is not valid.
     #[error(transparent)]
     File(#[from] FileError),
+    /// An install folder is not one plain folder name.
+    #[error("An install folder is one folder name, not a path: {0}")]
+    InstallDir(String),
     /// A pair side is not a placeholder template of its OS.
     #[error(transparent)]
     Pair(#[from] PairError),
@@ -52,7 +56,6 @@ enum FormError {
 }
 
 /// One editable Linux/Windows pair; both fields empty means the row is unused.
-#[derive(Default)]
 struct PairRow {
     linux: String,
     windows: String,
@@ -110,8 +113,10 @@ struct Form {
     name: String,
     integration: Integration,
     files: Vec<FileRow>,
-    /// One registry key per line.
-    registry: String,
+    /// One registry key per row; an empty row is unused.
+    registry: Vec<String>,
+    /// One install folder name per row; an empty row is unused.
+    install_dirs: Vec<String>,
     wine_prefix: String,
     pairs: Vec<PairRow>,
     /// One skipped root template per row; an empty row is unused.
@@ -125,9 +130,18 @@ struct Form {
     browsing: Option<Browse>,
 }
 
-/// The non-blank lines of `text`, trimmed.
-fn lines(text: &str) -> impl Iterator<Item = &str> {
-    text.lines().map(str::trim).filter(|line| !line.is_empty())
+/// The non-blank entries of `rows`, trimmed.
+fn filled(rows: &[String]) -> impl Iterator<Item = &str> {
+    rows.iter()
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty())
+}
+
+/// Why `name` cannot be an install folder: it must be one plain folder name on every OS.
+fn install_dir_error(name: &str) -> Option<FormError> {
+    let name = name.trim();
+    let plain = name.is_empty() || (layout::is_plain_component(name) && !name.contains('\\'));
+    (!plain).then(|| FormError::InstallDir(name.to_owned()))
 }
 
 fn wine_prefix_text(path: Option<&Path>) -> String {
@@ -142,7 +156,8 @@ impl Form {
             name: String::new(),
             integration: Integration::Extend,
             files: Vec::new(),
-            registry: String::new(),
+            registry: Vec::new(),
+            install_dirs: Vec::new(),
             wine_prefix: String::new(),
             pairs: Vec::new(),
             skips: Vec::new(),
@@ -164,13 +179,8 @@ impl Form {
                     browse_error: None,
                 })
                 .collect(),
-            registry: game
-                .entry
-                .registry
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n"),
+            registry: game.entry.registry.keys().cloned().collect(),
+            install_dirs: game.entry.install_dir.keys().cloned().collect(),
             wine_prefix: wine_prefix_text(game.wine_prefix.as_deref()),
             pairs: game
                 .pairs
@@ -191,8 +201,8 @@ impl Form {
     ///
     /// # Errors
     /// [`FormError`] for an empty or taken name, a file row, pair side or skipped folder that
-    /// `crossbuild::validate_file`, `validate_pair` or `validate_skip` rejects, and a game that
-    /// is no longer the one the form was opened on.
+    /// `crossbuild::validate_file`, `validate_pair` or `validate_skip` rejects, an install folder
+    /// that is not one folder name, and a game that is no longer the one the form was opened on.
     fn build(&self, games: &[CustomGame]) -> Result<CustomGame, FormError> {
         if let Some(index) = self.index
             && games.get(index) != self.snapshot.as_ref()
@@ -209,6 +219,13 @@ impl Form {
             .any(|(index, game)| Some(index) != self.index && game.name == name);
         if taken {
             return Err(FormError::DuplicateName(name.to_owned()));
+        }
+        if let Some(error) = self
+            .install_dirs
+            .iter()
+            .find_map(|name| install_dir_error(name))
+        {
+            return Err(error);
         }
         let files = (self.files.iter().filter_map(FileRow::file))
             .map(|file| crossbuild::validate_file(&file).map(|()| file))
@@ -232,7 +249,8 @@ impl Form {
         let original = self.snapshot.as_ref();
         // `entry.files` is no longer written; a stored one is read as it is (ADR-0016).
         let mut entry = original.map(|game| game.entry.clone()).unwrap_or_default();
-        entry.registry = lines(&self.registry)
+        entry.install_dir = self.install_dir();
+        entry.registry = filled(&self.registry)
             .map(|key| {
                 let rule = original
                     .and_then(|game| game.entry.registry.get(key))
@@ -264,7 +282,11 @@ impl Form {
         let environment = env.environment.clone();
         let config = config.clone();
         let title = self.name.trim().to_owned();
-        let entry = self.snapshot.as_ref().map(CustomGame::game_entry);
+        let mut entry = (self.snapshot.as_ref())
+            .map(CustomGame::game_entry)
+            .unwrap_or_default();
+        // A pick under one of the form's install folders becomes `<base>/...`.
+        entry.install_dir = self.install_dir();
         if let Some(row) = self.files.get_mut(row) {
             row.browse_error = None;
         }
@@ -273,10 +295,23 @@ impl Form {
                 return Ok(None);
             };
             let environment = environment.unwrap_or_else(Environment::detect);
-            let vars = restore::game_vars(&title, entry.as_ref(), &config, &environment);
+            let vars = restore::game_vars(&title, Some(&entry), &config, &environment);
             picked_template(&path, side, &environment, &vars).map(Some)
         });
         self.browsing = Some(Browse { row, side, job });
+    }
+
+    /// The install folders of the form, valid or not.
+    fn install_dir(&self) -> BTreeMap<String, InstallDir> {
+        filled(&self.install_dirs)
+            .map(|name| (name.to_owned(), InstallDir {}))
+            .collect()
+    }
+
+    /// Whether every file row and install folder is valid, so the game can be saved.
+    fn rows_valid(&self) -> bool {
+        self.files.iter().all(|row| row.error().is_none())
+            && (self.install_dirs.iter()).all(|name| install_dir_error(name).is_none())
     }
 
     /// Puts a finished pick into its row.
@@ -341,13 +376,6 @@ fn error_line(ui: &mut Ui, text: impl Into<String>) {
     theme::status(ui, icons::X_CIRCLE, color, text);
 }
 
-/// A label followed by a multi-line text field linked to it. Lays out two cells of a grid row.
-fn labelled_lines(ui: &mut Ui, label: &str, text: &mut String) {
-    let label = ui.label(label);
-    ui.add(TextEdit::multiline(text).desired_rows(3))
-        .labelled_by(label.id);
-}
-
 /// A label and a single-line field linked to it, side by side, narrow enough for two of them
 /// and a button on a row of the content column.
 fn inline_edit(ui: &mut Ui, label: String, text: &mut String, hint: &str) {
@@ -358,6 +386,45 @@ fn inline_edit(ui: &mut Ui, label: String, text: &mut String, hint: &str) {
             .desired_width(260.0),
     )
     .labelled_by(label.id);
+}
+
+/// `items` as a boxed list of fields labelled `{label} N`, each with a Remove button and the
+/// inline error `error` gives it, then an Add button. The buttons are disabled unless `enabled`.
+fn text_rows(
+    ui: &mut Ui,
+    items: &mut Vec<String>,
+    (label, hint): (&str, &str),
+    enabled: bool,
+    error: impl Fn(&str) -> Option<FormError>,
+) {
+    let noun = label.to_lowercase();
+    let mut remove = None;
+    if !items.is_empty() {
+        theme::group(ui, |ui| {
+            for (index, item) in items.iter_mut().enumerate() {
+                if index > 0 {
+                    theme::row_separator(ui);
+                }
+                ui.horizontal(|ui| {
+                    inline_edit(ui, format!("{label} {}", index + 1), item, hint);
+                    let button = egui::Button::new(format!("Remove {noun}"));
+                    if ui.add_enabled(enabled, button).clicked() {
+                        remove = Some(index);
+                    }
+                });
+                if let Some(error) = error(item) {
+                    error_line(ui, error.to_string());
+                }
+            }
+        });
+    }
+    if let Some(index) = remove {
+        items.remove(index);
+    }
+    let add = egui::Button::new(format!("Add {noun}"));
+    if ui.add_enabled(enabled, add).clicked() {
+        items.push(String::new());
+    }
 }
 
 /// `items` as the rows of a boxed list, each drawn by `row` in a horizontal layout; nothing
@@ -453,11 +520,15 @@ impl Form {
         clicked
     }
 
-    /// The Linux/Windows pairs, each editable and removable, including those the restore
-    /// mapping dialog saved.
+    /// The Linux/Windows pairs the restore mapping dialog saved, each editable and removable;
+    /// nothing when there are none.
     fn pairs_ui(&mut self, ui: &mut Ui) {
-        ui.heading("Linux and Windows pairs");
-        ui.weak("The same saves in the native Linux build and in the Windows build.");
+        if self.pairs.is_empty() {
+            return;
+        }
+        ui.add_space(16.0);
+        ui.heading("Saved restore mappings");
+        ui.weak("Where a restore on the other build put a folder, as the restore dialog saved it.");
         let mut remove = None;
         rows(ui, &mut self.pairs, |ui, index, row| {
             let number = index + 1;
@@ -473,41 +544,37 @@ impl Form {
                 &mut row.windows,
                 "<winAppData>/Game",
             );
-            if ui.button("Remove pair").clicked() {
+            if ui.button("Remove mapping").clicked() {
                 remove = Some(index);
             }
         });
         if let Some(index) = remove {
             self.pairs.remove(index);
         }
-        if ui.button("Add pair").clicked() {
-            self.pairs.push(PairRow::default());
-        }
     }
 
-    /// The root templates a cross-build restore leaves out, each editable and removable,
-    /// including those the restore mapping dialog saved.
-    fn skips_ui(&mut self, ui: &mut Ui) {
+    /// Registry keys, install folders and skipped folders, each a list of editable rows.
+    fn lists_ui(&mut self, ui: &mut Ui) {
+        let idle = self.browsing.is_none();
+        ui.add_space(16.0);
+        ui.heading("Registry keys");
+        ui.weak("Keys under HKEY_CURRENT_USER where the Windows build keeps saves or settings.");
+        let key = ("Registry key", "HKEY_CURRENT_USER/Software/My Game");
+        text_rows(ui, &mut self.registry, key, idle, |_| None);
+        ui.add_space(16.0);
+        ui.heading("Install folders");
+        ui.weak(
+            "Folder names the game installs into in a game library; <base> in a path is that \
+             folder. Without one, the game's name is used.",
+        );
+        let folder = ("Install folder", "My Game");
+        text_rows(ui, &mut self.install_dirs, folder, idle, install_dir_error);
+        self.pairs_ui(ui);
+        ui.add_space(16.0);
         ui.heading("Skipped folders");
         ui.weak("Folders a restore on the other OS leaves out.");
-        let mut remove = None;
-        rows(ui, &mut self.skips, |ui, index, skip| {
-            inline_edit(
-                ui,
-                format!("Skipped folder {}", index + 1),
-                skip,
-                "<xdgData>/Game",
-            );
-            if ui.button("Remove skipped folder").clicked() {
-                remove = Some(index);
-            }
-        });
-        if let Some(index) = remove {
-            self.skips.remove(index);
-        }
-        if ui.button("Add skipped folder").clicked() {
-            self.skips.push(String::new());
-        }
+        let skip = ("Skipped folder", "<xdgData>/Game");
+        text_rows(ui, &mut self.skips, skip, idle, |_| None);
     }
 
     fn ui(&mut self, ui: &mut Ui) -> Option<Action> {
@@ -539,23 +606,18 @@ impl Form {
                         .response
                         .labelled_by(label.id);
                     ui.end_row();
-                    labelled_lines(ui, "Registry keys", &mut self.registry);
-                    ui.end_row();
                     labelled_edit(ui, "Wine prefix", &mut self.wine_prefix, false);
                     ui.end_row();
                 });
         });
         ui.add_space(16.0);
         let browse = self.files_ui(ui);
-        ui.add_space(16.0);
-        self.pairs_ui(ui);
-        ui.add_space(16.0);
-        self.skips_ui(ui);
+        self.lists_ui(ui);
         if let Some(error) = &self.error {
             error_line(ui, error.to_string());
         }
         let mut action = browse.map(Action::Browse);
-        let valid = self.files.iter().all(|row| row.error().is_none());
+        let valid = self.rows_valid();
         theme::row_end(ui, |ui| {
             if self.error == Some(FormError::Changed) && ui.button("Reload").clicked() {
                 action = Some(Action::Reload);
