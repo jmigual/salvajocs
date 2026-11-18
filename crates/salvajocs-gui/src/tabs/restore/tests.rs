@@ -38,6 +38,42 @@ fn a_running_wineserver_asks_to_close_wine() {
     assert!(!other.contains("Close the game"), "{other}");
 }
 
+#[test]
+fn a_failed_delete_says_how_many_it_removed() {
+    let stopped = |forgotten| {
+        let source = salvajocs_core::storage::StorageError::Backend("gone".into());
+        let err = retention::CleanupError { forgotten, source };
+        describe_delete_error(&DeleteError::Stopped(err).into())
+    };
+    let refused = describe_delete_error(&DeleteError::NotAGameBackup("abc".into()).into());
+
+    assert!(
+        stopped(2).starts_with("Removed 2 backups"),
+        "{}",
+        stopped(2)
+    );
+    // The cleanup's own count of 0 would repeat what the start says.
+    let none = stopped(0);
+    assert!(none.starts_with("Nothing was removed"), "{none}");
+    assert!(!none.contains("cleanup"), "{none}");
+    assert!(refused.contains("out of date"), "{refused}");
+}
+
+#[test]
+fn a_cleanup_dropping_the_list_closes_the_delete_dialog() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    harness.step();
+    harness.get_by_label("Delete all backups of Mix").click();
+    harness.step();
+    assert!(harness.state().0.confirm_delete.is_some());
+
+    harness.state_mut().0.drop_listing();
+    harness.step();
+    assert!(harness.state().0.confirm_delete.is_none());
+    assert!(harness.query_by_label("Cancel").is_none());
+}
+
 /// A state whose repository, in `dir`, is open.
 fn state(dir: &Path) -> State {
     fn offline(_: &Path) -> Result<Freshness, FetchError> {
@@ -318,6 +354,59 @@ fn a_confirm_ending_after_the_dialog_closed_is_dropped() {
     assert!(tab.mapping.is_none());
     let games = &state.config.as_ref().unwrap().custom_games;
     assert!(games.is_empty(), "nothing is saved: {games:?}");
+}
+
+/// A tab listing Mix with one snapshot, chosen.
+fn with_mix(storage: &SharedStorage) -> RestoreTab {
+    let snapshot = SnapshotInfo {
+        id: "0".repeat(64),
+        time: at(0),
+        host: "pc".into(),
+        label: "Mix".into(),
+        tags: vec!["salvajocs".into(), "game:mix".into()],
+    };
+    RestoreTab {
+        repository: Some(storage.clone()),
+        games: vec![GameBackups {
+            slug: "mix".into(),
+            title: "Mix".into(),
+            snapshots: vec![snapshot],
+            default: Some(0),
+        }],
+        selected: Some("mix".into()),
+        snapshot: Some(0),
+        ..RestoreTab::default()
+    }
+}
+
+#[test]
+fn deleting_waits_while_a_restore_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    harness.step();
+    assert!(!is_disabled(&harness, "Delete snapshot"));
+    assert!(!is_disabled(&harness, "Delete all backups of Mix"));
+
+    let (release, restore) = crate::job::held(&harness.ctx.clone());
+    harness.state_mut().0.restoring = Some(restore);
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Delete snapshot"));
+    assert!(is_disabled(&harness, "Delete all backups of Mix"));
+    drop(release);
+}
+
+#[test]
+fn a_running_delete_keeps_the_tab_busy() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    let (release, delete) = crate::job::held(&harness.ctx.clone());
+    harness.state_mut().0.deleting = Some(delete);
+    harness.step();
+    harness.step();
+    assert!(harness.state().0.busy());
+    assert!(is_disabled(&harness, "Load backups"));
+    drop(release);
 }
 
 #[test]

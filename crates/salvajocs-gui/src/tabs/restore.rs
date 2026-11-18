@@ -1,15 +1,16 @@
 //! The Restore tab: the games in the repository with their snapshots from every host, the build
 //! to restore into, a preview of the plan and the restore behind a safety backup (ADR-0005,
-//! ADR-0010, ADR-0011).
+//! ADR-0010, ADR-0011). Backups can also be deleted from the repository (ADR-0015).
 
 use std::fs;
 use std::io;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
-use eframe::egui::{self, Response, TextEdit, Ui, Vec2};
+use eframe::egui::{self, Response, RichText, TextEdit, Ui, Vec2};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
@@ -17,11 +18,13 @@ use salvajocs_core::restore::{
     self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RunError,
     SafetyBackup, SkippedItem, StagedGame, Targets,
 };
+use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::count;
 use crate::theme::{self, icons};
 
 mod mapping;
@@ -205,6 +208,16 @@ struct Restored {
     lines: Vec<(String, bool)>,
 }
 
+/// Backups of one game waiting in the delete confirm dialog.
+struct Deletion {
+    title: String,
+    snapshots: Vec<SnapshotInfo>,
+    /// Whether these are all of the game's backups.
+    all: bool,
+    /// Whether Cancel still has to take the focus, once when the dialog opens.
+    focus: bool,
+}
+
 /// The state of the Restore tab.
 #[derive(Default)]
 pub struct RestoreTab {
@@ -226,6 +239,10 @@ pub struct RestoreTab {
     preview: Option<Preview>,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
+    confirm_delete: Option<Deletion>,
+    deleting: Option<Job<Cleanup>>,
+    /// How many backups the last delete removed.
+    removed: Option<usize>,
     error: Option<String>,
     /// Counts [`RestoreTab::forget_plan`] calls, so a job's result for a closed dialog or
     /// changed targets is dropped.
@@ -247,6 +264,7 @@ impl RestoreTab {
             self.drop_listing();
             self.detecting = None;
             self.pick = None;
+            self.removed = None;
             self.error = None;
         }
         self.poll(ui.ctx(), state);
@@ -275,16 +293,20 @@ impl RestoreTab {
                     ui.spinner();
                 }
                 self.error_ui(ui);
+                self.removed_ui(ui);
                 self.preview_ui(ui, state);
                 self.restored_ui(ui);
             });
         }
         self.mapping_ui(ui.ctx(), state);
+        self.delete_ui(ui.ctx());
     }
 
-    /// Drops the listed backups and the chosen game, as after a cleanup that may have forgotten
-    /// one of them; "Load backups" lists them again. A running preview or restore is kept.
+    /// Drops the listed backups, the chosen game and a delete waiting for its confirm, as after a
+    /// cleanup that may have forgotten one of them; "Load backups" lists them again. A running
+    /// preview or restore is kept.
     pub(crate) fn drop_listing(&mut self) {
+        self.confirm_delete = None;
         self.repository = None;
         self.listing = None;
         self.games.clear();
@@ -299,6 +321,7 @@ impl RestoreTab {
             || self.picking.is_some()
             || self.preparing.is_some()
             || self.restoring.is_some()
+            || self.deleting.is_some()
     }
 
     /// Whether the tab has nothing to show yet: no list loaded or loading, and no plan or report.
@@ -314,6 +337,14 @@ impl RestoreTab {
         if let Some(error) = &self.error {
             let color = ui.visuals().error_fg_color;
             theme::status(ui, icons::X_CIRCLE, color, error);
+        }
+    }
+
+    fn removed_ui(&self, ui: &mut Ui) {
+        if let Some(removed) = self.removed {
+            let accent = theme::palette(ui).accent;
+            let text = format!("Removed {}", count(removed, "backup"));
+            theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
         }
     }
 
@@ -380,6 +411,22 @@ impl RestoreTab {
                 // Nothing was written, so the plan stays for another try.
                 Err(err) => self.error = Some(describe_run_error(&err)),
             }
+        }
+        if let Some(job) = &mut self.deleting
+            && let Some(result) = job.take_result()
+        {
+            self.deleting = None;
+            match result {
+                Ok(done) if done.append_only_kept > 0 => {
+                    self.error =
+                        Some("The repository is append-only, so nothing was removed".to_owned());
+                }
+                Ok(done) => self.removed = Some(done.forgotten),
+                Err(err) => self.error = Some(describe_delete_error(&err)),
+            }
+            // A plan may be of a deleted snapshot, and the list may have lost some.
+            self.forget_plan();
+            self.start_listing(ctx, state);
         }
     }
 
@@ -454,6 +501,7 @@ impl RestoreTab {
 
     fn load(&mut self, ctx: &egui::Context, state: &State) {
         self.error = None;
+        self.removed = None;
         self.forget_plan();
         self.start_listing(ctx, state);
     }
@@ -515,6 +563,18 @@ impl RestoreTab {
                 })
                 .response
                 .labelled_by(label.id);
+            let chosen = self.snapshot.and_then(|index| game.snapshots.get(index));
+            let delete = ui.add_enabled(chosen.is_some(), egui::Button::new("Delete snapshot"));
+            if delete.clicked()
+                && let Some(snapshot) = chosen
+            {
+                self.confirm_delete = Some(Deletion {
+                    title: game.title.clone(),
+                    snapshots: vec![snapshot.clone()],
+                    all: game.snapshots.len() == 1,
+                    focus: true,
+                });
+            }
         });
         let mut changed = self.snapshot != before;
         if let Some(pick) = &mut self.pick {
@@ -542,6 +602,18 @@ impl RestoreTab {
         if manifest_loading {
             ui.weak("The game manifest is loading.");
         }
+        ui.add_space(16.0);
+        if ui
+            .button(format!("Delete all backups of {}", game.title))
+            .clicked()
+        {
+            self.confirm_delete = Some(Deletion {
+                title: game.title.clone(),
+                snapshots: game.snapshots.clone(),
+                all: true,
+                focus: true,
+            });
+        }
     }
 
     /// Selects `game` with its default snapshot and looks up its default targets.
@@ -553,6 +625,7 @@ impl RestoreTab {
         self.snapshot = game.default;
         self.pick = None;
         self.error = None;
+        self.removed = None;
         self.forget_plan();
         let (title, manifest, config) = (
             game.title.clone(),
@@ -648,6 +721,59 @@ impl RestoreTab {
             Some(DialogAction::Cancel) => self.forget_plan(),
             Some(DialogAction::Confirm(_)) | None => {}
         }
+    }
+
+    /// The confirm dialog of a delete; Delete starts it in the listed repository.
+    fn delete_ui(&mut self, ctx: &egui::Context) {
+        let Some(deletion) = &mut self.confirm_delete else {
+            return;
+        };
+        let (mut cancel, mut delete) = (false, false);
+        theme::modal(ctx, "restore_delete", 560.0, |ui| {
+            let backups = count(deletion.snapshots.len(), "backup");
+            ui.heading(format!("Delete {backups} of {}?", deletion.title));
+            for snapshot in &deletion.snapshots {
+                ui.label(snapshot_label(snapshot));
+            }
+            ui.label(
+                "This removes them from the repository for every computer. It cannot be undone.",
+            );
+            if deletion.all {
+                ui.weak("Your file choices for this game are kept.");
+            }
+            let error = ui.visuals().error_fg_color;
+            theme::row_end(ui, |ui| {
+                let button = ui.button("Cancel");
+                // `row_end` first runs this in a sizing pass, whose widgets are not the real ones.
+                if !ui.is_sizing_pass() && mem::take(&mut deletion.focus) {
+                    button.request_focus();
+                }
+                cancel |= button.clicked();
+                delete |= ui
+                    .button(RichText::new("Delete").color(error).strong())
+                    .clicked();
+            });
+        });
+        if delete {
+            self.start_delete(ctx);
+        } else if cancel {
+            self.confirm_delete = None;
+        }
+    }
+
+    /// Deletes the backups of the confirm dialog in a job holding the storage lock.
+    fn start_delete(&mut self, ctx: &egui::Context) {
+        let (Some(deletion), Some(storage)) = (self.confirm_delete.take(), &self.repository) else {
+            return;
+        };
+        let storage = storage.clone();
+        let ids: Vec<String> = deletion.snapshots.into_iter().map(|s| s.id).collect();
+        self.error = None;
+        self.removed = None;
+        self.deleting = Some(Job::spawn(ctx, move || {
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            Ok(retention::delete(&mut *lock_storage(&storage)?, &ids)?)
+        }));
     }
 
     fn preview_ui(&mut self, ui: &mut Ui, state: &State) {
@@ -840,6 +966,22 @@ fn describe_run_error(err: &anyhow::Error) -> String {
              running. Close the game and Wine first, then restore again."
             .to_owned(),
         _ => format!("Nothing was restored: {err:#}"),
+    }
+}
+
+/// What a failed delete job tells the user, with how many backups it removed.
+fn describe_delete_error(err: &anyhow::Error) -> String {
+    match err.downcast_ref::<DeleteError>() {
+        Some(DeleteError::Stopped(stopped)) if stopped.forgotten > 0 => format!(
+            "Removed {}, then the delete failed: {}",
+            count(stopped.forgotten, "backup"),
+            stopped.source
+        ),
+        Some(DeleteError::Stopped(stopped)) => format!("Nothing was removed: {}", stopped.source),
+        Some(DeleteError::NotAGameBackup(_)) => {
+            "The list was out of date, so nothing was removed".to_owned()
+        }
+        None => format!("Nothing was removed: {err:#}"),
     }
 }
 

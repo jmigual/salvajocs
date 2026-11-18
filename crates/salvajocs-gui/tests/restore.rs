@@ -19,7 +19,8 @@ use salvajocs_core::manifest::{
     self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
 };
 use salvajocs_core::scan::{Environment, FoundFile, GameScan};
-use salvajocs_core::storage::{RepoLocation, Storage};
+use salvajocs_core::selection::{self, Change};
+use salvajocs_core::storage::{RepoLocation, SnapshotInfo, Storage};
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -675,4 +676,136 @@ fn restore_typed_template_that_does_not_classify_shows_error() {
     // Editing the row clears its error.
     replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
     assert!(!shows(&harness, "is not a placeholder template"));
+}
+
+/// A new session on the tests' repository.
+fn open_repo(tmp: &TempDir) -> Storage {
+    let location = RepoLocation {
+        repository: repo_dir(tmp),
+        options: Default::default(),
+    };
+    Storage::open(&location, "").unwrap()
+}
+
+/// The snapshots tagged `tag` in the tests' repository, newest first.
+fn snapshots(tmp: &TempDir, tag: &str) -> Vec<SnapshotInfo> {
+    open_repo(tmp).snapshots(tag).unwrap()
+}
+
+/// The ids of the game backups labelled `title`, newest first.
+fn backups_of(tmp: &TempDir, title: &str) -> Vec<String> {
+    let snapshots = snapshots(tmp, "salvajocs").into_iter();
+    snapshots
+        .filter(|snapshot| snapshot.label == title)
+        .map(|snapshot| snapshot.id)
+        .collect()
+}
+
+/// Alpha with a safety backup, a newer backup and saved file choices, and Beta with one backup,
+/// listed in the Restore tab with Alpha chosen.
+fn two_games(tmp: &TempDir) -> Harness<'static, App> {
+    let alpha = scan(
+        tmp,
+        "Alpha",
+        &[(Base::WinAppData, "Alpha/save.dat")],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let beta = scan(
+        tmp,
+        "Beta",
+        &[(Base::WinAppData, "Beta/save.dat")],
+        &[(Base::WinAppData, "Beta")],
+    );
+    let (mut harness, _env) = open_tab(tmp, Vec::new(), &[beta]);
+    let mut storage = open_repo(tmp);
+    let stage = tmp.path().join("fixture-stage");
+    let safety = ["pre-restore"];
+    backup_games(
+        &mut storage,
+        std::slice::from_ref(&alpha),
+        &stage,
+        &safety,
+        |_| {},
+    )
+    .unwrap();
+    // Same length as the first contents, so the scan's size still holds.
+    fs::write(&alpha.files[0].real, "ALPHA/SAVE.DAT").unwrap();
+    backup_games(&mut storage, &[alpha], &stage, &[], |_| {}).unwrap();
+    let skip = [Change::Skip(true)];
+    selection::save(&mut storage, "Alpha", &skip, &tmp.path().join("settings")).unwrap();
+    drop(storage);
+    click(&mut harness, "Load backups");
+    select(&mut harness, "Alpha");
+    harness
+}
+
+/// Clicks Delete in the confirm dialog and waits for the list to reload.
+fn confirm_delete(harness: &mut Harness<'static, App>, result: &str) {
+    harness.get_by_label("Delete").click();
+    run_until(harness, "the delete", |h| shows(h, result));
+    run_settled(harness);
+}
+
+#[test]
+fn deleting_a_snapshot_removes_only_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let alpha = backups_of(&tmp, "Alpha");
+    assert_eq!(alpha.len(), 2);
+    let beta = backups_of(&tmp, "Beta");
+
+    // The second, older one is the safety backup, not the preselected newest.
+    click(&mut harness, "Snapshot");
+    harness.get_by_label_contains(", pre-restore").click();
+    run_settled(&mut harness);
+    click(&mut harness, "Delete snapshot");
+    assert!(shows(&harness, "Delete 1 backup of Alpha?"));
+    // The dialog lists the chosen snapshot only; the picker shows its text as a value.
+    assert_eq!(harness.query_all_by_label_contains(" UTC, ").count(), 1);
+    assert!(shows(&harness, ", pre-restore"));
+    assert!(shows(&harness, "for every computer. It cannot be undone."));
+    assert!(!shows(&harness, "Your file choices for this game are kept"));
+    confirm_delete(&mut harness, "Removed 1 backup");
+
+    assert_eq!(backups_of(&tmp, "Alpha"), alpha[..1]);
+    assert_eq!(backups_of(&tmp, "Beta"), beta);
+    select(&mut harness, "Alpha");
+    click(&mut harness, "Snapshot");
+    // The open list holds the one snapshot left.
+    assert_eq!(harness.query_all_by_label_contains(" UTC, ").count(), 1);
+}
+
+#[test]
+fn deleting_all_backups_of_a_game_keeps_its_file_choices_and_other_games() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let settings = snapshots(&tmp, "salvajocs-settings");
+    assert_eq!(settings.len(), 1);
+    let beta = backups_of(&tmp, "Beta");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(shows(&harness, "Delete 2 backups of Alpha?"));
+    assert!(shows(&harness, ", pre-restore"));
+    assert!(shows(&harness, "Your file choices for this game are kept"));
+    confirm_delete(&mut harness, "Removed 2 backups");
+
+    assert!(backups_of(&tmp, "Alpha").is_empty());
+    assert_eq!(backups_of(&tmp, "Beta"), beta);
+    assert_eq!(snapshots(&tmp, "salvajocs-settings"), settings);
+    assert!(!shows(&harness, "Alpha"));
+    assert!(shows(&harness, "Beta"));
+}
+
+#[test]
+fn cancelling_a_delete_removes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let before = snapshots(&tmp, "salvajocs");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(harness.get_by_label("Cancel").is_focused());
+    click(&mut harness, "Cancel");
+
+    assert!(!shows(&harness, "It cannot be undone"));
+    assert_eq!(snapshots(&tmp, "salvajocs"), before);
 }
