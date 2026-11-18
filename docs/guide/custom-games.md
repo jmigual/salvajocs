@@ -78,7 +78,7 @@ its side:
 
 | Windows path | Folder |
 | --- | --- |
-| `<home>` | Your user folder |
+| `<home>` | The Windows user's folder (`users/<user>` in a Wine prefix) |
 | `<winDocuments>` | Documents |
 | `<winAppData>` | `%APPDATA%`, `AppData/Roaming` |
 | `<winLocalAppData>` | `%LOCALAPPDATA%`, `AppData/Local` |
@@ -95,8 +95,10 @@ every library with every install folder and backs up the files found in any of t
 writes to the first folder that exists.
 
 Anywhere in a path, `<game>` is the game's install folder name (or its title when it has none),
-`<osUserName>` is your user name and `<storeUserId>` matches any store user id. The wildcards are
-`*` (any run of characters in a name), `?` (one character) and `[...]` (one character of a set).
+`<osUserName>` is your user name (in a Wine prefix, the prefix's user, usually `steamuser`),
+`<storeUserId>` matches any store user id and `<storeGameId>` is the game's Steam id. A path with
+`<storeGameId>` is skipped for a game that has no Steam id. The wildcards are `*` (any run of
+characters in a name), `?` (one character) and `[...]` (one character of a set).
 
 ### Registry keys
 

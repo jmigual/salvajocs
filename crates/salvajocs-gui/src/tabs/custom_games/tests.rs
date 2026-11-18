@@ -160,7 +160,7 @@ fn every_leading_placeholder_has_a_meaning() {
     for windows in [false, true] {
         for placeholder in layout::leading_placeholders(windows) {
             assert!(
-                !placeholder_meaning(placeholder).is_empty(),
+                !placeholder_meaning(placeholder, windows).is_empty(),
                 "{placeholder}"
             );
         }
@@ -171,4 +171,12 @@ fn every_leading_placeholder_has_a_meaning() {
 fn the_placeholders_link_follows_the_running_versions_tag() {
     assert!(PLACEHOLDERS_DOCS.contains(&format!("/blob/v{}/", env!("CARGO_PKG_VERSION"))));
     assert!(PLACEHOLDERS_DOCS.ends_with("/docs/guide/custom-games.md#placeholders"));
+}
+
+#[test]
+fn home_means_the_windows_user_folder_only_on_the_windows_side() {
+    assert_ne!(
+        placeholder_meaning("<home>", true),
+        placeholder_meaning("<home>", false)
+    );
 }

@@ -9,7 +9,7 @@ use common::{
     env, harness, harness_sized, init_repo, local_config, pick, replace_text, repo_dir,
     run_settled, run_until, run_until_ready, save_config, shows,
 };
-use eframe::egui::Vec2;
+use eframe::egui::{Key, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::AppConfig;
@@ -574,15 +574,20 @@ fn custom_games_skip_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
 }
 
 #[test]
-fn custom_games_placeholder_help_lists_the_placeholders_of_each_side_and_the_guide() {
+fn custom_games_placeholder_help_opens_from_the_keyboard_and_lists_each_side_once() {
     let (mut harness, _env, _tmp) = open_tab(Vec::new(), &[]);
     harness.get_by_label("Add game").click();
     run_settled(&mut harness);
-    harness.get_by_label("Path placeholders").hover();
+    harness.get_by_label("Path placeholders").focus();
+    harness.step();
+    harness.key_press(Key::Enter);
     run_until(&mut harness, "the placeholder help", |h| {
         shows(h, "<winAppData>")
     });
-    assert!(shows(&harness, "<xdgData>"));
+    let count = |h: &Harness<'static, App>, text: &str| h.query_all_by_label_contains(text).count();
+    // Only the Windows block lists the Windows folders and only the Linux block the XDG ones.
+    assert_eq!(count(&harness, "<winAppData>"), 1);
+    assert_eq!(count(&harness, "<xdgData>"), 1);
     assert!(shows(&harness, "<storeUserId>"));
     assert!(shows(&harness, "Placeholders in the guide"));
 }

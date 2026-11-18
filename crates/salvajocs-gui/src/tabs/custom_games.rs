@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use eframe::egui::{self, TextEdit, Ui};
+use eframe::egui::{self, Popup, PopupCloseBehavior, TextEdit, Ui};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Family, FileError, PairError, SkipError};
 use salvajocs_core::layout::{self, Context, GameVars, WinFolders};
@@ -20,21 +20,23 @@ use crate::env::Env;
 use crate::job::Job;
 use crate::state::State;
 use crate::theme::{self, icons};
-use crate::widgets::labelled_edit;
+use crate::widgets::{guide_url, labelled_edit};
 
-/// The placeholders section of the guide, at the tag of the running version so the page matches
-/// the placeholders this build reads.
-const PLACEHOLDERS_DOCS: &str = concat!(
-    "https://github.com/jmigual/salvajocs/blob/v",
-    env!("CARGO_PKG_VERSION"),
-    "/docs/guide/custom-games.md#placeholders"
-);
+/// The placeholders section of the guide.
+const PLACEHOLDERS_DOCS: &str = guide_url!("custom-games.md#placeholders");
 
 /// The value placeholders, valid anywhere in a path, and what each stands for.
-const VALUE_PLACEHOLDERS: [(&str, &str); 3] = [
+const VALUE_PLACEHOLDERS: [(&str, &str); 4] = [
     ("<game>", "the game's install folder name, or its title"),
-    ("<osUserName>", "your user name"),
+    (
+        "<osUserName>",
+        "your user name; in a Wine prefix, the prefix's user (usually steamuser)",
+    ),
     ("<storeUserId>", "any store user id"),
+    (
+        "<storeGameId>",
+        "the game's Steam id; a path using it is skipped when the game has none",
+    ),
 ];
 
 /// The wildcards a path may use, and what each matches.
@@ -44,9 +46,10 @@ const WILDCARDS: [(&str, &str); 3] = [
     ("[...]", "one character of a set"),
 ];
 
-/// What a leading placeholder stands for.
-fn placeholder_meaning(placeholder: &str) -> &'static str {
+/// What a leading placeholder stands for on a Windows (`windows`) or Linux path.
+fn placeholder_meaning(placeholder: &str, windows: bool) -> &'static str {
     match placeholder {
+        "<home>" if windows => "the Windows user's folder (users/<user> in a Wine prefix)",
         "<home>" => "your home folder",
         "<winDocuments>" => "Documents",
         "<winAppData>" => "%APPDATA%, AppData/Roaming",
@@ -63,13 +66,13 @@ fn placeholder_meaning(placeholder: &str) -> &'static str {
     }
 }
 
-/// The hover help of the Files heading: the placeholders of each side, the value placeholders,
-/// the wildcards and a link to the guide.
+/// The help of the Files heading: the placeholders of each side, the value placeholders, the
+/// wildcards and a link to the guide.
 fn placeholders_help(ui: &mut Ui) {
     for (side, windows) in [("Linux path", false), ("Windows path", true)] {
         ui.label(theme::semibold(side));
         for placeholder in layout::leading_placeholders(windows) {
-            let meaning = placeholder_meaning(placeholder);
+            let meaning = placeholder_meaning(placeholder, windows);
             ui.label(format!("{placeholder}: {meaning}"));
         }
     }
@@ -530,7 +533,14 @@ impl Form {
             help.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::Button, true, "Path placeholders")
             });
-            help.on_hover_ui(placeholders_help);
+            // A click, or Enter or Space on the focused button, opens it; hovering only previews.
+            let open = Popup::from_toggle_button_response(&help)
+                .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+                .accessible_name("Path placeholders")
+                .show(placeholders_help);
+            if open.is_none() {
+                help.on_hover_ui(placeholders_help);
+            }
         });
         ui.weak(
             "A path on one side is backed up only for that build; with both paths, they hold the \
