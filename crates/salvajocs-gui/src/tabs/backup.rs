@@ -177,6 +177,8 @@ pub struct BackupTab {
     run_error: Option<String>,
     saving: SaveProblems,
     cleanup: Option<Cleaned>,
+    /// A cleanup forgot snapshots since [`BackupTab::take_removed`] last ran.
+    removed: bool,
     /// Back up was clicked; the backup starts once the pending file is written.
     backup_requested: bool,
 }
@@ -244,6 +246,7 @@ impl BackupTab {
                     self.adopt(report);
                     self.run_error = error;
                     self.saving = saving;
+                    self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
                     if self.choices.backed_up(after) {
                         self.trees.iter_mut().for_each(FileTree::invalidate);
@@ -256,6 +259,13 @@ impl BackupTab {
             self.trees.iter_mut().for_each(FileTree::invalidate);
         }
         self.start_requested(ctx, state);
+    }
+
+    /// Whether a finished cleanup forgot snapshots since the last call, so a loaded list of
+    /// backups may name one that is gone. A flag rather than `poll`'s result, since `ui` polls
+    /// too and would swallow it.
+    pub(crate) fn take_removed(&mut self) -> bool {
+        std::mem::take(&mut self.removed)
     }
 
     /// Shows `report`, with a file tree per game.

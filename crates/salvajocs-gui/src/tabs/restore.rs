@@ -244,11 +244,7 @@ impl RestoreTab {
             .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
         {
             self.forget_plan();
-            self.repository = None;
-            self.listing = None;
-            self.games.clear();
-            self.selected = None;
-            self.snapshot = None;
+            self.drop_listing();
             self.detecting = None;
             self.pick = None;
             self.error = None;
@@ -284,6 +280,16 @@ impl RestoreTab {
             });
         }
         self.mapping_ui(ui.ctx(), state);
+    }
+
+    /// Drops the listed backups and the chosen game, as after a cleanup that may have forgotten
+    /// one of them; "Load backups" lists them again. A running preview or restore is kept.
+    pub(crate) fn drop_listing(&mut self) {
+        self.repository = None;
+        self.listing = None;
+        self.games.clear();
+        self.selected = None;
+        self.snapshot = None;
     }
 
     /// Whether a listing, restore or other job of this tab is running.

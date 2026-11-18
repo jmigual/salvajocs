@@ -328,6 +328,9 @@ impl eframe::App for App {
         self.poll_manifest();
         self.state.poll(&ctx);
         self.backup.poll(&ctx, &self.state);
+        if self.backup.take_removed() {
+            self.restore.drop_listing();
+        }
 
         let margin = Margin::symmetric(16, 8);
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(margin);

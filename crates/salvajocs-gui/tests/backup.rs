@@ -621,8 +621,12 @@ fn an_unchecked_registry_key_is_left_out_of_the_backup() {
 }
 
 /// Backs up Alpha alone, changes its save and backs it up again, in an app over the existing
-/// repository of `tmp`. Returns the app and how many snapshots of Alpha the repository holds.
-fn back_up_a_change(tmp: &TempDir) -> (Harness<'static, App>, usize) {
+/// repository of `tmp`, calling `between` in between. Returns the app and how many snapshots of
+/// Alpha the repository holds.
+fn back_up_a_change(
+    tmp: &TempDir,
+    between: impl FnOnce(&mut Harness<'static, App>),
+) -> (Harness<'static, App>, usize) {
     let prefix = make_prefix(tmp.path());
     write_save(&prefix, "Alpha", "abc");
     let games = vec![custom_game("Alpha", false, &prefix)];
@@ -631,6 +635,7 @@ fn back_up_a_change(tmp: &TempDir) -> (Harness<'static, App>, usize) {
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(&mut harness, "Alpha: backed up");
     assert!(!shows(&harness, "Removed"), "one backup is all there is");
+    between(&mut harness);
 
     write_save(&prefix, "Alpha", "changed");
     harness.get_by_label("Back up 1 game").click();
@@ -650,10 +655,31 @@ fn a_backup_removes_the_old_backups_the_policy_forgets() {
     init_repo(&repo_dir(&tmp));
     keep_last_one(&tmp);
 
-    let (harness, left) = back_up_a_change(&tmp);
+    let (harness, left) = back_up_a_change(&tmp, |_| {});
 
     assert_eq!(left, 1);
     assert!(shows(&harness, "Removed 1 old backup"));
+}
+
+#[test]
+fn removing_old_backups_drops_the_loaded_restore_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    keep_last_one(&tmp);
+
+    let (mut harness, _) = back_up_a_change(&tmp, |harness| {
+        harness.state_mut().set_tab(Tab::Restore);
+        run_settled(harness);
+        harness.get_by_label("Load backups").click();
+        run_until(harness, "the list", |h| shows(h, "Alpha"));
+        harness.state_mut().set_tab(Tab::Backup);
+        run_settled(harness);
+    });
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Alpha"), "the listed backup may be gone");
+    assert!(shows(&harness, "Load backups"));
 }
 
 /// Stores a retention policy that keeps each game's last backup in the repository of `tmp`.
@@ -695,7 +721,7 @@ fn without_a_policy_every_backup_stays() {
     let tmp = tempfile::tempdir().unwrap();
     init_repo(&repo_dir(&tmp));
 
-    let (harness, left) = back_up_a_change(&tmp);
+    let (harness, left) = back_up_a_change(&tmp, |_| {});
 
     assert_eq!(left, 2);
     assert!(!shows(&harness, "Removed"));
@@ -720,7 +746,7 @@ fn an_unreadable_policy_removes_nothing_and_warns() {
         .unwrap()
         .unwrap();
 
-    let (harness, left) = back_up_a_change(&tmp);
+    let (harness, left) = back_up_a_change(&tmp, |_| {});
 
     assert_eq!(left, 2);
     assert!(shows(&harness, "The cleanup rules could not be read"));
