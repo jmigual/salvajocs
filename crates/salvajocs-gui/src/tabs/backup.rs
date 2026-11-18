@@ -23,7 +23,7 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
-use tree::FileTree;
+use tree::{Clicked, FileTree};
 
 mod choices;
 mod tree;
@@ -186,9 +186,9 @@ pub struct BackupTab {
 }
 
 impl BackupTab {
-    /// Draws the tab. The scan and the backup run in jobs; `state` is only read.
+    /// Draws the tab. The scan and the backup run in jobs; `state` only gains notices.
     /// `manifest_loading` is whether the manifest job is still running.
-    pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+    pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
         self.poll(ui.ctx(), state);
         // Before the page, so the bar takes its height from the bottom first. It waits for a scan
         // report, so the empty state has one call to action.
@@ -277,7 +277,9 @@ impl BackupTab {
             .iter()
             .map(|game| {
                 let keys = game.files.iter();
-                FileTree::new(keys.map(|file| (selection::path_key(file), file.size)))
+                FileTree::new(
+                    keys.map(|file| (selection::path_key(file), file.size, file.real.clone())),
+                )
             })
             .collect();
         self.prefixes = report
@@ -384,7 +386,7 @@ impl BackupTab {
 
     /// The scan report: its problems, a header with the count and the selection buttons, and the
     /// games as a boxed list.
-    fn games_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+    fn games_ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
         let Some(report) = &self.report else {
             return;
         };
@@ -413,8 +415,9 @@ impl BackupTab {
         let Some(report) = &self.report else {
             return;
         };
-        // By index into `report.games`, applied after drawing.
+        // By index into `report.games`, applied after drawing, like the folder to open.
         let mut changes = Vec::new();
+        let mut opened = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
                 if self
@@ -483,7 +486,8 @@ impl BackupTab {
                         for prefix in prefixes {
                             ui.weak(prefix);
                         }
-                        if let Some(change) = files_ui(ui, game, tree, &settings, enabled) {
+                        let change = files_ui(ui, game, tree, &settings, enabled, &mut opened);
+                        if let Some(change) = change {
                             changes.push((index, change));
                         }
                     });
@@ -494,6 +498,12 @@ impl BackupTab {
             self.choices
                 .change(ui.ctx(), state, &report.games[index].title, change);
             self.trees[index].invalidate();
+        }
+        if let Some(path) = opened
+            && let Err(err) = (state.env.open_folder)(&path)
+        {
+            let path = path.display();
+            state.notices.push(format!("Could not open {path}: {err}"));
         }
     }
 
@@ -889,13 +899,14 @@ fn chosen_files(report: &ScanReport, settings: &Games) -> Vec<GameScan> {
 }
 
 /// What the scan found for one game, with its files as a checkbox tree and its registry keys
-/// folded away. Returns the change the user made this frame.
+/// folded away. Returns the change the user made this frame; a folder to open goes to `opened`.
 fn files_ui(
     ui: &mut Ui,
     game: &GameScan,
     tree: &mut FileTree,
     settings: &GameSettings,
     enabled: bool,
+    opened: &mut Option<PathBuf>,
 ) -> Option<Change> {
     let included = |key: &str| settings.path_included(key);
     let summary = summary(game, tree.included(&included), settings);
@@ -907,10 +918,15 @@ fn files_ui(
     egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
         .show(ui, |ui| {
-            let toggled = ui.push_id(&game.title, |ui| tree.ui(ui, &included, enabled));
-            let mut change = toggled
-                .inner
-                .map(|(node, included)| Change::Path { node, included });
+            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, &included, enabled));
+            let mut change = match clicked.inner {
+                Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
+                Some(Clicked::Open(path)) => {
+                    *opened = Some(path);
+                    None
+                }
+                None => None,
+            };
             if game.registry_source.is_some() {
                 ui.weak("Registry");
                 for key in &game.registry_keys {

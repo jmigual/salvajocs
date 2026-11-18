@@ -139,6 +139,7 @@ fn state(dir: &Path) -> State {
         run_installer: |_| panic!("tests never start an installer"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
         pick_folder: Arc::new(|| None),
+        open_folder: Arc::new(|_| Ok(())),
     });
     state.config = Some(AppConfig {
         repository: String::new(),
@@ -260,6 +261,27 @@ fn before_a_scan_the_only_action_is_one_enabled_scan() {
             .next()
             .is_none()
     );
+}
+
+#[test]
+fn a_folder_that_cannot_be_opened_is_a_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    state.env.open_folder = Arc::new(|_| Err(std::io::ErrorKind::NotFound.into()));
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state),
+    );
+    settle(&mut harness);
+    harness.get_by_label("1 file, 1 B").click();
+    harness.step();
+
+    harness
+        .get_by_label("Show Home in the file manager")
+        .click();
+    harness.step();
+
+    assert_eq!(harness.state().1.notices.len(), 1);
 }
 
 #[test]

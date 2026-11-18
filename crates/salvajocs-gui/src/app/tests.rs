@@ -37,6 +37,7 @@ fn app(dir: &Path) -> App {
         run_installer: fake_installer,
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
         pick_folder: Arc::new(|| None),
+        open_folder: Arc::new(|_| Ok(())),
     };
     let repository = dir.join("repo").to_str().unwrap().to_string();
     let location = RepoLocation {

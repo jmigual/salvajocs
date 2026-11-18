@@ -62,6 +62,9 @@ keys under **Registry**:
   `2 files, 1.1 MiB, 1 excluded`.
 - A game with every file and key unchecked gets no snapshot.
 - Below Windows folders, names that differ only in upper and lower case are one folder.
+- The button at the end of a folder's line, **Show … in the file manager**, opens that folder. A
+  folder whose files come from two places, such as two prefixes or install folders, opens the
+  first.
 
 The choices are kept in the repository, so every machine that uses it shares them. A click is
 not stored there right away: it waits in `pending-selection.json` in the config folder, which

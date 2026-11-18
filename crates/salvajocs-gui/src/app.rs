@@ -378,7 +378,7 @@ impl eframe::App for App {
             .show(ui, |ui| match (&self.stage, self.tab) {
                 (Stage::ConfigUnreadable(_), _) => false,
                 (_, Tab::Backup) => {
-                    self.backup.ui(ui, &self.state, self.manifest.is_some());
+                    self.backup.ui(ui, &mut self.state, self.manifest.is_some());
                     false
                 }
                 (_, Tab::Restore) => {

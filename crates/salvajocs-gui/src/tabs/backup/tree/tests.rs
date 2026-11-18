@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -8,7 +9,10 @@ use super::*;
 use crate::theme;
 
 fn tree(keys: &[&str]) -> FileTree {
-    FileTree::new(keys.iter().map(|key| ((*key).to_owned(), 10)))
+    FileTree::new(
+        keys.iter()
+            .map(|key| ((*key).to_owned(), 10, Path::new("/disk").join(key))),
+    )
 }
 
 /// The folder at `path` below the root, one component at a time.
@@ -128,6 +132,7 @@ struct Fixture {
     included: BTreeSet<String>,
     enabled: bool,
     toggled: Option<(String, bool)>,
+    opened: Option<PathBuf>,
 }
 
 fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, Fixture> {
@@ -136,6 +141,7 @@ fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, 
         included: included.iter().map(|key| (*key).to_owned()).collect(),
         enabled,
         toggled: None,
+        opened: None,
     };
     let mut harness = theme::harness(
         |ui, state: &mut Fixture| {
@@ -144,9 +150,12 @@ fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, 
                 included,
                 enabled,
                 toggled,
+                opened,
             } = state;
-            if let Some(clicked) = tree.ui(ui, &|key| included.contains(key), *enabled) {
-                *toggled = Some(clicked);
+            match tree.ui(ui, &|key| included.contains(key), *enabled) {
+                Some(Clicked::Toggle(key, on)) => *toggled = Some((key, on)),
+                Some(Clicked::Open(path)) => *opened = Some(path),
+                None => {}
             }
         },
         fixture,
@@ -287,4 +296,51 @@ fn case_variant_folders_merge_below_windows_bases_only() {
         ["WinAppData/Foo/a.sav", "WinAppData/foo/b.sav"]
     );
     assert_eq!(names(&folder(&tree, &["Home"]).folders), ["Foo", "foo"]);
+}
+
+#[test]
+fn folders_know_their_folder_on_disk() {
+    let tree = FileTree::new(
+        [
+            ("WinAppData/foo/sub/c.sav", "/pfx/Roaming/foo/sub/c.sav"),
+            ("WinAppData/Foo/b.sav", "/pfx/Roaming/Foo/b.sav"),
+            ("WinAbsolute/C/Games/d.sav", "C:/Games/d.sav"),
+        ]
+        .map(|(key, real)| (key.to_owned(), 1, PathBuf::from(real))),
+    );
+
+    let real = |path: &[&str]| folder(&tree, path).real.clone();
+    assert_eq!(real(&["WinAppData"]), Some(PathBuf::from("/pfx/Roaming")));
+    // The case variants merge into the first one in order, `Foo`, which is where it opens.
+    assert_eq!(
+        real(&["WinAppData", "Foo"]),
+        Some(PathBuf::from("/pfx/Roaming/Foo"))
+    );
+    assert_eq!(
+        real(&["WinAppData", "Foo", "sub"]),
+        Some(PathBuf::from("/pfx/Roaming/foo/sub"))
+    );
+    assert_eq!(tree.root.real, None);
+    assert_eq!(
+        real(&["WinAbsolute", "C", "Games"]),
+        Some(PathBuf::from("C:/Games"))
+    );
+    #[cfg(windows)]
+    assert_eq!(real(&["WinAbsolute"]), None);
+}
+
+#[test]
+fn a_folder_opens_even_in_a_disabled_tree() {
+    let mut harness = harness(&KEYS, &KEYS, false);
+
+    harness
+        .get_by_label("Show WinAppData in the file manager")
+        .click();
+    harness.run();
+
+    assert_eq!(
+        harness.state().opened,
+        Some(PathBuf::from("/disk/WinAppData"))
+    );
+    assert_eq!(harness.state().toggled, None);
 }

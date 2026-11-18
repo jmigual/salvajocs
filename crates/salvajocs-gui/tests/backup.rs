@@ -6,10 +6,11 @@ use std::fs;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use common::{
-    env, harness, init_repo, local_config, repo_dir, run_settled, run_until, run_until_backed_up,
-    run_until_ready, save_config, shows,
+    env, harness, init_repo, local_config, record_opened, repo_dir, run_settled, run_until,
+    run_until_backed_up, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::Toggled;
 use egui_kittest::Harness;
@@ -97,7 +98,17 @@ fn open_app(
     games: Vec<CustomGame>,
     cached_manifest: bool,
 ) -> (Harness<'static, App>, Env) {
-    let mut env = env(tmp);
+    start_app(env(tmp), repository, roots, games, cached_manifest)
+}
+
+/// Like [`open_app`], on `env`.
+fn start_app(
+    mut env: Env,
+    repository: &str,
+    roots: Vec<Root>,
+    games: Vec<CustomGame>,
+    cached_manifest: bool,
+) -> (Harness<'static, App>, Env) {
     if cached_manifest {
         fs::create_dir_all(&env.cache_dir).unwrap();
         fs::write(
@@ -407,6 +418,59 @@ fn a_choice_waits_in_the_pending_file_until_a_backup() {
     run_settled(&mut restarted);
     scan(&mut restarted, "2 games found");
     assert!(!checked(&restarted, "Beta"));
+}
+
+/// Like [`open_tab`] without roots, recording the folders the app is asked to open.
+fn open_tab_recording(
+    games: Vec<CustomGame>,
+) -> (Harness<'static, App>, Arc<Mutex<Vec<PathBuf>>>, TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut env = env(&tmp);
+    let opened = record_opened(&mut env);
+    let (harness, _) = start_app(env, &repository, Vec::new(), games, true);
+    (harness, opened, tmp)
+}
+
+#[test]
+fn a_folder_button_opens_the_folder_on_disk() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = alpha_with_sub_and_beta(&scratch);
+    let (mut harness, opened, _tmp) = open_tab_recording(games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "2 files, 5 B");
+
+    click(&mut harness, "Show WinAppData in the file manager");
+    click(&mut harness, "Open WinAppData");
+    click(&mut harness, "Show Alpha in the file manager");
+
+    let roaming = prefix.join("drive_c/users/steamuser/AppData/Roaming");
+    assert_eq!(
+        *opened.lock().unwrap(),
+        [roaming.clone(), roaming.join("Alpha")]
+    );
+}
+
+#[test]
+fn a_merged_case_variant_folder_opens_the_first_variant() {
+    let scratch = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(scratch.path());
+    let alpha = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
+    for (dir, file) in [("Sub", "a.dat"), ("sub", "b.dat")] {
+        fs::create_dir_all(alpha.join(dir)).unwrap();
+        fs::write(alpha.join(dir).join(file), "x").unwrap();
+    }
+    let (mut harness, opened, _tmp) =
+        open_tab_recording(vec![custom_game("Alpha", false, &prefix)]);
+    scan(&mut harness, "1 game found");
+    click(&mut harness, "2 files, 2 B");
+    click(&mut harness, "Open WinAppData");
+    click(&mut harness, "Open Alpha");
+
+    click(&mut harness, "Show Sub in the file manager");
+
+    assert_eq!(*opened.lock().unwrap(), [alpha.join("Sub")]);
 }
 
 #[test]

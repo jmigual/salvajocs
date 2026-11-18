@@ -1,19 +1,31 @@
 //! A tree of a game's files, with a checkbox on every folder and file to choose what to back up.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use eframe::egui::collapsing_header::CollapsingState;
-use eframe::egui::{Checkbox, Role, Ui, WidgetInfo};
+use eframe::egui::{Button, Checkbox, Role, Ui, WidgetInfo};
 use salvajocs_core::selection;
 
 use super::format_size;
 use crate::tabs::count;
+use crate::theme::{self, icons};
 
-/// One file: its `Base/dir/file` key, the last component of it, and its size.
+/// One file: its `Base/dir/file` key, the last component of it, its size and its path on disk.
 struct File {
     key: String,
     name: String,
     size: u64,
+    real: PathBuf,
+}
+
+/// What the user clicked in a [`FileTree`].
+pub(super) enum Clicked {
+    /// A folder's or file's checkbox: its key and new value. A folder's key covers every file
+    /// below it.
+    Toggle(String, bool),
+    /// A folder's open button: the folder on disk.
+    Open(PathBuf),
 }
 
 /// A folder, or the root that holds the Bases. `range` spans its files in [`FileTree::files`],
@@ -21,6 +33,9 @@ struct File {
 struct Folder {
     key: String,
     name: String,
+    /// The folder on disk, from its first file; `None` for the root and, on Windows, for the
+    /// `WinAbsolute` Base, which is above the drive roots.
+    real: Option<PathBuf>,
     range: Range<usize>,
     folders: Vec<Folder>,
     /// Indices of the files directly in this folder.
@@ -28,10 +43,11 @@ struct Folder {
 }
 
 impl Folder {
-    fn new(key: &str, name: &str, at: usize) -> Self {
+    fn new(key: &str, name: &str, at: usize, real: Option<&Path>) -> Self {
         Folder {
             key: key.to_owned(),
             name: name.to_owned(),
+            real: real.map(Path::to_path_buf),
             range: at..at,
             folders: Vec::new(),
             files: Vec::new(),
@@ -57,20 +73,26 @@ pub(super) struct FileTree {
 }
 
 impl FileTree {
-    /// Builds the tree from `(key, size)` pairs, `key` being `Base/dir/file`.
-    pub(super) fn new(keys: impl IntoIterator<Item = (String, u64)>) -> Self {
+    /// Builds the tree from `(key, size, real)` triples, `key` being `Base/dir/file` and `real`
+    /// the file on disk, whose last components are those of `key` below its Base.
+    pub(super) fn new(keys: impl IntoIterator<Item = (String, u64, PathBuf)>) -> Self {
         let mut files: Vec<File> = keys
             .into_iter()
-            .map(|(key, size)| {
+            .map(|(key, size, real)| {
                 let name = key.rsplit('/').next().unwrap_or_default().to_owned();
-                File { key, name, size }
+                File {
+                    key,
+                    name,
+                    size,
+                    real,
+                }
             })
             .collect();
         // By component, not by text, so the folder `a` lists before its sibling `a-b`. Below a
         // Windows-family base, case variants such as `Foo` and `foo` sort together into one folder.
         files.sort_by_cached_key(|file| (folded(&file.key), file.key.clone()));
 
-        let mut root = Folder::new("", "", 0);
+        let mut root = Folder::new("", "", 0, None);
         for (at, file) in files.iter().enumerate() {
             let mut folder = &mut root;
             folder.range.end = at + 1;
@@ -88,7 +110,12 @@ impl FileTree {
                         }
                     };
                     if folder.folders.last().is_none_or(|last| !same(&last.name)) {
-                        folder.folders.push(Folder::new(&file.key[..end], dir, at));
+                        // For merged case variants, the first one's.
+                        let below = file.key[end..].matches('/').count();
+                        let real = file.real.ancestors().nth(below);
+                        folder
+                            .folders
+                            .push(Folder::new(&file.key[..end], dir, at, real));
                     }
                     end += 1;
                     folder = folder
@@ -120,16 +147,15 @@ impl FileTree {
         (all.files, all.size)
     }
 
-    /// Draws the tree and returns the toggle clicked this frame, as the key of the folder or file
-    /// and its new value. A folder's key covers every file below it. `included` says whether a
-    /// file key is currently included; `enabled` false greys the checkboxes. The caller scopes the
-    /// ids (`ui.push_id`) when it draws several trees.
+    /// Draws the tree and returns what was clicked this frame. `included` says whether a file key
+    /// is currently included; `enabled` false greys the checkboxes, not the open buttons. The
+    /// caller scopes the ids (`ui.push_id`) when it draws several trees.
     pub(super) fn ui(
         &mut self,
         ui: &mut Ui,
         included: &dyn Fn(&str) -> bool,
         enabled: bool,
-    ) -> Option<(String, bool)> {
+    ) -> Option<Clicked> {
         let FileTree {
             files,
             root,
@@ -141,9 +167,9 @@ impl FileTree {
             enabled,
             included,
         };
-        let mut toggled = None;
-        drawing.children(ui, root, &mut toggled);
-        toggled
+        let mut clicked = None;
+        drawing.children(ui, root, &mut clicked);
+        clicked
     }
 }
 
@@ -194,9 +220,9 @@ struct Drawing<'a> {
 
 impl Drawing<'_> {
     /// The subfolders of `parent`, then the files directly in it.
-    fn children(&self, ui: &mut Ui, parent: &Folder, toggled: &mut Option<(String, bool)>) {
+    fn children(&self, ui: &mut Ui, parent: &Folder, clicked: &mut Option<Clicked>) {
         for folder in &parent.folders {
-            self.folder(ui, folder, toggled);
+            self.folder(ui, folder, clicked);
         }
         for &at in &parent.files {
             let file = &self.files[at];
@@ -204,7 +230,7 @@ impl Drawing<'_> {
                 let mut checked = (self.included)(&file.key);
                 let checkbox = Checkbox::new(&mut checked, &file.name);
                 if ui.add_enabled(self.enabled, checkbox).changed() {
-                    *toggled = Some((file.key.clone(), checked));
+                    *clicked = Some(Clicked::Toggle(file.key.clone(), checked));
                 }
                 ui.weak(format_size(file.size));
             });
@@ -212,7 +238,7 @@ impl Drawing<'_> {
     }
 
     /// A folder as a collapsing header whose children are only built while it is open.
-    fn folder(&self, ui: &mut Ui, folder: &Folder, toggled: &mut Option<(String, bool)>) {
+    fn folder(&self, ui: &mut Ui, folder: &Folder, clicked: &mut Option<Clicked>) {
         let Range { start, end } = folder.range;
         let total = end - start;
         let files = self.totals[end].files - self.totals[start].files;
@@ -227,15 +253,26 @@ impl Drawing<'_> {
                 let mixed = files != 0 && !checked;
                 let checkbox = Checkbox::new(&mut checked, &folder.name).indeterminate(mixed);
                 if ui.add_enabled(self.enabled, checkbox).changed() {
-                    *toggled = Some((folder.key.clone(), checked));
+                    *clicked = Some(Clicked::Toggle(folder.key.clone(), checked));
                 }
                 ui.weak(format!(
                     "{files} of {}, {}",
                     count(total, "file"),
                     format_size(size)
                 ));
+                if let Some(real) = &folder.real {
+                    let name = format!("Show {} in the file manager", folder.name);
+                    let button = Button::new(theme::icon(icons::ARROW_SQUARE_OUT))
+                        .frame_when_inactive(false);
+                    let response = ui.add(button);
+                    response
+                        .widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &name));
+                    if response.on_hover_text(&name).clicked() {
+                        *clicked = Some(Clicked::Open(real.clone()));
+                    }
+                }
             })
-            .body(|ui| self.children(ui, folder, toggled));
+            .body(|ui| self.children(ui, folder, clicked));
         // The arrow is a bare interaction, so name it for screen readers; not the bare folder
         // name, which the checkbox carries.
         arrow.widget_info(|| {

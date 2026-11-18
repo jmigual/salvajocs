@@ -24,6 +24,7 @@ All notable changes to salvajocs. The format follows
   backup.
 - On the Restore tab, delete one backup of a game, or all of them, from the repository.
 - On the Backup tab, a game found in a Wine or Proton prefix shows the prefix.
+- Each folder in the Backup tab's tree has a button that opens it in the file manager.
 
 ### Changed
 

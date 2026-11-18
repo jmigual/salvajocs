@@ -4,6 +4,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
@@ -109,6 +110,9 @@ pub type RefreshManifest = fn(&Path) -> Result<Freshness, FetchError>;
 /// Asks for a release newer than the given version (`update::check`).
 pub type CheckUpdate = fn(&str) -> Result<Option<Release>, UpdateError>;
 
+/// Shows a folder in the file manager; returns once the opener is spawned.
+pub type OpenFolder = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+
 /// Everything a worker thread needs from the environment; cheap to clone.
 #[derive(Clone)]
 pub struct Env {
@@ -135,6 +139,8 @@ pub struct Env {
     pub rclone_remotes: fn() -> io::Result<Vec<String>>,
     /// Asks the user for a folder; `None` when they cancel. Blocks, so call it from a worker.
     pub pick_folder: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
+    /// Shows a folder in the file manager.
+    pub open_folder: OpenFolder,
 }
 
 impl Env {
@@ -152,8 +158,32 @@ impl Env {
             run_installer: update::run_installer,
             rclone_remotes: config::rclone_remotes,
             pick_folder: Arc::new(|| rfd::FileDialog::new().pick_folder()),
+            open_folder: Arc::new(open_folder),
         })
     }
+}
+
+fn open_folder(path: &Path) -> io::Result<()> {
+    if !path.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "not a folder"));
+    }
+    // Explorer misreads `/`, which glob output and the drive pattern mix in with `\`.
+    #[cfg(windows)]
+    let path = &path.components().collect::<PathBuf>();
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = Command::new(program)
+        .arg(path)
+        .spawn()
+        .map_err(|err| io::Error::new(err.kind(), format!("{program}: {err}")))?;
+    // Reaped on a thread so the click does not wait, and no zombie is left behind.
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 fn installed_by_installer() -> bool {

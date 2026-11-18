@@ -77,12 +77,24 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         run_installer: |_| panic!("tests never start an installer"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
         pick_folder: Arc::new(|| None),
+        open_folder: Arc::new(|_| Ok(())),
     }
 }
 
 /// Makes the folder picker of `env` return `path`, as if the user chose it.
 pub fn pick(env: &mut Env, path: PathBuf) {
     env.pick_folder = Arc::new(move || Some(path.clone()));
+}
+
+/// Makes `env` record the folders it is asked to open instead of opening them.
+pub fn record_opened(env: &mut Env) -> Arc<Mutex<Vec<PathBuf>>> {
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let record = opened.clone();
+    env.open_folder = Arc::new(move |path| {
+        record.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    });
+    opened
 }
 
 /// Where the tests keep their repository.
