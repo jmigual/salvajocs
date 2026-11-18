@@ -409,6 +409,25 @@ fn lutris_reads_only_yml_games() {
     assert_eq!(h.prefixes(), [lutris_foo(prefix)]);
 }
 
+/// Lutris writes a `null` key into the file of a Steam game.
+#[test]
+fn lutris_null_key_is_ignored() {
+    let h = Home::new();
+    let prefix = h.prefix("Games/foo");
+    let steam = "system: {}\nnull: {}\ngame:\n  appid: '1000001'\n";
+    let steam = h.write(
+        ".local/share/lutris/games/steam-1000001-1700000000.yml",
+        steam,
+    );
+    h.write(
+        ".local/share/lutris/games/foo-1.yml",
+        "system: {}\nnull: {}\ngame:\n  prefix: ~/Games/foo\n",
+    );
+    let (prefixes, problems) = h.detect();
+    assert_eq!(problems, [], "{}", steam.display());
+    assert_eq!(prefixes, [lutris_foo(prefix)]);
+}
+
 #[test]
 fn malformed_lutris_yml_is_a_problem() {
     let h = Home::new();

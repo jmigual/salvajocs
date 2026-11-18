@@ -416,7 +416,11 @@ impl Found {
     }
 
     fn yaml<T: DeserializeOwned>(&mut self, path: &Path) -> Option<T> {
-        self.load(path, |text| serde_saphyr::from_str(text))
+        // Lutris writes a `null:` key into the file of a Steam game.
+        let options = serde_saphyr::options! { null_as_string: true };
+        self.load(path, |text| {
+            serde_saphyr::from_str_with_options(text, options)
+        })
     }
 
     /// Reads and parses a file. A missing file is `None`; any other failure is also a problem.
