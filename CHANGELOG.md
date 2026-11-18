@@ -10,9 +10,13 @@ All notable changes to salvajocs. The format follows
 
 - An [advanced storage options reference](docs/guide/advanced-options.md): how the key and value
   pairs are read, which values are accepted, and the keys of every backend.
+- A warning under an Advanced option key that the chosen backend does not read.
 
 ### Changed
 
+- A key typed in Advanced options twice, or as a field and an option, is refused whatever its
+  letter case, and for the Azure Blob, Google Cloud Storage and S3 fields also under their alias
+  names, as opendal reads them.
 - The **Option reference** link of the repository form opens that page, in the docs of the
   running version, instead of docs.rs or the rustic config.
 

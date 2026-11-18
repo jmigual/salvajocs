@@ -28,10 +28,10 @@ keys and tokens are masked, and their values are never written to the config fil
 them each session.
 
 **Advanced options** holds a free list of key and value pairs for settings that have no field,
-such as a retry count. The **Option reference** link opens the [advanced options reference](advanced-options.md) at
-the section of the backend, with the value formats and the keys. Tick
-**secret** on an option that holds a key or token. If a saved option has no field of its own, the
-list opens expanded.
+such as a retry count. The **Option reference** link opens the
+[advanced options reference](advanced-options.md) at the section of the backend, with the value
+formats and the keys. A key the backend does not read gets a warning. Tick **secret** on an option
+that holds a key or token. If a saved option has no field of its own, the list opens expanded.
 
 If `rclone` is not installed, the rclone entry says so and you can still type the location.
 

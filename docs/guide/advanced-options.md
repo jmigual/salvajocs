@@ -17,9 +17,12 @@ the way, so the rules below are those of the code that reads the value.
   after it is part of the value, so `true ` is not `true`.
 - Tick **secret** on a row that holds a key or token. It is then kept in the keyring, not in the
   config file.
+- A key with no meaning for the backend gets a warning under the row: "Not an option of this
+  backend". It is still saved and passed on, and it does nothing.
 - A key set in a form field and again in Advanced options is refused, and so is a key set twice.
-  Some keys also have alias names (listed per service). An alias and its key together are
-  refused too.
+  For the services, `Region` and `region` are the same key, and so are a key of a form field and
+  its alias names (listed per service). The form refuses all of these. It does not compare the
+  alias names of keys that have no form field.
 
 ### Service keys (OpenDAL)
 
@@ -29,14 +32,14 @@ sections below. They are snake_case: `disable_create_dir`.
 | Value type | What is accepted | Wrong value |
 | --- | --- | --- |
 | Text | Anything, as typed. An empty value means "not set" for an optional key. | |
-| Yes or no | `true`, `false`, `on` or `off`, in any letter case: `True` and `TRUE` work. | `1`, `0`, `yes` and an empty value are errors. |
+| Yes or no | `true` or `false`, in lowercase. | `1`, `0`, `yes` and an empty value are errors. |
 | Number | Digits, with a leading `-` where negative makes sense. No spaces. | An error. |
 
 - Key names are matched in any letter case: `Disable_Create_Dir` is `disable_create_dir`.
-- A key the service does not have is **ignored without a message**. A typo does nothing, so check
-  the spelling against the tables below.
-- Keys marked deprecated are still read, and still must be valid, but have no effect in this
-  version.
+- A key the service does not have is ignored by opendal. The form shows a warning under the row.
+  A typo does nothing, so check the spelling against the tables below.
+- Keys marked deprecated are still read, and still must be valid. They have no effect in this
+  version, except `allow_anonymous`, which still works as `skip_signature`.
 - No service has a list value in this version. The S3 key `assume_role_session_tags` is a map and
   cannot be set from a text value.
 
@@ -50,11 +53,11 @@ lowercase, and they must be typed in lowercase: unlike the service keys, `Retry`
 
 | Backend | Key | Value | What it does |
 | --- | --- | --- | --- |
-| Services | `retry` | `default`, `false`, `off` or a whole number. Default `5`. | How many times a failed request is retried. `false` and `off` mean 0. Typed exactly as shown: `False` is an error. |
-| Services | `connections` | A whole number. Default: no limit. | The most requests at the same time. |
-| Services | `throttle` | `bandwidth,burst`, each a size such as `10MiB` or `500kB`. Both are needed. | Limits upload and download speed per second, with a burst size. Each size must be under 4 GiB. |
+| Services | `retry` | `default`, `false` or a whole number. Default `5`. | How many times a failed request is retried. `false` means 0. |
+| Services | `connections` | A whole number, at least 1. Default: no limit. | The most requests at the same time. |
+| Services | `throttle` | `bandwidth,burst`, each a size such as `10MiB`. Both are needed, neither can be `0`, and each must be under 4 GiB. | Limits the upload speed, in bytes per second. Reads are not limited. A single write larger than the burst fails, and a pack is written in one call, so the burst must be at least the largest pack: tens of MiB. For example `10MiB,256MiB`. |
 | REST server, rclone remote | `retry` | As above. | As above, for the REST requests. |
-| REST server, rclone remote | `timeout` | A duration: `30s`, `10m`, `2h 30m` or `PT30S`. Default `10m`. | How long one request may take. A negative value counts as no time at all. |
+| REST server, rclone remote | `timeout` | A duration: `30s`, `10m`, `2h 30m` or `PT30S`. Default `10m`. | How long one request may take. A negative value sets a timeout of zero, so every request fails. |
 | REST server, rclone remote | `cacert` | A path to a PEM file. | Adds a certificate authority to trust. |
 | REST server, rclone remote | `tls-client-cert` | A path to a PEM file with the certificate and the private key. | The client certificate to present. |
 
@@ -98,7 +101,7 @@ program:
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `rclone-command` | Text | `rclone serve restic --addr localhost:0` | The command that starts the server. The location is added at the end. |
-| `use-password` | `true` or `false`, lowercase only | `true` | Whether salvajocs sets a user and password on the local server. `True` is an error here. |
+| `use-password` | `true` or `false` | `true` | Whether a random user and password are set on the local server. |
 | `rest-url` | Text | Read from the output of rclone | Use this URL, and do not read it from the output of rclone. With `use-password` it must start with `http://`. |
 
 ## Alibaba Cloud OSS
@@ -119,7 +122,8 @@ Service `oss`. The form has `bucket`, `endpoint`, `access_key_id`, `access_key_s
 | `oidc_provider_arn`, `oidc_token_file` | Text | Not set | Sign in with an OIDC token. |
 | `sts_endpoint` | Text | Not set | The STS endpoint for the role. |
 
-Deprecated: `enable_versioning`, `allow_anonymous`, `batch_max_operations`, `delete_max_size`.
+Deprecated: `enable_versioning`, `batch_max_operations`, `delete_max_size`, and `allow_anonymous`,
+which still works as `skip_signature`.
 
 ## Amazon S3 (or compatible)
 
@@ -160,8 +164,9 @@ also `aws_profile`. `access_key_id` is also `aws_access_key_id`. `secret_access_
 `enable_request_payer` is also `aws_request_payer`, `request_payer`.
 
 Cannot be set: `assume_role_session_tags`, a map.
-Deprecated: `enable_versioning`, `allow_anonymous`, `batch_max_operations`, `delete_max_size`,
-`disable_stat_with_override`, `disable_write_with_if_match`, `enable_write_with_append`.
+Deprecated: `enable_versioning`, `batch_max_operations`, `delete_max_size`,
+`disable_stat_with_override`, `disable_write_with_if_match`, `enable_write_with_append`, and
+`allow_anonymous`, which still works as `skip_signature`.
 
 ## Azure Blob Storage
 
@@ -177,6 +182,9 @@ Service `azblob`. The form has `container`, `endpoint`, `account_name`, `account
 
 Aliases: `container` is also `azure_container_name`, `container_name`. `endpoint` is also
 `azure_storage_endpoint`, `azure_endpoint`. `account_name` is also `azure_storage_account_name`.
+`account_key` is also `azure_storage_account_key`, `azure_storage_access_key`,
+`azure_storage_master_key`, `access_key`, `master_key`. `sas_token` is also
+`azure_storage_sas_key`, `azure_storage_sas_token`, `sas_key`.
 Deprecated: `batch_max_operations`.
 
 ## Azure Data Lake Storage
@@ -226,7 +234,7 @@ Service `gcs`. The form has `bucket`, `credential`, `credential_path` and `root`
 | `disable_config_load` | Yes or no | `false` | Do not read credentials from the environment. |
 | `skip_signature` | Yes or no | `false` | Send requests without credentials. |
 | `endpoint` | Text | `https://storage.googleapis.com` | The service URL. |
-| `scope` | Text | Not set | The OAuth2 scope, such as `https://www.googleapis.com/auth/devstorage.read_write`. |
+| `scope` | Text | `https://www.googleapis.com/auth/devstorage.read_write` | The OAuth2 scope. Read only is `https://www.googleapis.com/auth/devstorage.read_only`. |
 | `service_account` | Text | `default` | The service account to use when credentials come from the metadata server. |
 | `predefined_acl` | Text | Not set | One of `authenticatedRead`, `bucketOwnerFullControl`, `bucketOwnerRead`, `private`, `projectPrivate`, `publicRead`. |
 | `default_storage_class` | Text | Not set | The storage class of new objects. |
@@ -234,7 +242,9 @@ Service `gcs`. The form has `bucket`, `credential`, `credential_path` and `root`
 Aliases: `credential` is also `google_service_account_key`, `service_account_key`.
 `credential_path` is also `google_application_credentials`. `skip_signature` is also
 `google_skip_signature`. `bucket` is also `google_bucket`, `google_bucket_name`, `bucket_name`.
-Deprecated: `allow_anonymous`.
+`service_account` is also `google_service_account`, `google_service_account_path`,
+`service_account_path`.
+Deprecated: `allow_anonymous`, which still works as `skip_signature`.
 
 ## Google Drive
 
@@ -311,8 +321,8 @@ Service `webdav`. The form has `endpoint`, `username`, `password` and `root`.
 | `user_metadata_prefix` | Text | `opendal` | The XML prefix of the custom properties. |
 | `user_metadata_uri` | Text | `https://opendal.apache.org/ns` | The XML namespace of the custom properties. |
 
-Deprecated: `disable_copy`, `enable_user_metadata`. `disable_copy` is read, and must be `true`,
-`false`, `on` or `off` in any letter case, but it does nothing: copy is always on.
+Deprecated: `disable_copy`, `enable_user_metadata`. `disable_copy` takes `true` or `false`, but it
+does nothing: copy is always on.
 
 ## Yandex Disk
 
