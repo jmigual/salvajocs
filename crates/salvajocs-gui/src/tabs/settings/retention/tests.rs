@@ -173,9 +173,11 @@ fn a_reset_keeps_a_running_save_busy() {
     harness.state_mut().0.reset();
     assert!(harness.state().0.busy());
     drop(held);
-    step_until(&mut harness, "the save to end", |h| !h.state().0.busy());
+    // `busy` turns false when the job ends; `previous` is pruned by the next frame's poll.
+    step_until(&mut harness, "the save to end and be dropped", |h| {
+        !h.state().0.busy() && h.state().0.previous.is_empty()
+    });
     assert!(stored(dir.path()).keep_last.is_some());
-    assert!(harness.state().0.previous.is_empty());
 }
 
 #[test]
