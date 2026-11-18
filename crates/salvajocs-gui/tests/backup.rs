@@ -157,6 +157,18 @@ fn backup_scan_job_lists_games_with_file_counts() {
 }
 
 #[test]
+fn a_game_found_in_a_wine_prefix_shows_the_prefix() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+
+    scan(&mut harness, "2 games found");
+
+    let line = format!("Wine prefix: {}", prefix.display());
+    assert_eq!(harness.query_all_by_label(&line).count(), 2);
+}
+
+#[test]
 fn backup_scan_problems_are_shown() {
     let scratch = tempfile::tempdir().unwrap();
     let prefix = make_prefix(scratch.path());

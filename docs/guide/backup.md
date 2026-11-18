@@ -50,6 +50,8 @@ A game with unreadable paths shows how many, because its backup may be incomplet
 Each game found has a checkbox and a line such as `3 files, 1.2 MiB, plus registry keys`. A
 game's checkbox says whether it is backed up at all. New games start selected. **Select all** and
 **Deselect all** change every game at once.
+A game found in a Wine or Proton prefix shows it as `Wine prefix: <folder>`, one line per prefix
+its files or registry keys came from.
 
 Open the line to see the game's files as a tree of folders, each with a checkbox, and its registry
 keys under **Registry**:

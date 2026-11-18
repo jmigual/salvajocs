@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
@@ -170,6 +170,8 @@ pub struct BackupTab {
     scan_error: Option<String>,
     /// One tree per game of `report`, in its order.
     trees: Vec<FileTree>,
+    /// The `Wine prefix: …` lines of each game of `report`, in its order.
+    prefixes: Vec<Vec<String>>,
     /// What to back up of each game.
     choices: Choices,
     running: Option<Job<Backed>>,
@@ -276,6 +278,14 @@ impl BackupTab {
             .map(|game| {
                 let keys = game.files.iter();
                 FileTree::new(keys.map(|file| (selection::path_key(file), file.size)))
+            })
+            .collect();
+        self.prefixes = report
+            .games
+            .iter()
+            .map(|game| {
+                let line = |prefix: &PathBuf| format!("Wine prefix: {}", prefix.display());
+                game.prefixes.iter().map(line).collect()
             })
             .collect();
         self.report = Some(report);
@@ -437,12 +447,13 @@ impl BackupTab {
             );
             return;
         }
-        let (choices, trees) = (&self.choices, &mut self.trees);
+        let (choices, trees, prefixes) = (&self.choices, &mut self.trees, &self.prefixes);
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().interact_size.y = 24.0;
-            for (index, (game, tree)) in report.games.iter().zip(trees).enumerate() {
+            let games = report.games.iter().zip(trees).zip(prefixes);
+            for (index, ((game, tree), prefixes)) in games.enumerate() {
                 if index > 0 {
                     theme::row_separator(ui);
                 }
@@ -468,6 +479,9 @@ impl BackupTab {
                                 color,
                                 format!("What to back up cannot be read, so all of it is: {error}"),
                             );
+                        }
+                        for prefix in prefixes {
+                            ui.weak(prefix);
                         }
                         if let Some(change) = files_ui(ui, game, tree, &settings, enabled) {
                             changes.push((index, change));

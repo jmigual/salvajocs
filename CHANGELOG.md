@@ -23,6 +23,7 @@ All notable changes to salvajocs. The format follows
   span, or both. The rules are stored in the repository, and old backups are removed after each
   backup.
 - On the Restore tab, delete one backup of a game, or all of them, from the repository.
+- On the Backup tab, a game found in a Wine or Proton prefix shows the prefix.
 
 ### Changed
 
