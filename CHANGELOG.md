@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An [advanced storage options reference](docs/guide/advanced-options.md): how the key and value
+  pairs are read, which values are accepted, and the keys of every backend.
+
 ### Fixed
 
 - A dialog taller than the window, such as the one that creates a repository, scrolls.

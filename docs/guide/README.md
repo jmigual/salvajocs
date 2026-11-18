@@ -12,6 +12,7 @@ It describes the app as it is today. For the project overview, go back to the
 | [Backup](backup.md) | Scan for games and back them up. |
 | [Restore](restore.md) | Pick a snapshot, check the preview, restore, and undo. |
 | [Cross-OS restore](cross-os-restore.md) | Move saves between Wine/Proton on Linux and Windows. |
+| [Advanced options](advanced-options.md) | The key and value pairs of the repository form: value formats and every key per backend. |
 | [Custom games](custom-games.md) | Add a game the manifest does not know, or fix one it knows. |
 | [Settings](settings.md) | Change the repository, the compression level, the game folders and the Wine prefixes. |
 | [Using the repository with restic](restic-interop.md) | Read the repository with the restic command line. |

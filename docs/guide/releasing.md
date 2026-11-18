@@ -20,3 +20,11 @@ The release workflow (`.github/workflows/release.yml`) then:
 - writes a `SHA256SUMS` file covering every one of those files;
 - creates the GitHub Release with those files and `SHA256SUMS`, and uses the version's
   `CHANGELOG.md` section as the release notes.
+
+## Dependency bumps and the docs
+
+- After bumping `opendal` or `rustic_backend`, re-check [Advanced options](advanced-options.md)
+  against the new versions: the keys of each service, the value rules, and the "Checked against"
+  line at the top.
+- The **Option reference** link in the app points at the page in the tag of the running version
+  (`v<version>`), so a page the GUI links to must exist in the tagged tree.
