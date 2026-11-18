@@ -159,7 +159,7 @@ pub fn replace_text(harness: &mut Harness<'static, App>, label: &str, text: &str
 pub fn harness(env: Env) -> Harness<'static, App> {
     // Tall enough that the longest page, Settings, needs no scrolling: clicks land on the center
     // of a widget, which must be on screen.
-    harness_sized(env, Vec2::new(1000.0, 1400.0))
+    harness_sized(env, Vec2::new(1000.0, 1600.0))
 }
 
 /// Like `harness`, in a window of `size`.

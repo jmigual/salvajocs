@@ -581,6 +581,62 @@ fn applying_a_new_location_keeps_roots_added_since_the_form_was_built() {
     assert_eq!(saved.roots[0].kind, RootKind::Other);
 }
 
+/// Launcher prefixes are found on Linux only (ADR-0017).
+#[cfg(target_os = "linux")]
+#[test]
+fn unticking_a_found_prefix_ignores_it_and_ticking_uses_it_again() {
+    use std::fs;
+
+    use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
+    use salvajocs_core::manifest::fetch::JSON_FILE;
+    use salvajocs_core::manifest::{self, parse_yaml};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(&tmp);
+    // Two Heroic games without their own prefix share the default one.
+    let prefix = tmp.path().join("heroic");
+    for title in ["Foo™", "Bar"] {
+        let found = LauncherPrefix {
+            launcher: Launcher::Heroic,
+            path: prefix.clone(),
+            game: Some(LauncherGame {
+                title: Some(title.to_owned()),
+                ..LauncherGame::default()
+            }),
+        };
+        env.environment
+            .as_mut()
+            .unwrap()
+            .launcher_prefixes
+            .push(found);
+    }
+    fs::create_dir_all(&env.cache_dir).unwrap();
+    let manifest = parse_yaml("Foo: {}\nBar: {}\n").unwrap();
+    fs::write(
+        env.cache_dir.join(JSON_FILE),
+        manifest::to_json(&manifest).unwrap(),
+    )
+    .unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env.clone());
+    let label = format!("{} (Heroic: Foo, Bar)", prefix.display());
+    run_until(&mut harness, "the found prefix", |h| shows(h, &label));
+    let path = prefix.display().to_string();
+    assert_eq!(harness.query_all_by_label_contains(&path).count(), 1);
+
+    harness.get_by_label(&label).click();
+    let ignored = [prefix.clone()];
+    run_until_saved(&mut harness, &env, |config| {
+        config.ignored_prefixes == ignored
+    });
+    harness.get_by_label(&label).click();
+    run_until_saved(&mut harness, &env, |config| {
+        config.ignored_prefixes.is_empty()
+    });
+}
+
 #[test]
 fn applying_a_new_location_keeps_the_ignored_prefixes() {
     let tmp = tempfile::tempdir().unwrap();

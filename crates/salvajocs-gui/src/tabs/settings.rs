@@ -1,5 +1,5 @@
-//! The Settings tab: repository, compression, password, old backups (ADR-0015), roots (ADR-0009)
-//! and updates (ADR-0013).
+//! The Settings tab: repository, compression, password, old backups (ADR-0015), roots (ADR-0009,
+//! ADR-0017) and updates (ADR-0013).
 
 use std::path::PathBuf;
 
@@ -16,8 +16,10 @@ use crate::theme::{self, icons};
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{form_grid, labelled_edit};
 
+mod launchers;
 mod retention;
 
+use launchers::LaunchersSection;
 use retention::RetentionSection;
 
 /// The roots offered in the picker, in order.
@@ -46,6 +48,7 @@ pub struct SettingsTab {
     compression_job: Option<Job<Compression>>,
     compression_error: Option<String>,
     retention: RetentionSection,
+    launchers: LaunchersSection,
     root_kind: RootKind,
     root_path: String,
     root_picker: Option<Job<Option<PathBuf>>>,
@@ -60,6 +63,7 @@ impl Default for SettingsTab {
             compression_job: None,
             compression_error: None,
             retention: RetentionSection::default(),
+            launchers: LaunchersSection::default(),
             root_kind: RootKind::Other,
             root_path: String::new(),
             root_picker: None,
@@ -186,7 +190,12 @@ impl SettingsTab {
 
     fn roots_ui(&mut self, ui: &mut Ui, state: &mut State) {
         ui.heading("Roots");
-        theme::group(ui, |ui| self.roots_group_ui(ui, state));
+        theme::group(ui, |ui| {
+            self.roots_group_ui(ui, state);
+            if cfg!(target_os = "linux") {
+                self.launchers.ui(ui, state);
+            }
+        });
     }
 
     fn roots_group_ui(&mut self, ui: &mut Ui, state: &mut State) {
