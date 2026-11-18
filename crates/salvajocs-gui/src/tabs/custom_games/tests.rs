@@ -154,3 +154,21 @@ fn a_windows_pick_outside_a_prefix_is_an_error() {
     );
     assert!(picked.is_err());
 }
+
+#[test]
+fn every_leading_placeholder_has_a_meaning() {
+    for windows in [false, true] {
+        for placeholder in layout::leading_placeholders(windows) {
+            assert!(
+                !placeholder_meaning(placeholder).is_empty(),
+                "{placeholder}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_placeholders_link_follows_the_running_versions_tag() {
+    assert!(PLACEHOLDERS_DOCS.contains(&format!("/blob/v{}/", env!("CARGO_PKG_VERSION"))));
+    assert!(PLACEHOLDERS_DOCS.ends_with("/docs/guide/custom-games.md#placeholders"));
+}

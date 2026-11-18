@@ -63,6 +63,41 @@ the same OS. A box with an absolute path gives no automatic mapping, so a restor
 path onto the other build may ask where the files go, as for a game the manifest knows only one
 build of.
 
+### Placeholders
+
+The **?** next to **Files** lists these in the app. A path starts with one of the named folders of
+its side:
+
+| Linux path | Folder |
+| --- | --- |
+| `<home>` | Your home folder |
+| `<xdgData>` | `$XDG_DATA_HOME`, `~/.local/share` |
+| `<xdgConfig>` | `$XDG_CONFIG_HOME`, `~/.config` |
+| `<base>` | The game's install folder |
+| `<root>` | The Steam library holding the game |
+
+| Windows path | Folder |
+| --- | --- |
+| `<home>` | Your user folder |
+| `<winDocuments>` | Documents |
+| `<winAppData>` | `%APPDATA%`, `AppData/Roaming` |
+| `<winLocalAppData>` | `%LOCALAPPDATA%`, `AppData/Local` |
+| `<winLocalAppDataLow>` | `AppData/LocalLow` |
+| `<winPublic>` | `%PUBLIC%` |
+| `<winProgramData>` | `%PROGRAMDATA%` |
+| `<winDir>` | `%WINDIR%` |
+| `<base>` | The game's install folder |
+| `<root>` | The Steam library holding the game |
+
+`<base>` and `<root>` can stand for several folders: the game can have several
+[install folders](#install-folders), and there can be several Steam libraries. A backup tries
+every library with every install folder and backs up the files found in any of them. A restore
+writes to the first folder that exists.
+
+Anywhere in a path, `<game>` is the game's install folder name (or its title when it has none),
+`<osUserName>` is your user name and `<storeUserId>` matches any store user id. The wildcards are
+`*` (any run of characters in a name), `?` (one character) and `[...]` (one character of a set).
+
 ### Registry keys
 
 Keys under `HKEY_CURRENT_USER` where the Windows build keeps saves or settings, one per row, for

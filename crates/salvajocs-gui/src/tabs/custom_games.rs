@@ -22,6 +22,64 @@ use crate::state::State;
 use crate::theme::{self, icons};
 use crate::widgets::labelled_edit;
 
+/// The placeholders section of the guide, at the tag of the running version so the page matches
+/// the placeholders this build reads.
+const PLACEHOLDERS_DOCS: &str = concat!(
+    "https://github.com/jmigual/salvajocs/blob/v",
+    env!("CARGO_PKG_VERSION"),
+    "/docs/guide/custom-games.md#placeholders"
+);
+
+/// The value placeholders, valid anywhere in a path, and what each stands for.
+const VALUE_PLACEHOLDERS: [(&str, &str); 3] = [
+    ("<game>", "the game's install folder name, or its title"),
+    ("<osUserName>", "your user name"),
+    ("<storeUserId>", "any store user id"),
+];
+
+/// The wildcards a path may use, and what each matches.
+const WILDCARDS: [(&str, &str); 3] = [
+    ("*", "any run of characters in a name"),
+    ("?", "one character"),
+    ("[...]", "one character of a set"),
+];
+
+/// What a leading placeholder stands for.
+fn placeholder_meaning(placeholder: &str) -> &'static str {
+    match placeholder {
+        "<home>" => "your home folder",
+        "<winDocuments>" => "Documents",
+        "<winAppData>" => "%APPDATA%, AppData/Roaming",
+        "<winLocalAppData>" => "%LOCALAPPDATA%, AppData/Local",
+        "<winLocalAppDataLow>" => "AppData/LocalLow",
+        "<winPublic>" => "%PUBLIC%",
+        "<winProgramData>" => "%PROGRAMDATA%",
+        "<winDir>" => "%WINDIR%",
+        "<xdgData>" => "$XDG_DATA_HOME, ~/.local/share",
+        "<xdgConfig>" => "$XDG_CONFIG_HOME, ~/.config",
+        "<base>" => "the game's install folder; with several, every one is tried",
+        "<root>" => "the Steam library holding the game; with several, every one is tried",
+        _ => "",
+    }
+}
+
+/// The hover help of the Files heading: the placeholders of each side, the value placeholders,
+/// the wildcards and a link to the guide.
+fn placeholders_help(ui: &mut Ui) {
+    for (side, windows) in [("Linux path", false), ("Windows path", true)] {
+        ui.label(theme::semibold(side));
+        for placeholder in layout::leading_placeholders(windows) {
+            let meaning = placeholder_meaning(placeholder);
+            ui.label(format!("{placeholder}: {meaning}"));
+        }
+    }
+    ui.label(theme::semibold("Anywhere in a path"));
+    for (token, meaning) in VALUE_PLACEHOLDERS.into_iter().chain(WILDCARDS) {
+        ui.label(format!("{token}: {meaning}"));
+    }
+    ui.hyperlink_to("Placeholders in the guide", PLACEHOLDERS_DOCS);
+}
+
 fn integration_label(integration: Integration) -> &'static str {
     match integration {
         Integration::Override => "Override the manifest entry",
@@ -465,7 +523,15 @@ impl Form {
     /// The file rows, each with a Linux and a Windows path and a Browse button per side. Returns
     /// the side whose Browse was clicked.
     fn files_ui(&mut self, ui: &mut Ui) -> Option<Pick> {
-        ui.heading("Files");
+        ui.horizontal(|ui| {
+            ui.heading("Files");
+            // The icon font has no question mark, so the plain glyph stands in.
+            let help = ui.add(egui::Button::new("?").small());
+            help.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, "Path placeholders")
+            });
+            help.on_hover_ui(placeholders_help);
+        });
         ui.weak(
             "A path on one side is backed up only for that build; with both paths, they hold the \
              same saves in the Linux and the Windows build.",

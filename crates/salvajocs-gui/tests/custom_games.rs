@@ -572,3 +572,17 @@ fn custom_games_skip_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
         games.first().is_some_and(|game| game.skips.is_empty())
     });
 }
+
+#[test]
+fn custom_games_placeholder_help_lists_the_placeholders_of_each_side_and_the_guide() {
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), &[]);
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Path placeholders").hover();
+    run_until(&mut harness, "the placeholder help", |h| {
+        shows(h, "<winAppData>")
+    });
+    assert!(shows(&harness, "<xdgData>"));
+    assert!(shows(&harness, "<storeUserId>"));
+    assert!(shows(&harness, "Placeholders in the guide"));
+}
