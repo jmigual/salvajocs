@@ -14,6 +14,9 @@ All notable changes to salvajocs. The format follows
 - On the Backup tab, choose which files, folders and registry keys of each game are backed up in
   a tree of checkboxes. The choices are saved in the repository at the next backup, so every
   machine that uses it shares them.
+- **Browse** next to each path of a custom game file turns a picked folder into a path template;
+  on Linux, a Windows path is picked inside a Wine prefix.
+- Install folders of a custom game can be edited, for `<base>` paths.
 
 ### Changed
 
@@ -23,9 +26,13 @@ All notable changes to salvajocs. The format follows
 - The **Option reference** link of the repository form opens that page, in the docs of the
   running version, instead of docs.rs or the rustic config.
 - The app draws its own title bar, with the tabs and the window buttons in one bar.
-- Custom game files are rows with a Linux and a Windows path; only one is required, and a row
-  with one path is backed up on that system only. Breaking: custom games from 0.3.x must be
-  entered again.
+- Custom game files are boxes with a Linux and a Windows path; only one is required. A box with
+  one path is backed up only for that build; with two path templates, a restore onto the other
+  build uses the other path without asking. Breaking: the files of custom games from 0.3.x are
+  not converted and the form does not show them; remove such a game and add it again to edit
+  them.
+- A custom game's registry keys are a list of rows, and its Linux and Windows pairs show as
+  "Saved restore mappings" only when a restore saved some.
 
 ### Removed
 

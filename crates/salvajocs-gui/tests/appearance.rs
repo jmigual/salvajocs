@@ -34,7 +34,9 @@ use rustic_core::{
 };
 use salvajocs_core::backup::stage;
 use salvajocs_core::layout::{Base, Context, LinuxFolders, Root, RootKind};
-use salvajocs_core::manifest::{CustomGame, Integration, Manifest, Pair, parse_yaml, to_json};
+use salvajocs_core::manifest::{
+    CustomFile, CustomGame, GameEntry, Integration, Manifest, Pair, parse_yaml, to_json,
+};
 use salvajocs_core::registry::RegistryExport;
 use salvajocs_core::scan::{Environment, FoundFile, GameScan};
 use salvajocs_gui::tabs::Tab;
@@ -600,30 +602,36 @@ fn custom_games_tab() {
         linux: linux.into(),
         windows: windows.into(),
     };
-    let game = |name: &str, yaml: &str, prefix: Option<&str>, pairs: Vec<Pair>, skips: &[&str]| {
-        CustomGame {
-            name: name.into(),
-            files: Vec::new(),
-            entry: parse_yaml(yaml).unwrap().games.remove(name).unwrap(),
-            integration: Integration::Extend,
-            wine_prefix: prefix.map(PathBuf::from),
-            pairs,
-            skips: skips.iter().map(|skip| skip.to_string()).collect(),
-        }
+    let row = |linux: Option<&str>, windows: Option<&str>| CustomFile {
+        linux: linux.map(Into::into),
+        windows: windows.map(Into::into),
+    };
+    let game = |name: &str,
+                files: Vec<CustomFile>,
+                prefix: Option<&str>,
+                pairs: Vec<Pair>,
+                skips: &[&str]| CustomGame {
+        name: name.into(),
+        files,
+        entry: GameEntry::default(),
+        integration: Integration::Extend,
+        wine_prefix: prefix.map(PathBuf::from),
+        pairs,
+        skips: skips.iter().map(|skip| skip.to_string()).collect(),
     };
     let mut config = local_config(&repository);
     config.custom_games = vec![
         game(
             "Stardew Valley",
-            "Stardew Valley:\n  files:\n    <winAppData>/StardewValley/Saves: {tags: [save]}\n",
+            vec![row(
+                Some("<xdgConfig>/StardewValley/Saves"),
+                Some("<winAppData>/StardewValley/Saves"),
+            )],
             Some("/home/deck/Games/prefixes/stardew"),
-            vec![
-                pair(
-                    "<xdgConfig>/StardewValley/Saves",
-                    "<winAppData>/StardewValley/Saves",
-                ),
-                pair("<xdgConfig>/StardewValley", "<winAppData>/StardewValley"),
-            ],
+            vec![pair(
+                "<xdgConfig>/StardewValley",
+                "<winAppData>/StardewValley",
+            )],
             &[
                 "<winAppData>/StardewValley/ErrorLogs",
                 "<xdgConfig>/StardewValley/Screenshots",
@@ -631,17 +639,17 @@ fn custom_games_tab() {
         ),
         game(
             "Hollow Knight",
-            "Hollow Knight:\n  files:\n    <winLocalAppDataLow>/Team Cherry/Hollow Knight/Mods: {tags: [save]}\n",
-            Some("/home/deck/.local/share/Steam/steamapps/compatdata/367520/pfx"),
-            vec![pair(
-                "<xdgConfig>/unity3d/Team Cherry/Hollow Knight",
-                "<winLocalAppDataLow>/Team Cherry/Hollow Knight",
+            vec![row(
+                None,
+                Some("<winLocalAppDataLow>/Team Cherry/Hollow Knight/Mods"),
             )],
+            Some("/home/deck/.local/share/Steam/steamapps/compatdata/367520/pfx"),
+            Vec::new(),
             &[],
         ),
         game(
             "Spiritfarer",
-            "Spiritfarer:\n  files:\n    <home>/.config/Spiritfarer/Saves: {tags: [save]}\n",
+            vec![row(Some("<xdgConfig>/Spiritfarer/Saves"), None)],
             None,
             Vec::new(),
             &[],

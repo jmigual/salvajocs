@@ -16,32 +16,70 @@ change the list. **Add game** opens the form. Changes are saved to the config at
 | Field | What to enter |
 | --- | --- |
 | Name | The game's title. The name is how the game is matched with the manifest, so spell it exactly as the manifest does for an existing game. Two custom games cannot share a name. |
-| Integration | **Extend the manifest entry** adds your files and keys to the manifest's. **Override the manifest entry** replaces the manifest's entry of the same title. For a title the manifest lacks, the two behave the same. |
-| Files | One path template per line. |
-| Registry keys | One `HKEY_CURRENT_USER/...` key per line. |
+| Integration | **Extend the manifest entry** adds your files, keys and install folders to the manifest's. **Override the manifest entry** replaces the manifest's entry of the same title. For a title the manifest lacks, the two behave the same. |
 | Wine prefix | The Wine prefix of the game, for example a Heroic, Lutris or Bottles prefix. Leave it empty if the game does not need one. |
+
+### Files
+
+Each file is a box with a **Linux path** and a **Windows path**. Enter one or both:
+
+- **Linux path only:** backed up only when the native Linux build of the game runs here.
+- **Windows path only:** backed up only for the Windows build, on Windows or in a Wine or
+  Proton prefix on Linux.
+- **Both:** the two paths hold the same saves in the Linux and the Windows build. When both are
+  path templates with a folder below the named folder, a restore onto the other build puts the
+  files at the other path without asking.
+
+**Add file** adds a box and **Remove file** removes it. An empty box is left out. A path that is
+not valid shows its error under the box, and **Save game** stays disabled until you fix it.
+
+**Browse** next to a path opens a folder picker and turns the folder you pick into a path
+template, for example `<xdgData>/my-game`. You can still edit the text afterwards. On Linux, the
+folder for a **Windows path** must be inside a Wine prefix, for example
+`.../compatdata/<id>/pfx/drive_c/users/steamuser/AppData/Roaming/My Game`, which becomes
+`<winAppData>/My Game`. A folder outside a prefix shows "Pick a folder inside a Wine prefix" and
+leaves the path as it was. A Windows host has no Linux folders, so it shows no **Browse** for
+the Linux path.
 
 ### Path templates
 
 A path template starts with a named folder, then the path below it. Examples:
 
-- `<winDocuments>/My Game/*.sav`
-- `<winAppData>/My Game`
-- `<xdgData>/my-game`
-- `<home>/.mygame`
-- `<base>/saves`, where `<base>` is the game's install folder
-- `<root>/Saves`, where `<root>` is the Steam library or games folder holding the game
+- Linux path: `<xdgData>/my-game`, `<xdgConfig>/my-game`, `<home>/.mygame`
+- Windows path: `<winDocuments>/My Game/*.sav`, `<winAppData>/My Game`, `<home>/My Game`
+- Either path: `<base>/saves`, where `<base>` is the game's install folder, and `<root>/Saves`,
+  where `<root>` is the Steam library holding the game. `<root>` is for Steam libraries only.
 
-Wildcards such as `*` and `?` match as in a shell. A folder matches everything inside it. A relative path is
-ignored, and `<storeUserId>` matches any value. Editing a line resets its OS condition. If a
-game needs different paths per build, use a pair.
+`<home>` is your home on Linux and your user folder (`C:\Users\<name>`, or
+`drive_c/users/<user>` in a prefix) on Windows. Wildcards such as `*` and `?` match as in a
+shell, and a folder matches everything inside it. `<game>`, `<osUserName>` and `<storeUserId>`
+are allowed; `<storeUserId>` matches any value. Use `/` between folders after a named folder.
 
-### Linux and Windows pairs
+A path can also be absolute: `/opt/My Game/saves` as a Linux path, `C:\Games\My Game` or
+`C:/Games/My Game` as a Windows path. Files from an absolute path restore only to that path, on
+the same OS. A box with an absolute path gives no automatic mapping, so a restore of its other
+path onto the other build may ask where the files go, as for a game the manifest knows only one
+build of.
 
-A pair tells salvajocs which Linux folder and which Windows folder hold the same saves, for
-cross-build restores. A pair has a **Linux** side such as `<xdgData>/Game` and a **Windows** side
-such as `<winAppData>/Game`. Both sides must be placeholder templates without wildcards. The
-mapping dialog adds pairs here when you click **Use these folders**. You can edit or remove them.
+### Registry keys
+
+Keys under `HKEY_CURRENT_USER` where the Windows build keeps saves or settings, one per row, for
+example `HKEY_CURRENT_USER/Software/My Game`. **Add registry key** and **Remove registry key**
+change the list.
+
+### Install folders
+
+The folder names the game installs into in a game library, one per row. `<base>` in a path is
+that folder: `<library>/steamapps/common/<install folder>` in a Steam library, or
+`<folder>/<install folder>` in another games folder. Without an install folder,
+the game's name is used. An install folder is one folder name, not a path. **Browse** for a folder
+under an install folder fills in `<base>/...`.
+
+### Saved restore mappings
+
+When a restore onto the other build asks where a folder goes, and you confirm, the answer is
+saved here as a **Linux** and a **Windows** folder. You can edit or remove a mapping. Both sides
+must be path templates without wildcards. The section only shows when the game has mappings.
 
 ### Skipped folders
 
@@ -51,8 +89,15 @@ you tick **Skip**.
 
 ## Saving
 
-**Save game** checks the form. It reports an error for an empty or taken name, a pair or skip that
-is not a placeholder template, and a game that changed while the form was open (use **Reload**).
+**Save game** checks the form. It reports an error for an empty or taken name, a mapping or
+skipped folder that is not a path template, and a game that changed while the form was open (use
+**Reload**).
+
+## Games from salvajocs 0.3
+
+Version 0.4 stores a custom game's files as Linux and Windows paths. The files of a custom game
+made with 0.3 are not converted: they are still backed up, for both builds, but the form does
+not show them. To change them, remove the game and add it again.
 
 ## Using a Wine prefix from another launcher
 
