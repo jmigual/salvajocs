@@ -354,6 +354,27 @@ impl Storage {
         self.repo.delete_snapshots(&ids).map_err(backend)
     }
 
+    /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`.
+    pub fn read_file(
+        &mut self,
+        snapshot_id: &str,
+        path_in_snapshot: &str,
+    ) -> Result<Vec<u8>, StorageError> {
+        if self.stale {
+            self.reindex()?;
+        }
+        let repo = &self.repo;
+        let snap = repo
+            .get_snapshot_from_str(snapshot_id, |_| true)
+            .map_err(backend)?;
+        let node = repo
+            .node_from_snapshot_and_path(&snap, path_in_snapshot)
+            .map_err(backend)?;
+        let mut bytes = Vec::new();
+        repo.dump(&node, &mut bytes).map_err(backend)?;
+        Ok(bytes)
+    }
+
     /// Restores `path_in_snapshot` of snapshot `snapshot_id` into `dest_dir`: a directory's
     /// contents land in `dest_dir`, a file lands inside it under its own name.
     pub fn restore_path(

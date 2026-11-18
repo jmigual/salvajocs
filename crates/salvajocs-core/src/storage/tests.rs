@@ -223,6 +223,21 @@ fn forgotten_snapshot_is_no_longer_listed() {
 }
 
 #[test]
+fn read_file_returns_a_file_of_a_snapshot_written_this_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let bytes = storage
+        .read_file(&info.id, "/salvajocs/test-slug/sub/b.sav")
+        .unwrap();
+    assert_eq!(bytes, b"beta");
+}
+
+#[test]
 fn label_keeps_commas_and_unicode() {
     let tmp = tempfile::tempdir().unwrap();
     let src = save_dir(tmp.path());
