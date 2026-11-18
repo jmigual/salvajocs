@@ -142,6 +142,18 @@ pub struct Cleanup {
     pub append_only_kept: usize,
 }
 
+/// Why [`apply`] stopped, with how many snapshots it had forgotten by then.
+#[derive(Debug, thiserror::Error)]
+#[error("the cleanup stopped after forgetting {forgotten} snapshots")]
+pub struct CleanupError {
+    /// How many snapshots were forgotten before the error; their data waits for a later prune.
+    /// After a failed forget, those no longer listed, or all it tried when listing fails too.
+    pub forgotten: usize,
+    /// The repository error.
+    #[source]
+    pub source: StorageError,
+}
+
 /// Forgets the snapshots `policy` forgets at `now` ([`to_forget`] over every `salvajocs`
 /// snapshot), never one of `keep`. Then prunes if anything was forgotten or the repository has
 /// packs marked for deletion, which only a later prune frees, or recovers when a backup made
@@ -149,30 +161,47 @@ pub struct Cleanup {
 /// repository is neither forgotten from nor pruned: the snapshots to forget are only counted.
 ///
 /// # Errors
-/// The repository error of the listing, the forget or the prune.
+/// The repository error of the listing, the forget or the prune, with how many snapshots were
+/// forgotten before it. A forget that fails partway counts by listing again (see
+/// [`CleanupError::forgotten`]).
 pub fn apply(
     storage: &mut Storage,
     policy: &Retention,
     keep: &[&str],
     now: SystemTime,
-) -> Result<Cleanup, StorageError> {
+) -> Result<Cleanup, CleanupError> {
+    let stopped = |forgotten| move |source| CleanupError { forgotten, source };
     let append_only = storage.append_only();
     let (mut forgotten, mut append_only_kept) = (0, 0);
     if !policy.is_off() {
-        let ids = to_forget(policy, &storage.snapshots(APP_TAG)?, keep, now);
+        let snapshots = storage.snapshots(APP_TAG).map_err(stopped(0))?;
+        let ids = to_forget(policy, &snapshots, keep, now);
         if append_only {
             append_only_kept = ids.len();
         } else {
-            if !ids.is_empty() {
-                storage.forget(&ids.iter().map(String::as_str).collect::<Vec<_>>())?;
+            if !ids.is_empty()
+                && let Err(source) =
+                    storage.forget(&ids.iter().map(String::as_str).collect::<Vec<_>>())
+            {
+                // rustic deletes in parallel, so some may be gone. Over-counting when the
+                // listing fails too only makes a caller drop a list it would reload.
+                let forgotten = match storage.snapshots(APP_TAG) {
+                    Ok(left) => ids
+                        .iter()
+                        .filter(|id| !left.iter().any(|s| s.id == **id))
+                        .count(),
+                    Err(_) => ids.len(),
+                };
+                return Err(CleanupError { forgotten, source });
             }
             forgotten = ids.len();
         }
     }
     // rustic refuses an append-only prune only after planning it, which walks every tree.
-    let pruned = forgotten > 0 || (!append_only && storage.has_marked_packs()?);
+    let pruned = forgotten > 0
+        || (!append_only && storage.has_marked_packs().map_err(stopped(forgotten))?);
     if pruned {
-        storage.prune()?;
+        storage.prune().map_err(stopped(forgotten))?;
     }
     Ok(Cleanup {
         forgotten,

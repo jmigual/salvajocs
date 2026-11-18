@@ -489,6 +489,22 @@ fn apply_in_an_append_only_repository_only_counts() {
     assert!(repo.storage.has_marked_packs().unwrap());
 }
 
+#[test]
+fn a_prune_that_fails_after_a_forget_reports_the_forgotten_count() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    // Without its packs, planning the prune fails; the forget only removes a snapshot file.
+    for pack in repo.files("data") {
+        std::fs::remove_file(pack).unwrap();
+    }
+
+    let err = apply(&mut repo.storage, &keep_last(1), &[], SystemTime::now()).unwrap_err();
+
+    assert_eq!(err.forgotten, 1);
+    assert_eq!(repo.ids(APP_TAG).len(), 1);
+}
+
 /// Every file below `dir`.
 fn files_below(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
