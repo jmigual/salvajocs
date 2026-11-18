@@ -10,7 +10,8 @@ use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to
 use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
     LsOptions, PathList, Repository, RepositoryBackends, RepositoryOptions, RestoreOptions,
-    RusticError, SnapshotOptions, repofile::SnapshotFile,
+    RusticError, SnapshotOptions,
+    repofile::{SnapshotFile, SnapshotId},
 };
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
@@ -341,6 +342,16 @@ impl Storage {
             .map_err(backend)?;
         found.sort_by(|a, b| b.time.cmp(&a.time));
         Ok(found.iter().map(snapshot_info).collect())
+    }
+
+    /// Deletes the snapshots `ids` (full hex ids). Their data stays in the repository until a
+    /// `rustic prune`. May fail if one of them is already gone, depending on the backend.
+    pub fn forget(&self, ids: &[&str]) -> Result<(), StorageError> {
+        let ids = ids
+            .iter()
+            .map(|id| id.parse::<SnapshotId>().map_err(backend))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.repo.delete_snapshots(&ids).map_err(backend)
     }
 
     /// Restores `path_in_snapshot` of snapshot `snapshot_id` into `dest_dir`: a directory's

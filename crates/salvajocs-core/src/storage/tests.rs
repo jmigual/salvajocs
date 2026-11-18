@@ -204,6 +204,25 @@ fn second_unchanged_backup_is_skipped() {
 }
 
 #[test]
+fn forgotten_snapshot_is_no_longer_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let kept = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Kept")
+        .unwrap()
+        .unwrap();
+    let forgotten = storage
+        .backup_dir(&src, "/salvajocs/other", TAGS, "Forgotten")
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 2);
+
+    storage.forget(&[&forgotten.id]).unwrap();
+    assert_eq!(storage.snapshots("salvajocs").unwrap(), vec![kept]);
+}
+
+#[test]
 fn label_keeps_commas_and_unicode() {
     let tmp = tempfile::tempdir().unwrap();
     let src = save_dir(tmp.path());
