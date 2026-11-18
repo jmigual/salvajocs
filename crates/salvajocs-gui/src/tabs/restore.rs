@@ -12,7 +12,6 @@ use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Response, TextEdit, Ui, Vec2};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
-use salvajocs_core::manifest::{GameEntry, Pair};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
     self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RunError,
@@ -171,22 +170,12 @@ struct Fetched {
     staged: StagedGame,
     targets: Targets,
     vars: GameVars,
-    entry: Option<GameEntry>,
-    pairs: Vec<Pair>,
-    skips: Vec<String>,
+    info: GameInfo,
 }
 
 impl Fetched {
     fn prepare(&self, choices: &[(SnapshotRoot, Choice)]) -> Result<RestorePlan, PrepareError> {
-        restore::prepare(
-            &self.staged,
-            &self.targets,
-            &self.vars,
-            self.entry.as_ref(),
-            &self.pairs,
-            &self.skips,
-            choices,
-        )
+        restore::prepare(&self.staged, &self.targets, &self.vars, &self.info, choices)
     }
 }
 
@@ -603,21 +592,15 @@ impl RestoreTab {
             remove_dir(&work_dir)
                 .with_context(|| format!("cannot clear {}", work_dir.display()))?;
             let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
-            let GameInfo {
-                entry,
-                pairs,
-                skips,
-            } = restore::game_info(&title, &manifest, &config.custom_games);
+            let info = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
                 storage,
-                vars: restore::game_vars(&title, entry.as_ref(), &config, &environment),
+                vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 title,
                 staged,
                 targets,
-                entry,
-                pairs,
-                skips,
+                info,
             };
             Ok(Prepared {
                 plan: fetched.prepare(&[]),

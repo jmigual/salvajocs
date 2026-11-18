@@ -366,19 +366,17 @@ fn rows_game(rows: &[(&str, &str)], pairs: Vec<Pair>, skips: &[&str]) -> CustomG
 }
 
 #[test]
-fn game_info_puts_row_pairs_before_saved_pairs() {
+fn game_info_keeps_row_pairs_apart_from_saved_pairs() {
     let game = rows_game(
         &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
         vec![pair("<xdgConfig>/Foo", "<winAppData>/Foo")],
         &[],
     );
     let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
+    assert_eq!(info.pairs, [pair("<xdgConfig>/Foo", "<winAppData>/Foo")]);
     assert_eq!(
-        info.pairs,
-        [
-            pair("<xdgData>/Foo", "<winDocuments>/Foo"),
-            pair("<xdgConfig>/Foo", "<winAppData>/Foo"),
-        ]
+        info.row_pairs,
+        [pair("<xdgData>/Foo", "<winDocuments>/Foo")]
     );
 }
 
@@ -390,32 +388,56 @@ fn a_saved_pair_wins_a_tie_with_a_row_pair() {
         &[],
     );
     let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
-    let meta = SnapshotMeta {
-        format: layout::SNAPSHOT_FORMAT,
-        title: "Foo".into(),
-        roots: vec![(Base::XdgData, "Foo".into())],
+    let staged = StagedGame {
+        root: "/stage/foo".into(),
+        meta: SnapshotMeta {
+            format: layout::SNAPSHOT_FORMAT,
+            title: "Foo".into(),
+            roots: vec![(Base::XdgData, "Foo".into())],
+        },
+        files: vec![(Base::XdgData, "Foo/a.sav".into())],
+        registry: None,
     };
-    let proposals = crossbuild::propose(
-        &meta,
-        info.entry.as_ref(),
-        &info.pairs,
-        &info.skips,
-        Family::Windows,
+    let targets = Targets {
+        linux: None,
+        win: Some(Context::WindowsNative(WinFolders::for_prefix(
+            Path::new("/win"),
+            "Alice",
+        ))),
+    };
+    let vars = GameVars::new("Foo", vec![], &[], None);
+    let plan = super::super::prepare(&staged, &targets, &vars, &info, &[]).unwrap();
+    let written: Vec<_> = plan.writes.iter().map(|w| w.target.as_path()).collect();
+    assert_eq!(
+        written,
+        [Path::new(
+            "/win/drive_c/users/Alice/AppData/Roaming/Saved/a.sav"
+        )]
     );
-    assert_eq!(proposals[0].proposed.as_deref(), Some("<winAppData>/Saved"));
 }
 
 #[test]
 fn a_saved_skip_drops_the_row_pair_of_its_root() {
-    for skip in ["<home>/.local/share/Foo", "<winDocuments>/Foo"] {
+    for skip in [
+        "<home>/.local/share/Foo",
+        "<winDocuments>/Foo",
+        "<winDocuments>/foo",
+    ] {
         let game = rows_game(
             &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
             Vec::new(),
             &[skip],
         );
         let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
-        assert_eq!(info.pairs, [], "{skip}");
+        assert_eq!(info.row_pairs, [], "{skip}");
     }
+    let game = rows_game(
+        &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
+        Vec::new(),
+        &["<xdgData>/foo"],
+    );
+    let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
+    assert_eq!(info.row_pairs.len(), 1, "Linux sides keep their case");
 }
 
 #[test]
@@ -936,7 +958,17 @@ fn proton_backup_restores_into_windows_layout() {
     };
     let vars = GameVars::new("Foo", vec![], &[], Some("620".into()));
     let entry = manifest.games.get("Foo");
-    let plan = super::super::prepare(&staged, &targets, &vars, entry, &[], &[], &[]).unwrap();
+    let plan = super::super::prepare(
+        &staged,
+        &targets,
+        &vars,
+        &GameInfo {
+            entry: entry.cloned(),
+            ..GameInfo::default()
+        },
+        &[],
+    )
+    .unwrap();
     assert!(plan.skipped.is_empty(), "{plan:?}");
     let stage_root = tmp.path().join("pre-restore");
     let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
@@ -987,7 +1019,17 @@ fn prefix_registry_restores_into_other_prefix() {
     };
     let vars = GameVars::new("Foo", vec![], &[], None);
     let entry = manifest.games.get("Foo");
-    let plan = super::super::prepare(&staged, &targets, &vars, entry, &[], &[], &[]).unwrap();
+    let plan = super::super::prepare(
+        &staged,
+        &targets,
+        &vars,
+        &GameInfo {
+            entry: entry.cloned(),
+            ..GameInfo::default()
+        },
+        &[],
+    )
+    .unwrap();
     let stage_root = tmp.path().join("pre-restore");
     let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
 

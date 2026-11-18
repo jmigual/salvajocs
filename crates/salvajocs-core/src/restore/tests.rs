@@ -316,6 +316,15 @@ fn entry_of(staged: &StagedGame) -> GameEntry {
     )
 }
 
+fn info(entry: Option<&GameEntry>, pairs: &[Pair], skips: &[String]) -> GameInfo {
+    GameInfo {
+        entry: entry.cloned(),
+        pairs: pairs.to_vec(),
+        row_pairs: Vec::new(),
+        skips: skips.to_vec(),
+    }
+}
+
 fn templates(templates: &[impl AsRef<str>]) -> GameEntry {
     GameEntry {
         files: templates
@@ -610,9 +619,7 @@ fn native_linux_save_restores_without_prefix() {
         &staged,
         &linux_only(),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     )
     .unwrap();
@@ -645,9 +652,7 @@ fn cross_build_unknown_entry_blocks_restore() {
         &linux_unity_and_unknown(),
         &win_only(native_win()),
         &vars(),
-        Some(&entry_of(&linux_unity_and_unknown())),
-        &[],
-        &[],
+        &info(Some(&entry_of(&linux_unity_and_unknown())), &[], &[]),
         &[],
     );
     let Err(PrepareError::NeedsMapping(entries)) = result else {
@@ -685,9 +690,7 @@ fn nested_roots_count_files_under_the_deepest() {
         &staged,
         &win_only(native_win()),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     );
     let Err(PrepareError::NeedsMapping(entries)) = result else {
@@ -706,9 +709,7 @@ fn prepare_with_choices_returns_plan() {
         &staged,
         &targets,
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &choices,
     )
     .unwrap();
@@ -734,9 +735,7 @@ fn prepare_with_choices_returns_plan() {
         &staged,
         &targets,
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &choose(Choice::Skip),
     )
     .unwrap();
@@ -751,9 +750,11 @@ fn prepare_with_choices_returns_plan() {
         &staged,
         &targets,
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &["<xdgData>/Game".to_owned()],
+        &info(
+            Some(&entry_of(&staged)),
+            &[],
+            &["<xdgData>/Game".to_owned()],
+        ),
         &[],
     )
     .unwrap();
@@ -773,9 +774,7 @@ fn prepare_with_choices_returns_plan() {
             &staged,
             &targets,
             &vars(),
-            Some(&entry_of(&staged)),
-            &[],
-            &[],
+            &info(Some(&entry_of(&staged)), &[], &[]),
             &real_path
         ),
         Err(PrepareError::Unclassifiable { .. })
@@ -792,9 +791,7 @@ fn prepare_engine_rule_returns_plan_without_choices() {
         &staged,
         &win_only(native_win()),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     )
     .unwrap();
@@ -824,9 +821,7 @@ fn linux_save_maps_onto_windows_via_pair() {
         &staged,
         &win_only(native_win()),
         &vars,
-        Some(&entry_of(&staged)),
-        &pairs,
-        &[],
+        &info(Some(&entry_of(&staged)), &pairs, &[]),
         &[],
     )
     .unwrap();
@@ -862,9 +857,7 @@ fn prepare_adds_player_prefs_note_from_staged_registry() {
             staged,
             &linux_only(),
             &vars(),
-            Some(&entry_of(staged)),
-            &[],
-            &[],
+            &info(Some(&entry_of(staged)), &[], &[]),
             &[],
         );
         let Err(PrepareError::NeedsMapping(entries)) = result else {
@@ -892,9 +885,7 @@ fn absolute_root_restores_to_its_own_os_only() {
         &staged,
         &win_only(native_win()),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     )
     .unwrap();
@@ -923,9 +914,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         &staged,
         &linux_only(),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     );
     let Err(PrepareError::NeedsMapping(entries)) = result else {
@@ -941,9 +930,7 @@ fn mapped_root_with_os_user_name_covers_file() {
         &staged,
         &linux_only(),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &choices,
     )
     .unwrap();
@@ -968,9 +955,7 @@ fn unity_note_kept_when_mapped_automatically() {
         &staged,
         &linux_only(),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     )
     .unwrap();
@@ -1064,9 +1049,7 @@ fn linux_snapshot_restored_into_proton_build() {
         &staged,
         &win_only(ctx),
         &vars(),
-        Some(&entry_of(&staged)),
-        &[],
-        &[],
+        &info(Some(&entry_of(&staged)), &[], &[]),
         &[],
     )
     .unwrap();
@@ -1090,9 +1073,7 @@ fn snapshot_registry_keys_do_not_declare_themselves() {
         &staged,
         &win_only(native_win()),
         &vars(),
-        Some(&entry),
-        &[],
-        &[],
+        &info(Some(&entry), &[], &[]),
         &[],
     )
     .unwrap();
@@ -1209,7 +1190,14 @@ fn pair_side_root_is_trusted() {
         plan_of(&staged, None, &[]).skipped[0].reason,
         SkipReason::UndeclaredRoot
     );
-    let plan = prepare(&staged, &linux_only(), &vars(), None, &pairs, &[], &[]).unwrap();
+    let plan = prepare(
+        &staged,
+        &linux_only(),
+        &vars(),
+        &info(None, &pairs, &[]),
+        &[],
+    )
+    .unwrap();
     assert_eq!(
         targets_of(&plan),
         [Path::new("/home/me/.local/share/Foo/x.sav")]
@@ -1411,7 +1399,7 @@ fn rows_info(files: Vec<CustomFile>) -> GameInfo {
 #[test]
 fn two_path_rows_restore_cross_build_without_a_dialog() {
     // Two rows, so the manifest-style auto-pair cannot map them.
-    let info = rows_info(vec![
+    let game = rows_info(vec![
         file_row(
             Some("<xdgData>/g/*.sav"),
             Some("<winDocuments>/G/Saves/*.sav"),
@@ -1422,16 +1410,7 @@ fn two_path_rows_restore_cross_build_without_a_dialog() {
         &[(Base::XdgData, "g"), (Base::XdgConfig, "g")],
         &[(Base::XdgData, "g/a.sav"), (Base::XdgConfig, "g/o.ini")],
     );
-    let plan = prepare(
-        &staged,
-        &win_only(native_win()),
-        &vars(),
-        info.entry.as_ref(),
-        &info.pairs,
-        &info.skips,
-        &[],
-    )
-    .unwrap();
+    let plan = prepare(&staged, &win_only(native_win()), &vars(), &game, &[]).unwrap();
     let mut targets = targets_of(&plan);
     targets.sort();
     assert_eq!(
@@ -1446,11 +1425,11 @@ fn two_path_rows_restore_cross_build_without_a_dialog() {
 
 #[test]
 fn a_one_sided_row_is_mapped_as_before() {
-    let info = rows_info(vec![
+    let game = rows_info(vec![
         file_row(Some("<xdgConfig>/unity3d/Co/G"), None),
         file_row(Some("<xdgData>/g/*.sav"), None),
     ]);
-    assert_eq!(info.pairs, []);
+    assert_eq!(game.row_pairs, []);
     let staged = staged(
         &[(Base::XdgConfig, "unity3d/Co/G"), (Base::XdgData, "g")],
         &[
@@ -1458,18 +1437,54 @@ fn a_one_sided_row_is_mapped_as_before() {
             (Base::XdgData, "g/a.sav"),
         ],
     );
-    let result = prepare(
-        &staged,
-        &win_only(native_win()),
-        &vars(),
-        info.entry.as_ref(),
-        &info.pairs,
-        &info.skips,
-        &[],
-    );
+    let result = prepare(&staged, &win_only(native_win()), &vars(), &game, &[]);
     let Err(PrepareError::NeedsMapping(entries)) = result else {
         panic!("expected NeedsMapping, got {result:?}");
     };
     let confidences: Vec<_> = entries.iter().map(|e| e.confidence).collect();
     assert_eq!(confidences, [Confidence::EngineRule, Confidence::Unknown]);
+}
+
+fn skip_reasons(plan: &RestorePlan) -> Vec<SkipReason> {
+    plan.skipped.iter().map(|s| s.reason).collect()
+}
+
+#[test]
+fn a_row_pair_does_not_trust_its_whole_windows_folder() {
+    let game = rows_info(vec![file_row(
+        Some("<xdgData>/g/*.sav"),
+        Some("<winDir>/System32/g*.sav"),
+    )]);
+    let staged = staged(
+        &[(Base::WinDir, "System32")],
+        &[
+            (Base::WinDir, "System32/gx.sav"),
+            (Base::WinDir, "System32/evil.dll"),
+        ],
+    );
+    let plan = prepare(&staged, &win_only(native_win()), &vars(), &game, &[]).unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/win/drive_c/windows/System32/gx.sav")]
+    );
+    assert_eq!(skip_reasons(&plan), [SkipReason::UndeclaredRoot]);
+}
+
+#[test]
+fn a_row_pair_does_not_trust_the_whole_install_dir() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("Install Dir")).unwrap();
+    let roots = other_root(root.path());
+    let vars = GameVars::new("Game", vec!["Install Dir".into()], &roots, None);
+    let game = rows_info(vec![file_row(
+        Some("<base>/*.sav"),
+        Some("<base>/Saves/*.sav"),
+    )]);
+    let staged = staged(
+        &[(Base::GameDir, "")],
+        &[(Base::GameDir, "a.sav"), (Base::GameDir, "game.exe")],
+    );
+    let plan = prepare(&staged, &linux_only(), &vars, &game, &[]).unwrap();
+    assert_eq!(targets_of(&plan), [root.path().join("Install Dir/a.sav")]);
+    assert_eq!(skip_reasons(&plan), [SkipReason::UndeclaredRoot]);
 }

@@ -161,9 +161,7 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
             win: None,
         },
         vars: GameVars::new("Mix", Vec::new(), &[], None),
-        entry: None,
-        pairs: Vec::new(),
-        skips: Vec::new(),
+        info: GameInfo::default(),
     })
 }
 

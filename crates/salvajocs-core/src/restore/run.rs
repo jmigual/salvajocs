@@ -126,15 +126,17 @@ pub struct GameInfo {
     /// The manifest entry with the custom game applied (`manifest::merge_custom`); `None` when
     /// neither has the title.
     pub entry: Option<GameEntry>,
-    /// The pairs of the custom game's file rows (ADR-0016) a saved skip does not name, then its
-    /// saved pairs (ADR-0011), so a saved pair wins a tie.
+    /// The custom game's saved pairs (ADR-0011).
     pub pairs: Vec<Pair>,
+    /// The pairs of the custom game's file rows (`CustomGame::file_pairs`) that no saved skip
+    /// names. They only propose mappings and declare no roots (ADR-0016).
+    pub row_pairs: Vec<Pair>,
     /// The custom game's saved skips (ADR-0011).
     pub skips: Vec<String>,
 }
 
-/// The entry, pairs and skips of `title` from `manifest` and the `custom` games, the inputs
-/// [`super::prepare`] takes besides the snapshot, targets and variables.
+/// The entry, pairs, row pairs and skips of `title` from `manifest` and the `custom` games, the
+/// input [`super::prepare`] takes besides the snapshot, targets, variables and choices.
 pub fn game_info(title: &str, manifest: &Manifest, custom: &[CustomGame]) -> GameInfo {
     let mut merged = Manifest {
         games: (manifest.games.get(title))
@@ -145,23 +147,29 @@ pub fn game_info(title: &str, manifest: &Manifest, custom: &[CustomGame]) -> Gam
     merge_custom(&mut merged, custom);
     let custom = || custom.iter().filter(|game| game.name == title);
     let skips: Vec<String> = custom().flat_map(|game| game.skips.clone()).collect();
-    // A skip the user saved wins over a row's mapping of the same root, as it does over a pair.
+    // A skip the user saved wins over a row's mapping of the same root.
     let skipped = |pair: &Pair| {
         [Family::Linux, Family::Windows].into_iter().any(|family| {
-            let side = crossbuild::classify(pair_side(pair, family), family);
-            side.is_some()
-                && skips
-                    .iter()
-                    .any(|skip| crossbuild::classify(skip, family) == side)
+            let Some((base, rest)) = crossbuild::classify(pair_side(pair, family), family) else {
+                return false;
+            };
+            skips.iter().any(|skip| {
+                crossbuild::classify(skip, family).is_some_and(|(skip_base, skip_rest)| {
+                    skip_base == base
+                        && match family {
+                            Family::Windows => skip_rest.eq_ignore_ascii_case(&rest),
+                            Family::Linux => skip_rest == rest,
+                        }
+                })
+            })
         })
     };
-    let rows = custom()
-        .flat_map(CustomGame::file_pairs)
-        .filter(|pair| !skipped(pair));
     GameInfo {
         entry: merged.games.remove(title),
-        pairs: rows
-            .chain(custom().flat_map(|game| game.pairs.clone()))
+        pairs: custom().flat_map(|game| game.pairs.clone()).collect(),
+        row_pairs: custom()
+            .flat_map(CustomGame::file_pairs)
+            .filter(|pair| !skipped(pair))
             .collect(),
         skips,
     }

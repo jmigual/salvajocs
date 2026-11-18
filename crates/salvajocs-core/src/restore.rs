@@ -576,9 +576,9 @@ pub enum PrepareError {
 
 /// Plans a restore, mapping the roots of a base family without a target onto the other family:
 /// [`crossbuild::propose`], then [`crossbuild::resolve`] with `choices`, then [`plan`]. Saved
-/// pairs, engine rules and auto-pairs apply without choices (ADR-0011). `entry` is the game's
-/// manifest entry with its custom game applied (`manifest::merge_custom`), `pairs` its saved
-/// pairs and `skips` its saved skips.
+/// pairs, row pairs, engine rules and auto-pairs apply without choices (ADR-0011, ADR-0016).
+/// `info` is what the manifest and the custom game say about the game ([`game_info`]); its row
+/// pairs are proposed before its saved pairs, so a saved pair wins a tie, and declare no roots.
 ///
 /// # Errors
 /// [`PrepareError::NeedsMapping`] while an unknown root has no choice;
@@ -588,11 +588,10 @@ pub fn prepare(
     staged: &StagedGame,
     targets: &Targets,
     vars: &GameVars,
-    entry: Option<&GameEntry>,
-    pairs: &[Pair],
-    skips: &[String],
+    info: &GameInfo,
     choices: &[(SnapshotRoot, Choice)],
 ) -> Result<RestorePlan, PrepareError> {
+    let (entry, pairs) = (info.entry.as_ref(), &info.pairs);
     let target_family = match (&targets.linux, &targets.win) {
         (Some(_), None) => Some(Family::Linux),
         (None, Some(_)) => Some(Family::Windows),
@@ -616,7 +615,8 @@ pub fn prepare(
             let keys = export.keys.keys();
             (entry.registry).extend(keys.map(|key| (key.clone(), RegistryRule::default())));
         }
-        let mut entries = crossbuild::propose(&meta, Some(&entry), pairs, skips, family);
+        let proposing: Vec<Pair> = info.row_pairs.iter().chain(pairs).cloned().collect();
+        let mut entries = crossbuild::propose(&meta, Some(&entry), &proposing, &info.skips, family);
         for mapping in &mut entries {
             mapping.files = (staged.files.iter())
                 .filter(|(base, tail)| {
