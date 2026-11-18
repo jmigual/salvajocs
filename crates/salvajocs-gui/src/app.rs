@@ -165,6 +165,7 @@ impl App {
             Stage::Starting => Stage::Starting,
             Stage::FirstRun(mut connect) => {
                 let connected = theme::modal(&ctx, "first_run", 560.0, |ui| {
+                    self.updater.dialog_ui(ui, &self.state);
                     ui.heading("Welcome to salvajocs");
                     ui.weak("Pick a folder or server for your backups. You can change it later in Settings.");
                     connect.ui(ui, &self.state.env)
@@ -193,6 +194,7 @@ impl App {
                 // Read before the prompt hands its answers over.
                 let asks_password = prompt.asks_password();
                 match theme::modal(&ctx, "secret_prompt", 560.0, |ui| {
+                    self.updater.dialog_ui(ui, &self.state);
                     ui.heading("Repository secrets");
                     prompt.ui(ui)
                 }) {
@@ -327,6 +329,8 @@ impl eframe::App for App {
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 8));
         egui::Panel::top("tabs").frame(frame).show(ui, |ui| {
             self.updater.poll(&mut self.state);
+            // The dialog of these stages covers the bar, so it shows the notice instead.
+            let dialog_open = matches!(self.stage, Stage::FirstRun(_) | Stage::Prompt(_));
             let (tab, updater, state, loading) = (
                 &mut self.tab,
                 &mut self.updater,
@@ -337,7 +341,9 @@ impl eframe::App for App {
                 ui,
                 |ui| tabs_ui(tab, ui),
                 |ui| {
-                    updater.ui(ui, state);
+                    if !dialog_open {
+                        updater.ui(ui, state);
+                    }
                     match (&state.manifest, loading) {
                         (Some(manifest), _) => {
                             ui.weak(format!("Manifest: {} games", manifest.games.len()))

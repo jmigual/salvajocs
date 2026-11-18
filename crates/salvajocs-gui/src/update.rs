@@ -92,6 +92,17 @@ impl Updater {
         }
     }
 
+    /// Draws the notice on a line of its own, for a dialog that covers the top bar, then the
+    /// state's notices, such as a failed update, which the top bar would show out of sight.
+    pub fn dialog_ui(&mut self, ui: &mut Ui, state: &State) {
+        if self.release.is_some() {
+            ui.horizontal(|ui| self.ui(ui, state));
+        }
+        for notice in &state.notices {
+            theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
+        }
+    }
+
     /// Starts the downloaded installer and closes the window, unless `busy`: closing would cut
     /// a running job, such as a backup, a restore or a config save, short.
     pub fn install_when_idle(&mut self, ctx: &egui::Context, state: &mut State, busy: bool) {

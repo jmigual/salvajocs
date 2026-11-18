@@ -109,3 +109,28 @@ fn unticked_checkbox_is_saved_and_survives_a_new_repository() {
     });
     assert!(!saved(&config_dir).unwrap().check_updates);
 }
+
+#[test]
+fn update_notice_is_in_the_first_run_dialog_and_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(&tmp);
+    env.check_update = Some(newer);
+    env.installed_by_installer = || true;
+    let mut harness = harness(env);
+    wait_for_notice(&mut harness);
+    assert!(shows(&harness, "Welcome to salvajocs"));
+    assert_eq!(
+        harness.query_all_by_label("Update now").count(),
+        1,
+        "the top bar does not repeat the dialog's button"
+    );
+
+    harness.get_by_label("Update now").click();
+    // The fake release has no installer asset, so the download fails at once.
+    // Under the dialog's update line, not in the top bar that the backdrop dims.
+    run_until(&mut harness, "the failure in the dialog", |h| {
+        let notice = h.get_by_label_contains("Update available").rect().min.y;
+        h.query_all_by_label_contains("The update failed")
+            .any(|node| node.rect().min.y > notice)
+    });
+}

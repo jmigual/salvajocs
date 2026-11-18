@@ -9,6 +9,8 @@ All notable changes to salvajocs. The format follows
 ### Fixed
 
 - A dialog taller than the window, such as the one that creates a repository, scrolls.
+- The "Update available" notice shows in the first-run and repository secrets dialogs, which
+  cover the top bar.
 
 ## [0.3.1] - 2026-11-17
 
