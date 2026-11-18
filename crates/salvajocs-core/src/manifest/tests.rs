@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::glob_free_prefix;
 
 const SAMPLE: &str = include_str!("../../tests/fixtures/manifest-sample.yaml");
 
@@ -266,4 +267,18 @@ fn file_pairs_map_rows_with_two_different_sides_through_their_glob_free_prefixes
             windows: "<winDocuments>/G/Saves".into(),
         }]
     );
+}
+
+#[test]
+fn a_windows_drive_path_gets_slashes_so_its_glob_free_prefix_is_a_folder() {
+    let entry = rows_game(vec![row(None, Some(r"C:\Games\G\*.sav"))]).game_entry();
+    assert_eq!(oses(&entry, "C:/Games/G/*.sav"), [Some(Os::Windows)]);
+    assert_eq!(glob_free_prefix("C:/Games/G/*.sav"), "C:/Games/G");
+}
+
+#[test]
+fn a_template_already_in_entry_files_keeps_its_rule() {
+    // `custom` puts `<base>/mine` in `entry.files` with an empty `when`, which applies always.
+    let entry = rows_game(vec![row(Some("<base>/mine"), None)]).game_entry();
+    assert_eq!(entry.files["<base>/mine"].when, [When::default()]);
 }

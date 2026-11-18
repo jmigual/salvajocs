@@ -510,6 +510,19 @@ fn a_windows_row_is_found_in_a_prefix() {
     assert_eq!(tails(&found), [(Base::WinHome, "Mine/s.dat")]);
 }
 
+#[test]
+fn a_windows_row_is_not_scanned_on_native_linux() {
+    let home = tempfile::tempdir().unwrap();
+    write(&home.path().join("Mine/s.dat"), "a");
+    let custom = rows_game("Mine", None, Some("<home>/Mine"));
+    let report = scan(
+        &Manifest::default(),
+        &config(vec![], vec![custom]),
+        &linux_env(home.path()),
+    );
+    assert_eq!(report.games, []);
+}
+
 /// Times a full-manifest scan against one prefix root (ADR-0008). Run with
 /// `SALVAJOCS_MANIFEST_YAML=<manifest.yaml> SALVAJOCS_PREFIX=<pfx> cargo test --release -p
 /// salvajocs-core scan::tests::time_full_manifest_scan -- --ignored --nocapture`.

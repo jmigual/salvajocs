@@ -255,21 +255,22 @@ pub enum FileError {
         /// Its template.
         template: String,
     },
-    /// The row's two sides do not form a valid mapping.
-    #[error(
-        "a row with two paths maps one folder onto the other on a cross-build restore, so each \
-         needs a placeholder and a folder below it; otherwise split it into two rows"
-    )]
-    Pair(#[source] PairError),
+    /// A placeholder template separates folders with `\`.
+    #[error("use / between folders after a placeholder: {template}")]
+    Backslash {
+        /// The rejected side.
+        family: Family,
+        /// Its template.
+        template: String,
+    },
 }
 
 /// Checks a custom game file row: at least one side, each a placeholder template of its family
-/// or an absolute path of that OS (`/...` on Linux, `C:\...` or `C:/...` on Windows), without
-/// `.` or `..`. Two different sides must also form a mapping, see `row_pair`. Textual, so every
-/// host gives the same answer.
+/// (folders separated by `/`) or an absolute path of that OS (`/...` on Linux, `C:\...` or
+/// `C:/...` on Windows), without `.` or `..`. Textual, so every host gives the same answer.
 ///
 /// # Errors
-/// [`FileError`] for the first rule broken, Linux before Windows.
+/// [`FileError`] for the first side that breaks a rule, Linux before Windows.
 pub fn validate_file(file: &CustomFile) -> Result<(), FileError> {
     let sides = [
         (&file.linux, Family::Linux),
@@ -278,61 +279,58 @@ pub fn validate_file(file: &CustomFile) -> Result<(), FileError> {
     if sides.iter().all(|(side, _)| side.is_none()) {
         return Err(FileError::Empty);
     }
-    for (side, family) in sides {
-        if let Some(template) = side
-            && !valid_side(template, family)
-        {
-            return Err(FileError::Side {
-                family,
-                template: template.clone(),
-            });
-        }
-    }
-    match (&file.linux, &file.windows) {
-        (Some(linux), Some(windows)) if linux != windows => {
-            row_pair(linux, windows).map(drop).map_err(FileError::Pair)
-        }
-        _ => Ok(()),
-    }
+    sides
+        .into_iter()
+        .filter_map(|(side, family)| Some((side.as_deref()?, family)))
+        .try_for_each(|(template, family)| check_side(template, family))
 }
 
-/// Whether `template` is a placeholder template or an absolute path of `family`, without `.` or
-/// `..` (split on both separators).
-fn valid_side(template: &str, family: Family) -> bool {
-    let placeholder = layout::classify(template, &family_context(family))
-        .is_some_and(|(base, _)| !matches!(base, Base::Absolute | Base::WinAbsolute));
+/// Checks one side of a file row, see [`validate_file`].
+fn check_side(template: &str, family: Family) -> Result<(), FileError> {
+    let placeholder = |template: &str| {
+        layout::classify(template, &family_context(family))
+            .is_some_and(|(base, _)| !matches!(base, Base::Absolute | Base::WinAbsolute))
+    };
+    // `Path` splits on `\` only on Windows, so a `\` would make the result host-dependent.
+    if template.contains('\\') && placeholder(&template.replace('\\', "/")) {
+        return Err(FileError::Backslash {
+            family,
+            template: template.to_owned(),
+        });
+    }
     let absolute = match family {
         Family::Linux => template.starts_with('/'),
         Family::Windows => layout::drive_absolute_tail(template).is_some(),
     };
-    let no_dots = template
+    let dots = template
         .split(['/', '\\'])
-        .all(|part| part != "." && part != "..");
-    (placeholder || absolute) && no_dots
+        .any(|part| part == "." || part == "..");
+    if (placeholder(template) || absolute) && !dots {
+        Ok(())
+    } else {
+        Err(FileError::Side {
+            family,
+            template: template.to_owned(),
+        })
+    }
 }
 
 /// The mapping a file row with the sides `linux` and `windows` declares: their glob-free
-/// prefixes. Besides [`validate_pair`], a prefix on a Linux or Windows base needs a folder below
-/// it, since `declared_roots` would trust the whole base (`<home>/*.sav`).
-pub(crate) fn row_pair(linux: &str, windows: &str) -> Result<Pair, PairError> {
+/// prefixes, when both pass [`validate_pair`] (so no absolute paths) and, on a Linux or Windows
+/// base, hold a folder below the placeholder; a bare base would also map every other root of
+/// that base.
+pub(crate) fn row_pair(linux: &str, windows: &str) -> Option<Pair> {
     let pair = Pair {
         linux: layout::glob_free_prefix(linux).to_owned(),
         windows: layout::glob_free_prefix(windows).to_owned(),
     };
-    validate_pair(&pair)?;
-    for side in [Family::Linux, Family::Windows] {
-        let template = pair_side(&pair, side);
-        let bare = classify(template, side).is_some_and(|(base, rest)| {
+    validate_pair(&pair).ok()?;
+    let bare = |side| {
+        classify(pair_side(&pair, side), side).is_some_and(|(base, rest)| {
             base_family(base).is_some() && components(&rest).next().is_none()
-        });
-        if bare {
-            return Err(PairError {
-                side,
-                template: template.to_owned(),
-            });
-        }
-    }
-    Ok(pair)
+        })
+    };
+    (!bare(Family::Linux) && !bare(Family::Windows)).then_some(pair)
 }
 
 pub(crate) fn pair_side(pair: &Pair, family: Family) -> &str {

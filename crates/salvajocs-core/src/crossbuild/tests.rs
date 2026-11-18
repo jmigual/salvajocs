@@ -1155,7 +1155,6 @@ fn validate_file_names_the_side_that_is_not_a_path_of_its_os() {
         (None, Some("C:G"), Family::Windows),
         (None, Some(r"\\server\share\G"), Family::Windows),
         (None, Some(r"C:\Games\..\G"), Family::Windows),
-        (None, Some(r"<winDocuments>/G\..\H"), Family::Windows),
     ] {
         let error = validate_file(&file_row(linux, windows)).unwrap_err();
         assert!(
@@ -1166,39 +1165,30 @@ fn validate_file_names_the_side_that_is_not_a_path_of_its_os() {
 }
 
 #[test]
-fn validate_file_checks_a_two_path_row_as_a_mapping() {
-    assert_eq!(
-        validate_file(&file_row(
-            Some("<xdgData>/g/*.sav"),
-            Some("<winDocuments>/G/Saves/*.sav")
-        )),
-        Ok(())
-    );
-    assert_eq!(
-        validate_file(&file_row(Some("<base>/*.sav"), Some("<base>/Saves/*.sav"))),
-        Ok(()),
-        "an install-relative side needs no folder below it"
-    );
-    assert_eq!(
-        validate_file(&file_row(Some("<base>/save"), Some("<base>/save"))),
-        Ok(()),
-        "identical sides are no mapping"
-    );
-    for (linux, windows, side) in [
-        ("/opt/g", "<winAppData>/G", Family::Linux),
-        ("<xdgData>/g", r"C:\Games\G", Family::Windows),
-        ("<home>/*.sav", "<winDocuments>/G/*.sav", Family::Linux),
-        ("<home>/.config/*.sav", "<winDocuments>/G", Family::Linux),
-        (
-            "<xdgData>/g",
-            "<home>/AppData/Roaming/*.sav",
-            Family::Windows,
-        ),
+fn validate_file_accepts_any_two_valid_sides() {
+    for (linux, windows) in [
+        ("<xdgData>/g/*.sav", "<winDocuments>/G/Saves/*.sav"),
+        ("/opt/g", "<winAppData>/G"),
+        ("<xdgData>/g", r"C:\Games\G\*.sav"),
+        ("<home>/*.sav", "<winDocuments>/G/*.sav"),
+        ("<base>/save", "<base>/save"),
     ] {
-        let error = validate_file(&file_row(Some(linux), Some(windows))).unwrap_err();
+        let file = file_row(Some(linux), Some(windows));
+        assert_eq!(validate_file(&file), Ok(()), "{linux} / {windows}");
+    }
+}
+
+#[test]
+fn validate_file_rejects_a_backslash_after_a_placeholder() {
+    for (linux, windows, family) in [
+        (Some(r"<xdgData>\g"), None, Family::Linux),
+        (None, Some(r"<winDocuments>\My Games\G"), Family::Windows),
+        (None, Some(r"<winDocuments>/G\..\H"), Family::Windows),
+    ] {
+        let error = validate_file(&file_row(linux, windows)).unwrap_err();
         assert!(
-            matches!(&error, FileError::Pair(PairError { side: s, .. }) if *s == side),
-            "{linux} / {windows}: {error:?}"
+            matches!(error, FileError::Backslash { family: f, .. } if f == family),
+            "{linux:?} / {windows:?}: {error:?}"
         );
     }
 }

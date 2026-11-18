@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_saphyr::{Budget, Options};
 
 use crate::crossbuild::row_pair;
+use crate::layout::drive_absolute_tail;
 
 pub mod fetch;
 
@@ -200,7 +201,8 @@ pub struct CustomGame {
 impl CustomGame {
     /// `entry` plus a save-tagged rule per row side, `when.os` `linux` for the Linux side and
     /// `windows` for the Windows side; a template on both sides or in several rows gets both
-    /// OSes. A template already in `entry.files` keeps its rule.
+    /// OSes. A template already in `entry.files` keeps its rule. A Windows drive path gets `/`
+    /// separators, which globbing and `glob_free_prefix` expect.
     pub fn game_entry(&self) -> GameEntry {
         let mut entry = self.entry.clone();
         let mut rows: BTreeMap<String, FileRule> = BTreeMap::new();
@@ -208,7 +210,13 @@ impl CustomGame {
             let sides = [(&file.linux, Os::Linux), (&file.windows, Os::Windows)];
             for (template, os) in sides {
                 let Some(template) = template else { continue };
-                let rule = rows.entry(template.clone()).or_insert_with(|| FileRule {
+                let template = match os {
+                    Os::Windows if drive_absolute_tail(template).is_some() => {
+                        template.replace('\\', "/")
+                    }
+                    _ => template.clone(),
+                };
+                let rule = rows.entry(template).or_insert_with(|| FileRule {
                     tags: vec![Tag::Save],
                     when: Vec::new(),
                 });
@@ -227,7 +235,8 @@ impl CustomGame {
     }
 
     /// The Linux/Windows mapping of each row with two different sides: their glob-free prefixes,
-    /// kept when they pass the check [`crate::crossbuild::validate_file`] makes of a row.
+    /// when both are placeholder templates with, on a Linux or Windows base, a folder below the
+    /// placeholder. A row with an absolute side gives none; its roots map as one-sided rows do.
     pub fn file_pairs(&self) -> Vec<Pair> {
         self.files
             .iter()
@@ -236,7 +245,7 @@ impl CustomGame {
                     return None;
                 };
                 (linux != windows)
-                    .then(|| row_pair(linux, windows).ok())
+                    .then(|| row_pair(linux, windows))
                     .flatten()
             })
             .collect()
