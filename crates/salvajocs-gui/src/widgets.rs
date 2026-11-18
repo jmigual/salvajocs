@@ -7,6 +7,20 @@ use crate::theme;
 pub mod backend;
 pub mod compression;
 
+/// The URL of a page under `docs/guide/` at the tag of the running version, so the page matches
+/// what this build does. A macro so that it can build a `const`.
+macro_rules! guide_url {
+    ($page:literal) => {
+        concat!(
+            "https://github.com/jmigual/salvajocs/blob/v",
+            env!("CARGO_PKG_VERSION"),
+            "/docs/guide/",
+            $page
+        )
+    };
+}
+pub(crate) use guide_url;
+
 /// A label followed by a single-line text field linked to it, so the field is found by that
 /// label. `password` masks the text. Lays out two cells of a grid row.
 pub fn labelled_edit(ui: &mut Ui, label: &str, text: &mut String, password: bool) -> Response {

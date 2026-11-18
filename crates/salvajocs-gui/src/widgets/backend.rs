@@ -9,18 +9,14 @@ use std::path::PathBuf;
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendField, BackendKind, RepoOption};
 
-use super::{field_hint, field_status, labelled_edit};
+use super::{field_hint, field_status, guide_url, labelled_edit};
 use crate::env::Env;
 use crate::job::Job;
 use crate::theme::{self, icons};
 
 /// The advanced options reference, at the tag of the running version so the page matches the keys
 /// this build reads.
-const OPTIONS_DOCS: &str = concat!(
-    "https://github.com/jmigual/salvajocs/blob/v",
-    env!("CARGO_PKG_VERSION"),
-    "/docs/guide/advanced-options.md"
-);
+const OPTIONS_DOCS: &str = guide_url!("advanced-options.md");
 
 /// One row of the Advanced option list. No `Debug`: the value may be a secret.
 #[derive(Default)]
