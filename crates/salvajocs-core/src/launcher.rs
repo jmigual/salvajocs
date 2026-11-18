@@ -21,6 +21,8 @@ pub enum Launcher {
     Heroic,
     /// Lutris.
     Lutris,
+    /// Bottles.
+    Bottles,
 }
 
 /// What a launcher knows about the game in a prefix, to match it to a manifest entry.
@@ -77,6 +79,16 @@ pub fn detect(
             data.join("lutris")
         };
         found.lutris(home, &dir);
+    }
+    let bottles_data = flatpak.join("com.usebottles.bottles/data");
+    for (dir, var_data) in [
+        (data_dir.join("bottles/bottles"), None),
+        (
+            bottles_data.join("bottles/bottles"),
+            Some(bottles_data.as_path()),
+        ),
+    ] {
+        found.bottles(&dir, var_data);
     }
     (found.prefixes, found.problems)
 }
@@ -157,6 +169,22 @@ struct LutrisGame {
 struct LutrisGameSection {
     prefix: Option<String>,
     exe: Option<String>,
+}
+
+/// A bottle's `placeholder.yml`, left where a bottle kept elsewhere would be.
+#[derive(Deserialize)]
+struct BottlePlaceholder {
+    #[serde(rename = "Path")]
+    path: String,
+}
+
+/// The part of a `bottle.yml` that says where a bottle kept elsewhere is.
+#[derive(Deserialize)]
+struct BottleConfig {
+    #[serde(rename = "Path", default)]
+    path: String,
+    #[serde(rename = "Custom_Path", default)]
+    custom_path: bool,
 }
 
 /// What [`detect`] has found so far.
@@ -314,6 +342,43 @@ impl Found {
                 lutris_slug: Some(spec.game_slug.unwrap_or_else(|| file_slug(stem).to_owned())),
             };
             self.push(Launcher::Lutris, [prefix], Some(game));
+        }
+    }
+
+    /// Lists Bottles' bottles; each is a prefix and is not tied to one game. A bottle kept
+    /// elsewhere has its path in `placeholder.yml`, or in its `bottle.yml` with `Custom_Path`.
+    /// `var_data` is where the Flatpak's `/var/data` is on the host.
+    fn bottles(&mut self, dir: &Path, var_data: Option<&Path>) {
+        let host_path = |path: &str| match (var_data, Path::new(path).strip_prefix("/var/data")) {
+            (Some(var_data), Ok(rest)) => var_data.join(rest),
+            _ => PathBuf::from(path),
+        };
+        for bottle in self.entries(dir) {
+            match fs::metadata(&bottle) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => continue,
+                // A dangling link, like a missing launcher, is not a problem.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    self.unreadable(&bottle, e.to_string());
+                    continue;
+                }
+            }
+            let path = if let Some(placeholder) =
+                self.yaml::<BottlePlaceholder>(&bottle.join("placeholder.yml"))
+            {
+                host_path(&placeholder.path)
+            } else if self.is_prefix(&bottle) {
+                bottle
+            } else {
+                match self.yaml::<BottleConfig>(&bottle.join("bottle.yml")) {
+                    Some(config) if config.custom_path && Path::new(&config.path).is_absolute() => {
+                        host_path(&config.path)
+                    }
+                    _ => continue,
+                }
+            };
+            self.push(Launcher::Bottles, [path], None);
         }
     }
 

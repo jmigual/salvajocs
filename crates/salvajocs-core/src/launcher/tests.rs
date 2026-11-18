@@ -444,6 +444,95 @@ fn lutris_flatpak_dirs() {
     }
 }
 
+#[test]
+fn bottles_native_and_flatpak() {
+    let h = Home::new();
+    let native = h.prefix(".local/share/bottles/bottles/Foo");
+    let flatpak = h.prefix(".var/app/com.usebottles.bottles/data/bottles/bottles/Bar");
+    h.write(
+        ".local/share/bottles/bottles/Empty/bottle.yml",
+        "Name: Empty\nPath: Empty\nCustom_Path: false\n",
+    );
+    h.write(".local/share/bottles/bottles/stray.txt", "");
+    assert_eq!(
+        h.prefixes(),
+        [
+            found(Launcher::Bottles, native, None),
+            found(Launcher::Bottles, flatpak, None),
+        ]
+    );
+}
+
+#[test]
+fn bottles_placeholder_path() {
+    let h = Home::new();
+    let placed = h.prefix("Drive/Foo");
+    let custom = h.prefix("Drive/Bar");
+    h.write(
+        ".local/share/bottles/bottles/Foo/placeholder.yml",
+        &format!("Path: {}\n", placed.display()),
+    );
+    h.write(
+        ".local/share/bottles/bottles/Bar/bottle.yml",
+        &format!(
+            "Name: Bar\nPath: {}\nCustom_Path: true\nEnvironment: Gaming\n",
+            custom.display()
+        ),
+    );
+    assert_eq!(
+        h.prefixes(),
+        [
+            found(Launcher::Bottles, custom, None),
+            found(Launcher::Bottles, placed, None),
+        ]
+    );
+}
+
+#[test]
+fn bottles_custom_path_false_is_ignored() {
+    let h = Home::new();
+    let elsewhere = h.prefix("Drive/Bar");
+    h.write(
+        ".local/share/bottles/bottles/Bar/bottle.yml",
+        &format!(
+            "Name: Bar\nPath: {}\nCustom_Path: false\n",
+            elsewhere.display()
+        ),
+    );
+    assert_eq!(h.prefixes(), []);
+}
+
+#[test]
+fn bottles_var_data_rewrite() {
+    let h = Home::new();
+    let prefix = h.prefix(".var/app/com.usebottles.bottles/data/custom/Foo");
+    let placeholder = "Path: /var/data/custom/Foo\n";
+    h.write(
+        ".var/app/com.usebottles.bottles/data/bottles/bottles/Foo/placeholder.yml",
+        placeholder,
+    );
+    h.write(
+        ".local/share/bottles/bottles/Foo/placeholder.yml",
+        placeholder,
+    );
+    assert_eq!(h.prefixes(), [found(Launcher::Bottles, prefix, None)]);
+}
+
+#[test]
+fn malformed_bottles_placeholder_is_a_problem() {
+    let h = Home::new();
+    let file = h.write(
+        ".local/share/bottles/bottles/Foo/placeholder.yml",
+        "Name: Foo\n",
+    );
+    let (prefixes, problems) = h.detect();
+    assert_eq!(prefixes, []);
+    assert!(matches!(
+        problems.as_slice(),
+        [ScanProblem { path, kind: ProblemKind::Unreadable(_) }] if *path == file
+    ));
+}
+
 // These normalize_title tests cover ludusavi's `can_normalize_title` cases (src/scan/title.rs).
 
 #[test]
