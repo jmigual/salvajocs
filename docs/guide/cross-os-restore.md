@@ -66,7 +66,8 @@ first answer:
 
    Rules work for custom games too. Other engines have no rule.
 3. **One of each.** If the manifest lists exactly one save folder for Linux and exactly one for
-   Windows, salvajocs pairs them.
+   Windows, and both end the same way after their last folder without wildcards, salvajocs
+   pairs them.
 4. **Unknown.** salvajocs asks you.
 
 Folders matched by 1 to 3 are applied without a dialog. The preview shows where every file goes,

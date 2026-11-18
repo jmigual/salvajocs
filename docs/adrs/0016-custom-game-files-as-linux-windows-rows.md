@@ -54,7 +54,8 @@ hold the same file or folder.
   name Browse escaped (`Bar [x]` becomes `Bar [[]x[]]`, whose glob-free prefix stops before
   it). `glob_free_prefix` keeps treating an escaped class as a glob: reading it as a literal
   would need it to unescape and return an owned string for every caller, since snapshot roots
-  hold real folder names.
+  hold real folder names. The manifest auto-pair (ADR-0011) checks the tails the same way, so
+  a game with one such row asks too.
   `restore::game_info` returns these as `row_pairs`, apart from the saved `pairs`, minus those a
   saved skip names (base equal, rest equal, ASCII case ignored on the Windows side).
   `restore::prepare` proposes row pairs before the saved pairs, so a saved pair wins a tie.

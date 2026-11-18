@@ -30,8 +30,7 @@ Each file is a box with a **Linux path** and a **Windows path**. Enter one or bo
   path templates with a folder below the named folder, and they end the same way after their
   last folder without wildcards (both in `/*.sav`, say, or neither with a wildcard), a restore
   onto the other build puts the files at the other path without asking. Otherwise the restore
-  may ask, as for a box with one path. A folder whose name has `[` or `]` counts as a wildcard
-  here.
+  may ask where the files go. A folder whose name has `[` or `]` counts as a wildcard here.
 
 **Add file** adds a box and **Remove file** removes it. An empty box is left out. A path that is
 not valid shows its error under the box, and **Save game** stays disabled until you fix it.

@@ -83,7 +83,9 @@ Engine layouts, from primary sources:
        `~/.godot/app_userdata` layout gets no rule (no current primary source).
      Other engines are added only with a primary source.
   3. **Auto-pair:** the game's manifest entry has exactly one save-tagged Linux entry and exactly
-     one Windows entry. Their glob-free prefixes form the pair.
+     one Windows entry. Their glob-free prefixes form the pair, when the text after both
+     prefixes is the same (none, or the same glob); otherwise one side would map into a
+     shallower folder than the other, so the root is unknown (ADR-0016).
   4. **Unknown:** no default. The dialog lists the manifest's save templates for the target OS
      as candidates; the user picks one, types a path, or skips the root.
 - **Who computes what:** `restore::prepare(staged, targets, vars, entry, pairs, skips, choices)` is
@@ -139,5 +141,10 @@ Engine layouts, from primary sources:
 
 - Cross-build restores of about 1 000 manifest games are mapped automatically, with the preview
   as the check. The rest need one dialog the first time, then never again.
+- Since the auto-pair requires equal tails (ADR-0016), manifest games whose two save templates
+  end differently ask once instead of being auto-mapped: 78 of about 1 003 one-each entries
+  (measured on the live manifest, 2026-11-18), about 36 of which engine rules still map. Pairing
+  them anyway would put one side into a shallower folder, and a wrong mapping writes the saves
+  where the other build does not read them.
 - A wrong pair writes files where the other build doesn't read them. The safety backup and the
   warning cover this; nothing is deleted.
