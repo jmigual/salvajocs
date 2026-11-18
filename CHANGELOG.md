@@ -22,6 +22,7 @@ All notable changes to salvajocs. The format follows
 - In Settings, choose which old backups to keep: the last N of each game, those newer than a
   span, or both. The rules are stored in the repository, and old backups are removed after each
   backup.
+- On the Restore tab, delete one backup of a game, or all of them, from the repository.
 
 ### Changed
 

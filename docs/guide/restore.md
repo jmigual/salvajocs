@@ -103,6 +103,26 @@ An undo has limits:
 - A safety backup of a file that you redirected with **Override** is stored by its full path. Such
   files show up as skipped when you restore that snapshot through the normal flow.
 
+## Deleting backups
+
+To delete one backup, choose it in the **Snapshot** list and click **Delete snapshot**. To delete
+every backup of the chosen game, click **Delete all backups of …**, which names the game. A
+`pre-restore` backup can be deleted like any other.
+
+A dialog names the game and lists the backups that go, as in the **Snapshot** list: `time, host`,
+plus `, pre-restore` for a safety backup. Deleting removes them from the repository for every
+computer that uses it, and cannot be undone. **Cancel** has the keyboard focus. Click **Delete**
+to go ahead.
+
+Deleting all backups of a game keeps your file choices for it (see
+[Backup](backup.md#what-is-stored)). The buttons wait while the game manifest loads, the targets
+are detected, or a preview or a restore runs. When the delete is done, the tab says how many
+backups it removed and lists the games again. If it stops partway, the error says how many were
+removed before it.
+
+As with [old backups](settings.md#old-backups), the disk space comes back at a later cleanup, at
+least a day later. In an append-only repository nothing is deleted, and the tab says so.
+
 ## Next
 
 Restoring a Linux save on Windows, or the other way round: [Cross-OS restore](cross-os-restore.md).

@@ -107,3 +107,6 @@ label and paths, so two machines with the same files each write their own snapsh
   salvajocs, and restic deletes unused packs at once, including ones a running backup is about to
   reference. The restic guide says so.
 - Months and years are approximate (30 and 365 days).
+- The Restore tab can also delete chosen backups by hand (`retention::delete`): only snapshots
+  that are candidates here, any of a game's, then the same forget and prune, append-only
+  handling and partial count as the cleanup. A game's settings snapshot stays.
