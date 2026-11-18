@@ -82,6 +82,8 @@ dependency yet; once added, the two builds unify.
     `extend` appends its files and keys.
   - `wine_prefix` (ADR-0007).
   - `pairs: [{linux, windows}]` and `skips: [template]` for cross-build restores (ADR-0011).
+  - Since 0.4.0 the files are rows `files: [{linux, windows}]` instead of `entry.files`
+    (ADR-0016).
 - The same crate (`serde-saphyr`) writes the YAML config, so there is one YAML dependency.
 
 ## Alternatives considered

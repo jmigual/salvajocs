@@ -161,8 +161,8 @@ pub struct Pair {
 }
 
 /// One file or folder of a custom game: its path on a native Linux build and in a Windows build
-/// (native or in a Wine/Proton prefix). A missing side is not backed up or restored on that
-/// system (ADR-0016).
+/// (native or in a Wine/Proton prefix). A missing side is not scanned on that system
+/// (ADR-0016).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomFile {
     /// Path template on a native Linux build.

@@ -23,6 +23,9 @@ All notable changes to salvajocs. The format follows
 - The **Option reference** link of the repository form opens that page, in the docs of the
   running version, instead of docs.rs or the rustic config.
 - The app draws its own title bar, with the tabs and the window buttons in one bar.
+- Custom game files are rows with a Linux and a Windows path; only one is required, and a row
+  with one path is backed up on that system only. Breaking: custom games from 0.3.x must be
+  entered again.
 
 ### Removed
 
