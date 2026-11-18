@@ -15,8 +15,9 @@ use common::{
 use eframe::egui::accesskit::Toggled;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use salvajocs_core::layout::{Base, Root, RootKind};
-use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
 use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, parse_yaml};
 use salvajocs_core::retention::{self, Retention};
 use salvajocs_core::selection::{Change, Pending};
@@ -178,6 +179,47 @@ fn a_game_found_in_a_wine_prefix_shows_the_prefix() {
 
     let line = format!("Wine prefix: {}", prefix.display());
     assert_eq!(harness.query_all_by_label(&line).count(), 2);
+}
+
+#[test]
+fn a_game_found_in_a_launcher_prefix_shows_the_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "Alpha", "abc");
+    let mut env = env(&tmp);
+    let found = LauncherPrefix {
+        launcher: Launcher::Lutris,
+        path: prefix.clone(),
+        game: Some(LauncherGame {
+            title: Some("ALPHA™".to_owned()),
+            ..LauncherGame::default()
+        }),
+    };
+    env.environment
+        .as_mut()
+        .unwrap()
+        .launcher_prefixes
+        .push(found);
+    fs::create_dir_all(&env.cache_dir).unwrap();
+    let manifest = parse_yaml("Alpha:\n  files:\n    <winAppData>/Alpha: {}\n").unwrap();
+    fs::write(
+        env.cache_dir.join(JSON_FILE),
+        manifest::to_json(&manifest).unwrap(),
+    )
+    .unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = harness(env);
+    run_until_ready(&mut harness);
+    run_settled(&mut harness);
+
+    scan(&mut harness, "1 game found");
+
+    assert!(shows(
+        &harness,
+        &format!("Wine prefix: {}", prefix.display())
+    ));
 }
 
 #[test]
