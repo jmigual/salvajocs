@@ -374,16 +374,3 @@ pub fn opendal_label(service_name: &str) -> Option<&'static str> {
 pub fn opendal_hint(service_name: &str) -> Option<&'static str> {
     service(service_name).map(|service| service.hint)
 }
-
-/// The docs.rs page of the opendal config struct of a service, which documents every option key.
-pub fn opendal_docs_url(service_name: &str) -> String {
-    let camel: String = service_name
-        .split('-')
-        .flat_map(|word| {
-            let mut chars = word.chars();
-            let first = chars.next().map(|c| c.to_ascii_uppercase());
-            first.into_iter().chain(chars)
-        })
-        .collect();
-    format!("https://docs.rs/opendal/0.58/opendal/services/struct.{camel}Config.html")
-}

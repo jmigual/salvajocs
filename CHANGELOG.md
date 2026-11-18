@@ -11,6 +11,15 @@ All notable changes to salvajocs. The format follows
 - An [advanced storage options reference](docs/guide/advanced-options.md): how the key and value
   pairs are read, which values are accepted, and the keys of every backend.
 
+### Changed
+
+- The **Option reference** link of the repository form opens that page, in the docs of the
+  running version, instead of docs.rs or the rustic config.
+
+### Removed
+
+- `salvajocs_core::config::opendal_docs_url`, which built the docs.rs link.
+
 ### Fixed
 
 - A dialog taller than the window, such as the one that creates a repository, scrolls.

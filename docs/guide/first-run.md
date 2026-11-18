@@ -28,7 +28,8 @@ keys and tokens are masked, and their values are never written to the config fil
 them each session.
 
 **Advanced options** holds a free list of key and value pairs for settings that have no field,
-such as a retry count. The **Option reference** link opens the list of keys of the service. Tick
+such as a retry count. The **Option reference** link opens the [advanced options reference](advanced-options.md) at
+the section of the backend, with the value formats and the keys. Tick
 **secret** on an option that holds a key or token. If a saved option has no field of its own, the
 list opens expanded.
 

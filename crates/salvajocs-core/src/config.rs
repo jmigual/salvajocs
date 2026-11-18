@@ -18,7 +18,7 @@ use crate::storage::RepoLocation;
 mod services;
 
 use services::OPENDAL_SERVICES;
-pub use services::{BackendField, opendal_docs_url, opendal_fields, opendal_hint, opendal_label};
+pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label};
 
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";

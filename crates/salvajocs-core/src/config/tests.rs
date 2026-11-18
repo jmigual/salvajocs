@@ -258,6 +258,30 @@ fn named_field_keys_are_opendal_config_keys() {
     }
 }
 
+/// Fails when an opendal upgrade adds a key the options reference does not name, so the page is
+/// re-checked on a bump.
+#[test]
+fn options_reference_names_every_config_key() {
+    let page = include_str!("../../../../docs/guide/advanced-options.md");
+    for service in OPENDAL_SERVICES {
+        let heading = format!("\n## {}\n", service.label);
+        let section = page
+            .split(&heading)
+            .nth(1)
+            .unwrap_or_else(|| panic!("no section for {}", service.label))
+            .split("\n## ")
+            .next()
+            .expect("split yields a first part");
+        for key in config_keys(service.name) {
+            assert!(
+                section.contains(&format!("`{key}`")),
+                "the section of {} does not name `{key}`",
+                service.name
+            );
+        }
+    }
+}
+
 /// Fails when a table alias is not one opendal reads as the field's key.
 #[test]
 fn field_aliases_are_read_by_opendal_as_the_field() {
@@ -322,12 +346,6 @@ fn every_service_has_a_hint() {
         assert!(!service.hint.is_empty(), "{}", service.name);
         assert_eq!(opendal_hint(service.name), Some(service.hint));
     }
-}
-
-#[test]
-fn docs_url_names_the_config_struct() {
-    assert!(opendal_docs_url("yandex-disk").ends_with("struct.YandexDiskConfig.html"));
-    assert!(opendal_docs_url("s3").ends_with("struct.S3Config.html"));
 }
 
 #[test]

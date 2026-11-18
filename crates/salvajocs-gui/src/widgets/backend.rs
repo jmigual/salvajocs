@@ -14,8 +14,13 @@ use crate::env::Env;
 use crate::job::Job;
 use crate::theme::{self, icons};
 
-/// The options rustic reads for the local, REST and rclone backends.
-const RUSTIC_OPTIONS_DOCS: &str = "https://github.com/rustic-rs/rustic/blob/main/config/full.toml";
+/// The advanced options reference, at the tag of the running version so the page matches the keys
+/// this build reads.
+const OPTIONS_DOCS: &str = concat!(
+    "https://github.com/jmigual/salvajocs/blob/v",
+    env!("CARGO_PKG_VERSION"),
+    "/docs/guide/advanced-options.md"
+);
 
 /// One row of the Advanced option list. No `Debug`: the value may be a secret.
 #[derive(Default)]
@@ -76,6 +81,21 @@ fn fields_of(kind: BackendKind) -> &'static [BackendField] {
         BackendKind::OpenDal(service) => config::opendal_fields(service),
         _ => &[],
     }
+}
+
+/// The section of the options reference for a kind. Its heading is the picker entry, and GitHub
+/// makes the anchor from the heading: lowercase, spaces to hyphens, other punctuation dropped.
+fn options_docs_url(kind: BackendKind) -> String {
+    let anchor: String = kind_label(kind)
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            c if c.is_alphanumeric() => Some(c),
+            _ => None,
+        })
+        .collect();
+    format!("{OPTIONS_DOCS}#{anchor}")
 }
 
 /// The picker entry for a kind.
@@ -471,12 +491,8 @@ impl BackendForm {
         if !self.advanced_open {
             return;
         }
-        let docs = match self.kind {
-            BackendKind::OpenDal(service) => config::opendal_docs_url(service),
-            _ => RUSTIC_OPTIONS_DOCS.to_string(),
-        };
         ui.label("");
-        ui.hyperlink_to("Option reference", docs);
+        ui.hyperlink_to("Option reference", options_docs_url(self.kind));
         ui.end_row();
         self.options_ui(ui);
     }
@@ -531,6 +547,31 @@ mod tests {
     use salvajocs_core::config::PasswordMode;
 
     use super::*;
+
+    /// Fails when a picker entry has no heading in the options reference, which would leave its
+    /// link pointing at the top of the page.
+    #[test]
+    fn every_backend_has_a_section_in_the_options_reference() {
+        let page = include_str!("../../../../docs/guide/advanced-options.md");
+        for kind in config::backend_kinds() {
+            let heading = format!("\n## {}\n", kind_label(kind));
+            assert!(
+                page.contains(&heading),
+                "no section for {}",
+                kind_label(kind)
+            );
+        }
+    }
+
+    #[test]
+    fn options_link_names_the_tag_and_the_section() {
+        let url = options_docs_url(BackendKind::OpenDal("s3"));
+        assert!(url.starts_with("https://github.com/jmigual/salvajocs/blob/v"));
+        assert!(url.contains(env!("CARGO_PKG_VERSION")));
+        assert!(url.ends_with("/docs/guide/advanced-options.md#amazon-s3-or-compatible"));
+        assert!(options_docs_url(BackendKind::OpenDal("ipmfs")).ends_with("#ipfs-mfs"));
+        assert!(options_docs_url(BackendKind::Rest).ends_with("#rest-server"));
+    }
 
     fn config(repository: &str, options: Vec<RepoOption>) -> AppConfig {
         AppConfig {
