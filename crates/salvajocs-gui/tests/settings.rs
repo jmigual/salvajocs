@@ -582,6 +582,24 @@ fn applying_a_new_location_keeps_roots_added_since_the_form_was_built() {
 }
 
 #[test]
+fn applying_a_new_location_keeps_the_ignored_prefixes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.ignored_prefixes = vec![tmp.path().join("prefix")];
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.ignored_prefixes, config.ignored_prefixes);
+}
+
+#[test]
 fn changing_location_offers_to_delete_stale_keyring_entries() {
     let tmp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());

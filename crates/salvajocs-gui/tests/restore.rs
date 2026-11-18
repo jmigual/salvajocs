@@ -118,6 +118,8 @@ fn open_tab_tagged(
             xdg_config: home(tmp).join(".config"),
         })),
         steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     });
     fs::create_dir_all(&env.cache_dir).unwrap();
     fs::write(

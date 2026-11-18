@@ -87,6 +87,8 @@ fn linux_env(home: &Path) -> Environment {
             xdg_config: home.join(".config"),
         })),
         steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     }
 }
 

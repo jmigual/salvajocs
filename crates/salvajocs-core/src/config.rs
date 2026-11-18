@@ -189,6 +189,9 @@ pub struct AppConfig {
     /// Whether the app asks GitHub for a newer release at start (ADR-0013).
     #[serde(default = "default_true")]
     pub check_updates: bool,
+    /// Launcher prefixes that scans and restores leave out (ADR-0017).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_prefixes: Vec<PathBuf>,
 }
 
 fn default_true() -> bool {

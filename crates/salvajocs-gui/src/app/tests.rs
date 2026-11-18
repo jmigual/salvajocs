@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::Vec2;
 use egui_kittest::Harness;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::{Compression, RepoLocation};
 use salvajocs_core::update::UpdateError;
 
@@ -30,7 +31,13 @@ fn app(dir: &Path) -> App {
         cache_dir: dir.join("cache"),
         secrets: Arc::new(MemorySecrets::new()),
         refresh_manifest: offline,
-        environment: None,
+        // The Settings tab looks for launcher prefixes; this keeps it off the real machine.
+        environment: Some(Environment {
+            native: None,
+            steam_roots: Vec::new(),
+            launcher_prefixes: Vec::new(),
+            launcher_problems: Vec::new(),
+        }),
         wineserver_running: salvajocs_core::prefix::wineserver_running,
         check_update: None,
         installed_by_installer: || true,
@@ -52,6 +59,7 @@ fn app(dir: &Path) -> App {
         roots: Vec::new(),
         custom_games: Vec::new(),
         check_updates: true,
+        ignored_prefixes: Vec::new(),
     }
     .save(&env.config_dir)
     .unwrap();

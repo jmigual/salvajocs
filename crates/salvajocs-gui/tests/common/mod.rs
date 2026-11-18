@@ -14,6 +14,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::scan::Environment;
 use salvajocs_core::secret::{SecretError, SecretKey};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
@@ -70,7 +71,13 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         cache_dir: tmp.path().join("cache"),
         secrets,
         refresh_manifest: offline,
-        environment: None,
+        // A machine with nothing on it, so no test reads the real one.
+        environment: Some(Environment {
+            native: None,
+            steam_roots: Vec::new(),
+            launcher_prefixes: Vec::new(),
+            launcher_problems: Vec::new(),
+        }),
         wineserver_running: salvajocs_core::prefix::wineserver_running,
         check_update: None,
         installed_by_installer: || false,
@@ -116,6 +123,7 @@ pub fn local_config(repository: &str) -> AppConfig {
         roots: Vec::new(),
         custom_games: Vec::new(),
         check_updates: true,
+        ignored_prefixes: Vec::new(),
     }
 }
 

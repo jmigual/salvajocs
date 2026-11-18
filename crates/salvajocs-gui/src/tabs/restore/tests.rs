@@ -100,6 +100,7 @@ fn state(dir: &Path) -> State {
         roots: Vec::new(),
         custom_games: Vec::new(),
         check_updates: true,
+        ignored_prefixes: Vec::new(),
     });
     let location = RepoLocation {
         repository: dir.join("repo").to_str().unwrap().to_string(),

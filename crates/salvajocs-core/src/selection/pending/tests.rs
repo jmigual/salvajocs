@@ -18,6 +18,7 @@ fn config(repository: &str, options: &[(&str, &str, bool)]) -> AppConfig {
         roots: vec![],
         custom_games: vec![],
         check_updates: false,
+        ignored_prefixes: Vec::new(),
     }
 }
 

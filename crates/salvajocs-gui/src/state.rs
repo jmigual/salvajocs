@@ -105,8 +105,8 @@ impl State {
     }
 
     /// Makes a repository the user just connected the current one and saves the config. Roots,
-    /// custom games and the update setting come from the current config, which may have changed
-    /// since the form was built.
+    /// custom games, the update setting and the ignored prefixes come from the current config,
+    /// which may have changed since the form was built.
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -118,6 +118,7 @@ impl State {
             config.roots = old.roots.clone();
             config.custom_games = old.custom_games.clone();
             config.check_updates = old.check_updates;
+            config.ignored_prefixes = old.ignored_prefixes.clone();
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }
         self.session = Some(Session {

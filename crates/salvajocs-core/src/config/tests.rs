@@ -35,6 +35,7 @@ fn sample() -> AppConfig {
             skips: Vec::new(),
         }],
         check_updates: false,
+        ignored_prefixes: vec!["/prefixes/foo".into()],
     }
 }
 

@@ -210,6 +210,8 @@ fn linux_env(home: &Path, steam_roots: Vec<PathBuf>) -> Environment {
     Environment {
         native: Some(Context::Linux(linux_folders(home))),
         steam_roots,
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     }
 }
 
@@ -478,6 +480,8 @@ fn default_targets_on_windows_host_is_native_only() {
     let env = Environment {
         native: Some(native.clone()),
         steam_roots: vec![steam],
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     };
 
     assert_eq!(
@@ -903,6 +907,7 @@ fn config(roots: Vec<Root>) -> AppConfig {
         roots,
         custom_games: vec![],
         check_updates: true,
+        ignored_prefixes: Vec::new(),
     }
 }
 
@@ -948,6 +953,8 @@ fn proton_backup_restores_into_windows_layout() {
     let env = Environment {
         native: None,
         steam_roots: vec![steam],
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     };
     let staged = back_up_and_fetch(&mut storage, tmp.path(), &manifest, &config(vec![]), &env);
 
@@ -1003,6 +1010,8 @@ fn prefix_registry_restores_into_other_prefix() {
     let env = Environment {
         native: None,
         steam_roots: vec![],
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     };
     let staged = back_up_and_fetch(&mut storage, tmp.path(), &manifest, &config(roots), &env);
     assert_eq!(staged.registry, Some(foo_registry("a")));

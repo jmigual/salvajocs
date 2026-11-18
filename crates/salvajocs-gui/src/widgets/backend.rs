@@ -620,6 +620,7 @@ mod tests {
             roots: Vec::new(),
             custom_games: Vec::new(),
             check_updates: true,
+            ignored_prefixes: Vec::new(),
         }
     }
 

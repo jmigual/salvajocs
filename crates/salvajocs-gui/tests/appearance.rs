@@ -160,6 +160,8 @@ fn deck() -> Environment {
             home,
         })),
         steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     }
 }
 

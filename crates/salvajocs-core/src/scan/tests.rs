@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::config::PasswordMode;
+use crate::launcher::{Launcher, LauncherGame};
 use crate::layout::LinuxFolders;
 use crate::manifest::{CustomFile, CustomGame, Integration, parse_yaml};
 
@@ -30,6 +31,7 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         roots,
         custom_games,
         check_updates: true,
+        ignored_prefixes: Vec::new(),
     }
 }
 
@@ -49,6 +51,8 @@ fn linux_env(home: &Path) -> Environment {
             xdg_config: home.join(".config"),
         })),
         steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     }
 }
 
@@ -56,6 +60,8 @@ fn no_native_env(steam_roots: Vec<PathBuf>) -> Environment {
     Environment {
         native: None,
         steam_roots,
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
     }
 }
 
@@ -159,6 +165,142 @@ fn game_specific_prefix_beats_wine_prefix_root() {
     let found = game(&manifest, &config, &env);
     assert_eq!(found.files.len(), 1);
     assert_eq!(found.files[0].real, own.join(relative));
+}
+
+/// A launcher prefix at `path`, of the game titled `title` or, when `None`, of no game.
+fn launcher_prefix(path: &Path, title: Option<&str>) -> LauncherPrefix {
+    LauncherPrefix {
+        launcher: Launcher::Heroic,
+        path: path.to_path_buf(),
+        game: title.map(|title| LauncherGame {
+            title: Some(title.to_owned()),
+            ..LauncherGame::default()
+        }),
+    }
+}
+
+/// An environment without a native context that found `prefixes`.
+fn launcher_env(prefixes: Vec<LauncherPrefix>) -> Environment {
+    Environment {
+        launcher_prefixes: prefixes,
+        ..no_native_env(vec![])
+    }
+}
+
+const FOO_SAVE: &str = "drive_c/users/steamuser/AppData/Roaming/Foo/save.dat";
+const FOO: &str = "Foo:\n  files:\n    <winAppData>/Foo: {}\n";
+
+#[test]
+fn launcher_prefix_of_the_game_beats_wine_prefix_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = make_prefix(&dir.path().join("own"));
+    let root = make_prefix(&dir.path().join("root"));
+    write(&own.join(FOO_SAVE), "own");
+    write(&root.join(FOO_SAVE), "root");
+    let manifest = parse_yaml(FOO).unwrap();
+    let env = launcher_env(vec![launcher_prefix(&own, Some("Foo™"))]);
+    let found = game(&manifest, &config(vec![wine_root(&root)], vec![]), &env);
+    assert_eq!(found.files.len(), 1);
+    assert_eq!(found.files[0].real, own.join(FOO_SAVE));
+}
+
+#[test]
+fn proton_prefix_beats_launcher_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let steam = dir.path().join("steam");
+    let proton = make_prefix(&steam.join("steamapps/compatdata/620"));
+    let own = make_prefix(&dir.path().join("own"));
+    write(&proton.join(FOO_SAVE), "proton");
+    write(&own.join(FOO_SAVE), "own");
+    let manifest = parse_yaml(&format!("{FOO}  steam: {{id: 620}}\n")).unwrap();
+    let env = Environment {
+        launcher_prefixes: vec![launcher_prefix(&own, Some("Foo"))],
+        ..no_native_env(vec![steam])
+    };
+    let found = game(&manifest, &config(vec![], vec![]), &env);
+    assert_eq!(found.files.len(), 1);
+    assert_eq!(found.files[0].real, proton.join(FOO_SAVE));
+}
+
+#[test]
+fn custom_wine_prefix_beats_launcher_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let custom = make_prefix(&dir.path().join("custom"));
+    let own = make_prefix(&dir.path().join("own"));
+    write(&custom.join(FOO_SAVE), "custom");
+    write(&own.join(FOO_SAVE), "own");
+    let mut game_config = custom_game("Foo", "<winAppData>/Foo", Integration::Extend);
+    game_config.wine_prefix = Some(custom.clone());
+    let manifest = parse_yaml(FOO).unwrap();
+    let env = launcher_env(vec![launcher_prefix(&own, Some("Foo"))]);
+    let found = game(&manifest, &config(vec![], vec![game_config]), &env);
+    assert_eq!(found.files.len(), 1);
+    assert_eq!(found.files[0].real, custom.join(FOO_SAVE));
+}
+
+#[test]
+fn wine_prefix_root_beats_shared_launcher_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = make_prefix(&dir.path().join("root"));
+    let shared = make_prefix(&dir.path().join("shared"));
+    write(&root.join(FOO_SAVE), "root");
+    write(&shared.join(FOO_SAVE), "shared");
+    let bar_save = "drive_c/users/steamuser/AppData/Roaming/Bar/save.dat";
+    write(&shared.join(bar_save), "bar");
+    let manifest = parse_yaml(&format!(
+        "{FOO}Bar:\n  files:\n    <winAppData>/Bar: {{}}\n"
+    ));
+    // An unmapped prefix is scanned for every game, after the configured roots.
+    let env = launcher_env(vec![launcher_prefix(&shared, Some("Unknown"))]);
+    let report = scan(
+        &manifest.unwrap(),
+        &config(vec![wine_root(&root)], vec![]),
+        &env,
+    );
+    assert_eq!(report.problems, []);
+    let real: Vec<&Path> = (report.games.iter())
+        .flat_map(|game| game.files.iter().map(|file| file.real.as_path()))
+        .collect();
+    assert_eq!(real, [shared.join(bar_save), root.join(FOO_SAVE)]);
+}
+
+#[test]
+fn launcher_prefix_of_another_game_is_not_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    let bar = make_prefix(dir.path());
+    write(&bar.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(&format!("{FOO}Bar: {{}}\n")).unwrap();
+    let env = launcher_env(vec![launcher_prefix(&bar, Some("Bar"))]);
+    let report = scan(&manifest, &config(vec![], vec![]), &env);
+    assert_eq!(report.games, []);
+    assert_eq!(report.problems, []);
+}
+
+#[test]
+fn ignored_launcher_prefix_is_not_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = make_prefix(dir.path());
+    write(&own.join(FOO_SAVE), "own");
+    let manifest = parse_yaml(FOO).unwrap();
+    let env = launcher_env(vec![launcher_prefix(&own, Some("Foo"))]);
+    let mut config = config(vec![], vec![]);
+    config.ignored_prefixes = vec![own];
+    let report = scan(&manifest, &config, &env);
+    assert_eq!(report.games, []);
+}
+
+#[test]
+fn launcher_problems_are_reported_once() {
+    let problem = ScanProblem {
+        path: PathBuf::from("/launcher/games/foo.yml"),
+        kind: ProblemKind::Unreadable("bad".into()),
+    };
+    let env = Environment {
+        launcher_problems: vec![problem.clone(), problem.clone()],
+        ..no_native_env(vec![])
+    };
+    let report = scan(&Manifest::default(), &config(vec![], vec![]), &env);
+    assert_eq!(report.problems, [problem]);
 }
 
 #[test]

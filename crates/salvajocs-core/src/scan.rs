@@ -8,6 +8,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::AppConfig;
+#[cfg(target_os = "linux")]
+use crate::launcher;
+use crate::launcher::{GameIndex, LauncherPrefix};
 #[cfg(not(windows))]
 use crate::layout::LinuxFolders;
 use crate::layout::{
@@ -27,18 +30,33 @@ pub struct Environment {
     pub native: Option<Context>,
     /// Detected Steam roots; Proton prefixes are looked up under them.
     pub steam_roots: Vec<PathBuf>,
+    /// The Wine prefixes of the Heroic, Lutris and Bottles launchers (ADR-0017).
+    pub launcher_prefixes: Vec<LauncherPrefix>,
+    /// What could not be read while looking for `launcher_prefixes`.
+    pub launcher_problems: Vec<ScanProblem>,
 }
 
 impl Environment {
-    /// Detects the native context and the default Steam roots of this machine.
+    /// Detects the native context, the default Steam roots and, on Linux, the launcher prefixes
+    /// of this machine.
     pub fn detect() -> Self {
         #[cfg(windows)]
         let native = WinFolders::native().map(Context::WindowsNative);
         #[cfg(not(windows))]
         let native = LinuxFolders::native().map(Context::Linux);
+        #[cfg(target_os = "linux")]
+        let (launcher_prefixes, launcher_problems) =
+            match (dirs::home_dir(), dirs::config_dir(), dirs::data_dir()) {
+                (Some(home), Some(config), Some(data)) => launcher::detect(&home, &config, &data),
+                _ => (Vec::new(), Vec::new()),
+            };
+        #[cfg(not(target_os = "linux"))]
+        let (launcher_prefixes, launcher_problems) = (Vec::new(), Vec::new());
         Self {
             native,
             steam_roots: steam_roots(),
+            launcher_prefixes,
+            launcher_problems,
         }
     }
 }
@@ -253,6 +271,10 @@ struct Shared<'a> {
     roots: Vec<Root>,
     /// `WinePrefix` roots, in configured order.
     wine_roots: Vec<PathBuf>,
+    /// Launcher prefixes of one game, by title.
+    own_prefixes: HashMap<&'a str, Vec<PathBuf>>,
+    /// Launcher prefixes of no known game, scanned for every game.
+    shared_prefixes: Vec<PathBuf>,
     cache: Cache,
 }
 
@@ -341,9 +363,10 @@ fn matches(pattern: &str, issues: &mut Vec<Issue>) -> Vec<(PathBuf, u64)> {
     files
 }
 
-/// The contexts a game is evaluated in, best first (ADR-0007): its own prefixes (Proton, then
-/// the custom `wine_prefix`), the `WinePrefix` roots, then the native context, each with the
-/// game's `GameVars`. The context supplies `<osUserName>`.
+/// The contexts a game is evaluated in, best first (ADR-0007, ADR-0017): its own prefixes
+/// (Proton, the custom `wine_prefix`, then its launcher prefixes), the `WinePrefix` roots, the
+/// shared launcher prefixes, then the native context, each with the game's `GameVars`. The
+/// context supplies `<osUserName>`.
 fn contexts(
     title: &str,
     entry: &GameEntry,
@@ -356,10 +379,13 @@ fn contexts(
         .iter()
         .filter(|root| root.kind == RootKind::Steam)
         .filter_map(|root| proton_prefix(&root.path, u64::from(steam_id?)));
+    let own = shared.own_prefixes.get(title).into_iter().flatten();
     let mut prefixes: Vec<PathBuf> = Vec::new();
     for prefix in proton
         .chain(wine_prefix.cloned())
+        .chain(own.cloned())
         .chain(shared.wine_roots.iter().cloned())
+        .chain(shared.shared_prefixes.iter().cloned())
     {
         if !prefixes.contains(&prefix) {
             prefixes.push(prefix);
@@ -517,6 +543,29 @@ pub(crate) fn roots(config: &AppConfig, env: &Environment) -> Vec<Root> {
     roots
 }
 
+/// The launcher prefixes of `env` that `config` does not ignore, split into those mapped to a
+/// game of `manifest`, by title, and the rest (ADR-0017).
+pub(crate) fn launcher_prefixes<'a>(
+    manifest: &'a Manifest,
+    config: &AppConfig,
+    env: &Environment,
+) -> (HashMap<&'a str, Vec<PathBuf>>, Vec<PathBuf>) {
+    let index = GameIndex::new(manifest);
+    let mut own: HashMap<&str, Vec<PathBuf>> = HashMap::new();
+    let mut rest = Vec::new();
+    let used = env
+        .launcher_prefixes
+        .iter()
+        .filter(|prefix| !config.ignored_prefixes.contains(&prefix.path));
+    for prefix in used {
+        match index.title(prefix) {
+            Some(title) => own.entry(title).or_default().push(prefix.path.clone()),
+            None => rest.push(prefix.path.clone()),
+        }
+    }
+    (own, rest)
+}
+
 /// Scans every game of `manifest`, with the config's custom games applied. A game is listed when
 /// it has a file or a registry key on this machine; the first context in priority order wins per
 /// logical path and for the registry (ADR-0007). Prefixes and paths that cannot be used are
@@ -528,15 +577,23 @@ pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanR
         .filter(|root| root.kind == RootKind::WinePrefix)
         .map(|root| root.path.clone())
         .collect();
+    let (own_prefixes, shared_prefixes) = launcher_prefixes(manifest, config, env);
     let shared = Shared {
         env,
         roots,
         wine_roots,
+        own_prefixes,
+        shared_prefixes,
         cache: Cache::default(),
     };
     // Resolve the roots up front so a bad one is reported even when no game uses it.
     for prefix in &shared.wine_roots {
         shared.cache.prefix(prefix);
+    }
+    for problem in &env.launcher_problems {
+        shared
+            .cache
+            .report(problem.path.clone(), problem.kind.clone());
     }
 
     // Only the custom games' titles are copied; the manifest itself stays borrowed.
