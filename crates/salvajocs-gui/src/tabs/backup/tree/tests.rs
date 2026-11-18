@@ -263,3 +263,28 @@ fn empty_and_non_ascii_components_are_folders_of_their_own() {
     assert_eq!(direct.key, "Base/é");
     assert_eq!(keys(&tree, direct), ["Base/é/z"]);
 }
+
+#[test]
+fn case_variant_folders_merge_below_windows_bases_only() {
+    assert!(selection::folds_case("WinAppData"));
+    assert!(!selection::folds_case("Home"));
+    let tree = tree(&[
+        "WinAppData/Foo/a.sav",
+        "WinAppData/Goo/c.sav",
+        "WinAppData/foo/b.sav",
+        "Home/Foo/a.sav",
+        "Home/foo/b.sav",
+    ]);
+
+    assert_eq!(
+        names(&folder(&tree, &["WinAppData"]).folders),
+        ["Foo", "Goo"]
+    );
+    let foo = folder(&tree, &["WinAppData", "Foo"]);
+    assert_eq!(foo.key, "WinAppData/Foo");
+    assert_eq!(
+        keys(&tree, foo),
+        ["WinAppData/Foo/a.sav", "WinAppData/foo/b.sav"]
+    );
+    assert_eq!(names(&folder(&tree, &["Home"]).folders), ["Foo", "foo"]);
+}

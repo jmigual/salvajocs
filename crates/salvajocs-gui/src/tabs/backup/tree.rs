@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{Checkbox, Role, Ui, WidgetInfo};
+use salvajocs_core::selection;
 
 use super::format_size;
 use crate::tabs::count;
@@ -65,8 +66,9 @@ impl FileTree {
                 File { key, name, size }
             })
             .collect();
-        // By component, not by text, so the folder `a` lists before its sibling `a-b`.
-        files.sort_by(|a, b| a.key.split('/').cmp(b.key.split('/')));
+        // By component, not by text, so the folder `a` lists before its sibling `a-b`. Below a
+        // Windows-family base, case variants such as `Foo` and `foo` sort together into one folder.
+        files.sort_by_cached_key(|file| (folded(&file.key), file.key.clone()));
 
         let mut root = Folder::new("", "", 0);
         for (at, file) in files.iter().enumerate() {
@@ -75,9 +77,17 @@ impl FileTree {
             let mut end = 0;
             // An empty component is a folder with an empty name, so the key stays a literal prefix.
             if let Some((dirs, _)) = file.key.rsplit_once('/') {
+                let fold = selection::folds_case(dirs.split('/').next().unwrap_or_default());
                 for dir in dirs.split('/') {
                     end += dir.len();
-                    if folder.folders.last().is_none_or(|last| last.name != dir) {
+                    let same = |name: &str| {
+                        if fold {
+                            name.eq_ignore_ascii_case(dir)
+                        } else {
+                            name == dir
+                        }
+                    };
+                    if folder.folders.last().is_none_or(|last| !same(&last.name)) {
                         folder.folders.push(Folder::new(&file.key[..end], dir, at));
                     }
                     end += 1;
@@ -128,6 +138,23 @@ impl FileTree {
         drawing.children(ui, root, &mut toggled);
         toggled
     }
+}
+
+/// The components of `key`, ASCII-lowercased below a Windows-family base
+/// ([`selection::folds_case`]): the order [`FileTree::new`] groups folders by.
+fn folded(key: &str) -> Vec<String> {
+    let mut parts = key.split('/');
+    let base = parts.next().unwrap_or_default();
+    let fold = selection::folds_case(base);
+    std::iter::once(base.to_owned())
+        .chain(parts.map(|part| {
+            if fold {
+                part.to_ascii_lowercase()
+            } else {
+                part.to_owned()
+            }
+        }))
+        .collect()
 }
 
 /// The running totals in `cache`, computed from `included` when missing.
