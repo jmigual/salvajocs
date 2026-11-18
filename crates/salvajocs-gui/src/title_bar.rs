@@ -37,11 +37,12 @@ pub fn drag_area(ui: &mut Ui, margin: Margin) -> Rect {
 /// Moves the window when `response` is dragged and maximizes or restores it when double-clicked,
 /// both with the primary button.
 fn move_window(ctx: &egui::Context, response: &Response) {
-    let (pressed, down, moved, focus_lost) = ctx.input(|i| {
+    let (pressed, down, moved, focused, focus_lost) = ctx.input(|i| {
         (
             i.pointer.button_pressed(PointerButton::Primary),
             i.pointer.button_down(PointerButton::Primary),
             i.pointer.press_origin() != i.pointer.latest_pos(),
+            i.focused,
             i.events.contains(&Event::WindowFocused(false)),
         )
     });
@@ -55,10 +56,9 @@ fn move_window(ctx: &egui::Context, response: &Response) {
     let armed = ctx.data(|data| data.get_temp(response.id)).unwrap_or(false);
     if response.double_clicked_by(PointerButton::Primary) {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized(ctx)));
-    } else if armed && down && moved {
-        // Not egui's `drag_started`: it waits for 6 points of motion (`max_click_dist`) or 0.8 s
-        // (`max_click_duration`), and the compositor should get the move while the press is fresh.
-        // Once only: when the compositor takes the release, egui still holds the button down.
+    } else if armed && down && moved && focused {
+        // Not egui's `drag_started`, which waits for 6 points (`max_click_dist`) or 0.8 s. Once per
+        // press, as egui still holds a button the compositor took; the backend drops it unfocused.
         ctx.data_mut(|data| data.insert_temp(response.id, false));
         ctx.send_viewport_cmd(ViewportCommand::StartDrag);
     }

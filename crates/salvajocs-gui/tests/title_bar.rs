@@ -309,6 +309,27 @@ fn a_press_whose_release_went_with_the_focus_does_not_move_the_window() {
 }
 
 #[test]
+fn a_press_that_focuses_the_window_moves_it_once_focused() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.input_mut().focused = false;
+    harness.hover_at(empty);
+    harness.event(button(empty, true));
+    harness.step();
+    harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.step();
+    assert_eq!(
+        commands(&harness),
+        [],
+        "the backend drops a move before the focus"
+    );
+    harness.input_mut().focused = true;
+    harness.event(Event::PointerMoved(empty + Vec2::new(2.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
+}
+
+#[test]
 fn dragging_the_manifest_status_moves_the_window() {
     let (_tmp, mut harness) = ready();
     let status = harness
