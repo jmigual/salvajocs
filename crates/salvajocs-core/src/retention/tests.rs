@@ -505,6 +505,86 @@ fn a_prune_that_fails_after_a_forget_reports_the_forgotten_count() {
     assert_eq!(repo.ids(APP_TAG).len(), 1);
 }
 
+#[test]
+fn delete_forgets_only_the_given_ids_and_keeps_the_rest_restorable() {
+    let mut repo = Repo::new();
+    let old = repo.backup("old");
+    let mid = repo.backup("mid");
+    let new = repo.backup("new");
+
+    let cleanup = delete(&mut repo.storage, &[&mid.id]).unwrap();
+
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 1,
+            pruned: true,
+            append_only_kept: 0,
+        }
+    );
+    assert_eq!(repo.ids(APP_TAG), [new.id.clone(), old.id.clone()]);
+    assert!(repo.restores(&new, "new"));
+    assert!(repo.restores(&old, "old"));
+}
+
+#[test]
+fn delete_refuses_a_settings_snapshot_and_forgets_nothing() {
+    let mut repo = Repo::new();
+    let game = repo.backup("old");
+    let stage = repo.tmp.path().join("stage");
+    let skip = [crate::selection::Change::Skip(true)];
+    crate::selection::save(&mut repo.storage, "A", &skip, &stage).unwrap();
+    let settings = repo.ids(SETTINGS_TAG);
+
+    let err = delete(&mut repo.storage, &[&game.id, &settings[0]]).unwrap_err();
+
+    assert!(matches!(err, DeleteError::NotAGameBackup(_)));
+    assert_eq!(repo.ids(APP_TAG), [game.id]);
+    assert_eq!(repo.ids(SETTINGS_TAG), settings);
+}
+
+#[test]
+fn delete_refuses_a_snapshot_retention_never_picks() {
+    let mut repo = Repo::new();
+    let game = repo.backup("old");
+    let src = repo.save("other");
+    for (label, tags) in [
+        ("untagged", &[APP_TAG][..]),
+        ("settings", &[APP_TAG, SETTINGS_TAG, "game:a"][..]),
+    ] {
+        let as_path = format!("/salvajocs/{label}");
+        let other = (repo.storage.backup_dir(&src, &as_path, tags, label))
+            .unwrap()
+            .unwrap();
+        let before = repo.ids(APP_TAG);
+
+        let err = delete(&mut repo.storage, &[&game.id, &other.id]).unwrap_err();
+
+        assert!(matches!(err, DeleteError::NotAGameBackup(_)), "{label}");
+        assert_eq!(repo.ids(APP_TAG), before, "{label}");
+    }
+}
+
+#[test]
+fn delete_in_an_append_only_repository_only_counts() {
+    let mut repo = Repo::new();
+    let old = repo.backup("old");
+    repo.backup("new");
+    repo.storage.set_append_only();
+
+    let cleanup = delete(&mut repo.storage, &[&old.id]).unwrap();
+
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 0,
+            pruned: false,
+            append_only_kept: 1,
+        }
+    );
+    assert_eq!(repo.ids(APP_TAG).len(), 2);
+}
+
 /// Every file below `dir`.
 fn files_below(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
