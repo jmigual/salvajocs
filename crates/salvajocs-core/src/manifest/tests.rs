@@ -257,6 +257,7 @@ fn file_pairs_map_rows_with_two_different_sides_through_their_glob_free_prefixes
         row(Some("<base>/save"), Some("<base>/save")),
         row(Some("<xdgData>/only"), None),
         row(Some("/opt/g"), Some("<winAppData>/G")),
+        row(Some("<home>/*.sav"), Some("<winDocuments>/G/*.sav")),
     ]);
     assert_eq!(
         game.file_pairs(),

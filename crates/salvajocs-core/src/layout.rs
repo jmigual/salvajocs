@@ -350,7 +350,7 @@ const LINUX_HOME_SUBDIRS: [(&str, Base); 2] = [
 
 /// The `WinAbsolute` tail of a Windows drive-letter template (`C:\Games\Foo` -> `C/Games/Foo`).
 /// `None` for anything else, including UNC paths and drive-relative `C:foo`.
-fn drive_absolute_tail(template: &str) -> Option<String> {
+pub(crate) fn drive_absolute_tail(template: &str) -> Option<String> {
     let mut chars = template.chars();
     let drive = chars.next().filter(char::is_ascii_alphabetic)?;
     if chars.next() != Some(':') || !matches!(chars.next(), Some('/' | '\\')) {
@@ -564,7 +564,7 @@ pub fn tail_of(real_path: &Path, base_dir: &Path) -> Option<String> {
 }
 
 /// Whether `part` is a single plain path component (no `..`, separators or drive prefix).
-pub(crate) fn is_plain_component(part: &str) -> bool {
+pub fn is_plain_component(part: &str) -> bool {
     let mut components = Path::new(part).components();
     matches!(
         (components.next(), components.next()),

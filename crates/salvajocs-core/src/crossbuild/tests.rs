@@ -3,7 +3,7 @@ use std::fs;
 use super::*;
 use crate::config::PasswordMode;
 use crate::layout::{Root, RootKind};
-use crate::manifest::{RegistryRule, When};
+use crate::manifest::{CustomFile, RegistryRule, When};
 
 fn root(template: &str, family: Family) -> SnapshotRoot {
     classify(template, family).unwrap()
@@ -1098,4 +1098,107 @@ fn template_for_falls_back_to_a_drive_path_on_native_windows() {
     );
     assert_eq!(template(r"C:\", &ctx, &vars).as_deref(), Some("C:/"));
     assert_eq!(template(r"\\server\share\Foo", &ctx, &vars), None);
+}
+
+fn file_row(linux: Option<&str>, windows: Option<&str>) -> CustomFile {
+    CustomFile {
+        linux: linux.map(Into::into),
+        windows: windows.map(Into::into),
+    }
+}
+
+#[test]
+fn validate_file_needs_a_side() {
+    assert_eq!(validate_file(&file_row(None, None)), Err(FileError::Empty));
+}
+
+#[test]
+fn validate_file_accepts_placeholder_templates_and_absolute_paths_of_each_os() {
+    for linux in [
+        "<home>/g",
+        "<xdgData>/g/*.sav",
+        "<xdgConfig>/<game>/<storeUserId>/s[0-9].dat",
+        "<home>/<osUserName>",
+        "<base>/save",
+        "<root>/g",
+        "/opt/g",
+    ] {
+        assert_eq!(
+            validate_file(&file_row(Some(linux), None)),
+            Ok(()),
+            "{linux}"
+        );
+    }
+    for windows in [
+        "<winDocuments>/G/*.sav",
+        "<home>/G",
+        "<base>/save",
+        r"C:\Games\G",
+        "C:/Games/G",
+    ] {
+        let file = file_row(None, Some(windows));
+        assert_eq!(validate_file(&file), Ok(()), "{windows}");
+    }
+}
+
+#[test]
+fn validate_file_names_the_side_that_is_not_a_path_of_its_os() {
+    for (linux, windows, family) in [
+        (Some("<winAppData>/g"), None, Family::Linux),
+        (Some("relative/g"), None, Family::Linux),
+        (Some(r"C:\Games\G"), None, Family::Linux),
+        (Some("<home>/../g"), None, Family::Linux),
+        (Some("/opt/./g"), None, Family::Linux),
+        (Some(""), None, Family::Linux),
+        (None, Some("<xdgData>/g"), Family::Windows),
+        (None, Some("/opt/g"), Family::Windows),
+        (None, Some("C:G"), Family::Windows),
+        (None, Some(r"\\server\share\G"), Family::Windows),
+        (None, Some(r"C:\Games\..\G"), Family::Windows),
+        (None, Some(r"<winDocuments>/G\..\H"), Family::Windows),
+    ] {
+        let error = validate_file(&file_row(linux, windows)).unwrap_err();
+        assert!(
+            matches!(error, FileError::Side { family: f, .. } if f == family),
+            "{linux:?} / {windows:?}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn validate_file_checks_a_two_path_row_as_a_mapping() {
+    assert_eq!(
+        validate_file(&file_row(
+            Some("<xdgData>/g/*.sav"),
+            Some("<winDocuments>/G/Saves/*.sav")
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        validate_file(&file_row(Some("<base>/*.sav"), Some("<base>/Saves/*.sav"))),
+        Ok(()),
+        "an install-relative side needs no folder below it"
+    );
+    assert_eq!(
+        validate_file(&file_row(Some("<base>/save"), Some("<base>/save"))),
+        Ok(()),
+        "identical sides are no mapping"
+    );
+    for (linux, windows, side) in [
+        ("/opt/g", "<winAppData>/G", Family::Linux),
+        ("<xdgData>/g", r"C:\Games\G", Family::Windows),
+        ("<home>/*.sav", "<winDocuments>/G/*.sav", Family::Linux),
+        ("<home>/.config/*.sav", "<winDocuments>/G", Family::Linux),
+        (
+            "<xdgData>/g",
+            "<home>/AppData/Roaming/*.sav",
+            Family::Windows,
+        ),
+    ] {
+        let error = validate_file(&file_row(Some(linux), Some(windows))).unwrap_err();
+        assert!(
+            matches!(&error, FileError::Pair(PairError { side: s, .. }) if *s == side),
+            "{linux} / {windows}: {error:?}"
+        );
+    }
 }

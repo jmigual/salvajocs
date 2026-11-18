@@ -6,8 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_saphyr::{Budget, Options};
 
-use crate::crossbuild::validate_pair;
-use crate::layout::glob_free_prefix;
+use crate::crossbuild::row_pair;
 
 pub mod fetch;
 
@@ -228,8 +227,7 @@ impl CustomGame {
     }
 
     /// The Linux/Windows mapping of each row with two different sides: their glob-free prefixes,
-    /// kept when both are placeholder templates of their own OS family
-    /// ([`crate::crossbuild::validate_pair`]).
+    /// kept when they pass the check [`crate::crossbuild::validate_file`] makes of a row.
     pub fn file_pairs(&self) -> Vec<Pair> {
         self.files
             .iter()
@@ -237,11 +235,9 @@ impl CustomGame {
                 let (Some(linux), Some(windows)) = (&file.linux, &file.windows) else {
                     return None;
                 };
-                let pair = Pair {
-                    linux: glob_free_prefix(linux).to_owned(),
-                    windows: glob_free_prefix(windows).to_owned(),
-                };
-                (linux != windows && validate_pair(&pair).is_ok()).then_some(pair)
+                (linux != windows)
+                    .then(|| row_pair(linux, windows).ok())
+                    .flatten()
             })
             .collect()
     }

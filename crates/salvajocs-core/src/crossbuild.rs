@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AppConfig;
 use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta, WinFolders};
-use crate::manifest::{CustomGame, FileRule, GameEntry, Integration, Os, Pair, Tag};
+use crate::manifest::{CustomFile, CustomGame, FileRule, GameEntry, Integration, Os, Pair, Tag};
 
 /// A snapshot root, `(base, rest)` as in [`SnapshotMeta::roots`].
 pub type SnapshotRoot = (Base, String);
@@ -239,6 +239,100 @@ pub fn validate_skip(skip: &str) -> Result<(), SkipError> {
         .ok_or_else(|| SkipError {
             template: skip.to_owned(),
         })
+}
+
+/// Why a custom game file row is rejected (ADR-0016).
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FileError {
+    /// Neither side is set.
+    #[error("enter a Linux path, a Windows path or both")]
+    Empty,
+    /// A side is not a placeholder template or an absolute path of its OS family.
+    #[error("not a {family:?} path: {template}")]
+    Side {
+        /// The rejected side.
+        family: Family,
+        /// Its template.
+        template: String,
+    },
+    /// The row's two sides do not form a valid mapping.
+    #[error(
+        "a row with two paths maps one folder onto the other on a cross-build restore, so each \
+         needs a placeholder and a folder below it; otherwise split it into two rows"
+    )]
+    Pair(#[source] PairError),
+}
+
+/// Checks a custom game file row: at least one side, each a placeholder template of its family
+/// or an absolute path of that OS (`/...` on Linux, `C:\...` or `C:/...` on Windows), without
+/// `.` or `..`. Two different sides must also form a mapping, see `row_pair`. Textual, so every
+/// host gives the same answer.
+///
+/// # Errors
+/// [`FileError`] for the first rule broken, Linux before Windows.
+pub fn validate_file(file: &CustomFile) -> Result<(), FileError> {
+    let sides = [
+        (&file.linux, Family::Linux),
+        (&file.windows, Family::Windows),
+    ];
+    if sides.iter().all(|(side, _)| side.is_none()) {
+        return Err(FileError::Empty);
+    }
+    for (side, family) in sides {
+        if let Some(template) = side
+            && !valid_side(template, family)
+        {
+            return Err(FileError::Side {
+                family,
+                template: template.clone(),
+            });
+        }
+    }
+    match (&file.linux, &file.windows) {
+        (Some(linux), Some(windows)) if linux != windows => {
+            row_pair(linux, windows).map(drop).map_err(FileError::Pair)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether `template` is a placeholder template or an absolute path of `family`, without `.` or
+/// `..` (split on both separators).
+fn valid_side(template: &str, family: Family) -> bool {
+    let placeholder = layout::classify(template, &family_context(family))
+        .is_some_and(|(base, _)| !matches!(base, Base::Absolute | Base::WinAbsolute));
+    let absolute = match family {
+        Family::Linux => template.starts_with('/'),
+        Family::Windows => layout::drive_absolute_tail(template).is_some(),
+    };
+    let no_dots = template
+        .split(['/', '\\'])
+        .all(|part| part != "." && part != "..");
+    (placeholder || absolute) && no_dots
+}
+
+/// The mapping a file row with the sides `linux` and `windows` declares: their glob-free
+/// prefixes. Besides [`validate_pair`], a prefix on a Linux or Windows base needs a folder below
+/// it, since `declared_roots` would trust the whole base (`<home>/*.sav`).
+pub(crate) fn row_pair(linux: &str, windows: &str) -> Result<Pair, PairError> {
+    let pair = Pair {
+        linux: layout::glob_free_prefix(linux).to_owned(),
+        windows: layout::glob_free_prefix(windows).to_owned(),
+    };
+    validate_pair(&pair)?;
+    for side in [Family::Linux, Family::Windows] {
+        let template = pair_side(&pair, side);
+        let bare = classify(template, side).is_some_and(|(base, rest)| {
+            base_family(base).is_some() && components(&rest).next().is_none()
+        });
+        if bare {
+            return Err(PairError {
+                side,
+                template: template.to_owned(),
+            });
+        }
+    }
+    Ok(pair)
 }
 
 fn pair_side(pair: &Pair, family: Family) -> &str {
