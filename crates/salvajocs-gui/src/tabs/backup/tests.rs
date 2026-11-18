@@ -18,6 +18,8 @@ use crate::theme;
 use super::*;
 use crate::state::Session;
 
+const KEY: &str = "HKEY_CURRENT_USER/Software/Game";
+
 fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
     GameScan {
         title: "Game".into(),
@@ -31,7 +33,7 @@ fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
             })
             .collect(),
         roots: Vec::new(),
-        registry_keys: Vec::new(),
+        registry_keys: registry.then(|| KEY.to_owned()).into_iter().collect(),
         registry_source: registry.then_some(RegistrySource::Windows),
         unreadable: vec![PathBuf::from("/locked"); unreadable],
     }
@@ -56,22 +58,40 @@ fn sizes_use_binary_units() {
 
 #[test]
 fn summary_names_files_registry_and_unreadable_paths() {
+    let all = GameSettings::default();
     assert_eq!(
-        summary(&game(&[1024, 2048], true, 0)),
+        summary(&game(&[1024, 2048], true, 0), (2, 3072), &all),
         "2 files, 3.0 KiB, plus registry keys"
     );
     assert_eq!(
-        summary(&game(&[], false, 2)),
+        summary(&game(&[], false, 2), (0, 0), &all),
         "0 files, 0 B, 2 unreadable paths (the files may be incomplete)"
     );
 }
 
 #[test]
 fn summary_counts_one_file_and_one_path_in_the_singular() {
-    assert_eq!(summary(&game(&[3], false, 0)), "1 file, 3 B");
+    let all = GameSettings::default();
+    assert_eq!(summary(&game(&[3], false, 0), (1, 3), &all), "1 file, 3 B");
     assert_eq!(
-        summary(&game(&[3], false, 1)),
+        summary(&game(&[3], false, 1), (1, 3), &all),
         "1 file, 3 B, 1 unreadable path (the files may be incomplete)"
+    );
+}
+
+#[test]
+fn summary_says_what_the_settings_exclude() {
+    let game = game(&[1024, 2048, 4096], true, 0);
+    let mut settings = GameSettings::default();
+
+    assert_eq!(
+        summary(&game, (1, 1024), &settings),
+        "1 file, 1.0 KiB, 2 excluded, plus registry keys"
+    );
+    settings.set_registry(KEY, false);
+    assert_eq!(
+        summary(&game, (1, 1024), &settings),
+        "1 file, 1.0 KiB, 2 excluded"
     );
 }
 

@@ -113,6 +113,13 @@ impl FileTree {
         self.included = None;
     }
 
+    /// How many files `included` accepts and their size, from the cached counts.
+    pub(super) fn included(&mut self, included: &dyn Fn(&str) -> bool) -> (usize, u64) {
+        let totals = totals(&mut self.included, &self.files, included);
+        let all = totals.last().copied().unwrap_or_default();
+        (all.files, all.size)
+    }
+
     /// Draws the tree and returns the toggle clicked this frame, as the key of the folder or file
     /// and its new value. A folder's key covers every file below it. `included` says whether a
     /// file key is currently included; `enabled` false greys the checkboxes. The caller scopes the

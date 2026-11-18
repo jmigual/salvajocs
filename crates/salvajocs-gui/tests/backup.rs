@@ -335,6 +335,19 @@ fn open_repo(tmp: &TempDir) -> Storage {
     Storage::open(&location, "").unwrap()
 }
 
+/// Two games without registry keys: Alpha has `save.dat` and `sub/x.dat`, Beta `save.dat`.
+fn alpha_with_sub_and_beta(scratch: &TempDir) -> (PathBuf, Vec<CustomGame>) {
+    let prefix = make_prefix(scratch.path());
+    write_save(&prefix, "Alpha", "abc");
+    write_save(&prefix, "Alpha/sub", "xy");
+    write_save(&prefix, "Beta", "defgh");
+    let games = vec![
+        custom_game("Alpha", false, &prefix),
+        custom_game("Beta", false, &prefix),
+    ];
+    (prefix, games)
+}
+
 /// Runs frames until the backup job has ended and Beta was backed up.
 fn back_up_until_beta(harness: &mut Harness<'static, App>, button: &str) {
     harness.get_by_label(button).click();
@@ -389,6 +402,49 @@ fn a_choice_waits_in_the_pending_file_until_a_backup() {
     run_settled(&mut restarted);
     scan(&mut restarted, "2 games found");
     assert!(!checked(&restarted, "Beta"));
+}
+
+#[test]
+fn an_excluded_folder_is_left_out_of_the_backup() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_with_sub_and_beta(&scratch);
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "2 files, 5 B");
+    click(&mut harness, "Open WinAppData");
+    click(&mut harness, "Open Alpha");
+    click(&mut harness, "sub");
+    assert!(shows(&harness, "1 file, 3 B, 1 excluded"));
+
+    back_up_until_beta(&mut harness, "Back up 2 games");
+
+    assert!(shows(&harness, "Alpha: backed up"));
+    let staged = env
+        .cache_dir
+        .join("stage")
+        .join(slug("Alpha"))
+        .join("files")
+        .join(Base::WinAppData.dir_name())
+        .join("Alpha");
+    assert!(staged.join("save.dat").exists(), "{}", staged.display());
+    assert!(!staged.join("sub").exists(), "{}", staged.display());
+}
+
+#[test]
+fn a_game_with_every_file_excluded_gets_no_snapshot() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_with_sub_and_beta(&scratch);
+    let (mut harness, _env, tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "2 files, 5 B");
+    click(&mut harness, "WinAppData");
+    assert!(shows(&harness, "0 files, 0 B, 2 excluded"));
+
+    back_up_until_beta(&mut harness, "Back up 1 game");
+
+    assert!(!shows(&harness, "Alpha:"));
+    let tag = format!("game:{}", slug("Alpha"));
+    assert!(open_repo(&tmp).snapshots(&tag).unwrap().is_empty());
 }
 
 #[test]
@@ -545,4 +601,36 @@ fn a_change_to_choices_another_version_replaced_stays_pending() {
 
     assert!(shows(&harness, "What to back up was not saved for Beta"));
     assert_eq!(pending_changes(&env)["Beta"], [Change::Skip(true)]);
+}
+
+#[test]
+fn an_unchecked_registry_key_is_left_out_of_the_backup() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "1 file, 3 B, plus registry keys");
+    let key = harness
+        .query_all_by_label_contains("Software")
+        .next()
+        .unwrap()
+        .accesskit_node()
+        .label()
+        .unwrap()
+        .to_string();
+    click(&mut harness, &key);
+    assert!(shows(&harness, "1 file, 3 B"));
+    assert!(!shows(&harness, "plus registry keys"));
+    let unchecked = [Change::Registry {
+        key: key.clone(),
+        included: false,
+    }];
+    run_until_pending(&mut harness, &env, "Alpha", &unchecked);
+
+    back_up_until_beta(&mut harness, "Back up 2 games");
+
+    assert!(shows(&harness, "Alpha: backed up"));
+    let stage = env.cache_dir.join("stage").join(slug("Alpha"));
+    assert!(stage.join("files").exists());
+    assert!(!stage.join("registry.json").exists());
 }

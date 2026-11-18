@@ -21,9 +21,9 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
+use tree::FileTree;
 
 mod choices;
-#[allow(dead_code)]
 mod tree;
 
 /// What a backup did for one game.
@@ -82,11 +82,16 @@ fn format_size(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-/// What the scan found for a game: file count and size, registry, and unreadable paths.
-fn summary(game: &GameScan) -> String {
-    let size: u64 = game.files.iter().map(|file| file.size).sum();
-    let mut text = format!("{}, {}", count(game.files.len(), "file"), format_size(size));
-    if game.registry_source.is_some() {
+/// What the scan found for a game: the count and size of the files backed up, given as
+/// `included`, how many are excluded, whether registry keys are backed up, and unreadable paths.
+fn summary(game: &GameScan, (files, size): (usize, u64), settings: &GameSettings) -> String {
+    let mut text = format!("{}, {}", count(files, "file"), format_size(size));
+    let excluded = game.files.len() - files;
+    if excluded > 0 {
+        text += &format!(", {excluded} excluded");
+    }
+    let keys = &game.registry_keys;
+    if game.registry_source.is_some() && keys.iter().any(|key| settings.registry_included(key)) {
         text += ", plus registry keys";
     }
     if !game.unreadable.is_empty() {
@@ -147,6 +152,8 @@ pub struct BackupTab {
     scanning: Option<Job<ScanReport>>,
     report: Option<ScanReport>,
     scan_error: Option<String>,
+    /// One tree per game of `report`, in its order.
+    trees: Vec<FileTree>,
     /// What to back up of each game.
     choices: Choices,
     running: Option<Job<Backed>>,
@@ -219,17 +226,29 @@ impl BackupTab {
                     self.adopt(report);
                     self.run_error = error;
                     self.saving = saving;
-                    self.choices.backed_up(after);
+                    if self.choices.backed_up(after) {
+                        self.trees.iter_mut().for_each(FileTree::invalidate);
+                    }
                 }
                 Err(err) => self.run_error = Some(format!("{err:#}")),
             }
         }
-        self.choices.poll(ctx, state);
+        if self.choices.poll(ctx, state) {
+            self.trees.iter_mut().for_each(FileTree::invalidate);
+        }
         self.start_requested(ctx, state);
     }
 
-    /// Shows `report`.
+    /// Shows `report`, with a file tree per game.
     fn adopt(&mut self, report: ScanReport) {
+        self.trees = report
+            .games
+            .iter()
+            .map(|game| {
+                let keys = game.files.iter();
+                FileTree::new(keys.map(|file| (selection::path_key(file), file.size)))
+            })
+            .collect();
         self.report = Some(report);
     }
 
@@ -247,17 +266,27 @@ impl BackupTab {
     }
 
     /// How many games of the report a backup would store: those its settings leave something
-    /// of, and those whose settings cannot be read.
-    fn chosen(&self) -> usize {
+    /// of, as [`selection::apply`] decides, and those whose settings cannot be read. Counts
+    /// files from each tree's cached totals.
+    fn chosen(&mut self) -> usize {
         let Some(report) = &self.report else {
             return 0;
         };
-        let games = report.games.iter();
+        let choices = &self.choices;
+        let games = report.games.iter().zip(&mut self.trees);
         games
-            .filter(|game| match self.choices.game(&game.title) {
-                Ok(settings) => selection::apply(game, &settings).is_some(),
+            .map(|(game, tree)| match choices.game(&game.title) {
+                Ok(settings) => {
+                    let (files, _) = tree.included(&|key| settings.path_included(key));
+                    let keys = &game.registry_keys;
+                    !settings.skip
+                        && (files > 0
+                            || game.registry_source.is_some()
+                                && keys.iter().any(|key| settings.registry_included(key)))
+                }
                 Err(_) => true,
             })
+            .filter(|&chosen| chosen)
             .count()
     }
 
@@ -379,12 +408,12 @@ impl BackupTab {
             );
             return;
         }
-        let choices = &self.choices;
+        let (choices, trees) = (&self.choices, &mut self.trees);
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().interact_size.y = 24.0;
-            for (index, game) in report.games.iter().enumerate() {
+            for (index, (game, tree)) in report.games.iter().zip(trees).enumerate() {
                 if index > 0 {
                     theme::row_separator(ui);
                 }
@@ -411,7 +440,9 @@ impl BackupTab {
                                 format!("What to back up cannot be read, so all of it is: {error}"),
                             );
                         }
-                        files_ui(ui, game);
+                        if let Some(change) = files_ui(ui, game, tree, &settings, enabled) {
+                            changes.push((index, change));
+                        }
                     });
                 });
             }
@@ -419,6 +450,7 @@ impl BackupTab {
         for (index, change) in changes {
             self.choices
                 .change(ui.ctx(), state, &report.games[index].title, change);
+            self.trees[index].invalidate();
         }
     }
 
@@ -735,21 +767,48 @@ fn chosen_files(report: &ScanReport, settings: &Games) -> Vec<GameScan> {
         .collect()
 }
 
-/// What the scan found for one game, with the file list folded away.
-fn files_ui(ui: &mut Ui, game: &GameScan) {
-    let summary = summary(game);
-    if game.files.is_empty() {
+/// What the scan found for one game, with its files as a checkbox tree and its registry keys
+/// folded away. Returns the change the user made this frame.
+fn files_ui(
+    ui: &mut Ui,
+    game: &GameScan,
+    tree: &mut FileTree,
+    settings: &GameSettings,
+    enabled: bool,
+) -> Option<Change> {
+    let included = |key: &str| settings.path_included(key);
+    let summary = summary(game, tree.included(&included), settings);
+    if game.files.is_empty() && game.registry_source.is_none() {
         ui.weak(summary);
-        return;
+        return None;
     }
     let summary = RichText::new(summary).color(ui.visuals().weak_text_color());
     egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
         .show(ui, |ui| {
-            for file in &game.files {
-                ui.weak(format!("{}/{}", file.base.dir_name(), file.tail));
+            let toggled = ui.push_id(&game.title, |ui| tree.ui(ui, &included, enabled));
+            let mut change = toggled
+                .inner
+                .map(|(node, included)| Change::Path { node, included });
+            if game.registry_source.is_some() {
+                ui.weak("Registry");
+                for key in &game.registry_keys {
+                    let mut included = settings.registry_included(key);
+                    if ui
+                        .add_enabled(enabled, Checkbox::new(&mut included, key))
+                        .changed()
+                    {
+                        change = Some(Change::Registry {
+                            key: key.clone(),
+                            included,
+                        });
+                    }
+                }
             }
-        });
+            change
+        })
+        .body_returned
+        .flatten()
 }
 
 /// Gives the tab a backup that runs until the returned sender is dropped.
