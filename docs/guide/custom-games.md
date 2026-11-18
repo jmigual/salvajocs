@@ -140,9 +140,10 @@ not show them. To change them, remove the game and add it again.
 
 ## Using a Wine prefix from another launcher
 
-salvajocs finds Steam's Proton prefixes by itself. It does not find the prefixes of Heroic, Lutris
-or Bottles. For such a game, add a custom game with the same title as in the manifest, integration
-**Extend**, and put the prefix path in **Wine prefix**. A game with its own prefix is looked up
-there first.
+salvajocs finds Steam's Proton prefixes and, on Linux, the prefixes of Heroic, Lutris and Bottles
+by itself ([Found by salvajocs](settings.md#found-by-salvajocs)). For a game in another prefix, or
+one matched to the wrong prefix, add a custom game with the same title as in the manifest,
+integration **Extend**, and put the prefix path in **Wine prefix**. A game with its own prefix is
+looked up there first.
 
 Back to the [guide index](README.md).

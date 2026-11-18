@@ -25,6 +25,11 @@ All notable changes to salvajocs. The format follows
 - On the Restore tab, delete one backup of a game, or all of them, from the repository.
 - On the Backup tab, a game found in a Wine or Proton prefix shows the prefix.
 - Each folder in the Backup tab's tree has a button that opens it in the file manager.
+- On Linux, the scan finds the Wine prefixes of Heroic, Lutris and Bottles. A Heroic or Lutris
+  prefix is matched to its game by id or title and checked for that game only; the others are
+  checked for every game. A restore of such a game fills in its prefix.
+- Settings → Roots lists these prefixes under **Found by salvajocs**; untick one to leave it out
+  of scans and restores.
 
 ### Changed
 

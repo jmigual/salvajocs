@@ -28,7 +28,8 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `repository_options`: a list of `{ key, value | secret: true }`;
   - `password: none | keyring | ask`;
   - `roots`;
-  - `custom_games`.
+  - `custom_games`;
+  - `ignored_prefixes`: launcher prefixes left out of scans and restores (ADR-0017).
   Compression is **not** stored here: it lives in the repository config (ADR-0003).
 - **Generic backend UI:**
   - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone remote"

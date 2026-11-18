@@ -26,6 +26,9 @@ Click **Scan for games**. The scan checks, for every game in the manifest and ev
   (`~/.steam/steam`, `~/.local/share/Steam` and the Flatpak Steam folder) and under every Steam
   library you added in [Settings](settings.md#roots);
 - on Linux, every Wine prefix you added in Settings, and the `wine_prefix` of each custom game;
+- on Linux, the Wine prefixes of Heroic, Lutris and Bottles that are ticked in
+  [Settings](settings.md#found-by-salvajocs). A Heroic or Lutris prefix is checked for its own
+  game; the others for every game;
 - the registry keys of the game under `HKEY_CURRENT_USER`: the live registry on Windows, or
   `user.reg` inside the prefix on Linux. Other registry hives are not backed up.
 
@@ -41,7 +44,8 @@ Problems are listed in yellow above the games and do not stop the scan:
 - the Wine prefix has several users and none is `steamuser`;
 - the Wine prefix has no user yet (run the game once);
 - the folder is not a Wine prefix;
-- a folder cannot be read.
+- a folder cannot be read;
+- a Heroic, Lutris or Bottles file cannot be read.
 
 A game with unreadable paths shows how many, because its backup may be incomplete.
 

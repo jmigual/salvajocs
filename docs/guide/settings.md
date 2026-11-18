@@ -79,11 +79,31 @@ example because `$HOME` points elsewhere in a container, add its folder too.
 
 A **Wine prefix** root covers a prefix that does not belong to a Steam game, such as the default
 `~/.wine`. It must contain `drive_c/users` and one of `system.reg`, `user.reg` or `dosdevices`.
-Prefixes of Heroic, Lutris and Bottles are not found by themselves. Add them here, or set the
-**Wine prefix** of a [custom game](custom-games.md).
+On Linux, the prefixes of Heroic, Lutris and Bottles are found by themselves (see below).
 
-When several prefixes match a game, the game's own prefix (its Proton prefix, or its custom
-`wine_prefix`) comes first, then the Wine prefix roots in the order you added them.
+When several prefixes match a game, they are checked in this order:
+
+1. the game's own prefix: its Proton prefix, its custom `wine_prefix`, then its Heroic or
+   Lutris prefix;
+2. the Wine prefix roots, in the order you added them;
+3. the Bottles prefixes, and the Heroic and Lutris prefixes that match no game.
+
+### Found by salvajocs
+
+On Linux, the **Found by salvajocs** list shows the Wine prefixes salvajocs found in the native
+and Flatpak installs of Heroic, Lutris and Bottles. Each line has the prefix folder, the launcher
+and, when salvajocs knows them, the games. Games that share a prefix share its line.
+
+- A Heroic or Lutris prefix is matched to its game by its GOG, Steam or Lutris id, else by its
+  title. It is checked for that game only.
+- A Bottles prefix, or one whose game is unknown or matches several games, is checked for every
+  game.
+- Untick a prefix to leave it out of scans and restores, for example when it was matched to the
+  wrong game. Tick it to use it again. The change is saved at once. A folder that is also a Wine
+  prefix root or a custom game's prefix is still used as such.
+
+Lutris games whose prefix is a relative path are not found. Add their prefix as a **Wine prefix**
+root.
 
 ## Updates
 

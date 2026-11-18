@@ -51,8 +51,9 @@ configured roots (research.md §2).
   `WindowsNative` or `WinePrefix`. Each base resolves against the target that has it, so a
   snapshot holding both base families restores both.
   - Windows host: `win` = native `WinFolders`, `linux` = `None`.
-  - Linux host: `linux` = `LinuxFolders`. `win` = the game's own prefix (Proton
-    `compatdata/<steam.id>`, or the custom game's `wine_prefix`) when it exists.
+  - Linux host: `linux` = `LinuxFolders`. `win` = the game's own prefix when it exists: the
+    custom game's `wine_prefix`, else Proton `compatdata/<steam.id>`, else its launcher
+    prefix (ADR-0017).
   - On a Linux host the user always picks the build: native Linux (`linux` set, `win` unset)
     or Windows in a prefix (`win` set, `linux` unset), whatever bases the snapshot has; a
     mixed snapshot may keep both. `default_targets` supplies the default. A leftover Proton

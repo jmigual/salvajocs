@@ -27,8 +27,10 @@ On Linux you choose the build you want to restore into:
 
 - **Native Linux build**: the XDG folders of this machine.
 - **Windows build in a Wine/Proton prefix**: a prefix path, such as `.../compatdata/<id>/pfx`.
-  salvajocs fills it in when the game has a Proton prefix it can find (from its Steam id) or a
-  `wine_prefix` set on a [custom game](custom-games.md). **Browse** opens a folder picker.
+  salvajocs fills it in with the game's own prefix: the `wine_prefix` set on a
+  [custom game](custom-games.md), else a Proton prefix it can find (from its Steam id), else its
+  Heroic or Lutris prefix ([Found by salvajocs](settings.md#found-by-salvajocs)). **Browse**
+  opens a folder picker.
 
 You can tick both. Each folder in the backup goes into the build it belongs to. Saves of the other
 build are mapped onto the one you chose. See [Cross-OS restore](cross-os-restore.md).

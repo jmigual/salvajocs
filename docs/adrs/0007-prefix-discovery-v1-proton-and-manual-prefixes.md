@@ -34,20 +34,23 @@ v1 discovers:
    - A root of kind `WinePrefix` in Settings: every game is checked against it, which covers
      `~/.wine`.
    - A custom game's `wine_prefix`, which covers Heroic, Lutris and Bottles by hand.
+4. **Launcher prefixes** of Heroic, Lutris and Bottles, on Linux, since 0.4.0 (ADR-0017).
 
 The prefix check and user choice follow ludusavi: validate a prefix as above; the user is the
 single non-system entry of `drive_c/users` (system = `Public` and `root`; a prefix run as root
 has a `root` dir), else `steamuser`, else a typed `Ambiguous` error. A prefix with no user dir (never run) is an error on restore: run the game once.
 
 Priority when several prefixes match a game: the game's own prefix (Proton appid or
-`wine_prefix`) first, then `WinePrefix` roots in configured order. When several match, the first
-one wins per logical path. Registry keys use the same context priority. Scan problems, such as
-an `Ambiguous` prefix, are returned typed, never dropped.
+`wine_prefix`) first, then `WinePrefix` roots in configured order. ADR-0017 places the launcher
+prefixes in this order. When several match, the first one wins per logical path. Registry keys
+use the same context priority. Scan problems, such as an `Ambiguous` prefix, are returned typed,
+never dropped.
 
 ## Alternatives considered
 
 - **Auto-discover Heroic, Lutris and Bottles in v1:** three config formats to parse. Each is a
-  small additive step later, and the manual `wine_prefix` covers them now.
+  small additive step later, and the manual `wine_prefix` covers them now. ADR-0017 added them
+  in 0.4.0.
 - **Ask the user to pick the prefix for every game:** too much friction for Steam, the common case.
 
 ## Consequences

@@ -47,7 +47,7 @@ dependency yet; once added, the two builds unify.
   - `installDir: {name: {}}`
   - `steam.id`
   - `gog.id` (integer) and `id: {lutris, gogExtra[], steamExtra[]}`, which match a launcher's
-    games (Heroic, Lutris) to manifest titles. `flatpak` is dropped.
+    games (Heroic, Lutris) to manifest titles (ADR-0017). `flatpak` is dropped.
   - `alias`: entries that have it are skipped as nicknames.
 - **Cache:** `<cache>/salvajocs/manifest-v2.json` (serde_json of the typed subset) plus
   `manifest.etag`. The `-v2` name marks the subset that gained `gog` and `id`: a cache

@@ -44,7 +44,7 @@ other way round.
 | Area | What it does |
 | --- | --- |
 | Game list | Uses the [ludusavi manifest](https://github.com/mtkennerly/ludusavi-manifest), about 52,000 games. It is downloaded at start (with ETag revalidation) and cached. |
-| Scan | Finds saves in the native folders, in Steam Proton prefixes (by Steam id), in Wine prefixes you configure and for custom games. |
+| Scan | Finds saves in the native folders, in Steam Proton prefixes (by Steam id), in the Wine prefixes of Heroic, Lutris and Bottles on Linux, in Wine prefixes you configure and for custom games. |
 | Registry | Backs up and restores registry keys: the live registry on Windows, `user.reg` inside a Wine/Proton prefix. |
 | Storage | One repository for every machine: a local folder, a REST server, an rclone remote or an OpenDAL service (S3, WebDAV, Google Drive and more), through the embedded rustic library. The Restore tab lists the backups of all machines. |
 | Readable data | The repository is plain restic format. You can list and copy files out of it with the restic command line. |
@@ -148,7 +148,7 @@ Proton program closed. Games with a separate native Linux build need the mapping
 | Game list | ludusavi manifest | ludusavi manifest | None; you give the paths |
 | Storage | restic-format repository, local or remote | Not a restic repository | restic-format repository |
 | Moving saves between operating systems | Automatic for Wine/Proton and Windows; rules and a dialog for native Linux builds | Redirects you set up, and a [guide to transferring between operating systems](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/transfer-between-operating-systems.md) | Not aware of games |
-| Launcher discovery on Linux | Steam/Proton, prefixes you add, custom games | Wider: also reads Heroic and Lutris | Not applicable |
+| Launcher discovery on Linux | Steam/Proton, Heroic, Lutris, Bottles, prefixes you add, custom games | Steam, Heroic and Lutris among others, and roots you add | Not applicable |
 | Releases | Early (0.x) | Yes | Yes |
 | Command line | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/command-line.md) | Yes |
 | Retention of old backups | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/backup-retention.md) | Yes (`forget`, `prune`) |
@@ -163,8 +163,8 @@ for what was tested.
 - A graphical app only; there is no command line.
 - Linux and Windows only. macOS is not supported.
 - Only `HKEY_CURRENT_USER` registry keys are handled. Other hives are skipped.
-- Wine prefixes of Heroic, Lutris and Bottles are not found by themselves. Add them as a Wine
-  prefix in Settings or on a custom game.
+- Lutris games whose prefix is a relative path are not found. Add the prefix in Settings or on a
+  custom game.
 - Steam library folders on other drives are not read from Steam's configuration. Add them in
   Settings. Non-Steam shortcuts are not matched.
 - A restore that includes registry keys for a Wine prefix is refused while any `wineserver` runs.
