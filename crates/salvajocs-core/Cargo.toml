@@ -15,6 +15,7 @@ repository.workspace = true
 dirs.workspace = true
 glob.workspace = true
 keyring-core.workspace = true
+opendal.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 rustic_backend.workspace = true
 rustic_core.workspace = true
@@ -33,7 +34,6 @@ windows-native-keyring-store.workspace = true
 windows-registry.workspace = true
 
 [dev-dependencies]
-opendal.workspace = true
 tempfile.workspace = true
 
 [lints]

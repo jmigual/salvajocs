@@ -1,6 +1,8 @@
 //! The opendal services the picker offers, with the named fields of each (ADR-0009). The keys
 //! are opendal's config keys; a test checks them against opendal's config structs.
 
+use serde_json::{Map, Value, json};
+
 /// One named field of an opendal service in the connect form. `key` is the opendal option key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendField {
@@ -115,13 +117,17 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
                 .aliases(&["aws_bucket", "aws_bucket_name", "bucket_name"])
                 .required(),
             BackendField::new("region", "Region")
+                .aliases(&["aws_region"])
                 .example("us-east-1")
                 .hint("AWS needs it. Other providers often accept auto or us-east-1."),
             BackendField::new("endpoint", "Endpoint")
+                .aliases(&["aws_endpoint", "aws_endpoint_url", "endpoint_url"])
                 .example("https://s3.example.com")
                 .hint("Leave empty for AWS."),
-            BackendField::new("access_key_id", "Access key ID"),
-            BackendField::new("secret_access_key", "Secret access key").secret(),
+            BackendField::new("access_key_id", "Access key ID").aliases(&["aws_access_key_id"]),
+            BackendField::new("secret_access_key", "Secret access key")
+                .aliases(&["aws_secret_access_key"])
+                .secret(),
             ROOT,
         ],
     },
@@ -138,9 +144,23 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
                 .aliases(&["azure_storage_endpoint", "azure_endpoint"])
                 .required()
                 .example("https://myaccount.blob.core.windows.net"),
-            BackendField::new("account_name", "Account name"),
-            BackendField::new("account_key", "Account key").secret(),
+            BackendField::new("account_name", "Account name")
+                .aliases(&["azure_storage_account_name"]),
+            BackendField::new("account_key", "Account key")
+                .aliases(&[
+                    "azure_storage_account_key",
+                    "azure_storage_access_key",
+                    "azure_storage_master_key",
+                    "access_key",
+                    "master_key",
+                ])
+                .secret(),
             BackendField::new("sas_token", "SAS token")
+                .aliases(&[
+                    "azure_storage_sas_key",
+                    "azure_storage_sas_token",
+                    "sas_key",
+                ])
                 .secret()
                 .hint("Instead of the account key."),
             ROOT,
@@ -217,9 +237,11 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
                 .aliases(&["google_bucket", "google_bucket_name", "bucket_name"])
                 .required(),
             BackendField::new("credential", "Service account key")
+                .aliases(&["google_service_account_key", "service_account_key"])
                 .secret()
                 .hint("Base64 of the JSON key. Or use the key file below."),
             BackendField::new("credential_path", "Service account key file")
+                .aliases(&["google_application_credentials"])
                 .example("/home/me/key.json"),
             ROOT,
         ],
@@ -373,4 +395,69 @@ pub fn opendal_label(service_name: &str) -> Option<&'static str> {
 /// One line saying what an opendal service is; `None` for a service the picker does not offer.
 pub fn opendal_hint(service_name: &str) -> Option<&'static str> {
     service(service_name).map(|service| service.hint)
+}
+
+/// What opendal's config struct for `service` reads from the JSON `input`, serialized back to
+/// JSON; `null` gives its default. `None` when the struct rejects the input.
+pub(super) fn config_json(service_name: &str, input: Value) -> Option<Value> {
+    use opendal::services::*;
+    macro_rules! read {
+        ($config:ty) => {
+            if input.is_null() {
+                serde_json::to_value(<$config>::default()).ok()
+            } else {
+                serde_json::from_value::<$config>(input)
+                    .ok()
+                    .and_then(|config| serde_json::to_value(config).ok())
+            }
+        };
+    }
+    match service_name {
+        "azblob" => read!(AzblobConfig),
+        "azdls" => read!(AzdlsConfig),
+        "azfile" => read!(AzfileConfig),
+        "b2" => read!(B2Config),
+        "cos" => read!(CosConfig),
+        "dropbox" => read!(DropboxConfig),
+        "ftp" => read!(FtpConfig),
+        "gcs" => read!(GcsConfig),
+        "gdrive" => read!(GdriveConfig),
+        "ipmfs" => read!(IpmfsConfig),
+        "obs" => read!(ObsConfig),
+        "onedrive" => read!(OnedriveConfig),
+        "oss" => read!(OssConfig),
+        "pcloud" => read!(PcloudConfig),
+        "s3" => read!(S3Config),
+        #[cfg(not(windows))]
+        "sftp" => read!(SftpConfig),
+        "swift" => read!(SwiftConfig),
+        "webdav" => read!(WebdavConfig),
+        "webhdfs" => read!(WebhdfsConfig),
+        "yandex-disk" => read!(YandexDiskConfig),
+        _ => None,
+    }
+}
+
+/// Whether opendal reads `key` for a service, as a config key or as one of its aliases. Found by
+/// feeding the struct the key and seeing whether anything changes, so aliases need no list. Keys
+/// are matched in any letter case, as opendal does.
+pub(super) fn opendal_reads_key(service_name: &str, key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    // Two bases: nothing, and the fields the table requires, for structs with no default for them.
+    let required: Map<String, Value> = opendal_fields(service_name)
+        .iter()
+        .filter(|field| field.required)
+        .map(|field| (field.key.to_string(), json!("y")))
+        .collect();
+    // One sample of each type a config field has, so the key is read whatever its type.
+    let samples = [json!("x"), json!(true), json!(false), json!(1), json!({})];
+    [Map::new(), required].into_iter().any(|base| {
+        let reference = config_json(service_name, Value::Object(base.clone()));
+        samples.iter().any(|sample| {
+            let mut input = base.clone();
+            input.insert(key.clone(), sample.clone());
+            let read = config_json(service_name, Value::Object(input));
+            read.is_some() && read != reference
+        })
+    })
 }

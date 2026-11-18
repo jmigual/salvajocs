@@ -17,8 +17,8 @@ use crate::storage::RepoLocation;
 
 mod services;
 
-use services::OPENDAL_SERVICES;
 pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label};
+use services::{OPENDAL_SERVICES, opendal_reads_key};
 
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";
@@ -104,6 +104,37 @@ pub fn backend_kinds() -> Vec<BackendKind> {
                 .map(|service| BackendKind::OpenDal(service.name)),
         )
         .collect()
+}
+
+/// The keys rustic itself reads for a backend, matched exactly: rustic does not lowercase them.
+fn rustic_keys(kind: BackendKind) -> &'static [&'static str] {
+    match kind {
+        BackendKind::Local => &["post-create-command", "post-delete-command"],
+        BackendKind::Rest => &["retry", "timeout", "cacert", "tls-client-cert"],
+        BackendKind::Rclone => &[
+            "retry",
+            "timeout",
+            "cacert",
+            "tls-client-cert",
+            "rclone-command",
+            "use-password",
+            "rest-url",
+        ],
+        BackendKind::OpenDal(_) => &["retry", "connections", "throttle"],
+    }
+}
+
+/// Whether `key` is one of the keys rustic itself reads for the backend. They are exact, even
+/// next to an opendal service, whose own keys are read in any letter case.
+pub fn is_rustic_key(kind: BackendKind, key: &str) -> bool {
+    rustic_keys(kind).contains(&key)
+}
+
+/// Whether the backend reads the option `key`: one of rustic's own keys, or for an opendal
+/// service a key of its config or an alias of one. An unknown key is allowed but does nothing.
+pub fn option_key_known(kind: BackendKind, key: &str) -> bool {
+    is_rustic_key(kind, key)
+        || matches!(kind, BackendKind::OpenDal(service) if opendal_reads_key(service, key))
 }
 
 /// The remotes of the user's rclone config, from `rclone listremotes`. A missing `rclone` binary

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+use super::services::config_json;
 use super::*;
 use crate::layout::RootKind;
 use crate::manifest::{GameEntry, Integration};
@@ -195,41 +196,7 @@ fn every_offered_service_has_named_fields_and_a_label() {
 /// default. The struct ignores unknown keys when it is built, so a typo in the table would
 /// otherwise only show at runtime.
 fn config_value(service: &str, input: serde_json::Value) -> serde_json::Value {
-    use opendal::services::*;
-    macro_rules! read {
-        ($config:ty) => {
-            serde_json::to_value(if input.is_null() {
-                <$config>::default()
-            } else {
-                serde_json::from_value::<$config>(input).expect("the config struct reads it")
-            })
-            .expect("a config struct serializes")
-        };
-    }
-    match service {
-        "azblob" => read!(AzblobConfig),
-        "azdls" => read!(AzdlsConfig),
-        "azfile" => read!(AzfileConfig),
-        "b2" => read!(B2Config),
-        "cos" => read!(CosConfig),
-        "dropbox" => read!(DropboxConfig),
-        "ftp" => read!(FtpConfig),
-        "gcs" => read!(GcsConfig),
-        "gdrive" => read!(GdriveConfig),
-        "ipmfs" => read!(IpmfsConfig),
-        "obs" => read!(ObsConfig),
-        "onedrive" => read!(OnedriveConfig),
-        "oss" => read!(OssConfig),
-        "pcloud" => read!(PcloudConfig),
-        "s3" => read!(S3Config),
-        #[cfg(not(windows))]
-        "sftp" => read!(SftpConfig),
-        "swift" => read!(SwiftConfig),
-        "webdav" => read!(WebdavConfig),
-        "webhdfs" => read!(WebhdfsConfig),
-        "yandex-disk" => read!(YandexDiskConfig),
-        other => panic!("no config struct is listed for {other}"),
-    }
+    config_json(service, input).expect("the config struct reads it")
 }
 
 /// The keys of opendal's config struct for `service`.
@@ -259,19 +226,26 @@ fn named_field_keys_are_opendal_config_keys() {
 }
 
 /// Fails when an opendal upgrade adds a key the options reference does not name, so the page is
-/// re-checked on a bump.
+/// re-checked on a bump. It cannot see an alias or a key opendal dropped. The page is not in the
+/// crates.io tarball, so the test is skipped there.
 #[test]
 fn options_reference_names_every_config_key() {
-    let page = include_str!("../../../../docs/guide/advanced-options.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/guide/advanced-options.md");
+    let Ok(page) = fs::read_to_string(&path) else {
+        eprintln!("skipped: {} is not here", path.display());
+        return;
+    };
     for service in OPENDAL_SERVICES {
-        let heading = format!("\n## {}\n", service.label);
-        let section = page
-            .split(&heading)
-            .nth(1)
-            .unwrap_or_else(|| panic!("no section for {}", service.label))
-            .split("\n## ")
-            .next()
-            .expect("split yields a first part");
+        let heading = format!("## {}", service.label);
+        let section: Vec<&str> = page
+            .lines()
+            .skip_while(|line| *line != heading)
+            .skip(1)
+            .take_while(|line| !line.starts_with("## "))
+            .collect();
+        assert!(!section.is_empty(), "no section for {}", service.label);
+        let section = section.join("\n");
         for key in config_keys(service.name) {
             assert!(
                 section.contains(&format!("`{key}`")),
@@ -302,6 +276,73 @@ fn field_aliases_are_read_by_opendal_as_the_field() {
                     service.name, field.key
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn an_option_key_is_known_when_the_backend_reads_it() {
+    let webdav = BackendKind::OpenDal("webdav");
+    assert!(
+        option_key_known(webdav, "disable_create_dir"),
+        "a config key"
+    );
+    assert!(
+        option_key_known(webdav, "enable_conditional_read"),
+        "true by default"
+    );
+    assert!(
+        option_key_known(webdav, "Disable_Create_Dir"),
+        "any letter case"
+    );
+    assert!(
+        option_key_known(webdav, "retry"),
+        "rustic's key for services"
+    );
+    assert!(
+        !option_key_known(webdav, "Retry"),
+        "rustic matches its keys exactly"
+    );
+    assert!(!option_key_known(webdav, "disable_create_dirs"), "a typo");
+    assert!(
+        !option_key_known(webdav, "post-create-command"),
+        "another backend's key"
+    );
+    let s3 = BackendKind::OpenDal("s3");
+    assert!(
+        option_key_known(s3, "aws_profile"),
+        "an alias of a key with no form field"
+    );
+    assert!(
+        option_key_known(s3, "AWS_REGION"),
+        "an alias, in any letter case"
+    );
+    assert!(option_key_known(s3, "assume_role_session_tags"), "a map");
+    assert!(
+        option_key_known(s3, "assume_role_duration_seconds"),
+        "a number"
+    );
+    assert!(option_key_known(BackendKind::Local, "post-create-command"));
+    assert!(!option_key_known(BackendKind::Local, "retry"));
+    assert!(option_key_known(BackendKind::Rest, "tls-client-cert"));
+    assert!(option_key_known(BackendKind::Rclone, "use-password"));
+    assert!(
+        option_key_known(BackendKind::Rclone, "timeout"),
+        "rclone passes REST keys on"
+    );
+}
+
+/// Fails when a service has a config key `opendal_reads_key` cannot see, such as one of a type it
+/// has no sample for.
+#[test]
+fn opendal_reads_every_config_key_of_every_service() {
+    for service in OPENDAL_SERVICES {
+        for key in config_keys(service.name) {
+            assert!(
+                opendal_reads_key(service.name, &key),
+                "{} `{key}`",
+                service.name
+            );
         }
     }
 }
