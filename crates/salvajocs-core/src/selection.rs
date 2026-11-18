@@ -1,7 +1,10 @@
 //! Which files and registry keys of a game are backed up (ADR-0014). A game's
 //! [`GameSettings`] say what is excluded; [`apply`] filters a scan with them before backup.
+//! [`load_all`] and [`save`] keep them in the repository, one settings snapshot per game.
 
 use std::collections::BTreeMap;
+use std::io;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +12,11 @@ use serde_json::Value;
 use crate::crossbuild::{Family, base_family};
 use crate::layout::Base;
 use crate::scan::{FoundFile, GameScan};
+use crate::storage::StorageError;
+
+mod repo;
+
+pub use repo::{Saved, load_all, save};
 
 /// The [`GameSettings`] format this version reads and writes.
 pub const FORMAT: u32 = 1;
@@ -22,6 +30,19 @@ pub enum SelectionError {
     /// The settings are not valid JSON for their format.
     #[error("cannot parse the settings")]
     Parse(#[from] serde_json::Error),
+    /// A settings file could not be written.
+    #[error("I/O failed on {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// The repository failed.
+    #[error("repository error")]
+    Storage(#[from] StorageError),
+    /// The repository found the new settings unchanged from an older snapshot and stored none.
+    #[error("the settings snapshot was not written")]
+    NotWritten,
 }
 
 /// One game's backup selection. Paths and registry keys are included unless saved otherwise.

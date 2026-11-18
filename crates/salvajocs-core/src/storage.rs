@@ -354,6 +354,14 @@ impl Storage {
         self.repo.delete_snapshots(&ids).map_err(backend)
     }
 
+    /// Makes the repository append-only, so [`Storage::forget`] fails.
+    #[cfg(test)]
+    pub(crate) fn set_append_only(&mut self) {
+        self.repo
+            .apply_config(&ConfigOptions::default().set_append_only(true))
+            .unwrap();
+    }
+
     /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`.
     pub fn read_file(
         &mut self,
