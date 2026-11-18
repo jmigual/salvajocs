@@ -80,6 +80,10 @@ dependency yet; once added, the two builds unify.
     real cost is about (1 + prefix contexts) times that, since every context is globbed. It runs
     in a background `Job`, so v1 accepts it. If it must be faster, cache directory listings per
     scan, not drop case-insensitivity.
+  - Done for 0.4.0: a pattern is globbed only when its first part matches an entry of its base
+    dir, listed once per scan (a literal part is one `stat`). Measured 2026-11-18: one launcher
+    prefix checked for every game, 2.5 s to 0.25 s; with six of them, 21 s to 3.3 s. Results
+    are unchanged.
   - Rejected: a hand-written per-component `read_dir` walk. It would reimplement `*`/`**`/`?`
     matching that `glob` already does.
 - **Custom games** (stored in config, ADR-0009; the `CustomGame`, `Integration` and `Pair` types

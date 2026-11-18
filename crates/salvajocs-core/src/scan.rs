@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -161,6 +162,8 @@ struct Cache {
     registries: RefCell<HashMap<PathBuf, Result<Option<RegFile>, ()>>>,
     /// How many `user.reg` files were read.
     user_reg_loads: Cell<usize>,
+    /// The entry names of each glob base dir, or why they could not be read.
+    listings: RefCell<HashMap<PathBuf, Result<Vec<OsString>, io::ErrorKind>>>,
     problems: RefCell<Vec<ScanProblem>>,
 }
 
@@ -170,6 +173,42 @@ impl Cache {
         let mut problems = self.problems.borrow_mut();
         if !problems.contains(&problem) {
             problems.push(problem);
+        }
+    }
+
+    /// Whether `pattern`, a glob of [`expand`] below `base_dir`, may match: false only when no
+    /// entry of `base_dir` matches its first component, so a skipped glob would find nothing.
+    fn may_match(&self, base_dir: &Path, pattern: &str) -> bool {
+        let base = glob::Pattern::escape(&base_dir.to_string_lossy());
+        let first = pattern
+            .strip_prefix(base.trim_end_matches('/'))
+            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|rest| rest.split('/').next());
+        // `**` also matches `base_dir` itself.
+        let Some(first) = first.filter(|&first| first != "**") else {
+            return true;
+        };
+        // Glob looks a literal name up rather than listing, so the file system's case rules apply.
+        if !first.contains(['*', '?', '[']) {
+            return fs::symlink_metadata(base_dir.join(first)).is_ok();
+        }
+        let mut listings = self.listings.borrow_mut();
+        let listing = listings.entry(base_dir.to_path_buf()).or_insert_with(|| {
+            fs::read_dir(base_dir)
+                .and_then(|entries| entries.map(|entry| Ok(entry?.file_name())).collect())
+                .map_err(|err| err.kind())
+        });
+        // Glob also tries `.`, which no listing holds, for a part that starts with a literal dot.
+        let dot = first.starts_with('.');
+        match listing {
+            Ok(names) => glob::Pattern::new(first).is_ok_and(|first| {
+                dot && first.matches(".")
+                    || names
+                        .iter()
+                        .any(|name| name.to_str().is_some_and(|name| first.matches(name)))
+            }),
+            // A missing base matches nothing; other failures are left for glob to report.
+            Err(kind) => !matches!(kind, io::ErrorKind::NotFound | io::ErrorKind::NotADirectory),
         }
     }
 
@@ -435,6 +474,9 @@ fn scan_game(
             let mut matched = false;
             let mut issues = Vec::new();
             for (base_dir, pattern) in expand(template, ctx, vars) {
+                if !shared.cache.may_match(&base_dir, &pattern) {
+                    continue;
+                }
                 for (real, size) in matches(&pattern, &mut issues) {
                     let Some(tail) = tail_of(&real, &base_dir) else {
                         continue;

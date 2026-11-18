@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 use crate::config::PasswordMode;
 use crate::launcher::{Launcher, LauncherGame};
-use crate::layout::LinuxFolders;
+use crate::layout::{LinuxFolders, glob_pattern};
 use crate::manifest::{CustomFile, CustomGame, Integration, parse_yaml};
 
 /// Creates a valid prefix at `root/pfx` with a `steamuser` home and returns its path.
@@ -495,6 +495,47 @@ fn user_reg_parsed_once_per_prefix() {
     );
     assert_eq!(cache.user_reg_loads.get(), 1);
     assert_eq!(cache.problems.into_inner(), []);
+}
+
+#[test]
+fn a_glob_is_skipped_only_when_its_first_part_matches_no_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("Documents");
+    write(&base.join("My Games/Foo/save"), "x");
+    fs::create_dir(dir.path().join("Empty")).unwrap();
+    let cache = Cache::default();
+    let may_match = |base: &Path, rest: &str, folded: bool| {
+        cache.may_match(base, &glob_pattern(base, rest, folded))
+    };
+    assert!(may_match(&base, "my games/foo", true));
+    assert!(!may_match(&base, "Other Games/Foo", true));
+    assert!(may_match(&base, "*/Foo", false));
+    assert!(may_match(&base, "**/Foo", false));
+    assert!(may_match(&base, "", false));
+    assert!(may_match(&base, "My Games/Bar", false));
+    assert!(!may_match(&base, "Other Games", false));
+    assert!(!may_match(&dir.path().join("Empty"), "*", false));
+    assert!(may_match(&dir.path().join("Empty"), ".*/save", true));
+    assert!(!may_match(&dir.path().join("Missing"), "foo/*", true));
+    assert!(!may_match(&base.join("My Games/Foo/save"), "y*", true));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_glob_below_an_unreadable_dir_still_runs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let may_match = Cache::default().may_match(&locked, &glob_pattern(&locked, "*.dat", true));
+    let readable = fs::read_dir(&locked).is_ok();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        return; // running as root: permissions do not apply
+    }
+    assert!(may_match, "glob reports the unreadable dir");
 }
 
 #[test]

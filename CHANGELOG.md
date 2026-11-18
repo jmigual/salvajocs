@@ -46,6 +46,8 @@ All notable changes to salvajocs. The format follows
   them.
 - A custom game's registry keys are a list of rows, and its Linux and Windows pairs show as
   "Saved restore mappings" only when a restore saved some.
+- The scan skips a path whose first folder is not on disk without searching it, so each Wine
+  prefix checked for every game adds about a tenth of the time it did.
 
 ### Removed
 
