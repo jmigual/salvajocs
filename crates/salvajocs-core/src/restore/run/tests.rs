@@ -5,7 +5,7 @@ use super::*;
 use crate::backup::backup_games;
 use crate::config::{AppConfig, PasswordMode};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
-use crate::manifest::{CustomGame, GameEntry, Integration, Pair, Steam};
+use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair, Steam};
 use crate::registry::{RegData, RegValue};
 use crate::storage::{Compression, RepoLocation};
 
@@ -338,6 +338,84 @@ fn game_info_merges_the_custom_game_and_takes_its_pairs_and_skips() {
     assert_eq!(info.pairs, games[0].pairs);
     assert_eq!(info.skips, ["<home>/Foo"]);
     assert_eq!(game_info("Baz", &manifest, &games), GameInfo::default());
+}
+
+fn pair(linux: &str, windows: &str) -> Pair {
+    Pair {
+        linux: linux.into(),
+        windows: windows.into(),
+    }
+}
+
+/// A custom game `Foo` with two-path `rows` and the saved `pairs` and `skips`.
+fn rows_game(rows: &[(&str, &str)], pairs: Vec<Pair>, skips: &[&str]) -> CustomGame {
+    CustomGame {
+        name: "Foo".into(),
+        files: (rows.iter())
+            .map(|&(linux, windows)| CustomFile {
+                linux: Some(linux.into()),
+                windows: Some(windows.into()),
+            })
+            .collect(),
+        entry: GameEntry::default(),
+        integration: Integration::Extend,
+        wine_prefix: None,
+        pairs,
+        skips: skips.iter().map(|&skip| skip.into()).collect(),
+    }
+}
+
+#[test]
+fn game_info_puts_row_pairs_before_saved_pairs() {
+    let game = rows_game(
+        &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
+        vec![pair("<xdgConfig>/Foo", "<winAppData>/Foo")],
+        &[],
+    );
+    let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
+    assert_eq!(
+        info.pairs,
+        [
+            pair("<xdgData>/Foo", "<winDocuments>/Foo"),
+            pair("<xdgConfig>/Foo", "<winAppData>/Foo"),
+        ]
+    );
+}
+
+#[test]
+fn a_saved_pair_wins_a_tie_with_a_row_pair() {
+    let game = rows_game(
+        &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
+        vec![pair("<xdgData>/Foo", "<winAppData>/Saved")],
+        &[],
+    );
+    let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
+    let meta = SnapshotMeta {
+        format: layout::SNAPSHOT_FORMAT,
+        title: "Foo".into(),
+        roots: vec![(Base::XdgData, "Foo".into())],
+    };
+    let proposals = crossbuild::propose(
+        &meta,
+        info.entry.as_ref(),
+        &info.pairs,
+        &info.skips,
+        Family::Windows,
+    );
+    assert_eq!(proposals[0].proposed.as_deref(), Some("<winAppData>/Saved"));
+}
+
+#[test]
+fn a_saved_skip_drops_the_row_pair_of_its_root() {
+    for skip in ["<home>/.local/share/Foo", "<winDocuments>/Foo"] {
+        let game = rows_game(
+            &[("<xdgData>/Foo/*.sav", "<winDocuments>/Foo/*.sav")],
+            Vec::new(),
+            &[skip],
+        );
+        let info = game_info("Foo", &Manifest::default(), slice::from_ref(&game));
+        assert_eq!(info.pairs, [], "{skip}");
+    }
 }
 
 #[test]

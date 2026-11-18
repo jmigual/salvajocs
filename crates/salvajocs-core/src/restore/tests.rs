@@ -4,7 +4,7 @@ use std::path::Path;
 use super::*;
 use crate::crossbuild::{Confidence, PLAYER_PREFS_NOTE, root_template};
 use crate::layout::{Root, RootKind, SNAPSHOT_FORMAT, WinFolders};
-use crate::manifest::{FileRule, RegistryRule};
+use crate::manifest::{CustomFile, CustomGame, FileRule, Integration, Manifest, RegistryRule};
 use crate::registry::HKCU;
 
 fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
@@ -1385,4 +1385,91 @@ fn shallow_prefix_only_trusts_files_matching_the_template() {
         plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
         [SkipReason::UndeclaredRoot]
     );
+}
+
+fn file_row(linux: Option<&str>, windows: Option<&str>) -> CustomFile {
+    CustomFile {
+        linux: linux.map(Into::into),
+        windows: windows.map(Into::into),
+    }
+}
+
+/// What a restore takes from a custom game holding only `files`.
+fn rows_info(files: Vec<CustomFile>) -> GameInfo {
+    let game = CustomGame {
+        name: "Game".into(),
+        files,
+        entry: GameEntry::default(),
+        integration: Integration::Override,
+        wine_prefix: None,
+        pairs: Vec::new(),
+        skips: Vec::new(),
+    };
+    game_info("Game", &Manifest::default(), &[game])
+}
+
+#[test]
+fn two_path_rows_restore_cross_build_without_a_dialog() {
+    // Two rows, so the manifest-style auto-pair cannot map them.
+    let info = rows_info(vec![
+        file_row(
+            Some("<xdgData>/g/*.sav"),
+            Some("<winDocuments>/G/Saves/*.sav"),
+        ),
+        file_row(Some("<xdgConfig>/g/*.ini"), Some("<winAppData>/G/*.ini")),
+    ]);
+    let staged = staged(
+        &[(Base::XdgData, "g"), (Base::XdgConfig, "g")],
+        &[(Base::XdgData, "g/a.sav"), (Base::XdgConfig, "g/o.ini")],
+    );
+    let plan = prepare(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        info.entry.as_ref(),
+        &info.pairs,
+        &info.skips,
+        &[],
+    )
+    .unwrap();
+    let mut targets = targets_of(&plan);
+    targets.sort();
+    assert_eq!(
+        targets,
+        [
+            Path::new("/win/drive_c/users/Alice/AppData/Roaming/G/o.ini"),
+            Path::new("/win/drive_c/users/Alice/Documents/G/Saves/a.sav"),
+        ]
+    );
+    assert!(plan.skipped.is_empty());
+}
+
+#[test]
+fn a_one_sided_row_is_mapped_as_before() {
+    let info = rows_info(vec![
+        file_row(Some("<xdgConfig>/unity3d/Co/G"), None),
+        file_row(Some("<xdgData>/g/*.sav"), None),
+    ]);
+    assert_eq!(info.pairs, []);
+    let staged = staged(
+        &[(Base::XdgConfig, "unity3d/Co/G"), (Base::XdgData, "g")],
+        &[
+            (Base::XdgConfig, "unity3d/Co/G/prefs.dat"),
+            (Base::XdgData, "g/a.sav"),
+        ],
+    );
+    let result = prepare(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        info.entry.as_ref(),
+        &info.pairs,
+        &info.skips,
+        &[],
+    );
+    let Err(PrepareError::NeedsMapping(entries)) = result else {
+        panic!("expected NeedsMapping, got {result:?}");
+    };
+    let confidences: Vec<_> = entries.iter().map(|e| e.confidence).collect();
+    assert_eq!(confidences, [Confidence::EngineRule, Confidence::Unknown]);
 }

@@ -13,6 +13,7 @@ use serde::de::{DeserializeOwned, IntoDeserializer, value};
 use super::{RestorePlan, StagedGame, Targets, Write};
 use crate::backup::{BackupError, backup_games};
 use crate::config::AppConfig;
+use crate::crossbuild::{self, Family, pair_side};
 use crate::layout::{
     self, Base, Context, FILES_DIR, GameVars, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
 };
@@ -125,7 +126,8 @@ pub struct GameInfo {
     /// The manifest entry with the custom game applied (`manifest::merge_custom`); `None` when
     /// neither has the title.
     pub entry: Option<GameEntry>,
-    /// The custom game's saved pairs (ADR-0011).
+    /// The pairs of the custom game's file rows (ADR-0016) a saved skip does not name, then its
+    /// saved pairs (ADR-0011), so a saved pair wins a tie.
     pub pairs: Vec<Pair>,
     /// The custom game's saved skips (ADR-0011).
     pub skips: Vec<String>,
@@ -142,10 +144,26 @@ pub fn game_info(title: &str, manifest: &Manifest, custom: &[CustomGame]) -> Gam
     };
     merge_custom(&mut merged, custom);
     let custom = || custom.iter().filter(|game| game.name == title);
+    let skips: Vec<String> = custom().flat_map(|game| game.skips.clone()).collect();
+    // A skip the user saved wins over a row's mapping of the same root, as it does over a pair.
+    let skipped = |pair: &Pair| {
+        [Family::Linux, Family::Windows].into_iter().any(|family| {
+            let side = crossbuild::classify(pair_side(pair, family), family);
+            side.is_some()
+                && skips
+                    .iter()
+                    .any(|skip| crossbuild::classify(skip, family) == side)
+        })
+    };
+    let rows = custom()
+        .flat_map(CustomGame::file_pairs)
+        .filter(|pair| !skipped(pair));
     GameInfo {
         entry: merged.games.remove(title),
-        pairs: custom().flat_map(|game| game.pairs.clone()).collect(),
-        skips: custom().flat_map(|game| game.skips.clone()).collect(),
+        pairs: rows
+            .chain(custom().flat_map(|game| game.pairs.clone()))
+            .collect(),
+        skips,
     }
 }
 

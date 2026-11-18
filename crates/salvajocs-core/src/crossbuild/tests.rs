@@ -1202,3 +1202,37 @@ fn validate_file_checks_a_two_path_row_as_a_mapping() {
         );
     }
 }
+
+#[test]
+fn apply_choices_does_not_store_a_pair_a_file_row_declares() {
+    let mut config = config();
+    config.custom_games.push(CustomGame {
+        name: "Game".into(),
+        files: vec![file_row(
+            Some("<home>/.local/share/g/*.sav"),
+            Some("<winDocuments>/G/*.sav"),
+        )],
+        entry: GameEntry::default(),
+        integration: Integration::Extend,
+        wine_prefix: None,
+        pairs: Vec::new(),
+        skips: vec!["<xdgData>/g".into()],
+    });
+    apply_choices(
+        &mut config,
+        "Game",
+        &[
+            (
+                linux_root("<xdgData>/g"),
+                Choice::Template("<winDocuments>/G".into()),
+            ),
+            (
+                linux_root("<xdgData>/h"),
+                Choice::Template("<winDocuments>/H".into()),
+            ),
+        ],
+    );
+    let game = &config.custom_games[0];
+    assert_eq!(game.pairs, [pair("<xdgData>/h", "<winDocuments>/H")]);
+    assert!(game.skips.is_empty(), "the choice still clears the skip");
+}

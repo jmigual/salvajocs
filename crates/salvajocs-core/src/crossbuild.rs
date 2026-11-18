@@ -335,7 +335,7 @@ pub(crate) fn row_pair(linux: &str, windows: &str) -> Result<Pair, PairError> {
     Ok(pair)
 }
 
-fn pair_side(pair: &Pair, family: Family) -> &str {
+pub(crate) fn pair_side(pair: &Pair, family: Family) -> &str {
     match family {
         Family::Linux => &pair.linux,
         Family::Windows => &pair.windows,
@@ -684,7 +684,8 @@ pub fn template_for(path: &Path, ctx: &Context, vars: &GameVars) -> Option<Strin
 
 /// Saves each choice on the custom game `title`, creating an `Extend` custom game when there is
 /// none: `Template` as a [`Pair`] of the root and the chosen template, `Skip` as the root's
-/// template in `skips`. A choice replaces any earlier pair or skip for the same root. Templates
+/// template in `skips`. A choice replaces any earlier pair or skip for the same root; a pair one
+/// of the game's file rows already declares ([`CustomGame::file_pairs`]) is not stored. Templates
 /// must have passed [`resolve`].
 pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRoot, Choice)]) {
     let choices: Vec<_> = choices
@@ -711,22 +712,34 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
             config.custom_games.len() - 1
         });
     let game = &mut config.custom_games[index];
+    let rows = game.file_pairs();
     for (family, root, choice) in choices {
         game.pairs
             .retain(|saved| classify(pair_side(saved, family), family).as_ref() != Some(root));
         game.skips
             .retain(|saved| classify(saved, family).as_ref() != Some(root));
         let own = root_template(root);
-        match (choice, family) {
-            (Choice::Skip, _) => game.skips.push(own),
-            (Choice::Template(target), Family::Linux) => game.pairs.push(Pair {
+        let pair = match (choice, family) {
+            (Choice::Skip, _) => {
+                game.skips.push(own);
+                continue;
+            }
+            (Choice::Template(target), Family::Linux) => Pair {
                 linux: own,
                 windows: target.clone(),
-            }),
-            (Choice::Template(target), Family::Windows) => game.pairs.push(Pair {
+            },
+            (Choice::Template(target), Family::Windows) => Pair {
                 linux: target.clone(),
                 windows: own,
-            }),
+            },
+        };
+        let from_row = rows.iter().any(|row| {
+            [Family::Linux, Family::Windows].into_iter().all(|side| {
+                classify(pair_side(row, side), side) == classify(pair_side(&pair, side), side)
+            })
+        });
+        if !from_row {
+            game.pairs.push(pair);
         }
     }
 }
