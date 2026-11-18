@@ -285,3 +285,39 @@ fn a_template_already_in_entry_files_keeps_its_rule() {
     let entry = rows_game(vec![row(Some("<base>/mine"), None)]).game_entry();
     assert_eq!(entry.files["<base>/mine"].when, [When::default()]);
 }
+
+#[test]
+fn parse_yaml_keeps_gog_and_lutris_ids() {
+    let manifest = parse_yaml(
+        "Game:\n  gog:\n    id: 1087788668\n  id:\n    lutris: some-game\n    \
+         gogExtra:\n      - 1\n      - 2\n    steamExtra:\n      - 3\n    flatpak: org.x.Y\n  \
+         steam:\n    id: 9\nBare:\n  installDir:\n    Bare: {}\n",
+    )
+    .unwrap();
+    let game = &manifest.games["Game"];
+    assert_eq!(
+        game.gog,
+        Some(Gog {
+            id: Some(1087788668)
+        })
+    );
+    assert_eq!(
+        game.id,
+        Some(Ids {
+            lutris: Some("some-game".into()),
+            gog_extra: vec![1, 2],
+            steam_extra: vec![3],
+        })
+    );
+    assert_eq!(manifest.games["Bare"].gog, None);
+    assert_eq!(manifest.games["Bare"].id, None);
+    assert_eq!(from_json(&to_json(&manifest).unwrap()).unwrap(), manifest);
+}
+
+#[test]
+fn custom_game_without_launcher_ids_serializes_without_them() {
+    let game = custom("Homebrew", Integration::Extend, "<home>/a");
+    let yaml = serde_saphyr::to_string(&game).unwrap();
+    assert!(!yaml.contains("gog") && !yaml.contains("id:"), "{yaml}");
+    assert_eq!(serde_saphyr::from_str::<CustomGame>(&yaml).unwrap(), game);
+}

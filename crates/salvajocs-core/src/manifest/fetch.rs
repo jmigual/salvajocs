@@ -18,7 +18,10 @@ use super::{Manifest, ManifestError, from_json, parse_yaml, to_json};
 /// Ludusavi's own manifest endpoint.
 pub const MANIFEST_URL: &str = "https://raw.githubusercontent.com/mtkennerly/ludusavi-manifest/refs/heads/data/data/manifest.yaml";
 
-const JSON_FILE: &str = "manifest.json";
+// v2 added the GOG and cross-store ids; an older cache lacks them, so it is not read.
+/// Name of the JSON cache file inside the cache dir.
+pub const JSON_FILE: &str = "manifest-v2.json";
+const OLD_JSON_FILE: &str = "manifest.json";
 const ETAG_FILE: &str = "manifest.etag";
 // The default 30 s total timeout is too short for 2.4 MB on a slow link.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -47,7 +50,7 @@ pub enum Freshness {
 }
 
 /// Revalidates the cache in `cache_dir` against [`MANIFEST_URL`], replacing it when it changed.
-/// `cache_dir` holds `manifest.json` and `manifest.etag`; it is created if missing.
+/// `cache_dir` holds `manifest-v2.json` and `manifest.etag`; it is created if missing.
 pub fn refresh(cache_dir: &Path) -> Result<Freshness, FetchError> {
     refresh_from(MANIFEST_URL, cache_dir)
 }
@@ -89,6 +92,8 @@ fn refresh_from(url: &str, cache_dir: &Path) -> Result<Freshness, FetchError> {
     if let Some(etag) = etag {
         write_atomic(&cache_dir.join(ETAG_FILE), etag.as_bytes())?;
     }
+    // A leftover old cache is harmless, so its removal must not fail the refresh.
+    let _ = remove_if_exists(&cache_dir.join(OLD_JSON_FILE));
     Ok(Freshness::Updated)
 }
 

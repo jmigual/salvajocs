@@ -117,7 +117,11 @@ fn a_cached_manifest_survives_a_failed_download() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let json = salvajocs_core::manifest::to_json(&Manifest::default()).unwrap();
-    std::fs::write(tmp.path().join("manifest.json"), json).unwrap();
+    std::fs::write(
+        tmp.path().join(salvajocs_core::manifest::fetch::JSON_FILE),
+        json,
+    )
+    .unwrap();
 
     let load = load_manifest(tmp.path(), offline);
 

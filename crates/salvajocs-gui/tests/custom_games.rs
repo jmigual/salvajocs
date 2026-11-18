@@ -50,7 +50,8 @@ fn open_tab_with(
     };
     std::fs::create_dir_all(&env.cache_dir).unwrap();
     std::fs::write(
-        env.cache_dir.join("manifest.json"),
+        env.cache_dir
+            .join(salvajocs_core::manifest::fetch::JSON_FILE),
         manifest::to_json(&manifest).unwrap(),
     )
     .unwrap();

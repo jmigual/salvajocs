@@ -88,6 +88,23 @@ fn etag_without_json_is_not_sent() {
 }
 
 #[test]
+fn old_cache_name_forces_full_fetch() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(OLD_JSON_FILE), "{}").unwrap();
+    fs::write(dir.path().join(ETAG_FILE), ETAG_VALUE).unwrap();
+    // The server answers 304 to this ETag, which would keep a cache without the new fields.
+    let url = serve(1, "200 OK", "Game:\n  gog:\n    id: 5\n", true);
+
+    assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
+    assert!(!dir.path().join(OLD_JSON_FILE).exists());
+    let cached = load_cached(dir.path()).unwrap().unwrap();
+    assert_eq!(
+        cached.games["Game"].gog,
+        Some(crate::manifest::Gog { id: Some(5) })
+    );
+}
+
+#[test]
 fn update_without_etag_drops_stale_etag() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join(JSON_FILE), "{\"games\":{}}").unwrap();

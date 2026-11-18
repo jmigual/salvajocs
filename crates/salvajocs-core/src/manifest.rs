@@ -116,6 +116,29 @@ pub struct Steam {
     pub id: Option<u32>,
 }
 
+/// GOG identity of a game.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gog {
+    /// GOG product id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+}
+
+/// Cross-store identifiers of a game, used to match launcher libraries (ADR-0008).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ids {
+    /// Lutris slug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lutris: Option<String>,
+    /// Further GOG product ids of the same game.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gog_extra: Vec<u64>,
+    /// Further Steam app ids of the same game.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steam_extra: Vec<u32>,
+}
+
 /// Save locations of one game; fields this version does not use are dropped.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +155,12 @@ pub struct GameEntry {
     /// Steam identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steam: Option<Steam>,
+    /// GOG identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gog: Option<Gog>,
+    /// Cross-store identifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Ids>,
 }
 
 /// All known games by title.

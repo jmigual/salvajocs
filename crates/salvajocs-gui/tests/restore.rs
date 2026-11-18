@@ -121,7 +121,8 @@ fn open_tab_tagged(
     });
     fs::create_dir_all(&env.cache_dir).unwrap();
     fs::write(
-        env.cache_dir.join("manifest.json"),
+        env.cache_dir
+            .join(salvajocs_core::manifest::fetch::JSON_FILE),
         manifest::to_json(&Manifest::default()).unwrap(),
     )
     .unwrap();
