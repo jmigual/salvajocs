@@ -14,8 +14,10 @@ use crate::layout::Base;
 use crate::scan::{FoundFile, GameScan};
 use crate::storage::StorageError;
 
+mod pending;
 mod repo;
 
+pub use pending::Pending;
 pub use repo::{Saved, load_all, save};
 
 /// The [`GameSettings`] format this version reads and writes.
@@ -24,13 +26,14 @@ pub const FORMAT: u32 = 1;
 /// Errors from reading or saving backup selections.
 #[derive(Debug, thiserror::Error)]
 pub enum SelectionError {
-    /// The settings were written by a newer version: they are neither applied nor rewritten.
+    /// The settings or the pending file were written by a newer version: they are neither
+    /// applied nor rewritten.
     #[error("settings format {0} is newer than this version understands")]
     NewerFormat(u32),
     /// The settings are not valid JSON for their format.
     #[error("cannot parse the settings")]
     Parse(#[from] serde_json::Error),
-    /// A settings file could not be written.
+    /// A settings or pending file could not be read or written.
     #[error("I/O failed on {path}")]
     Io {
         path: PathBuf,
@@ -103,7 +106,7 @@ impl GameSettings {
     /// Parses settings JSON. A `format` above [`FORMAT`] is [`SelectionError::NewerFormat`],
     /// whatever the rest holds.
     pub fn from_json(bytes: &[u8]) -> Result<Self, SelectionError> {
-        check_format(bytes)?;
+        check_format(bytes, FORMAT)?;
         Ok(serde_json::from_slice(bytes)?)
     }
 
@@ -161,14 +164,14 @@ impl GameSettings {
 }
 
 /// Fails with [`SelectionError::NewerFormat`] when the JSON object's `format` is above
-/// [`FORMAT`], before the rest is parsed: a newer format may change any other field.
-pub(crate) fn check_format(bytes: &[u8]) -> Result<(), SelectionError> {
+/// `known`, before the rest is parsed: a newer format may change any other field.
+fn check_format(bytes: &[u8], known: u32) -> Result<(), SelectionError> {
     #[derive(Deserialize)]
     struct Header {
         format: u32,
     }
     let Header { format } = serde_json::from_slice(bytes)?;
-    if format > FORMAT {
+    if format > known {
         return Err(SelectionError::NewerFormat(format));
     }
     Ok(())
