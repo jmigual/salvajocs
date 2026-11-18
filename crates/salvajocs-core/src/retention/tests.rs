@@ -275,3 +275,197 @@ fn serde_round_trips_yaml_and_json() {
     let yaml = serde_saphyr::to_string(&policy).unwrap();
     assert_eq!(serde_saphyr::from_str::<Retention>(&yaml).unwrap(), policy);
 }
+
+/// A repository on a temp dir with one game's save folder to back up.
+struct Repo {
+    tmp: tempfile::TempDir,
+    location: crate::storage::RepoLocation,
+    storage: Storage,
+}
+
+impl Repo {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let location = crate::storage::RepoLocation {
+            repository: tmp.path().join("repo").to_str().unwrap().to_string(),
+            options: Default::default(),
+        };
+        let storage = Storage::init(&location, "", crate::storage::Compression::Default).unwrap();
+        Self {
+            tmp,
+            location,
+            storage,
+        }
+    }
+
+    /// A second session on the same repository, as another machine would have.
+    fn open(&self) -> Storage {
+        Storage::open(&self.location, "").unwrap()
+    }
+
+    /// Backs up game `a` with `contents` in its save file.
+    fn backup(&mut self, contents: &str) -> SnapshotInfo {
+        // A new backup run reindexes first, so the previous snapshot is its parent.
+        self.storage.reindex().unwrap();
+        let src = self.save(contents);
+        self.storage
+            .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Writes `contents` to game `a`'s save file and returns its folder.
+    fn save(&self, contents: &str) -> std::path::PathBuf {
+        let src = self.tmp.path().join("save");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.sav"), contents).unwrap();
+        src
+    }
+
+    /// Every file below the repository folder `dir`, such as `index`, sorted.
+    fn files(&self, dir: &str) -> Vec<std::path::PathBuf> {
+        let mut files = files_below(&self.tmp.path().join("repo").join(dir));
+        files.sort();
+        files
+    }
+
+    /// Whether a new session restores `snapshot` with `contents` in the save file.
+    fn restores(&self, snapshot: &SnapshotInfo, contents: &str) -> bool {
+        let out = self.tmp.path().join("out").join(&snapshot.id);
+        self.open()
+            .restore_path(&snapshot.id, "/salvajocs/a", &out)
+            .is_ok_and(|()| std::fs::read_to_string(out.join("a.sav")).unwrap() == contents)
+    }
+
+    fn ids(&self, tag: &str) -> Vec<String> {
+        let snapshots = self.storage.snapshots(tag).unwrap();
+        snapshots.into_iter().map(|snapshot| snapshot.id).collect()
+    }
+}
+
+#[test]
+fn apply_keep_last_one_leaves_the_newest_restorable() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    let newest = repo.backup("new");
+
+    let packs = repo.files("data").len();
+
+    let cleanup = apply(&mut repo.storage, &keep_last(1), &[], SystemTime::now()).unwrap();
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 1,
+            pruned: true
+        }
+    );
+    assert_eq!(repo.ids(APP_TAG), std::slice::from_ref(&newest.id));
+    assert!(repo.restores(&newest, "new"));
+    // The old snapshot's pack is now unused, but a prune only marks it (no `instant_delete`).
+    assert!(repo.files("data").len() >= packs);
+    assert!(repo.storage.has_marked_packs().unwrap());
+}
+
+#[test]
+fn a_backup_reusing_a_marked_pack_is_recovered_by_the_next_cleanup() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    // Another machine loaded the index while the "old" data was still in use.
+    let mut other = repo.open();
+    let now = SystemTime::now();
+    let cleanup = apply(&mut repo.storage, &keep_last(1), &[], now).unwrap();
+    assert_eq!(cleanup.forgotten, 1);
+
+    // Its backup reuses the "old" data, which is now only in a marked pack.
+    let src = repo.save("old");
+    let theirs = other
+        .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+        .unwrap()
+        .unwrap();
+    assert!(!repo.restores(&theirs, "old"));
+
+    // Its own cleanup forgets nothing, but still prunes, which recovers the pack.
+    let cleanup = apply(&mut other, &keep_last(5), &[&theirs.id], now).unwrap();
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 0,
+            pruned: true
+        }
+    );
+    assert!(repo.restores(&theirs, "old"));
+}
+
+#[test]
+fn apply_leaves_settings_snapshots() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    let stage = repo.tmp.path().join("stage");
+    let skip = [crate::selection::Change::Skip(true)];
+    crate::selection::save(&mut repo.storage, "A", &skip, &stage).unwrap();
+    repo.backup("new");
+    let settings = repo.ids(SETTINGS_TAG);
+    assert_eq!(settings.len(), 1);
+
+    let cleanup = apply(&mut repo.storage, &keep_last(1), &[], SystemTime::now()).unwrap();
+    assert_eq!(cleanup.forgotten, 1);
+    assert_eq!(repo.ids(SETTINGS_TAG), settings);
+}
+
+#[test]
+fn apply_with_nothing_to_forget_does_not_prune() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    let index = repo.files("index");
+    let cleanup = apply(&mut repo.storage, &keep_last(2), &[], SystemTime::now()).unwrap();
+    assert_eq!(cleanup, Cleanup::default());
+    assert_eq!(repo.ids(APP_TAG).len(), 2);
+    assert_eq!(repo.files("index"), index);
+}
+
+#[test]
+fn apply_off_does_nothing() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    let before = repo.ids(APP_TAG);
+    let off = Retention::default();
+    assert_eq!(
+        apply(&mut repo.storage, &off, &[], SystemTime::now()).unwrap(),
+        Cleanup::default()
+    );
+    assert_eq!(repo.ids(APP_TAG), before);
+}
+
+#[test]
+fn apply_off_still_prunes_marked_packs() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    let now = SystemTime::now();
+    apply(&mut repo.storage, &keep_last(1), &[], now).unwrap();
+    let cleanup = apply(&mut repo.storage, &Retention::default(), &[], now).unwrap();
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 0,
+            pruned: true
+        }
+    );
+}
+
+/// Every file below `dir`.
+fn files_below(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(files_below(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}

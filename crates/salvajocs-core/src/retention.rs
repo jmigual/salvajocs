@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::restore::PRE_RESTORE_TAG;
-use crate::storage::SnapshotInfo;
+use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 const APP_TAG: &str = "salvajocs";
 const GAME_TAG_PREFIX: &str = "game:";
@@ -124,6 +124,43 @@ pub fn to_forget(
         .filter(|snapshot| forget.contains(snapshot.id.as_str()))
         .map(|snapshot| snapshot.id.clone())
         .collect()
+}
+
+/// What [`apply`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Cleanup {
+    /// How many snapshots were forgotten.
+    pub forgotten: usize,
+    /// Whether a prune ran: after a forget, or while packs wait marked for deletion.
+    pub pruned: bool,
+}
+
+/// Forgets the snapshots `policy` forgets at `now` ([`to_forget`] over every `salvajocs`
+/// snapshot), never one of `keep`. Then prunes if anything was forgotten or the repository has
+/// packs marked for deletion, which only a later prune frees, or recovers when a backup made
+/// since uses them. An off policy forgets nothing but still prunes marked packs.
+///
+/// # Errors
+/// The repository error of the listing, the forget or the prune.
+pub fn apply(
+    storage: &mut Storage,
+    policy: &Retention,
+    keep: &[&str],
+    now: SystemTime,
+) -> Result<Cleanup, StorageError> {
+    let mut forgotten = 0;
+    if !policy.is_off() {
+        let ids = to_forget(policy, &storage.snapshots(APP_TAG)?, keep, now);
+        if !ids.is_empty() {
+            storage.forget(&ids.iter().map(String::as_str).collect::<Vec<_>>())?;
+        }
+        forgotten = ids.len();
+    }
+    let pruned = forgotten > 0 || storage.has_marked_packs()?;
+    if pruned {
+        storage.prune()?;
+    }
+    Ok(Cleanup { forgotten, pruned })
 }
 
 /// The `game:` tag of a snapshot retention may forget.
