@@ -13,6 +13,9 @@ use crate::theme::{self, icons};
 const BUTTON: Vec2 = Vec2::new(40.0, 32.0);
 /// How far from the window edge the pointer resizes the window.
 const EDGE: f32 = 4.0;
+/// How far the pointer moves from the press on the bar before the window moves, so the jitter of
+/// a double click does not.
+const DRAG_START: f32 = 3.0;
 
 /// Whether the window fills the screen; the backend may not say, which counts as no.
 fn maximized(ctx: &egui::Context) -> bool {
@@ -41,7 +44,10 @@ fn move_window(ctx: &egui::Context, response: &Response) {
         (
             i.pointer.button_pressed(PointerButton::Primary),
             i.pointer.button_down(PointerButton::Primary),
-            i.pointer.press_origin() != i.pointer.latest_pos(),
+            i.pointer
+                .press_origin()
+                .zip(i.pointer.latest_pos())
+                .is_some_and(|(origin, pos)| origin.distance(pos) >= DRAG_START),
             i.focused,
             i.events.contains(&Event::WindowFocused(false)),
         )

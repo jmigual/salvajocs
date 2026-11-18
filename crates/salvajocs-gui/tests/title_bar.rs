@@ -236,6 +236,32 @@ fn double_clicking_the_bar_maximizes() {
 }
 
 #[test]
+fn a_double_click_that_jitters_still_maximizes() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.hover_at(empty);
+    harness.step();
+    // The second release a frame later, still within the double-click time.
+    for event in [
+        button(empty, true),
+        button(empty, false),
+        button(empty, true),
+        Event::PointerMoved(empty + Vec2::new(1.0, 0.0)),
+    ] {
+        harness.input_mut().events.push(event);
+    }
+    harness.step();
+    assert_eq!(
+        commands(&harness),
+        [],
+        "the jitter does not move the window"
+    );
+    harness.event(button(empty + Vec2::new(1.0, 0.0), false));
+    harness.step();
+    assert_eq!(commands(&harness), [ViewportCommand::Maximized(true)]);
+}
+
+#[test]
 fn dragging_the_bar_moves_the_window() {
     let (_tmp, mut harness) = ready();
     let empty = empty_bar(&harness);
@@ -246,7 +272,7 @@ fn dragging_the_bar_moves_the_window() {
 }
 
 #[test]
-fn the_first_motion_after_a_press_on_the_bar_moves_the_window() {
+fn three_points_from_a_press_on_the_bar_move_the_window() {
     let (_tmp, mut harness) = ready();
     let empty = empty_bar(&harness);
     harness.hover_at(empty);
@@ -254,6 +280,9 @@ fn the_first_motion_after_a_press_on_the_bar_moves_the_window() {
     harness.step();
     assert_eq!(commands(&harness), [], "a press alone may be a click");
     harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), [], "a jitter may still be a click");
+    harness.event(Event::PointerMoved(empty + Vec2::new(3.0, 0.0)));
     harness.step();
     assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
     // The compositor keeps the release, so egui still holds the button down.
@@ -269,7 +298,7 @@ fn the_bar_still_clicks_after_the_compositor_kept_the_release() {
     harness.hover_at(empty);
     harness.event(button(empty, true));
     harness.step();
-    harness.event(Event::PointerMoved(empty + Vec2::new(2.0, 0.0)));
+    harness.event(Event::PointerMoved(empty + Vec2::new(3.0, 0.0)));
     harness.step();
     assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
     harness.event(Event::PointerGone);
@@ -303,7 +332,7 @@ fn a_press_whose_release_went_with_the_focus_does_not_move_the_window() {
         harness.event(Event::WindowFocused(focused));
         harness.step();
     }
-    harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.event(Event::PointerMoved(empty + Vec2::new(3.0, 0.0)));
     harness.step();
     assert_eq!(commands(&harness), []);
 }
@@ -316,7 +345,7 @@ fn a_press_that_focuses_the_window_moves_it_once_focused() {
     harness.hover_at(empty);
     harness.event(button(empty, true));
     harness.step();
-    harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.event(Event::PointerMoved(empty + Vec2::new(3.0, 0.0)));
     harness.step();
     assert_eq!(
         commands(&harness),
@@ -324,7 +353,7 @@ fn a_press_that_focuses_the_window_moves_it_once_focused() {
         "the backend drops a move before the focus"
     );
     harness.input_mut().focused = true;
-    harness.event(Event::PointerMoved(empty + Vec2::new(2.0, 0.0)));
+    harness.event(Event::PointerMoved(empty + Vec2::new(4.0, 0.0)));
     harness.step();
     assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
 }
@@ -389,7 +418,7 @@ fn nudging_a_tab_leaves_the_window_be() {
     harness.hover_at(tab);
     harness.event(button(tab, true));
     harness.step();
-    harness.event(Event::PointerMoved(tab + Vec2::new(1.0, 0.0)));
+    harness.event(Event::PointerMoved(tab + Vec2::new(3.0, 0.0)));
     harness.step();
     assert_eq!(commands(&harness), []);
 }
