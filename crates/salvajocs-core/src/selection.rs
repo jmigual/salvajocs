@@ -18,6 +18,7 @@ mod pending;
 mod repo;
 
 pub use pending::Pending;
+pub(crate) use repo::forget_listed;
 pub use repo::{Saved, load_all, save};
 
 /// The [`GameSettings`] format this version reads and writes.

@@ -404,9 +404,10 @@ fn apply_leaves_settings_snapshots() {
     let stage = repo.tmp.path().join("stage");
     let skip = [crate::selection::Change::Skip(true)];
     crate::selection::save(&mut repo.storage, "A", &skip, &stage).unwrap();
+    save(&mut repo.storage, &keep_last(1), &stage).unwrap();
     repo.backup("new");
     let settings = repo.ids(SETTINGS_TAG);
-    assert_eq!(settings.len(), 1);
+    assert_eq!(settings.len(), 2);
 
     let cleanup = apply(&mut repo.storage, &keep_last(1), &[], SystemTime::now()).unwrap();
     assert_eq!(cleanup.forgotten, 1);

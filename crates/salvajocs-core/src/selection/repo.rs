@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use super::{Change, GameSettings, SelectionError};
+use crate::retention::POLICY_TAG;
 use crate::slug::slug;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
@@ -36,6 +37,10 @@ pub fn load_all(
     storage.reindex()?;
     let mut newest: BTreeMap<String, SnapshotInfo> = BTreeMap::new();
     for snapshot in storage.snapshots(SETTINGS_TAG)? {
+        // The retention policy is a settings snapshot too, but of no game.
+        if snapshot.tags.iter().any(|tag| tag == POLICY_TAG) {
+            continue;
+        }
         if let Some(slug) = snapshot
             .tags
             .iter()
@@ -142,7 +147,7 @@ fn write(
 
 /// Forgets those of `ids` still listed under `tag`, so one another machine already forgot is
 /// not forgotten twice. Returns the error rather than failing: the settings are saved either way.
-fn forget_listed(storage: &Storage, tag: &str, ids: &[String]) -> Option<StorageError> {
+pub(crate) fn forget_listed(storage: &Storage, tag: &str, ids: &[String]) -> Option<StorageError> {
     if ids.is_empty() {
         return None;
     }

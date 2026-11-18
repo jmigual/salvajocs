@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use crate::restore::PRE_RESTORE_TAG;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
+mod repo;
+
+pub(crate) use repo::POLICY_TAG;
+pub use repo::{FORMAT, RetentionError, Saved, load, save};
+
 const APP_TAG: &str = "salvajocs";
 const GAME_TAG_PREFIX: &str = "game:";
 const SETTINGS_TAG: &str = "salvajocs-settings";
