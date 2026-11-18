@@ -1,7 +1,7 @@
 # Settings
 
-The Settings tab changes the repository, the compression level and the folders salvajocs looks
-in for games. This page covers each section. Back to the [guide index](README.md).
+The Settings tab changes the repository, the compression level, which old backups to keep and the
+folders salvajocs looks in for games. This page covers each section. Back to the [guide index](README.md).
 
 ![The Settings tab](../images/settings.png)
 
@@ -25,6 +25,31 @@ compression**. The entries are the same as on [first run](first-run.md#compressi
 without its own entry, such as 5, shows as **Custom level** with the number filled in.
 
 The level is a property of the repository, so the change affects every machine that writes to it.
+
+## Old backups
+
+These rules decide which old backups of each game are removed. Tick one or both:
+
+- **Keep the last [N] backups of each game**, from 1 to 9999.
+- **Keep every backup newer than [N] days, weeks, months or years**, counted back from now.
+  A month is 30 days and a year 365.
+
+A backup is only made when a game's files changed, so the last N backups are the last N changes.
+A backup is kept if any rule keeps it. The newest backup of each game, and of each computer, is
+always kept. With both rules off, all backups are kept.
+
+The same rules also remove the safety backups (`pre-restore`) a restore makes first. They are
+counted on their own, so they never take the place of a game's regular backups.
+
+Old backups are removed after the next backup. Their disk space comes back at a later cleanup, at
+least a day later.
+
+The rules are stored in the repository, so every machine that uses it shares them. The section is
+disabled until the repository is open and its rules are loaded. Changes are saved at once; a typed
+number is saved when you press Enter or leave the field. If the repository holds rules this
+version cannot read, for example from a newer salvajocs, the section says so, stays disabled and
+nothing is removed. If the repository could not be reached, click **Retry**. The rules are read
+again each time you open the tab, so changes made on another computer show up.
 
 ## Roots
 
@@ -67,6 +92,7 @@ time salvajocs starts. Untick it to stop the check. Other systems do not show th
 
 ## Where settings are stored
 
-All settings except the compression level are in `config.yaml`, listed in
-[Installation](installation.md#where-salvajocs-keeps-its-files). The compression level is in the
-repository; passwords and secret options are in the keyring or asked each session.
+All settings except the compression level and the old-backup rules are in `config.yaml`, listed
+in [Installation](installation.md#where-salvajocs-keeps-its-files). The compression level and the
+old-backup rules are in the repository; passwords and secret options are in the keyring or asked
+each session.

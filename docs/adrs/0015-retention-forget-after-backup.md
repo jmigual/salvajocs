@@ -18,8 +18,13 @@ label and paths, so two machines with the same files each write their own snapsh
 - **Policy:** `core::retention::Retention { keep_last, keep_within }`. Each rule is optional,
   and with both unset nothing is forgotten. `keep_within` is an amount of days, weeks, months
   (30 days) or years (365 days), with no calendar maths.
-- **Stored in the repository:** one policy for all games, shared by every machine. The step that
-  stores it decides how; whatever holds it must not carry the `salvajocs` tag.
+- **Stored in the repository:** one policy for all games, shared by every machine, in a snapshot
+  at `/salvajocs-settings/retention` holding `retention.json` = `{ "format": 1, "policy": … }`,
+  tagged `salvajocs-settings` and `settings:retention`, never `salvajocs` or `game:`.
+  `retention::load` reindexes and reads the newest (none means off); `retention::save` writes a
+  new one and forgets the older ones it read, as ADR-0014's `save` does. A higher `format` is an
+  error like a parse failure. `selection::load_all` skips this snapshot: no game slug is
+  `retention`, since every slug holds a hex hash.
 - **Unknown fields are an error** (`deny_unknown_fields`), so an older app never applies only
   the rules it knows. A policy that fails to parse means no cleanup (forget nothing), and the
   caller reports the error instead of treating it as off.
@@ -34,8 +39,12 @@ label and paths, so two machines with the same files each write their own snapsh
 - `to_forget(policy, snapshots, keep, now)` returns the ids to forget. It is pure and has no
   rustic types. Ids in `keep` are never forgotten: the caller passes the snapshots the backup
   just made, which an older snapshot from a clock that ran ahead would otherwise outrank.
-- **Prune** runs only after a backup whose forget removed something, with rustic's default
-  `PruneOptions` and never `instant_delete`.
+- **Prune** runs in the cleanup after a backup when its forget removed something, or when any
+  index file lists packs marked for deletion (`Storage::has_marked_packs`, which reads the index
+  files but no tree). Only a later prune frees a marked pack, or recovers one that a backup made
+  since uses, so marks must not wait for the next forget. This holds also with every rule off. It
+  uses rustic's default `PruneOptions` and never `instant_delete`. After a prune the session
+  reindexes, so its next backup does not reuse data that is only in a marked pack.
 - **Own rule function** instead of rustic's `KeepOptions`: the guards (newest per host,
   separate `pre-restore` sequence, `keep_within` from now) do not map onto it, and it keeps rustic
   types inside `core::storage` (ADR-0003).
@@ -52,7 +61,14 @@ label and paths, so two machines with the same files each write their own snapsh
 - **`pre-restore` never forgotten:** they would accumulate forever. **`pre-restore` only aged out
   by `keep_within`:** with only `keep_last` set they would never go.
 - **Prune after every backup, or weekly:** every backup would pay a full prune on remote backends;
-  a schedule needs state and a timer. After a forget is when there is something to free.
+  a schedule needs state and a timer. After a forget, or while marks wait, is when there is
+  something to free or recover.
+- **Prune only after a forget:** a pack marked by one machine and then reused by another
+  machine's backup (made from an index loaded before the mark) would stay unrecoverable until some
+  later forget, with no upper bound, and marked space would never come back without one.
+- **Read the marks from the prune plan:** building the plan walks every snapshot's trees, the
+  full cost of a prune, on every backup. Reading the index files is enough to know whether a
+  prune has anything to do.
 
 ## Consequences
 
@@ -60,9 +76,20 @@ label and paths, so two machines with the same files each write their own snapsh
   repository locks. Prune deletes in two phases: an unused pack is first marked, and removed only
   by a later prune once `keep_delete` (default 23 h) has passed. A marked pack that a snapshot
   needs again (a backup from another machine meanwhile) is recovered by the next prune.
-  `instant_delete` would skip the marking. So marked packs are freed only by a later
-  forget-triggered prune at least 23 h after the one that marked them; with no further forget,
-  that space does not come back.
+  `instant_delete` would skip the marking. Until that next prune, such a snapshot cannot be
+  restored; the cleanup after the backup that made it is that prune. Marked packs are freed by
+  the first cleanup at least 23 h after the one that marked them.
+- While marks wait, every backup's cleanup runs a full prune: for at least 23 h after each forget.
+  With `keep_last` set and a game changing daily, some forget happens every day, so marks nearly
+  always wait and nearly every backup prunes, close to the "prune after every backup" alternative.
+  Without marks the check lists `index/` and reads the index files not cached yet; with marks it
+  is a full prune plan. Measured in a debug test build on a local repository with 40 games of 5
+  snapshots (200 index files): about 15 ms for the check, about 330 ms for the prune.
+- A newer-format or corrupt stored policy means nothing is forgotten, and every save of the
+  policy fails until another version replaces it or it is forgotten by hand.
+- The last save wins: two machines editing the policy at once each write their own, and the
+  newer one stays. The Settings tab reloads the policy each time it is shown, unless an edit is
+  still being saved, but a tab left open shows its own copy until then.
 - `keep_within` counts from the local clock: a machine whose clock jumps far ahead forgets
   everything that `keep_last` and the newest-per-host guard do not keep.
 - Running `restic prune` while salvajocs may back up is unsafe: restic's lock does not stop
