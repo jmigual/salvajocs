@@ -107,6 +107,19 @@ fn leading_placeholders_pick_their_base() {
     );
 }
 
+#[test]
+fn leading_placeholders_list_each_sides_own_folders_then_base_and_root() {
+    assert_eq!(
+        leading_placeholders(false).collect::<Vec<_>>(),
+        ["<home>", "<xdgData>", "<xdgConfig>", "<base>", "<root>"]
+    );
+    let windows: Vec<_> = leading_placeholders(true).collect();
+    assert_eq!(windows.len(), 10);
+    assert_eq!(windows[..2], ["<home>", "<winDocuments>"]);
+    assert_eq!(windows[8..], ["<base>", "<root>"]);
+    assert!(!windows.contains(&"<xdgData>"));
+}
+
 #[cfg(unix)]
 #[test]
 fn classify_unix_absolute_template() {

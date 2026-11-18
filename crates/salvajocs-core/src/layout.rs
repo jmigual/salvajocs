@@ -338,6 +338,7 @@ pub(crate) const LINUX_LEADING: [(&str, Base); 3] = [
 ];
 pub(crate) const ANY_LEADING: [(&str, Base); 2] =
     [("<base>", Base::GameDir), ("<root>", Base::StoreRoot)];
+
 /// The placeholders a Windows (`windows`) or Linux path template may start with: the OS's own
 /// named folders, then `<base>` and `<root>`.
 pub fn leading_placeholders(windows: bool) -> impl Iterator<Item = &'static str> {
