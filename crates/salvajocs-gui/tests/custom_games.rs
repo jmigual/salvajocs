@@ -217,7 +217,7 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
     replace_text(&mut harness, "Name", "My Game");
     harness.get_by_label("Add file").click();
     run_settled(&mut harness);
-    replace_text(&mut harness, "Linux path", "<xdgData>/mygame/*.sav");
+    replace_text(&mut harness, "Linux path 1", "<xdgData>/mygame/*.sav");
     harness.get_by_label("Add registry key").click();
     run_settled(&mut harness);
     replace_text(
@@ -264,7 +264,7 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
     for (label, value) in [
-        ("Linux path", "<xdgData>/mygame/*.sav"),
+        ("Linux path 1", "<xdgData>/mygame/*.sav"),
         ("Registry key 1", "HKEY_CURRENT_USER/Software/My Game"),
         ("Install folder 1", "My Game Dir"),
     ] {
@@ -316,9 +316,9 @@ fn custom_games_install_folder_makes_a_browsed_folder_base_relative() {
     replace_text(&mut harness, "Install folder 1", "Install Dir");
     harness.get_by_label("Add file").click();
     run_settled(&mut harness);
-    harness.query_all_by_label("Browse").next().unwrap().click();
+    harness.get_by_label("Browse Linux path 1").click();
     run_until(&mut harness, "the picked folder", |h| {
-        h.get_by_label("Linux path").value().as_deref() == Some("<base>/saves")
+        h.get_by_label("Linux path 1").value().as_deref() == Some("<base>/saves")
     });
 }
 
@@ -329,16 +329,24 @@ fn custom_games_invalid_file_row_shows_its_error_and_cannot_be_saved() {
     harness.get_by_label("Add game").click();
     run_settled(&mut harness);
     replace_text(&mut harness, "Name", "My Game");
-    harness.get_by_label("Add file").click();
-    run_settled(&mut harness);
+    for _ in 0..2 {
+        harness.get_by_label("Add file").click();
+        run_settled(&mut harness);
+    }
     assert!(!disabled(&harness, "Save game"), "a blank row is unused");
-    replace_text(&mut harness, "Windows path", "<xdgData>/mygame");
+    replace_text(&mut harness, "Linux path 1", "<xdgData>/kept");
+    replace_text(&mut harness, "Windows path 2", "<xdgData>/mygame");
     assert!(shows(&harness, "not a Windows path"));
     assert!(disabled(&harness, "Save game"));
 
-    harness.get_by_label("Remove file").click();
+    harness.get_by_label("Remove file 2").click();
     run_settled(&mut harness);
     assert!(!disabled(&harness, "Save game"));
+    assert_eq!(
+        harness.get_by_label("Linux path 1").value().as_deref(),
+        Some("<xdgData>/kept")
+    );
+    assert!(harness.query_by_label("Linux path 2").is_none());
 }
 
 #[test]
@@ -353,9 +361,9 @@ fn custom_games_browse_fills_the_linux_path_from_the_picked_folder() {
     run_settled(&mut harness);
     harness.get_by_label("Add file").click();
     run_settled(&mut harness);
-    harness.query_all_by_label("Browse").next().unwrap().click();
+    harness.get_by_label("Browse Linux path 1").click();
     run_until(&mut harness, "the picked folder", |h| {
-        h.get_by_label("Linux path").value().as_deref() == Some("<xdgData>/my-game")
+        h.get_by_label("Linux path 1").value().as_deref() == Some("<xdgData>/my-game")
     });
 }
 
@@ -371,13 +379,13 @@ fn custom_games_browse_for_a_windows_path_outside_a_prefix_shows_an_error() {
     run_settled(&mut harness);
     harness.get_by_label("Add file").click();
     run_settled(&mut harness);
-    replace_text(&mut harness, "Windows path", "<winAppData>/Kept");
-    harness.query_all_by_label("Browse").nth(1).unwrap().click();
+    replace_text(&mut harness, "Windows path 1", "<winAppData>/Kept");
+    harness.get_by_label("Browse Windows path 1").click();
     run_until(&mut harness, "the pick to fail", |h| {
         shows(h, "Pick a folder inside a Wine prefix")
     });
     assert_eq!(
-        harness.get_by_label("Windows path").value().as_deref(),
+        harness.get_by_label("Windows path 1").value().as_deref(),
         Some("<winAppData>/Kept")
     );
 }

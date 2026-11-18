@@ -370,6 +370,14 @@ enum Action {
     Browse(Pick),
 }
 
+/// A button showing `text` whose accessible name is `name`, so a button repeated on every row
+/// can still be told apart.
+fn named_button(ui: &mut Ui, enabled: bool, text: &str, name: &str) -> egui::Response {
+    let response = ui.add_enabled(enabled, egui::Button::new(text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
+    response
+}
+
 /// An error line in the error color.
 fn error_line(ui: &mut Ui, text: impl Into<String>) {
     let color = ui.visuals().error_fg_color;
@@ -469,14 +477,17 @@ impl Form {
         let mut clicked = None;
         let mut remove = None;
         for (index, row) in self.files.iter_mut().enumerate() {
+            let number = index + 1;
             theme::group(ui, |ui| {
-                ui.label(theme::semibold(format!("File {}", index + 1)));
+                ui.label(theme::semibold(format!("File {number}")));
                 for side in [Family::Linux, Family::Windows] {
                     let (label, hint) = match side {
                         Family::Linux => ("Linux path", "<xdgData>/My Game"),
                         Family::Windows => ("Windows path", "<winDocuments>/My Game"),
                     };
+                    let label = format!("{label} {number}");
                     ui.horizontal(|ui| {
+                        let browse = format!("Browse {label}");
                         let label = ui.label(label);
                         let edit = TextEdit::singleline(row.side(side))
                             .hint_text(hint)
@@ -487,8 +498,7 @@ impl Form {
                         // A Windows host has no Linux folders to pick from.
                         let can_browse = side == Family::Windows || !cfg!(windows);
                         let idle = busy.is_none();
-                        if can_browse && ui.add_enabled(idle, egui::Button::new("Browse")).clicked()
-                        {
+                        if can_browse && named_button(ui, idle, "Browse", &browse).clicked() {
                             clicked = Some((index, side));
                         }
                         if busy == Some((index, side)) {
@@ -502,8 +512,8 @@ impl Form {
                 if let Some(error) = row.error() {
                     error_line(ui, error.to_string());
                 }
-                let remove_button = egui::Button::new("Remove file");
-                if ui.add_enabled(busy.is_none(), remove_button).clicked() {
+                let name = format!("Remove file {number}");
+                if named_button(ui, busy.is_none(), "Remove file", &name).clicked() {
                     remove = Some(index);
                 }
             });
