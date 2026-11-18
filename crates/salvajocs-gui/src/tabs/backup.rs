@@ -1,23 +1,28 @@
 //! The Backup tab: scan this machine for games, choose which to back up and see what each
 //! backup did (ADR-0004, ADR-0010).
 
-use std::collections::BTreeSet;
+use std::borrow::Cow;
 use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use eframe::egui::emath::Rot2;
-use eframe::egui::{self, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo};
+use eframe::egui::{
+    self, Checkbox, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
+};
 use salvajocs_core::backup::{self, GameBackup};
-use salvajocs_core::config::PasswordMode;
+use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
+use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::theme::{self, icons};
+use choices::{AfterBackup, Choices, Games};
 
+mod choices;
 #[allow(dead_code)]
 mod tree;
 
@@ -115,12 +120,25 @@ struct Progress {
     done: Vec<GameResult>,
 }
 
+/// What saving the selection before a backup ran into.
+#[derive(Default)]
+struct SaveProblems {
+    /// The games whose changes could not be saved, with why; their changes stay pending.
+    failed: Vec<String>,
+    /// Problems that lost no change.
+    warnings: Vec<String>,
+}
+
 /// What a finished backup job hands back.
 struct Backed {
     /// The scan the backup went by, which replaces the shown list.
     report: ScanReport,
     /// Why the run stopped early, if it did.
     error: Option<String>,
+    /// What saving the selection ran into.
+    saving: SaveProblems,
+    /// What the backup left of the selection.
+    after: AfterBackup,
 }
 
 /// The state of the Backup tab.
@@ -129,18 +147,21 @@ pub struct BackupTab {
     scanning: Option<Job<ScanReport>>,
     report: Option<ScanReport>,
     scan_error: Option<String>,
-    /// Titles of the games to back up.
-    selected: BTreeSet<String>,
+    /// What to back up of each game.
+    choices: Choices,
     running: Option<Job<Backed>>,
     progress: Arc<Mutex<Progress>>,
     run_error: Option<String>,
+    saving: SaveProblems,
+    /// Back up was clicked; the backup starts once the pending file is written.
+    backup_requested: bool,
 }
 
 impl BackupTab {
     /// Draws the tab. The scan and the backup run in jobs; `state` is only read.
     /// `manifest_loading` is whether the manifest job is still running.
     pub fn ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
-        self.poll();
+        self.poll(ui.ctx(), state);
         // Before the page, so the bar takes its height from the bottom first. It waits for a scan
         // report, so the empty state has one call to action.
         if state.config.is_some() && self.report.is_some() {
@@ -169,7 +190,9 @@ impl BackupTab {
         });
     }
 
-    fn poll(&mut self) {
+    /// Collects the tab's finished jobs and starts what waits on them. The app calls it every
+    /// frame, whichever tab is in front, so a pending file write or a load never stalls.
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &State) {
         if let Some(job) = &mut self.scanning
             && let Some(result) = job.take_result()
         {
@@ -187,37 +210,55 @@ impl BackupTab {
         {
             self.running = None;
             match result {
-                Ok(Backed { report, error }) => {
+                Ok(Backed {
+                    report,
+                    error,
+                    saving,
+                    after,
+                }) => {
                     self.adopt(report);
                     self.run_error = error;
+                    self.saving = saving;
+                    self.choices.backed_up(after);
                 }
                 Err(err) => self.run_error = Some(format!("{err:#}")),
             }
         }
+        self.choices.poll(ctx, state);
+        self.start_requested(ctx, state);
     }
 
-    /// Shows `report`. The user's choice stays for the games already listed; a game new to the
-    /// list starts selected.
+    /// Shows `report`.
     fn adopt(&mut self, report: ScanReport) {
-        let known: BTreeSet<&str> = self
-            .report
-            .iter()
-            .flat_map(|old| old.games.iter().map(|game| game.title.as_str()))
-            .collect();
-        self.selected = report
-            .games
-            .iter()
-            .filter(|game| {
-                self.selected.contains(&game.title) || !known.contains(game.title.as_str())
-            })
-            .map(|game| game.title.clone())
-            .collect();
         self.report = Some(report);
     }
 
-    /// Whether a scan, backup or other job of this tab is running.
+    /// Whether a scan, backup or other job of this tab is running or waits to.
     pub(crate) fn busy(&self) -> bool {
-        self.scanning.is_some() || self.running.is_some()
+        self.scanning.is_some()
+            || self.running.is_some()
+            || self.backup_requested
+            || self.choices.busy()
+    }
+
+    /// Finishes the pending file writes; for when the app closes.
+    pub(crate) fn flush(&mut self, config_dir: &Path) -> anyhow::Result<()> {
+        self.choices.flush(config_dir)
+    }
+
+    /// How many games of the report a backup would store: those its settings leave something
+    /// of, and those whose settings cannot be read.
+    fn chosen(&self) -> usize {
+        let Some(report) = &self.report else {
+            return 0;
+        };
+        let games = report.games.iter();
+        games
+            .filter(|game| match self.choices.game(&game.title) {
+                Ok(settings) => selection::apply(game, &settings).is_some(),
+                Err(_) => true,
+            })
+            .count()
     }
 
     /// Before the first scan: what the tab is for and the scan as its one action.
@@ -239,7 +280,7 @@ impl BackupTab {
     /// The scan button: `primary` in the empty state, the one framed button of the list header
     /// otherwise.
     fn scan_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool, primary: bool) {
-        let enabled = !manifest_loading && !self.busy();
+        let enabled = !manifest_loading && self.scanning.is_none() && self.running.is_none();
         let glyph = icons::MAGNIFYING_GLASS;
         let button = if primary {
             theme::primary(ui, enabled, Some(glyph), "Scan for games")
@@ -280,7 +321,8 @@ impl BackupTab {
             return;
         };
         let games = report.games.len();
-        let mut select_all = false;
+        let editable = self.choices.editable() && self.running.is_none();
+        let mut select = None;
         theme::row(
             ui,
             |ui| {
@@ -289,19 +331,32 @@ impl BackupTab {
             |ui| {
                 // Frameless until hovered, so the scan reads as the header's main action.
                 let quiet = |text| egui::Button::new(text).frame_when_inactive(false);
-                select_all = ui.add(quiet("Select all")).clicked();
-                if ui.add(quiet("Deselect all")).clicked() {
-                    self.selected.clear();
+                if ui.add_enabled(editable, quiet("Select all")).clicked() {
+                    select = Some(true);
+                }
+                if ui.add_enabled(editable, quiet("Deselect all")).clicked() {
+                    select = Some(false);
                 }
                 self.scan_ui(ui, state, manifest_loading, false);
             },
         );
         self.scan_notes_ui(ui, state, manifest_loading);
+        self.choices.status_ui(ui, state);
         let Some(report) = &self.report else {
             return;
         };
-        if select_all {
-            self.selected = report.games.iter().map(|g| g.title.clone()).collect();
+        // By index into `report.games`, applied after drawing.
+        let mut changes = Vec::new();
+        if let Some(select) = select {
+            for (index, game) in report.games.iter().enumerate() {
+                if self
+                    .choices
+                    .game(&game.title)
+                    .is_ok_and(|s| s.skip == select)
+                {
+                    changes.push((index, Change::Skip(!select)));
+                }
+            }
         }
         if !report.problems.is_empty() {
             let warn = ui.visuals().warn_fg_color;
@@ -324,6 +379,7 @@ impl BackupTab {
             );
             return;
         }
+        let choices = &self.choices;
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -332,21 +388,38 @@ impl BackupTab {
                 if index > 0 {
                     theme::row_separator(ui);
                 }
-                let mut checked = self.selected.contains(&game.title);
-                if ui.checkbox(&mut checked, &game.title).changed() {
-                    if checked {
-                        self.selected.insert(game.title.clone());
-                    } else {
-                        self.selected.remove(&game.title);
-                    }
+                let (settings, error) = match choices.game(&game.title) {
+                    Ok(settings) => (settings, None),
+                    Err(error) => (Cow::Owned(GameSettings::default()), Some(error)),
+                };
+                let enabled = editable && error.is_none();
+                let mut checked = !settings.skip;
+                let checkbox = Checkbox::new(&mut checked, &game.title);
+                if ui.add_enabled(enabled, checkbox).changed() {
+                    changes.push((index, Change::Skip(!checked)));
                 }
                 // Under the title, without the indent line: the row already groups them.
                 ui.scope(|ui| {
                     ui.visuals_mut().indent_has_left_vline = false;
-                    ui.indent(&game.title, |ui| files_ui(ui, game));
+                    ui.indent(&game.title, |ui| {
+                        if let Some(error) = error {
+                            let color = ui.visuals().error_fg_color;
+                            theme::status(
+                                ui,
+                                icons::X_CIRCLE,
+                                color,
+                                format!("What to back up cannot be read, so all of it is: {error}"),
+                            );
+                        }
+                        files_ui(ui, game);
+                    });
                 });
             }
         });
+        for (index, change) in changes {
+            self.choices
+                .change(ui.ctx(), state, &report.games[index].title, change);
+        }
     }
 
     /// The bar along the bottom: where backups go and the backup button, or while a backup runs,
@@ -373,8 +446,15 @@ impl BackupTab {
     }
 
     fn save_bar_contents(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
-        let selected = self.selected.len();
-        let ready = state.session.is_some() && selected > 0 && !manifest_loading && !self.busy();
+        let selected = self.chosen();
+        // A pending file write does not hold the button back: the click waits for it.
+        let ready = state.session.is_some()
+            && self.choices.loaded()
+            && selected > 0
+            && !manifest_loading
+            && self.scanning.is_none()
+            && self.running.is_none()
+            && !self.backup_requested;
         let label = format!("Back up {}", count(selected, "game"));
         let back_up = theme::row(
             ui,
@@ -382,7 +462,17 @@ impl BackupTab {
             |ui| theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label),
         );
         if back_up.clicked() {
-            self.start_backup(ui.ctx(), state);
+            self.backup_requested = true;
+            self.start_requested(ui.ctx(), state);
+        }
+    }
+
+    /// Starts the requested backup once no pending file write runs, so the backup saves every
+    /// change and is the file's only writer.
+    fn start_requested(&mut self, ctx: &egui::Context, state: &State) {
+        if self.backup_requested && !self.choices.busy() && self.running.is_none() {
+            self.backup_requested = false;
+            self.start_backup(ctx, state);
         }
     }
 
@@ -412,38 +502,61 @@ impl BackupTab {
         }
     }
 
-    /// Backs up the selected games in a job, with the staging mirrors under the cache dir
-    /// (ADR-0004). The job scans again first, so a save made since the last scan is included.
+    /// Backs up the chosen games in a job, with the staging mirrors under the cache dir
+    /// (ADR-0004). The job first saves the pending selection changes to the repository and reads
+    /// every game's settings again, so another machine's newer choices count. Then it scans
+    /// again, so a save made since the last scan is included, and filters each game by its
+    /// settings.
     fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
         };
+        let Some((pending, settings)) = self.choices.for_backup() else {
+            return;
+        };
         let progress = Arc::new(Mutex::new(Progress {
-            total: self.selected.len(),
+            total: self.chosen(),
             done: Vec::new(),
         }));
         self.progress = progress.clone();
         self.run_error = None;
-        let (manifest, config, titles) = (
-            state.manifest_or_empty(),
-            config.clone(),
-            self.selected.clone(),
-        );
+        self.saving = SaveProblems::default();
+        let (manifest, config) = (state.manifest_or_empty(), config.clone());
         let (storage, stage_root, waker) = (
             session.storage.clone(),
             state.env.cache_dir.join("stage"),
             ctx.clone(),
         );
+        let config_dir = state.env.config_dir.clone();
         let environment = state.env.environment.clone();
         self.running = Some(Job::spawn(ctx, move || {
+            let mut pending = pending;
+            let (mut saving, written) = match &mut pending {
+                Some(pending) => save_selection(
+                    &storage,
+                    pending,
+                    &config,
+                    &settings,
+                    &stage_root,
+                    &config_dir,
+                ),
+                None => (SaveProblems::default(), None),
+            };
+            let reloaded = choices::load(&storage)
+                .map(|games| choices::replay(games, pending.as_ref(), &config.secret_scope()));
+            let filter = match &reloaded {
+                Ok(games) => games,
+                Err(err) => {
+                    saving.warnings.push(format!(
+                        "What to back up could not be read again, so the choices shown are \
+                         used: {err:#}"
+                    ));
+                    &settings
+                }
+            };
             let environment = environment.unwrap_or_else(Environment::detect);
             let report = scan::scan(&manifest, &config, &environment);
-            let games: Vec<GameScan> = report
-                .games
-                .iter()
-                .filter(|game| titles.contains(&game.title))
-                .cloned()
-                .collect();
+            let games = chosen_files(&report, filter);
             lock(&progress).total = games.len();
             let error = back_up(&storage, &games, &stage_root, |backup| {
                 lock(&progress).done.push(summarize(backup));
@@ -451,7 +564,17 @@ impl BackupTab {
             })
             .err()
             .map(|err| format!("{err:#}"));
-            Ok(Backed { report, error })
+            Ok(Backed {
+                report,
+                error,
+                saving,
+                after: AfterBackup {
+                    source: Arc::downgrade(&storage),
+                    pending,
+                    written,
+                    games: reloaded.ok(),
+                },
+            })
         }));
     }
 
@@ -465,6 +588,18 @@ impl BackupTab {
                 error_color,
                 format!("The backup failed: {error}"),
             );
+        }
+        for failed in &self.saving.failed {
+            theme::status(
+                ui,
+                icons::X_CIRCLE,
+                error_color,
+                format!("What to back up was not saved for {failed}"),
+            );
+        }
+        let warn = ui.visuals().warn_fg_color;
+        for warning in &self.saving.warnings {
+            theme::status(ui, icons::WARNING, warn, warning);
         }
         if progress.done.is_empty() {
             return;
@@ -533,6 +668,71 @@ fn back_up(
     let mut storage = lock_storage(storage)?;
     backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
     Ok(())
+}
+
+/// Saves this repository's pending changes of each game whose settings could be read; each
+/// saved game's changes leave `pending` and the pending file in `config_dir`. Settings stage
+/// below `stage_root` (ADR-0014). Returns the problems and, when the file was written, how the
+/// last write went.
+fn save_selection(
+    storage: &SharedStorage,
+    pending: &mut Pending,
+    config: &AppConfig,
+    settings: &Games,
+    stage_root: &Path,
+    config_dir: &Path,
+) -> (SaveProblems, Option<Result<(), String>>) {
+    let mut problems = SaveProblems::default();
+    let scope = config.secret_scope();
+    let games = pending
+        .repositories
+        .get(&scope)
+        .cloned()
+        .unwrap_or_default();
+    if games.is_empty() {
+        return (problems, None);
+    }
+    let mut storage = match lock_storage(storage) {
+        Ok(storage) => storage,
+        Err(err) => {
+            problems.failed.push(format!("any game: {err:#}"));
+            return (problems, None);
+        }
+    };
+    let mut written = None;
+    for (title, changes) in games {
+        // Settings that could not be read are never written over.
+        if matches!(settings.get(&title), Some(Err(_))) {
+            continue;
+        }
+        match selection::save(&mut storage, &title, &changes, stage_root) {
+            Ok(saved) => {
+                if let Some(err) = saved.forget_error {
+                    problems.warnings.push(format!(
+                        "{title}: older copies of what to back up stay in the repository: {}",
+                        chain(&err)
+                    ));
+                }
+                pending.remove(config, &title);
+                written = Some(pending.save(config_dir).map_err(|err| chain(&err)));
+            }
+            Err(err) => problems.failed.push(format!("{title}: {}", chain(&err))),
+        }
+    }
+    (problems, written)
+}
+
+/// The games of `report` as `settings` filter them; a game skipped or with nothing left is
+/// left out, and one whose settings cannot be read is backed up whole.
+fn chosen_files(report: &ScanReport, settings: &Games) -> Vec<GameScan> {
+    report
+        .games
+        .iter()
+        .filter_map(|game| match settings.get(&game.title) {
+            Some(Ok(settings)) => selection::apply(game, settings),
+            _ => Some(game.clone()),
+        })
+        .collect()
 }
 
 /// What the scan found for one game, with the file list folded away.

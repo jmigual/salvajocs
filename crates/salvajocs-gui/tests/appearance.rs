@@ -267,6 +267,8 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
 
     harness.get_by_label("Scan for games").click();
     run_until(&mut harness, "the scan", |h| shows(h, "5 games found"));
+    // What to back up may still be loading.
+    run_settled(&mut harness);
     harness.get_by_label("Back up 5 games").click();
     run_until(&mut harness, "the first backup", |h| {
         shows(h, "Terraria: backed up")

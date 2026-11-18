@@ -327,6 +327,7 @@ impl eframe::App for App {
         }
         self.poll_manifest();
         self.state.poll(&ctx);
+        self.backup.poll(&ctx, &self.state);
 
         let margin = Margin::symmetric(16, 8);
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(margin);
@@ -399,6 +400,12 @@ impl eframe::App for App {
         // Last, so a job started in this frame holds the update back.
         let busy = self.busy();
         self.updater.install_when_idle(&ctx, &mut self.state, busy);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Err(err) = self.backup.flush(&self.state.env.config_dir) {
+            eprintln!("salvajocs: could not write the unsaved choices: {err:#}");
+        }
     }
 }
 

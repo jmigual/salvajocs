@@ -126,3 +126,27 @@ fn downloaded_update_waits_for_every_running_job() {
         "the window closes once the installer started"
     );
 }
+
+#[test]
+fn the_backup_tab_finishes_its_jobs_while_another_tab_is_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(1000.0, 900.0))
+        .build_ui_state(
+            |ui, app| {
+                let mut frame = eframe::Frame::_new_kittest();
+                eframe::App::ui(app, ui, &mut frame);
+            },
+            app(dir.path()),
+        );
+    step_until(&mut harness, "the repository to open", |app| {
+        app.state.session.is_some()
+    });
+    // The Backup tab is in front for this frame, which starts loading what to back up.
+    harness.step();
+    harness.state_mut().set_tab(Tab::Settings);
+
+    step_until(&mut harness, "the backup tab to finish its jobs", |app| {
+        !app.backup.busy()
+    });
+}

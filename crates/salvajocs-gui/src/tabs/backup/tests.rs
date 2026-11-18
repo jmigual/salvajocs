@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -8,6 +9,7 @@ use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::layout::Base;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::{FoundFile, RegistrySource};
+use salvajocs_core::selection::{Change, Pending};
 use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
 
 use crate::env::{Env, MemorySecrets};
@@ -141,22 +143,42 @@ fn is_disabled(harness: &Harness<'_, (BackupTab, State)>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
 
+/// A tab listing a game of one file for each of `titles`.
+fn listing(titles: &[&str]) -> BackupTab {
+    let mut tab = BackupTab::default();
+    tab.adopt(ScanReport {
+        games: titles
+            .iter()
+            .map(|title| GameScan {
+                title: (*title).into(),
+                ..game(&[1], false, 0)
+            })
+            .collect(),
+        problems: Vec::new(),
+    });
+    tab
+}
+
+/// Steps until the tab's jobs, such as loading what to back up, are done.
+fn settle(harness: &mut Harness<'_, (BackupTab, State)>) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    harness.step();
+    while harness.state().0.busy() {
+        assert!(Instant::now() < deadline, "the tab's jobs never ended");
+        std::thread::sleep(Duration::from_millis(5));
+        harness.step();
+    }
+    harness.step();
+}
+
 #[test]
 fn scan_and_backup_wait_while_a_backup_runs() {
-    let tab = BackupTab {
-        report: Some(ScanReport {
-            games: vec![game(&[1], false, 0)],
-            problems: Vec::new(),
-        }),
-        selected: BTreeSet::from(["Game".to_owned()]),
-        ..BackupTab::default()
-    };
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
-        (tab, state(dir.path())),
+        (listing(&["Game"]), state(dir.path())),
     );
-    harness.step();
+    settle(&mut harness);
     assert!(!is_disabled(&harness, "Scan for games"));
     assert!(!is_disabled(&harness, "Back up 1 game"));
 
@@ -170,6 +192,13 @@ fn scan_and_backup_wait_while_a_backup_runs() {
         Ok(Backed {
             report,
             error: None,
+            saving: SaveProblems::default(),
+            after: AfterBackup {
+                source: std::sync::Weak::new(),
+                pending: None,
+                written: None,
+                games: None,
+            },
         })
     }));
     harness.step();
@@ -238,30 +267,52 @@ fn a_scan_that_found_nothing_says_where_to_add_games() {
 
 #[test]
 fn select_all_and_deselect_all_change_every_game() {
-    let named = |title: &str| GameScan {
-        title: title.into(),
-        ..game(&[1], false, 0)
-    };
-    let tab = BackupTab {
-        report: Some(ScanReport {
-            games: vec![named("Alpha"), named("Beta")],
-            problems: Vec::new(),
-        }),
-        ..BackupTab::default()
-    };
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
-        (tab, state(dir.path())),
+        (listing(&["Alpha", "Beta"]), state(dir.path())),
     );
-    harness.run();
-    harness.get_by_label("Select all").click();
-    harness.run();
-    let all = BTreeSet::from(["Alpha".to_owned(), "Beta".to_owned()]);
-    assert_eq!(harness.state().0.selected, all);
+    settle(&mut harness);
+    let skipped = |harness: &Harness<'_, (BackupTab, State)>| {
+        ["Alpha", "Beta"].map(|title| harness.state().0.choices.game(title).unwrap().skip)
+    };
+
     harness.get_by_label("Deselect all").click();
-    harness.run();
-    assert!(harness.state().0.selected.is_empty());
+    settle(&mut harness);
+    assert_eq!(skipped(&harness), [true, true]);
+    let pending = Pending::load(&dir.path().join("config")).unwrap();
+    let games = pending.repositories.values().next().unwrap();
+    assert_eq!(games["Alpha"], [Change::Skip(true)]);
+    assert_eq!(games["Beta"], [Change::Skip(true)]);
+
+    harness.get_by_label("Select all").click();
+    settle(&mut harness);
+    assert_eq!(skipped(&harness), [false, false]);
+}
+
+#[test]
+fn choices_wait_for_the_repository_to_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let session = state.session.take();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state),
+    );
+    settle(&mut harness);
+    assert!(is_disabled(&harness, "Game"));
+    assert!(is_disabled(&harness, "Deselect all"));
+    assert!(
+        harness
+            .query_all_by_label_contains("Open the repository to choose what to back up")
+            .next()
+            .is_some()
+    );
+
+    harness.state_mut().1.session = session;
+    settle(&mut harness);
+    assert!(!is_disabled(&harness, "Game"));
+    assert!(!is_disabled(&harness, "Deselect all"));
 }
 
 /// The save bar marks the repository encrypted exactly when it has a password.
@@ -287,4 +338,123 @@ fn the_save_bar_says_whether_the_repository_is_encrypted() {
         assert!(harness.query_by_label(shown).is_some(), "{password:?}");
         assert!(harness.query_by_label(hidden).is_none(), "{password:?}");
     }
+}
+
+#[test]
+fn back_up_waits_while_what_to_back_up_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state(dir.path())),
+    );
+    settle(&mut harness);
+    assert!(!is_disabled(&harness, "Back up 1 game"));
+
+    let ctx = harness.ctx.clone();
+    let (tab, state) = harness.state_mut();
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let release = tab.choices.hold_load(&ctx, &storage);
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Back up 1 game"));
+    assert!(is_disabled(&harness, "Game"));
+    drop(release);
+}
+
+#[test]
+fn back_up_clicked_during_a_pending_write_starts_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state(dir.path())),
+    );
+    settle(&mut harness);
+    let ctx = harness.ctx.clone();
+    let release = harness.state_mut().0.choices.hold_write(&ctx);
+    harness.step();
+
+    harness.get_by_label("Back up 1 game").click();
+    harness.step();
+    harness.step();
+    assert!(harness.state().0.running.is_none(), "waits for the write");
+    assert!(harness.state().0.backup_requested);
+
+    drop(release);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while harness.state().0.running.is_none() {
+        assert!(Instant::now() < deadline, "the backup never started");
+        std::thread::sleep(Duration::from_millis(5));
+        harness.step();
+    }
+    settle(&mut harness);
+}
+
+#[test]
+fn each_repository_keeps_its_own_unsaved_choices() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state(dir.path())),
+    );
+    settle(&mut harness);
+    harness.get_by_label("Game").click();
+    settle(&mut harness);
+    let skipped = |harness: &Harness<'_, (BackupTab, State)>| {
+        harness.state().0.choices.game("Game").unwrap().skip
+    };
+    assert!(skipped(&harness));
+
+    // Open another repository, as Settings does.
+    let first = {
+        let state = &mut harness.state_mut().1;
+        let other = dir.path().join("other").to_str().unwrap().to_owned();
+        let location = RepoLocation {
+            repository: other.clone(),
+            options: Default::default(),
+        };
+        let storage = Storage::init(&location, "", Compression::Default).unwrap();
+        let first = state.session.replace(Session {
+            compression: storage.compression(),
+            storage: Arc::new(Mutex::new(storage)),
+        });
+        let config = state.config.as_mut().unwrap();
+        let first_repository = std::mem::replace(&mut config.repository, other);
+        (first, first_repository)
+    };
+    settle(&mut harness);
+    assert!(!skipped(&harness), "the other repository has no changes");
+    harness.get_by_label("Game").click();
+    settle(&mut harness);
+    harness.get_by_label("Game").click();
+    settle(&mut harness);
+    assert!(!skipped(&harness));
+
+    let (session, repository) = first;
+    let state = &mut harness.state_mut().1;
+    state.session = session;
+    state.config.as_mut().unwrap().repository = repository;
+    settle(&mut harness);
+    assert!(skipped(&harness), "the first repository keeps its change");
+    let pending = Pending::load(&dir.path().join("config")).unwrap();
+    let changes: Vec<_> = pending
+        .repositories
+        .values()
+        .map(|games| &games["Game"])
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            &vec![Change::Skip(true)],
+            &vec![Change::Skip(true), Change::Skip(false)]
+        ]
+    );
+}
+
+#[test]
+fn closing_gives_up_on_a_stuck_pending_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut choices = Choices::default();
+    let _release = choices.hold_write(&egui::Context::default());
+
+    assert!(choices.flush(dir.path()).is_err());
 }
