@@ -6,7 +6,7 @@ use common::{
     env, init_repo, local_config, repo_dir, run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::{
-    Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, Ui, UiBuilder, Vec2,
+    Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, Shape, Ui, UiBuilder, Vec2,
     ViewportCommand, ViewportId, viewport::ResizeDirection,
 };
 use egui_kittest::Harness;
@@ -165,6 +165,30 @@ fn a_maximized_window_offers_restore_with_close_in_the_corner() {
     harness.get_by_label("Restore window").click();
     harness.step();
     assert_eq!(commands(&harness), [ViewportCommand::Maximized(false)]);
+}
+
+#[test]
+fn a_maximized_window_keeps_the_icons_on_the_tabs_line() {
+    let (_tmp, mut harness) = ready();
+    maximize(&mut harness);
+    harness.step();
+    let close = harness.get_by_label("Close").rect();
+    let tab = harness.get_by_label(Tab::ALL[0].label()).rect();
+    let icon = harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(text) if close.contains_rect(text.visual_bounding_rect()) => {
+                Some(text.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .expect("the Close icon");
+    assert!(
+        (icon.center().y - tab.center().y).abs() < 0.5,
+        "the icon sits on the tabs' line: {icon:?}, {tab:?}"
+    );
 }
 
 #[test]

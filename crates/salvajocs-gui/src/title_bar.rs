@@ -126,11 +126,15 @@ pub fn controls(ui: &Ui, bar: Rect, slot: Rect) {
         // Above the dialogs' foreground layer, which blocks every layer below it.
         .order(Order::Tooltip)
         .movable(false)
-        // Top-aligned and not `ui.horizontal`: either would stretch the area, and its hold on the
-        // pointer, over the window.
-        .layout(Layout::left_to_right(Align::Min))
         .fixed_pos(pos)
-        .show(ctx, |ui| buttons(ui, maximized, height));
+        .show(ctx, |ui| {
+            // Buttons place their icon by the layout's alignment; bounded, so the area, and its
+            // hold on the pointer, does not stretch over the window.
+            let layout = Layout::left_to_right(Align::Center);
+            ui.allocate_ui_with_layout(Vec2::new(slot.width(), height), layout, |ui| {
+                buttons(ui, maximized, height);
+            });
+        });
     if !maximized {
         resize_edges(ui);
         let stroke = ctx.global_style().visuals.window_stroke;
