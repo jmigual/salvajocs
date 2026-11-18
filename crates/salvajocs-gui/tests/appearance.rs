@@ -339,6 +339,7 @@ fn scan(
             .collect(),
         registry_keys: Vec::new(),
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: Vec::new(),
     }
 }

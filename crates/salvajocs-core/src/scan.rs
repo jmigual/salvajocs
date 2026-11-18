@@ -11,8 +11,8 @@ use crate::config::AppConfig;
 #[cfg(not(windows))]
 use crate::layout::LinuxFolders;
 use crate::layout::{
-    Base, Context, GameVars, Root, RootKind, WinFolders, classify, expand, glob_free_prefix,
-    tail_of,
+    Base, Context, GameVars, Root, RootKind, WIN_LEADING, WinFolders, classify, expand,
+    glob_free_prefix, tail_of,
 };
 use crate::manifest::{GameEntry, Manifest, Os, When, merge_custom};
 use crate::prefix::{PrefixError, proton_prefix, steam_roots, wine_user};
@@ -72,6 +72,9 @@ pub struct GameScan {
     pub registry_keys: Vec<String>,
     /// The first context, in priority order, whose registry holds any of `registry_keys`.
     pub registry_source: Option<RegistrySource>,
+    /// The Wine prefixes the files below Windows folders were found in, in context order, then
+    /// that of `registry_source`; without duplicates.
+    pub prefixes: Vec<PathBuf>,
     /// Paths that could not be read; `files` may be incomplete.
     pub unreadable: Vec<PathBuf>,
 }
@@ -390,6 +393,7 @@ fn scan_game(
     let mut files = Vec::new();
     let mut roots: Vec<(Base, String)> = Vec::new();
     let mut unreadable: Vec<PathBuf> = Vec::new();
+    let mut prefixes: Vec<PathBuf> = Vec::new();
     let mut seen_real = HashSet::new();
     let mut seen_logical = HashSet::new();
     let contexts = contexts(title, entry, wine_prefix, shared);
@@ -420,6 +424,13 @@ fn scan_game(
                         continue;
                     }
                     seen_real.insert(real.clone());
+                    // Only Windows folders are in the prefix, not a `<base>`, `<root>` or absolute file.
+                    if let Context::WinePrefix { prefix, .. } = ctx
+                        && WIN_LEADING.iter().any(|&(_, win)| win == base)
+                        && !prefixes.contains(prefix)
+                    {
+                        prefixes.push(prefix.clone());
+                    }
                     files.push(FoundFile {
                         base,
                         tail,
@@ -472,12 +483,18 @@ fn scan_game(
     if files.is_empty() && registry_source.is_none() {
         return None;
     }
+    if let Some(RegistrySource::WinePrefix(prefix)) = &registry_source
+        && !prefixes.contains(prefix)
+    {
+        prefixes.push(prefix.clone());
+    }
     Some(GameScan {
         title: title.to_owned(),
         files,
         roots,
         registry_keys,
         registry_source,
+        prefixes,
         unreadable,
     })
 }

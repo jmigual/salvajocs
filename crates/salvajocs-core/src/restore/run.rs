@@ -453,6 +453,7 @@ pub fn run(
         roots: Vec::new(),
         registry_keys: Vec::new(),
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: Vec::new(),
     };
     for (write, check) in plan.writes.iter().zip(&checks) {

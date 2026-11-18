@@ -30,6 +30,7 @@ fn game(title: &str, files: Vec<FoundFile>) -> GameScan {
         roots: vec![],
         registry_keys: vec![],
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: vec![],
     }
 }

@@ -87,6 +87,7 @@ fn scan(tmp: &TempDir, title: &str, files: &[(Base, &str)], roots: &[(Base, &str
             .collect(),
         registry_keys: Vec::new(),
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: Vec::new(),
     }
 }

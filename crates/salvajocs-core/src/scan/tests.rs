@@ -285,6 +285,34 @@ fn registry_only_game_is_offered() {
 }
 
 #[test]
+fn prefixes_are_those_of_windows_files_then_the_registry() {
+    let steam = tempfile::tempdir().unwrap();
+    // The game's own Proton prefix, looked in first, holds none of its files.
+    make_prefix(&steam.path().join("steamapps/compatdata/620"));
+    let other = make_prefix(&steam.path().join("other"));
+    let third = make_prefix(&steam.path().join("third"));
+    // Found while looking in the own prefix, but not inside it.
+    write(&steam.path().join("Foo.cfg"), "root");
+    write(
+        &other.join("drive_c/users/steamuser/AppData/Roaming/Foo/a.dat"),
+        "a",
+    );
+    write_user_reg(&third, &["Software\\Foo"]);
+    let manifest = parse_yaml(
+        "Foo:\n  steam: {id: 620}\n  files:\n    <winAppData>/Foo: {}\n    <root>/Foo.cfg: {}\n  \
+         registry:\n    HKEY_CURRENT_USER/Software/Foo: {}\n",
+    )
+    .unwrap();
+    let env = no_native_env(vec![steam.path().to_path_buf()]);
+    let config = config(vec![wine_root(&other), wine_root(&third)], vec![]);
+
+    let found = game(&manifest, &config, &env);
+
+    assert_eq!(found.files.len(), 2);
+    assert_eq!(found.prefixes, [other, third]);
+}
+
+#[test]
 fn registry_source_is_first_context_with_keys() {
     let steam = tempfile::tempdir().unwrap();
     let own = make_prefix(&steam.path().join("steamapps/compatdata/620"));

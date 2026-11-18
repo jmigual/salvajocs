@@ -38,6 +38,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
         roots: vec![(Base::WinAppData, "Game".into())],
         registry_keys: vec![],
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: vec![],
     }
 }

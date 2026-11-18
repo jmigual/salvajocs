@@ -35,6 +35,7 @@ fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
         roots: Vec::new(),
         registry_keys: registry.then(|| KEY.to_owned()).into_iter().collect(),
         registry_source: registry.then_some(RegistrySource::Windows),
+        prefixes: Vec::new(),
         unreadable: vec![PathBuf::from("/locked"); unreadable],
     }
 }
@@ -495,6 +496,7 @@ fn saved_game(dir: &Path, title: &str, content: &str) -> GameScan {
         roots: Vec::new(),
         registry_keys: Vec::new(),
         registry_source: None,
+        prefixes: Vec::new(),
         unreadable: Vec::new(),
     }
 }
