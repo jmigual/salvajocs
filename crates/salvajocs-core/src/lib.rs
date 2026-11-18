@@ -3,6 +3,7 @@
 pub mod backup;
 pub mod config;
 pub mod crossbuild;
+pub mod launcher;
 pub mod layout;
 pub mod manifest;
 pub mod prefix;
