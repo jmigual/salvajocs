@@ -194,6 +194,7 @@ impl Form {
             .filter(|path| wine_prefix_text(Some(path)) == self.wine_prefix);
         Ok(CustomGame {
             name: name.to_owned(),
+            files: original.map(|game| game.files.clone()).unwrap_or_default(),
             entry,
             integration: self.integration,
             wine_prefix: kept

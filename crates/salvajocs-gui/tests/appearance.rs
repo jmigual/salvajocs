@@ -603,6 +603,7 @@ fn custom_games_tab() {
     let game = |name: &str, yaml: &str, prefix: Option<&str>, pairs: Vec<Pair>, skips: &[&str]| {
         CustomGame {
             name: name.into(),
+            files: Vec::new(),
             entry: parse_yaml(yaml).unwrap().games.remove(name).unwrap(),
             integration: Integration::Extend,
             wine_prefix: prefix.map(PathBuf::from),

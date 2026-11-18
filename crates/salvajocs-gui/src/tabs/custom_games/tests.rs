@@ -4,6 +4,7 @@ use salvajocs_core::manifest::GameEntry;
 fn game(name: &str) -> CustomGame {
     CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: GameEntry::default(),
         integration: Integration::Extend,
         wine_prefix: None,

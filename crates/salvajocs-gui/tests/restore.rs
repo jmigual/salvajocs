@@ -52,6 +52,7 @@ fn custom(name: &str, files: &[&str], wine_prefix: Option<&Path>, pairs: Vec<Pai
     }
     CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
         integration: Integration::Override,
         wine_prefix: wine_prefix.map(Path::to_path_buf),

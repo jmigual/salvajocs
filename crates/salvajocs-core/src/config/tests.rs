@@ -27,6 +27,7 @@ fn sample() -> AppConfig {
         }],
         custom_games: vec![CustomGame {
             name: "Homebrew".into(),
+            files: Vec::new(),
             entry: GameEntry::default(),
             integration: Integration::Extend,
             wine_prefix: None,

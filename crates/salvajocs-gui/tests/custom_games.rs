@@ -86,6 +86,7 @@ fn kept_rules_game() -> CustomGame {
     };
     CustomGame {
         name: "Game".into(),
+        files: Vec::new(),
         entry: GameEntry {
             files: BTreeMap::from([(
                 "<home>/.game/config".to_owned(),
@@ -211,6 +212,7 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
         saved,
         [CustomGame {
             name: "My Game".into(),
+            files: Vec::new(),
             entry: GameEntry {
                 files: BTreeMap::from([("<winDocuments>/My Game/*.sav".to_owned(), save_rule())]),
                 registry: BTreeMap::from([(
@@ -257,6 +259,7 @@ fn custom_games_pair_that_does_not_classify_shows_error_and_is_not_saved() {
 fn custom_games_empty_and_duplicate_names_are_rejected() {
     let existing = CustomGame {
         name: "Taken".into(),
+        files: Vec::new(),
         entry: GameEntry::default(),
         integration: Integration::Override,
         wine_prefix: None,
@@ -297,6 +300,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     });
     let renamed = CustomGame {
         name: "Renamed".into(),
+        files: Vec::new(),
         pairs: Vec::new(),
         skips: Vec::new(),
         ..game
@@ -332,6 +336,7 @@ fn custom_games_removing_an_earlier_game_keeps_the_open_form_on_its_game() {
         saved,
         [CustomGame {
             name: "Moved".into(),
+            files: Vec::new(),
             ..dialog_game("Other")
         }]
     );

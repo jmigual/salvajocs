@@ -13,6 +13,7 @@ fn custom(name: &str, integration: Integration, template: &str) -> CustomGame {
     };
     CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: GameEntry {
             files: BTreeMap::from([(template.into(), rule)]),
             ..GameEntry::default()
@@ -183,4 +184,85 @@ fn custom_game_round_trips_through_yaml() {
     }];
     let yaml = serde_saphyr::to_string(&game).unwrap();
     assert_eq!(serde_saphyr::from_str::<CustomGame>(&yaml).unwrap(), game);
+}
+
+fn row(linux: Option<&str>, windows: Option<&str>) -> CustomFile {
+    CustomFile {
+        linux: linux.map(Into::into),
+        windows: windows.map(Into::into),
+    }
+}
+
+fn rows_game(files: Vec<CustomFile>) -> CustomGame {
+    CustomGame {
+        files,
+        ..custom("Homebrew", Integration::Override, "<base>/mine")
+    }
+}
+
+fn oses(entry: &GameEntry, template: &str) -> Vec<Option<Os>> {
+    entry.files[template]
+        .when
+        .iter()
+        .map(|when| when.os)
+        .collect()
+}
+
+#[test]
+fn each_row_side_is_a_save_rule_of_its_os() {
+    let game = rows_game(vec![row(Some("<xdgData>/g"), Some("<winDocuments>/G"))]);
+    let entry = game.game_entry();
+    assert_eq!(oses(&entry, "<xdgData>/g"), [Some(Os::Linux)]);
+    assert_eq!(oses(&entry, "<winDocuments>/G"), [Some(Os::Windows)]);
+    assert_eq!(entry.files["<xdgData>/g"].tags, [Tag::Save]);
+    assert!(entry.files.contains_key("<base>/mine"), "entry files kept");
+}
+
+#[test]
+fn a_template_on_both_sides_applies_to_both_oses() {
+    for files in [
+        vec![row(Some("<base>/save"), Some("<base>/save"))],
+        vec![
+            row(Some("<base>/save"), None),
+            row(None, Some("<base>/save")),
+            row(Some("<base>/save"), None),
+        ],
+    ] {
+        let entry = rows_game(files).game_entry();
+        assert_eq!(
+            oses(&entry, "<base>/save"),
+            [Some(Os::Linux), Some(Os::Windows)]
+        );
+    }
+}
+
+#[test]
+fn merge_custom_takes_the_rows() {
+    let mut manifest = sample();
+    let game = rows_game(vec![row(None, Some("<winAppData>/Homebrew"))]);
+    merge_custom(&mut manifest, std::slice::from_ref(&game));
+    assert_eq!(
+        oses(&manifest.games["Homebrew"], "<winAppData>/Homebrew"),
+        [Some(Os::Windows)]
+    );
+}
+
+#[test]
+fn file_pairs_map_rows_with_two_different_sides_through_their_glob_free_prefixes() {
+    let game = rows_game(vec![
+        row(
+            Some("<xdgData>/g/*.sav"),
+            Some("<winDocuments>/G/Saves/*.sav"),
+        ),
+        row(Some("<base>/save"), Some("<base>/save")),
+        row(Some("<xdgData>/only"), None),
+        row(Some("/opt/g"), Some("<winAppData>/G")),
+    ]);
+    assert_eq!(
+        game.file_pairs(),
+        [Pair {
+            linux: "<xdgData>/g".into(),
+            windows: "<winDocuments>/G/Saves".into(),
+        }]
+    );
 }

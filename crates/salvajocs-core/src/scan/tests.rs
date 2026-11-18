@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::*;
 use crate::config::PasswordMode;
 use crate::layout::LinuxFolders;
-use crate::manifest::{CustomGame, Integration, parse_yaml};
+use crate::manifest::{CustomFile, CustomGame, Integration, parse_yaml};
 
 /// Creates a valid prefix at `root/pfx` with a `steamuser` home and returns its path.
 fn make_prefix(root: &Path) -> PathBuf {
@@ -224,6 +224,7 @@ fn custom_game_with_wine_prefix_is_scanned() {
     );
     let custom = CustomGame {
         name: "Mine".into(),
+        files: Vec::new(),
         entry: parse_yaml("Mine:\n  files:\n    <winAppData>/Mine: {}\n")
             .unwrap()
             .games
@@ -259,6 +260,7 @@ fn custom_game(name: &str, files: &str, integration: Integration) -> CustomGame 
     let yaml = format!("{name}:\n  files:\n    {files}: {{}}\n");
     CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
         integration,
         wine_prefix: None,
@@ -466,6 +468,46 @@ fn extend_custom_game_keeps_the_manifest_files() {
     let mut got = tails(&found);
     got.sort();
     assert_eq!(got, [(Base::XdgData, "foo/b"), (Base::XdgConfig, "foo/a")]);
+}
+
+fn rows_game(name: &str, linux: Option<&str>, windows: Option<&str>) -> CustomGame {
+    CustomGame {
+        files: vec![CustomFile {
+            linux: linux.map(Into::into),
+            windows: windows.map(Into::into),
+        }],
+        ..custom_game(name, "<base>/unused", Integration::Override)
+    }
+}
+
+#[test]
+fn a_linux_row_is_not_scanned_in_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    write(&pfx.join("drive_c/users/steamuser/Mine/s.dat"), "a");
+    let mut custom = rows_game("Mine", Some("<home>/Mine"), None);
+    custom.wine_prefix = Some(pfx);
+    let report = scan(
+        &Manifest::default(),
+        &config(vec![], vec![custom]),
+        &no_native_env(vec![]),
+    );
+    assert_eq!(report.games, []);
+}
+
+#[test]
+fn a_windows_row_is_found_in_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(dir.path());
+    write(&pfx.join("drive_c/users/steamuser/Mine/s.dat"), "a");
+    let mut custom = rows_game("Mine", Some("<xdgData>/Mine"), Some("<home>/Mine"));
+    custom.wine_prefix = Some(pfx);
+    let found = game(
+        &Manifest::default(),
+        &config(vec![], vec![custom]),
+        &no_native_env(vec![]),
+    );
+    assert_eq!(tails(&found), [(Base::WinHome, "Mine/s.dat")]);
 }
 
 /// Times a full-manifest scan against one prefix root (ADR-0008). Run with

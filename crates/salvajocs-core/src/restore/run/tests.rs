@@ -254,6 +254,7 @@ fn default_targets_prefers_custom_wine_prefix() {
     let env = linux_env(&tmp.path().join("home"), vec![steam]);
     let custom = CustomGame {
         name: "Foo".into(),
+        files: Vec::new(),
         entry: GameEntry::default(),
         integration: Integration::Extend,
         wine_prefix: Some(own.clone()),
@@ -309,6 +310,7 @@ fn game_info_merges_the_custom_game_and_takes_its_pairs_and_skips() {
     .unwrap();
     let custom = |name: &str, file: &str| CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: crate::manifest::parse_yaml(&format!("{name}:\n  files:\n    {file}: {{}}\n"))
             .unwrap()
             .games

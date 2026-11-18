@@ -395,6 +395,7 @@ fn apply_choices_keeps_existing_custom_game() {
     let mut config = config();
     config.custom_games.push(CustomGame {
         name: "Game".into(),
+        files: Vec::new(),
         entry: entry(&[("<xdgData>/Foo", Some(Os::Linux))]),
         integration: Integration::Override,
         wine_prefix: None,
@@ -875,6 +876,7 @@ fn apply_choices_replaces_pair_spelled_differently() {
     let mut config = config();
     config.custom_games.push(CustomGame {
         name: "Game".into(),
+        files: Vec::new(),
         entry: GameEntry::default(),
         integration: Integration::Extend,
         wine_prefix: None,

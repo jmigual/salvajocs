@@ -43,6 +43,7 @@ fn custom_game(name: &str, registry: bool, prefix: &Path) -> CustomGame {
     }
     CustomGame {
         name: name.into(),
+        files: Vec::new(),
         entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
         integration: Integration::Override,
         wine_prefix: Some(prefix.to_path_buf()),

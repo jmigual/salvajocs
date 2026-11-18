@@ -607,6 +607,7 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
         .unwrap_or_else(|| {
             config.custom_games.push(CustomGame {
                 name: title.to_owned(),
+                files: Vec::new(),
                 entry: GameEntry::default(),
                 integration: Integration::Extend,
                 wine_prefix: None,

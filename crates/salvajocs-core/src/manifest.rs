@@ -6,6 +6,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_saphyr::{Budget, Options};
 
+use crate::crossbuild::validate_pair;
+use crate::layout::glob_free_prefix;
+
 pub mod fetch;
 
 /// Failure to read or write a manifest.
@@ -158,12 +161,29 @@ pub struct Pair {
     pub windows: String,
 }
 
+/// One file or folder of a custom game: its path on a native Linux build and in a Windows build
+/// (native or in a Wine/Proton prefix). A missing side is not backed up or restored on that
+/// system (ADR-0016).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomFile {
+    /// Path template on a native Linux build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<String>,
+    /// Path template in a Windows build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
+}
+
 /// A game defined or adjusted by the user (ADR-0008).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomGame {
     /// Game title; matches manifest titles exactly.
     pub name: String,
-    /// Locations to add or substitute.
+    /// File and folder rows; [`CustomGame::game_entry`] turns them into file rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<CustomFile>,
+    /// Registry keys and install folders to add or substitute; its `files` are still read but
+    /// no longer written (ADR-0016).
     pub entry: GameEntry,
     /// How `entry` combines with the manifest entry.
     pub integration: Integration,
@@ -176,6 +196,55 @@ pub struct CustomGame {
     /// Root templates a cross-build restore leaves out, glob-free like the sides of a pair.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skips: Vec<String>,
+}
+
+impl CustomGame {
+    /// `entry` plus a save-tagged rule per row side, `when.os` `linux` for the Linux side and
+    /// `windows` for the Windows side; a template on both sides or in several rows gets both
+    /// OSes. A template already in `entry.files` keeps its rule.
+    pub fn game_entry(&self) -> GameEntry {
+        let mut entry = self.entry.clone();
+        let mut rows: BTreeMap<String, FileRule> = BTreeMap::new();
+        for file in &self.files {
+            let sides = [(&file.linux, Os::Linux), (&file.windows, Os::Windows)];
+            for (template, os) in sides {
+                let Some(template) = template else { continue };
+                let rule = rows.entry(template.clone()).or_insert_with(|| FileRule {
+                    tags: vec![Tag::Save],
+                    when: Vec::new(),
+                });
+                if !rule.when.iter().any(|when| when.os == Some(os)) {
+                    rule.when.push(When {
+                        os: Some(os),
+                        store: None,
+                    });
+                }
+            }
+        }
+        for (template, rule) in rows {
+            entry.files.entry(template).or_insert(rule);
+        }
+        entry
+    }
+
+    /// The Linux/Windows mapping of each row with two different sides: their glob-free prefixes,
+    /// kept when both are placeholder templates of their own OS family
+    /// ([`crate::crossbuild::validate_pair`]).
+    pub fn file_pairs(&self) -> Vec<Pair> {
+        self.files
+            .iter()
+            .filter_map(|file| {
+                let (Some(linux), Some(windows)) = (&file.linux, &file.windows) else {
+                    return None;
+                };
+                let pair = Pair {
+                    linux: glob_free_prefix(linux).to_owned(),
+                    windows: glob_free_prefix(windows).to_owned(),
+                };
+                (linux != windows && validate_pair(&pair).is_ok()).then_some(pair)
+            })
+            .collect()
+    }
 }
 
 /// Parse budget limit; serde-saphyr's default is too small for the real manifest (ADR-0008).
@@ -223,15 +292,16 @@ pub fn merge_custom(manifest: &mut Manifest, custom: &[CustomGame]) {
     for game in custom {
         match (game.integration, manifest.games.get_mut(&game.name)) {
             (Integration::Extend, Some(entry)) => {
-                entry.files.extend(game.entry.files.clone());
-                entry.registry.extend(game.entry.registry.clone());
-                entry.install_dir.extend(game.entry.install_dir.clone());
+                let custom = game.game_entry();
+                entry.files.extend(custom.files);
+                entry.registry.extend(custom.registry);
+                entry.install_dir.extend(custom.install_dir);
                 if entry.steam.is_none() {
-                    entry.steam.clone_from(&game.entry.steam);
+                    entry.steam = custom.steam;
                 }
             }
             _ => {
-                manifest.games.insert(game.name.clone(), game.entry.clone());
+                manifest.games.insert(game.name.clone(), game.game_entry());
             }
         }
     }
