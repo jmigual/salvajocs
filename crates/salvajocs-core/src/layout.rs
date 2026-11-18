@@ -338,6 +338,18 @@ pub(crate) const LINUX_LEADING: [(&str, Base); 3] = [
 ];
 pub(crate) const ANY_LEADING: [(&str, Base); 2] =
     [("<base>", Base::GameDir), ("<root>", Base::StoreRoot)];
+/// The placeholders a Windows (`windows`) or Linux path template may start with: the OS's own
+/// named folders, then `<base>` and `<root>`.
+pub fn leading_placeholders(windows: bool) -> impl Iterator<Item = &'static str> {
+    let own: &[(&str, Base)] = if windows {
+        &WIN_LEADING
+    } else {
+        &LINUX_LEADING
+    };
+    own.iter()
+        .chain(&ANY_LEADING)
+        .map(|&(placeholder, _)| placeholder)
+}
 const WIN_HOME_SUBDIRS: [(&str, Base); 3] = [
     ("AppData/Roaming", Base::WinAppData),
     ("AppData/Local", Base::WinLocalAppData),
