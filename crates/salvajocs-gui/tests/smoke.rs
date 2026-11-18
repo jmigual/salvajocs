@@ -22,7 +22,8 @@ fn smoke_renders_every_tab() {
 
     for tab in Tab::ALL {
         harness.state_mut().set_tab(tab);
-        harness.run();
+        // Settings loads the retention policy in a job, so plain `run` would not settle.
+        run_settled(&mut harness);
         assert!(
             shows(&harness, tab.label()),
             "{} is on the strip",

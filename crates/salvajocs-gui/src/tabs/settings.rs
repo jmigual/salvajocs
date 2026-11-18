@@ -1,4 +1,5 @@
-//! The Settings tab: repository, compression, password, roots (ADR-0009) and updates (ADR-0013).
+//! The Settings tab: repository, compression, password, old backups (ADR-0015), roots (ADR-0009)
+//! and updates (ADR-0013).
 
 use std::path::PathBuf;
 
@@ -14,6 +15,10 @@ use crate::state::State;
 use crate::theme::{self, icons};
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{form_grid, labelled_edit};
+
+mod retention;
+
+use retention::RetentionSection;
 
 /// The roots offered in the picker, in order.
 const ROOT_KINDS: [RootKind; 3] = [RootKind::Steam, RootKind::Other, RootKind::WinePrefix];
@@ -40,6 +45,7 @@ pub struct SettingsTab {
     compression: Option<CompressionField>,
     compression_job: Option<Job<Compression>>,
     compression_error: Option<String>,
+    retention: RetentionSection,
     root_kind: RootKind,
     root_path: String,
     root_picker: Option<Job<Option<PathBuf>>>,
@@ -53,6 +59,7 @@ impl Default for SettingsTab {
             compression: None,
             compression_job: None,
             compression_error: None,
+            retention: RetentionSection::default(),
             root_kind: RootKind::Other,
             root_path: String::new(),
             root_picker: None,
@@ -68,12 +75,15 @@ impl SettingsTab {
         self.compression = None;
         self.compression_job = None;
         self.compression_error = None;
+        self.retention.reset();
     }
 
-    /// Whether a repository change, compression change, keyring cleanup or folder picker runs.
+    /// Whether a repository change, compression change, retention save, keyring cleanup or
+    /// folder picker runs.
     pub(crate) fn busy(&self) -> bool {
         self.connect.as_ref().is_some_and(Connect::busy)
             || self.compression_job.is_some()
+            || self.retention.busy()
             || self.cleanup.is_some()
             || self.root_picker.is_some()
     }
@@ -84,6 +94,8 @@ impl SettingsTab {
             let adopted = self.repository_ui(ui, state);
             ui.add_space(16.0);
             self.compression_ui(ui, state);
+            ui.add_space(16.0);
+            self.retention.ui(ui, state);
             ui.add_space(16.0);
             self.roots_ui(ui, state);
             updates_ui(ui, state);

@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -9,10 +10,12 @@ use common::{
     MemorySecrets, env, env_with, harness, init_repo, init_repo_with, local_config, other_repo_dir,
     replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
 };
+use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption};
 use salvajocs_core::layout::RootKind;
+use salvajocs_core::retention::{self, Retention, Unit};
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
@@ -632,4 +635,188 @@ fn choosing_a_repository_in_settings_clears_the_open_failure() {
 
     assert!(!shows(&harness, "could not be opened"));
     assert!(!shows(&harness, "Retry"));
+}
+
+const KEEP_LAST: &str = "Keep the last";
+const KEEP_WITHIN: &str = "Keep every backup newer than";
+
+fn location(repository: &str) -> RepoLocation {
+    RepoLocation {
+        repository: repository.to_string(),
+        options: Default::default(),
+    }
+}
+
+/// Waits until the repository holds a policy satisfying `ready`; saving is a background job.
+fn run_until_policy(
+    harness: &mut Harness<'static, App>,
+    repository: &str,
+    ready: impl Fn(&Retention) -> bool,
+) {
+    let location = location(repository);
+    run_until(harness, "the policy to be saved", move |_| {
+        Storage::open(&location, "")
+            .ok()
+            .and_then(|mut storage| retention::load(&mut storage).ok())
+            .is_some_and(|policy| ready(&policy))
+    });
+}
+
+fn is_disabled(harness: &Harness<'static, App>, role: Role, label: &str) -> bool {
+    harness
+        .get_by_role_and_label(role, label)
+        .accesskit_node()
+        .is_disabled()
+}
+
+/// The app on the repository at `repository` with the Settings tab in front, once the policy
+/// has loaded.
+fn open_retention(env: Env, repository: &str) -> Harness<'static, App> {
+    save_config(&env, &local_config(repository));
+    let mut harness = open_settings(env);
+    run_until(&mut harness, "the policy to load", |h| {
+        !is_disabled(h, Role::CheckBox, KEEP_LAST)
+    });
+    harness
+}
+
+#[test]
+fn old_backups_are_disabled_before_the_repository_opens() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    // Nothing was ever created there, so opening it fails.
+    save_config(&env, &local_config(&repo_dir(&tmp)));
+    let mut harness = harness(env);
+    run_until(&mut harness, "the failure", |h| {
+        shows(h, "could not be opened")
+    });
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
+
+    assert!(is_disabled(&harness, Role::CheckBox, KEEP_LAST));
+    assert!(is_disabled(&harness, Role::SpinButton, KEEP_LAST));
+    assert!(is_disabled(&harness, Role::CheckBox, KEEP_WITHIN));
+    assert!(is_disabled(&harness, Role::ComboBox, KEEP_WITHIN));
+}
+
+#[test]
+fn ticking_keep_last_saves_the_policy_in_the_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut harness = open_retention(env(&tmp), &repository);
+    assert!(shows(&harness, "All backups are kept"));
+
+    harness
+        .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
+        .click();
+    run_until_policy(&mut harness, &repository, |policy| {
+        policy.keep_last.is_some() && policy.keep_within.is_none()
+    });
+    assert!(!shows(&harness, "All backups are kept"));
+}
+
+#[test]
+fn changing_the_unit_saves_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut harness = open_retention(env(&tmp), &repository);
+    harness
+        .get_by_role_and_label(Role::CheckBox, KEEP_WITHIN)
+        .click();
+    run_until_policy(&mut harness, &repository, |policy| {
+        policy
+            .keep_within
+            .is_some_and(|within| within.unit == Unit::Months)
+    });
+
+    harness
+        .get_by_role_and_label(Role::ComboBox, KEEP_WITHIN)
+        .click();
+    run_settled(&mut harness);
+    harness.get_by_label("weeks").click();
+    run_until_policy(&mut harness, &repository, |policy| {
+        policy
+            .keep_within
+            .is_some_and(|within| within.unit == Unit::Weeks)
+    });
+}
+
+#[test]
+fn keep_last_is_never_below_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut harness = open_retention(env(&tmp), &repository);
+    harness
+        .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
+        .click();
+    run_settled(&mut harness);
+
+    harness
+        .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
+        .set_value_accesskit(0.0);
+    run_until_policy(&mut harness, &repository, |policy| {
+        policy.keep_last.is_some_and(|n| n.get() == 1)
+    });
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
+            .value()
+            .as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn the_stored_policy_is_shown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let policy = Retention {
+        keep_last: NonZeroU32::new(4),
+        keep_within: None,
+    };
+    let mut storage = Storage::open(&location(&repository), "").unwrap();
+    retention::save(&mut storage, &policy, &tmp.path().join("stage")).unwrap();
+    let harness = open_retention(env(&tmp), &repository);
+
+    let checkbox = harness.get_by_role_and_label(Role::CheckBox, KEEP_LAST);
+    assert_eq!(checkbox.accesskit_node().toggled(), Some(Toggled::True));
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
+            .value()
+            .as_deref(),
+        Some("4")
+    );
+}
+
+#[test]
+fn an_unreadable_policy_is_reported_and_not_editable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    // A newer version's policy.
+    let dir = tmp.path().join("newer");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("retention.json"), r#"{ "format": 2 }"#).unwrap();
+    Storage::open(&location(&repository), "")
+        .unwrap()
+        .backup_dir(
+            &dir,
+            "/salvajocs-settings/retention",
+            &["salvajocs-settings", "settings:retention"],
+            "Retention policy",
+        )
+        .unwrap()
+        .unwrap();
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env);
+    run_until(&mut harness, "the error", |h| {
+        shows(h, "cleanup rules could not be read; nothing is removed")
+    });
+    assert!(is_disabled(&harness, Role::CheckBox, KEEP_LAST));
 }
