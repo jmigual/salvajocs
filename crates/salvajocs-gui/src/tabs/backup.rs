@@ -18,6 +18,9 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::theme::{self, icons};
 
+#[allow(dead_code)]
+mod tree;
+
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
