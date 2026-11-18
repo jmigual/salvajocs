@@ -4,11 +4,12 @@ mod common;
 
 use std::fs;
 use std::io;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use common::{
-    env, harness, init_repo, local_config, repo_dir, run_settled, run_until, run_until_ready,
-    save_config, shows,
+    env, harness, init_repo, local_config, repo_dir, run_settled, run_until, run_until_backed_up,
+    run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::Toggled;
 use egui_kittest::Harness;
@@ -16,6 +17,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, parse_yaml};
+use salvajocs_core::retention::{self, Retention};
 use salvajocs_core::selection::{Change, Pending};
 use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{RepoLocation, Storage};
@@ -184,18 +186,14 @@ fn backup_reports_new_then_unchanged_per_game() {
     click(&mut harness, "Beta");
     assert!(shows(&harness, "Back up 1 game"));
     harness.get_by_label("Back up 1 game").click();
-    run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Alpha: backed up")
-    });
+    run_until_backed_up(&mut harness, "Alpha: backed up");
     assert!(!shows(&harness, "Beta:"), "a deselected game is left out");
     let stage = env.cache_dir.join("stage");
     assert!(stage.join(slug("Alpha")).exists());
     assert!(!stage.join(slug("Beta")).exists());
 
     harness.get_by_label("Back up 1 game").click();
-    run_until(&mut harness, "the second backup to finish", |h| {
-        shows(h, "Alpha: up to date")
-    });
+    run_until_backed_up(&mut harness, "Alpha: up to date");
     assert!(!shows(&harness, ": backed up"));
 }
 
@@ -210,9 +208,7 @@ fn backup_failing_game_does_not_stop_the_others() {
     fs::write(env.cache_dir.join("stage").join(slug("Alpha")), "").unwrap();
 
     harness.get_by_label("Back up 2 games").click();
-    run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Beta: backed up")
-    });
+    run_until_backed_up(&mut harness, "Beta: backed up");
 
     assert!(shows(&harness, "Alpha: failed:"));
 }
@@ -353,9 +349,7 @@ fn alpha_with_sub_and_beta(scratch: &TempDir) -> (PathBuf, Vec<CustomGame>) {
 fn back_up_until_beta(harness: &mut Harness<'static, App>, button: &str) {
     harness.get_by_label(button).click();
     harness.step();
-    run_until(harness, "the backup to finish", |h| {
-        shows(h, "Beta: backed up") && !shows(h, "Backed up ")
-    });
+    run_until_backed_up(harness, "Beta: backed up");
 }
 
 #[test]
@@ -366,9 +360,7 @@ fn backup_saves_the_choices_for_other_machines() {
     scan(&mut harness, "2 games found");
     click(&mut harness, "Beta");
     harness.get_by_label("Back up 1 game").click();
-    run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Alpha: backed up")
-    });
+    run_until_backed_up(&mut harness, "Alpha: backed up");
     assert!(
         pending_changes(&env).is_empty(),
         "the saved changes left the file"
@@ -486,15 +478,11 @@ fn a_backup_follows_choices_saved_by_another_machine_since_it_loaded() {
 
     click(&mut first, "Beta");
     first.get_by_label("Back up 1 game").click();
-    run_until(&mut first, "the first backup to finish", |h| {
-        shows(h, "Alpha: backed up")
-    });
+    run_until_backed_up(&mut first, "Alpha: backed up");
     assert!(checked(&second, "Beta"), "the second machine loaded before");
     second.get_by_label("Back up 2 games").click();
     second.step();
-    run_until(&mut second, "the second backup to finish", |h| {
-        shows(h, "Alpha: ") && !shows(h, "Backed up ")
-    });
+    run_until_backed_up(&mut second, "Alpha: ");
 
     assert!(!shows(&second, "Beta:"));
     assert!(
@@ -519,9 +507,7 @@ fn back_up_right_after_a_click_saves_that_click() {
     harness.step();
     harness.get_by_label("Back up 1 game").click();
     harness.step();
-    run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Alpha: backed up") && !shows(h, "Backed up ")
-    });
+    run_until_backed_up(&mut harness, "Alpha: backed up");
 
     assert!(!shows(&harness, "Beta:"));
     assert!(pending_changes(&env).is_empty(), "the click was saved");
@@ -596,9 +582,7 @@ fn a_change_to_choices_another_version_replaced_stays_pending() {
 
     harness.get_by_label("Back up 1 game").click();
     harness.step();
-    run_until(&mut harness, "the backup to finish", |h| {
-        shows(h, "Alpha: backed up") && !shows(h, "Backed up ")
-    });
+    run_until_backed_up(&mut harness, "Alpha: backed up");
 
     assert!(shows(&harness, "What to back up was not saved for Beta"));
     assert_eq!(pending_changes(&env)["Beta"], [Change::Skip(true)]);
@@ -634,4 +618,111 @@ fn an_unchecked_registry_key_is_left_out_of_the_backup() {
     let stage = env.cache_dir.join("stage").join(slug("Alpha"));
     assert!(stage.join("files").exists());
     assert!(!stage.join("registry.json").exists());
+}
+
+/// Backs up Alpha alone, changes its save and backs it up again, in an app over the existing
+/// repository of `tmp`. Returns the app and how many snapshots of Alpha the repository holds.
+fn back_up_a_change(tmp: &TempDir) -> (Harness<'static, App>, usize) {
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "Alpha", "abc");
+    let games = vec![custom_game("Alpha", false, &prefix)];
+    let (mut harness, _) = open_app(tmp, &repo_dir(tmp), Vec::new(), games, true);
+    scan(&mut harness, "1 game found");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    assert!(!shows(&harness, "Removed"), "one backup is all there is");
+
+    write_save(&prefix, "Alpha", "changed");
+    harness.get_by_label("Back up 1 game").click();
+    // The new backup clears the first one's results as it starts.
+    run_until(&mut harness, "the second backup to start", |h| {
+        !shows(h, "Alpha: backed up")
+    });
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    let tag = format!("game:{}", slug("Alpha"));
+    let left = open_repo(tmp).snapshots(&tag).unwrap().len();
+    (harness, left)
+}
+
+#[test]
+fn a_backup_removes_the_old_backups_the_policy_forgets() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    keep_last_one(&tmp);
+
+    let (harness, left) = back_up_a_change(&tmp);
+
+    assert_eq!(left, 1);
+    assert!(shows(&harness, "Removed 1 old backup"));
+}
+
+/// Stores a retention policy that keeps each game's last backup in the repository of `tmp`.
+fn keep_last_one(tmp: &TempDir) {
+    let policy = Retention {
+        keep_last: NonZeroU32::new(1),
+        keep_within: None,
+    };
+    retention::save(&mut open_repo(tmp), &policy, &tmp.path().join("policy")).unwrap();
+}
+
+#[test]
+fn a_failed_game_does_not_stop_the_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    keep_last_one(&tmp);
+    let (prefix, games) = alpha_beta(&tmp);
+    let (mut harness, env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), games, true);
+    scan(&mut harness, "2 games found");
+    // A file where Alpha's staging dir belongs makes staging it fail.
+    fs::create_dir_all(env.cache_dir.join("stage")).unwrap();
+    fs::write(env.cache_dir.join("stage").join(slug("Alpha")), "").unwrap();
+    harness.get_by_label("Back up 2 games").click();
+    run_until_backed_up(&mut harness, "Beta: backed up");
+
+    write_save(&prefix, "Beta", "changed");
+    harness.get_by_label("Back up 2 games").click();
+    run_until(&mut harness, "the second backup to start", |h| {
+        !shows(h, "Beta: backed up")
+    });
+    run_until_backed_up(&mut harness, "Beta: backed up");
+
+    assert!(shows(&harness, "Alpha: failed:"));
+    assert!(shows(&harness, "Removed 1 old backup"));
+}
+
+#[test]
+fn without_a_policy_every_backup_stays() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+
+    let (harness, left) = back_up_a_change(&tmp);
+
+    assert_eq!(left, 2);
+    assert!(!shows(&harness, "Removed"));
+    assert!(!shows(&harness, "Cleanup did not finish"));
+}
+
+#[test]
+fn an_unreadable_policy_removes_nothing_and_warns() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    let dir = tmp.path().join("newer-policy");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("retention.json"), r#"{"format": 99}"#).unwrap();
+    let tags = ["salvajocs-settings", "settings:retention"];
+    open_repo(&tmp)
+        .backup_dir(
+            &dir,
+            "/salvajocs-settings/retention",
+            &tags,
+            "Retention policy",
+        )
+        .unwrap()
+        .unwrap();
+
+    let (harness, left) = back_up_a_change(&tmp);
+
+    assert_eq!(left, 2);
+    assert!(shows(&harness, "The cleanup rules could not be read"));
+    assert!(!shows(&harness, "Cleanup did not finish"));
 }

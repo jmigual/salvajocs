@@ -219,6 +219,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
                 written: None,
                 games: None,
             },
+            cleanup: None,
         })
     }));
     harness.step();
@@ -477,4 +478,81 @@ fn closing_gives_up_on_a_stuck_pending_write() {
     let _release = choices.hold_write(&egui::Context::default());
 
     assert!(choices.flush(dir.path()).is_err());
+}
+
+/// A game whose one save file, under `dir`, holds `content`.
+fn saved_game(dir: &Path, title: &str, content: &str) -> GameScan {
+    let real = dir.join(title);
+    std::fs::write(&real, content).unwrap();
+    GameScan {
+        title: title.into(),
+        files: vec![FoundFile {
+            base: Base::Home,
+            tail: "save".into(),
+            real,
+            size: content.len() as u64,
+        }],
+        roots: Vec::new(),
+        registry_keys: Vec::new(),
+        registry_source: None,
+        unreadable: Vec::new(),
+    }
+}
+
+/// A new repository in `dir`, shared as a session shares it.
+fn shared_storage(dir: &Path) -> SharedStorage {
+    let location = RepoLocation {
+        repository: dir.join("repo").to_str().unwrap().into(),
+        options: Default::default(),
+    };
+    let storage = Storage::init(&location, "", Compression::Default).unwrap();
+    Arc::new(Mutex::new(storage))
+}
+
+/// The ids of the snapshots of `title`, newest first.
+fn snapshot_ids(storage: &SharedStorage, title: &str) -> Vec<String> {
+    let tag = format!("game:{}", salvajocs_core::slug::slug(title));
+    let snapshots = lock_storage(storage).unwrap().snapshots(&tag).unwrap();
+    snapshots.into_iter().map(|snapshot| snapshot.id).collect()
+}
+
+#[test]
+fn back_up_returns_only_the_new_snapshots() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = shared_storage(dir.path());
+    let stage = dir.path().join("stage");
+    let same = saved_game(dir.path(), "Same", "a");
+    let games = [same.clone(), saved_game(dir.path(), "Changed", "b")];
+    back_up(&storage, &games, &stage, |_| {}).unwrap();
+    let failing = saved_game(dir.path(), "Failing", "c");
+    // A file where its staging dir belongs makes staging it fail.
+    std::fs::write(stage.join(salvajocs_core::slug::slug("Failing")), "").unwrap();
+
+    let games = [same, saved_game(dir.path(), "Changed", "b2"), failing];
+    let made = back_up(&storage, &games, &stage, |_| {}).unwrap();
+
+    assert_eq!(made, snapshot_ids(&storage, "Changed")[..1]);
+}
+
+#[test]
+fn clean_up_never_forgets_the_snapshots_it_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = shared_storage(dir.path());
+    let stage = dir.path().join("stage");
+    for content in ["old", "new"] {
+        let games = [saved_game(dir.path(), "Game", content)];
+        back_up(&storage, &games, &stage, |_| {}).unwrap();
+    }
+    let ids = snapshot_ids(&storage, "Game");
+    let policy = Retention {
+        keep_last: std::num::NonZeroU32::new(1),
+        keep_within: None,
+    };
+    retention::save(&mut lock_storage(&storage).unwrap(), &policy, &stage).unwrap();
+
+    let cleaned = clean_up(&storage, std::slice::from_ref(&ids[1]));
+
+    assert!(cleaned.error.is_none());
+    assert_eq!(cleaned.done.forgotten, 0);
+    assert_eq!(snapshot_ids(&storage, "Game"), ids);
 }

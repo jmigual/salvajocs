@@ -178,6 +178,14 @@ pub fn run_until(
     }
 }
 
+/// Runs frames until the results show `result` and the backup job has ended, the cleanup after
+/// the games included.
+pub fn run_until_backed_up(harness: &mut Harness<'static, App>, result: &str) {
+    run_until(harness, "the backup to finish", |h| {
+        shows(h, result) && !shows(h, "Backed up ") && !shows(h, "Removing old backups")
+    });
+}
+
 /// Runs frames until the screen stops asking to be redrawn.
 ///
 /// Unlike `run`, a job in flight (a config save, say) is waited out instead of panicking when

@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use common::{
-    env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until, run_until_ready,
-    save_config, shows,
+    env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
+    run_until_backed_up, run_until_ready, save_config, shows,
 };
 use eframe::egui::{Theme, Vec2};
 use egui_kittest::Harness;
@@ -272,18 +272,14 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     // What to back up may still be loading.
     run_settled(&mut harness);
     harness.get_by_label("Back up 5 games").click();
-    run_until(&mut harness, "the first backup", |h| {
-        shows(h, "Terraria: backed up")
-    });
+    run_until_backed_up(&mut harness, "Terraria: backed up");
 
     let saves = prefix.join("drive_c/users/steamuser/AppData/Roaming/StardewValley/Saves");
     write_file(&saves.join("Ines_372841905/SaveGameInfo"), 3_300);
     harness.get_by_label("Terraria").click();
     run_settled(&mut harness);
     harness.get_by_label("Back up 4 games").click();
-    run_until(&mut harness, "the second backup", |h| {
-        shows(h, "Stardew Valley: backed up")
-    });
+    run_until_backed_up(&mut harness, "Stardew Valley: backed up");
     harness
         .get_by_label("3 files, 807.0 KiB, plus registry keys")
         .click();

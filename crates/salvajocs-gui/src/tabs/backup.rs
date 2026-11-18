@@ -1,11 +1,12 @@
 //! The Backup tab: scan this machine for games, choose which to back up and see what each
-//! backup did (ADR-0004, ADR-0010).
+//! backup and the cleanup after it did (ADR-0004, ADR-0010, ADR-0015).
 
 use std::borrow::Cow;
 use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::SystemTime;
 
 use eframe::egui::emath::Rot2;
 use eframe::egui::{
@@ -13,6 +14,7 @@ use eframe::egui::{
 };
 use salvajocs_core::backup::{self, GameBackup};
 use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 
@@ -123,6 +125,8 @@ struct Progress {
     total: usize,
     /// The outcome of each game finished so far.
     done: Vec<GameResult>,
+    /// Every game is done and old backups are being removed.
+    cleaning: bool,
 }
 
 /// What saving the selection before a backup ran into.
@@ -132,6 +136,16 @@ struct SaveProblems {
     failed: Vec<String>,
     /// Problems that lost no change.
     warnings: Vec<String>,
+}
+
+/// What the cleanup after a backup did.
+struct Cleaned {
+    /// Why the retention policy could not be read, so nothing was forgotten.
+    policy_error: Option<String>,
+    /// What the cleanup did, up to `error` if it stopped.
+    done: Cleanup,
+    /// Why the cleanup stopped, if it did.
+    error: Option<String>,
 }
 
 /// What a finished backup job hands back.
@@ -144,6 +158,8 @@ struct Backed {
     saving: SaveProblems,
     /// What the backup left of the selection.
     after: AfterBackup,
+    /// The cleanup after the backup, `None` when the run stopped early.
+    cleanup: Option<Cleaned>,
 }
 
 /// The state of the Backup tab.
@@ -160,6 +176,7 @@ pub struct BackupTab {
     progress: Arc<Mutex<Progress>>,
     run_error: Option<String>,
     saving: SaveProblems,
+    cleanup: Option<Cleaned>,
     /// Back up was clicked; the backup starts once the pending file is written.
     backup_requested: bool,
 }
@@ -222,10 +239,12 @@ impl BackupTab {
                     error,
                     saving,
                     after,
+                    cleanup,
                 }) => {
                     self.adopt(report);
                     self.run_error = error;
                     self.saving = saving;
+                    self.cleanup = cleanup;
                     if self.choices.backed_up(after) {
                         self.trees.iter_mut().for_each(FileTree::invalidate);
                     }
@@ -515,11 +534,15 @@ impl BackupTab {
         if self.running.is_some() {
             autosave_mark(ui);
             let progress = lock(&self.progress);
-            ui.label(format!(
-                "Backed up {} of {}",
-                progress.done.len(),
-                count(progress.total, "game")
-            ));
+            if progress.cleaning {
+                ui.label("Removing old backups");
+            } else {
+                ui.label(format!(
+                    "Backed up {} of {}",
+                    progress.done.len(),
+                    count(progress.total, "game")
+                ));
+            }
         } else if let (Some(config), Some(_)) = (&state.config, &state.session) {
             let (glyph, encryption) = match config.password {
                 PasswordMode::None => (icons::LOCK_SIMPLE_OPEN, "Not encrypted"),
@@ -538,7 +561,7 @@ impl BackupTab {
     /// (ADR-0004). The job first saves the pending selection changes to the repository and reads
     /// every game's settings again, so another machine's newer choices count. Then it scans
     /// again, so a save made since the last scan is included, and filters each game by its
-    /// settings.
+    /// settings. Last, it removes old backups by the repository's retention policy.
     fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
@@ -549,10 +572,12 @@ impl BackupTab {
         let progress = Arc::new(Mutex::new(Progress {
             total: self.chosen(),
             done: Vec::new(),
+            cleaning: false,
         }));
         self.progress = progress.clone();
         self.run_error = None;
         self.saving = SaveProblems::default();
+        self.cleanup = None;
         let (manifest, config) = (state.manifest_or_empty(), config.clone());
         let (storage, stage_root, waker) = (
             session.storage.clone(),
@@ -590,16 +615,24 @@ impl BackupTab {
             let report = scan::scan(&manifest, &config, &environment);
             let games = chosen_files(&report, filter);
             lock(&progress).total = games.len();
-            let error = back_up(&storage, &games, &stage_root, |backup| {
+            let backed_up = back_up(&storage, &games, &stage_root, |backup| {
                 lock(&progress).done.push(summarize(backup));
                 waker.request_repaint();
-            })
-            .err()
-            .map(|err| format!("{err:#}"));
+            });
+            // A failed game still cleans up; a run that stopped early does not.
+            let (error, cleanup) = match backed_up {
+                Ok(made) => {
+                    lock(&progress).cleaning = true;
+                    waker.request_repaint();
+                    (None, Some(clean_up(&storage, &made)))
+                }
+                Err(err) => (Some(format!("{err:#}")), None),
+            };
             Ok(Backed {
                 report,
                 error,
                 saving,
+                cleanup,
                 after: AfterBackup {
                     source: Arc::downgrade(&storage),
                     pending,
@@ -633,13 +666,38 @@ impl BackupTab {
         for warning in &self.saving.warnings {
             theme::status(ui, icons::WARNING, warn, warning);
         }
+        let accent = theme::palette(ui).accent;
+        if let Some(Cleaned {
+            policy_error,
+            done,
+            error,
+        }) = &self.cleanup
+        {
+            if let Some(error) = policy_error {
+                let text = "The cleanup rules could not be read, so no old backup was removed";
+                theme::status(ui, icons::WARNING, warn, format!("{text}: {error}"));
+            }
+            if done.forgotten > 0 {
+                let removed = count(done.forgotten, "old backup");
+                let text = format!("Removed {removed}");
+                theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
+            }
+            if done.append_only_kept > 0 {
+                let kept = count(done.append_only_kept, "old backup");
+                let text = format!("The repository is append-only, so {kept} stayed");
+                theme::status(ui, icons::WARNING, warn, text);
+            }
+            if let Some(error) = error {
+                let text = format!("Cleanup did not finish: {error}");
+                theme::status(ui, icons::X_CIRCLE, error_color, text);
+            }
+        }
         if progress.done.is_empty() {
             return;
         }
         ui.add_space(16.0);
         ui.heading("Last backup");
         ui.spacing_mut().item_spacing.y = 4.0;
-        let accent = theme::palette(ui).accent;
         for GameResult { title, outcome } in &progress.done {
             let text = match outcome {
                 Outcome::Saved => format!("{title}: backed up"),
@@ -690,16 +748,55 @@ fn lock(progress: &Mutex<Progress>) -> MutexGuard<'_, Progress> {
     progress.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Backs up `games` into `storage`, calling `progress` as each game is done.
+/// Backs up `games` into `storage`, calling `progress` as each game is done. Returns the ids of
+/// the new snapshots.
 fn back_up(
     storage: &SharedStorage,
     games: &[GameScan],
     stage_root: &Path,
     progress: impl FnMut(&GameBackup),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<String>> {
     let mut storage = lock_storage(storage)?;
-    backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
-    Ok(())
+    let backups = backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
+    let made = backups
+        .into_iter()
+        .filter_map(|backup| backup.result.ok().flatten());
+    Ok(made.map(|snapshot| snapshot.id).collect())
+}
+
+/// Forgets and prunes by the repository's retention policy, never the snapshots `made`
+/// (ADR-0015). A policy that cannot be read forgets nothing, but marked packs are still pruned.
+fn clean_up(storage: &SharedStorage, made: &[String]) -> Cleaned {
+    let mut storage = match lock_storage(storage) {
+        Ok(storage) => storage,
+        Err(err) => {
+            return Cleaned {
+                policy_error: None,
+                done: Cleanup::default(),
+                error: Some(format!("{err:#}")),
+            };
+        }
+    };
+    let (policy, policy_error) = match retention::load(&mut storage) {
+        Ok(policy) => (policy, None),
+        Err(err) => (Retention::default(), Some(chain(&err))),
+    };
+    let keep: Vec<&str> = made.iter().map(String::as_str).collect();
+    let (done, error) = match retention::apply(&mut storage, &policy, &keep, SystemTime::now()) {
+        Ok(done) => (done, None),
+        Err(err) => {
+            let done = Cleanup {
+                forgotten: err.forgotten,
+                ..Cleanup::default()
+            };
+            (done, Some(chain(&err.source)))
+        }
+    };
+    Cleaned {
+        policy_error,
+        done,
+        error,
+    }
 }
 
 /// Saves this repository's pending changes of each game whose settings could be read; each
