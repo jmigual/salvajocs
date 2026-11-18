@@ -9,8 +9,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::crossbuild::{Family, base_family};
-use crate::layout::Base;
 use crate::scan::{FoundFile, GameScan};
 use crate::storage::StorageError;
 
@@ -205,8 +203,19 @@ pub fn apply(scan: &GameScan, settings: &GameSettings) -> Option<GameScan> {
 /// [`path_key`], such as `WinAppData`) compare ignoring ASCII case: true for Windows-family
 /// bases, false for the others and for unknown names.
 pub fn folds_case(base_dir_name: &str) -> bool {
-    serde_json::from_value::<Base>(Value::from(base_dir_name))
-        .is_ok_and(|base| base_family(base) == Some(Family::Windows))
+    // A match rather than parsing a `Base`: the GUI calls this for every file it draws.
+    matches!(
+        base_dir_name,
+        "WinHome"
+            | "WinDocuments"
+            | "WinAppData"
+            | "WinLocalAppData"
+            | "WinLocalAppDataLow"
+            | "WinPublic"
+            | "WinProgramData"
+            | "WinDir"
+            | "WinAbsolute"
+    )
 }
 
 fn components(key: &str) -> impl Iterator<Item = &str> {

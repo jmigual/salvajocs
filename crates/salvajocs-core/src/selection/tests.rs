@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use super::*;
+use crate::crossbuild::{Family, base_family};
+use crate::layout::Base;
 use crate::scan::RegistrySource;
 
 const KEY: &str = r"HKEY_CURRENT_USER\Software\Foo";
@@ -219,6 +221,40 @@ fn path_key_is_the_staging_path() {
         path_key(&file(Base::WinAppData, "Foo/a.sav")),
         "WinAppData/Foo/a.sav"
     );
+}
+
+/// The base after `base`, through every variant. The match has no wildcard arm, so a new
+/// variant fails to compile here until it joins the chain.
+fn next_base(base: Base) -> Option<Base> {
+    use Base::*;
+    Some(match base {
+        WinHome => WinDocuments,
+        WinDocuments => WinAppData,
+        WinAppData => WinLocalAppData,
+        WinLocalAppData => WinLocalAppDataLow,
+        WinLocalAppDataLow => WinPublic,
+        WinPublic => WinProgramData,
+        WinProgramData => WinDir,
+        WinDir => Home,
+        Home => XdgData,
+        XdgData => XdgConfig,
+        XdgConfig => GameDir,
+        GameDir => StoreRoot,
+        StoreRoot => Absolute,
+        Absolute => WinAbsolute,
+        WinAbsolute => return None,
+    })
+}
+
+#[test]
+fn every_windows_family_base_and_no_other_folds_case() {
+    let bases: Vec<Base> =
+        std::iter::successors(Some(Base::WinHome), |base| next_base(*base)).collect();
+    assert_eq!(bases.len(), 15);
+    for base in bases {
+        let windows = base_family(base) == Some(Family::Windows);
+        assert_eq!(folds_case(base.dir_name()), windows, "{base:?}");
+    }
 }
 
 #[test]
