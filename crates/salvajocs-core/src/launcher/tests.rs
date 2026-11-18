@@ -537,6 +537,8 @@ fn bottles_custom_path_false_is_ignored() {
     assert_eq!(h.prefixes(), []);
 }
 
+// `/var/data` is a Flatpak path, absolute only on Unix.
+#[cfg(unix)]
 #[test]
 fn bottles_var_data_rewrite() {
     let h = Home::new();
