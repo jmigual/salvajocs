@@ -243,6 +243,65 @@ fn scan_waits_for_the_manifest_to_load() {
     assert!(is_disabled(&harness, "Scan for games"));
 }
 
+#[test]
+fn a_scan_counts_the_games_it_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let manifest = salvajocs_core::manifest::parse_yaml("Bar: {}\nFoo: {}\n").unwrap();
+    state.manifest = Some(Arc::new(manifest));
+    state.env.environment = Some(Environment {
+        native: None,
+        steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
+    });
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (BackupTab::default(), state),
+    );
+    harness.step();
+    harness.get_by_label("Scan for games").click();
+    settle(&mut harness);
+    assert_eq!(*lock(&harness.state().0.checked), (2, 2));
+}
+
+#[test]
+fn a_running_scan_shows_a_bar_of_the_games_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (BackupTab::default(), state(dir.path())),
+    );
+    let (release, job) = crate::job::held(&harness.ctx.clone());
+    let tab = &mut harness.state_mut().0;
+    tab.scanning = Some(job);
+    *lock(&tab.checked) = (3, 10);
+    harness.step();
+    let bar = harness.get_by_label("Checked 3 of 10 games");
+    assert_eq!(bar.accesskit_node().role(), Role::ProgressIndicator);
+    drop(release);
+}
+
+#[test]
+fn a_backup_shows_the_games_its_scan_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (listing(&["Game"]), state(dir.path())),
+    );
+    settle(&mut harness);
+    let ctx = harness.ctx.clone();
+    let release = harness.state_mut().0.hold_backup(&ctx);
+    *lock(&harness.state().0.checked) = (3, 10);
+    harness.step();
+    assert!(harness.query_by_label("Checked 3 of 10 games").is_some());
+
+    *lock(&harness.state().0.checked) = (10, 10);
+    harness.step();
+    assert!(harness.query_by_label("Backed up 0 of 0 games").is_some());
+    drop(release);
+}
+
 /// Before a scan the empty state's scan is the one action: no second scan button, and no
 /// backup button for zero games.
 #[test]

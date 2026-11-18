@@ -965,7 +965,7 @@ fn back_up_and_fetch(
     config: &AppConfig,
     env: &Environment,
 ) -> StagedGame {
-    let report = crate::scan::scan(manifest, config, env);
+    let report = crate::scan::scan(manifest, config, env, |_, _| {});
     assert_eq!(report.problems, []);
     back_up(storage, root, &report.games, &[]);
     let game = list(storage).unwrap().remove(0);

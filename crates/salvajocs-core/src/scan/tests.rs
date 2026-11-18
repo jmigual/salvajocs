@@ -66,7 +66,7 @@ fn no_native_env(steam_roots: Vec<PathBuf>) -> Environment {
 }
 
 fn game(manifest: &Manifest, config: &AppConfig, env: &Environment) -> GameScan {
-    let mut report = scan(manifest, config, env);
+    let mut report = scan(manifest, config, env, |_, _| {});
     assert_eq!(report.games.len(), 1, "{report:?}");
     assert_eq!(report.problems, []);
     report.games.remove(0)
@@ -256,6 +256,7 @@ fn wine_prefix_root_beats_shared_launcher_prefix() {
         &manifest.unwrap(),
         &config(vec![wine_root(&root)], vec![]),
         &env,
+        |_, _| {},
     );
     assert_eq!(report.problems, []);
     let real: Vec<&Path> = (report.games.iter())
@@ -271,7 +272,7 @@ fn launcher_prefix_of_another_game_is_not_scanned() {
     write(&bar.join(FOO_SAVE), "foo");
     let manifest = parse_yaml(&format!("{FOO}Bar: {{}}\n")).unwrap();
     let env = launcher_env(vec![launcher_prefix(&bar, Some("Bar"))]);
-    let report = scan(&manifest, &config(vec![], vec![]), &env);
+    let report = scan(&manifest, &config(vec![], vec![]), &env, |_, _| {});
     assert_eq!(report.games, []);
     assert_eq!(report.problems, []);
 }
@@ -285,8 +286,22 @@ fn ignored_launcher_prefix_is_not_scanned() {
     let env = launcher_env(vec![launcher_prefix(&own, Some("Foo"))]);
     let mut config = config(vec![], vec![]);
     config.ignored_prefixes = vec![own];
-    let report = scan(&manifest, &config, &env);
+    let report = scan(&manifest, &config, &env, |_, _| {});
     assert_eq!(report.games, []);
+}
+
+#[test]
+fn progress_counts_every_game_with_the_custom_ones() {
+    let manifest = parse_yaml("Bar: {}\nFoo: {}\n").unwrap();
+    let custom = custom_game("Baz", "<home>/baz", Integration::Override);
+    let mut calls = Vec::new();
+    scan(
+        &manifest,
+        &config(vec![], vec![custom]),
+        &no_native_env(vec![]),
+        |done, total| calls.push((done, total)),
+    );
+    assert_eq!(calls, [(1, 3), (2, 3), (3, 3)]);
 }
 
 #[test]
@@ -299,7 +314,12 @@ fn launcher_problems_are_reported_once() {
         launcher_problems: vec![problem.clone(), problem.clone()],
         ..no_native_env(vec![])
     };
-    let report = scan(&Manifest::default(), &config(vec![], vec![]), &env);
+    let report = scan(
+        &Manifest::default(),
+        &config(vec![], vec![]),
+        &env,
+        |_, _| {},
+    );
     assert_eq!(report.problems, [problem]);
 }
 
@@ -547,7 +567,12 @@ fn ambiguous_wine_prefix_root_reported() {
         fs::create_dir(pfx.join("drive_c/users").join(user)).unwrap();
     }
     let config = config(vec![wine_root(&pfx)], vec![]);
-    let report = scan(&Manifest::default(), &config, &no_native_env(vec![]));
+    let report = scan(
+        &Manifest::default(),
+        &config,
+        &no_native_env(vec![]),
+        |_, _| {},
+    );
     assert_eq!(report.games, []);
     assert_eq!(
         report.problems,
@@ -572,7 +597,12 @@ fn unreadable_dir_reported_not_dropped() {
         "Foo:\n  files:\n    <xdgConfig>/foo/ok: {}\n    <xdgConfig>/foo/locked/*.dat: {}\n",
     )
     .unwrap();
-    let report = scan(&manifest, &config(vec![], vec![]), &linux_env(home.path()));
+    let report = scan(
+        &manifest,
+        &config(vec![], vec![]),
+        &linux_env(home.path()),
+        |_, _| {},
+    );
     let readable = fs::read_dir(&locked).is_ok();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     if readable {
@@ -604,7 +634,7 @@ fn unreadable_user_reg_stops_the_registry_walk() {
     )
     .unwrap();
     let config = config(vec![wine_root(&broken), wine_root(&good)], vec![]);
-    let report = scan(&manifest, &config, &no_native_env(vec![]));
+    let report = scan(&manifest, &config, &no_native_env(vec![]), |_, _| {});
     let [found] = report.games.as_slice() else {
         panic!("{report:?}");
     };
@@ -702,6 +732,7 @@ fn a_linux_row_is_not_scanned_in_a_prefix() {
         &Manifest::default(),
         &config(vec![], vec![custom]),
         &no_native_env(vec![]),
+        |_, _| {},
     );
     assert_eq!(report.games, []);
 }
@@ -730,6 +761,7 @@ fn a_windows_row_is_not_scanned_on_native_linux() {
         &Manifest::default(),
         &config(vec![], vec![custom]),
         &linux_env(home.path()),
+        |_, _| {},
     );
     assert_eq!(report.games, []);
 }
@@ -753,7 +785,7 @@ fn time_full_manifest_scan() {
     let manifest = parse_yaml(&yaml).unwrap();
     let config = config(vec![wine_root(&prefix)], vec![]);
     let started = Instant::now();
-    let report = scan(&manifest, &config, &no_native_env(vec![]));
+    let report = scan(&manifest, &config, &no_native_env(vec![]), |_, _| {});
     println!(
         "{} games, {} files, {} problems in {:?}",
         report.games.len(),

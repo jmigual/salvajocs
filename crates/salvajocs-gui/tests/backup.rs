@@ -291,7 +291,7 @@ fn backup_selection_survives_a_rescan() {
     harness.get_by_label("Scan for games").click();
     harness.step();
     run_until(&mut harness, "the rescan to finish", |h| {
-        !shows(h, "Scanning")
+        !shows(h, "Scanning") && !shows(h, "Checked")
     });
 
     assert!(shows(&harness, "Back up 1 game"), "Beta stays deselected");

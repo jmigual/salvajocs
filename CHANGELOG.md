@@ -30,6 +30,8 @@ All notable changes to salvajocs. The format follows
   checked for every game. A restore of such a game fills in its prefix.
 - Settings → Roots lists these prefixes under **Found by salvajocs**; untick one to leave it out
   of scans and restores.
+- While a scan runs, also the one before a backup, the Backup tab shows how many games of the
+  manifest and custom games it has checked.
 
 ### Changed
 

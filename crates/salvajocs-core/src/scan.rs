@@ -611,8 +611,14 @@ pub(crate) fn launcher_prefixes<'a>(
 /// Scans every game of `manifest`, with the config's custom games applied. A game is listed when
 /// it has a file or a registry key on this machine; the first context in priority order wins per
 /// logical path and for the registry (ADR-0007). Prefixes and paths that cannot be used are
-/// returned as problems, never dropped.
-pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanReport {
+/// returned as problems, never dropped. `progress` gets the number of games scanned and the
+/// total after each game.
+pub fn scan(
+    manifest: &Manifest,
+    config: &AppConfig,
+    env: &Environment,
+    mut progress: impl FnMut(usize, usize),
+) -> ScanReport {
     let roots = roots(config, env);
     let wine_roots: Vec<PathBuf> = roots
         .iter()
@@ -664,10 +670,14 @@ pub fn scan(manifest: &Manifest, config: &AppConfig, env: &Environment) -> ScanR
             .map(|(title, entry)| (title.as_str(), entry)),
     );
 
+    let total = games.len();
     let games = games
         .into_iter()
-        .filter_map(|(title, entry)| {
-            scan_game(title, entry, wine_prefixes.get(title).copied(), &shared)
+        .enumerate()
+        .filter_map(|(index, (title, entry))| {
+            let game = scan_game(title, entry, wine_prefixes.get(title).copied(), &shared);
+            progress(index + 1, total);
+            game
         })
         .collect();
     ScanReport {

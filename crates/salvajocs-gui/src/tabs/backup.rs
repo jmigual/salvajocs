@@ -176,6 +176,8 @@ pub struct BackupTab {
     choices: Choices,
     running: Option<Job<Backed>>,
     progress: Arc<Mutex<Progress>>,
+    /// The games the running scan, or the backup's, has checked and its total; 0 before it starts.
+    checked: Arc<Mutex<(usize, usize)>>,
     run_error: Option<String>,
     saving: SaveProblems,
     cleanup: Option<Cleaned>,
@@ -362,9 +364,11 @@ impl BackupTab {
             let (manifest, config) = (state.manifest_or_empty(), config.clone());
             let environment = state.env.environment.clone();
             self.scan_error = None;
+            self.checked = Arc::default();
+            let progress = scan_progress(&self.checked, ui.ctx());
             self.scanning = Some(Job::spawn(ui.ctx(), move || {
                 let environment = environment.unwrap_or_else(Environment::detect);
-                Ok(scan::scan(&manifest, &config, &environment))
+                Ok(scan::scan(&manifest, &config, &environment, progress))
             }));
         }
     }
@@ -377,10 +381,16 @@ impl BackupTab {
             ui.weak("The game manifest is not available; only custom games are scanned.");
         }
         if self.scanning.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Scanning");
-            });
+            let (done, total) = *lock(&self.checked);
+            if total == 0 {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Scanning");
+                });
+            } else {
+                let text = format!("Checked {done} of {}", count(total, "game"));
+                ui.add(egui::ProgressBar::new(done as f32 / total as f32).text(text));
+            }
         }
     }
 
@@ -521,8 +531,15 @@ impl BackupTab {
                 theme::column(ui, |ui| self.save_bar_contents(ui, state, manifest_loading));
             });
         let progress = lock(&self.progress);
-        if self.running.is_some() && progress.total > 0 {
-            let done = progress.done.len() as f32 / progress.total as f32;
+        let (checked, games) = *lock(&self.checked);
+        // While the backup's scan runs, the rule shows the scan.
+        let (done, total) = if checked < games {
+            (checked, games)
+        } else {
+            (progress.done.len(), progress.total)
+        };
+        if self.running.is_some() && total > 0 {
+            let done = done as f32 / total as f32;
             let rect = bar.response.rect;
             let rule = Rect::from_min_size(rect.left_top(), Vec2::new(rect.width() * done, 3.0));
             ui.painter()
@@ -568,8 +585,11 @@ impl BackupTab {
         if self.running.is_some() {
             autosave_mark(ui);
             let progress = lock(&self.progress);
+            let (checked, games) = *lock(&self.checked);
             if progress.cleaning {
                 ui.label("Removing old backups");
+            } else if checked < games {
+                ui.label(format!("Checked {checked} of {}", count(games, "game")));
             } else {
                 ui.label(format!(
                     "Backed up {} of {}",
@@ -609,6 +629,8 @@ impl BackupTab {
             cleaning: false,
         }));
         self.progress = progress.clone();
+        self.checked = Arc::default();
+        let scanned = scan_progress(&self.checked, ctx);
         self.run_error = None;
         self.saving = SaveProblems::default();
         self.cleanup = None;
@@ -646,7 +668,7 @@ impl BackupTab {
                 }
             };
             let environment = environment.unwrap_or_else(Environment::detect);
-            let report = scan::scan(&manifest, &config, &environment);
+            let report = scan::scan(&manifest, &config, &environment, scanned);
             let games = chosen_files(&report, filter);
             lock(&progress).total = games.len();
             let backed_up = back_up(&storage, &games, &stage_root, |backup| {
@@ -778,8 +800,23 @@ fn autosave_mark(ui: &mut Ui) {
     ui.ctx().request_repaint();
 }
 
-fn lock(progress: &Mutex<Progress>) -> MutexGuard<'_, Progress> {
+fn lock<T>(progress: &Mutex<T>) -> MutexGuard<'_, T> {
     progress.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A scan progress callback that stores into `checked` and wakes `ctx`.
+fn scan_progress(
+    checked: &Arc<Mutex<(usize, usize)>>,
+    ctx: &egui::Context,
+) -> impl FnMut(usize, usize) + Send + 'static {
+    let (checked, ctx) = (checked.clone(), ctx.clone());
+    move |done, total| {
+        *lock(&checked) = (done, total);
+        // Once per percent: a repaint per game would wake the UI tens of thousands of times.
+        if (done - 1) * 100 / total != done * 100 / total {
+            ctx.request_repaint();
+        }
+    }
 }
 
 /// Backs up `games` into `storage`, calling `progress` as each game is done. Returns the ids of
