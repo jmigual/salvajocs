@@ -379,6 +379,11 @@ impl Storage {
         Ok(false)
     }
 
+    /// Whether the repository is append-only, so [`Storage::forget`] and [`Storage::prune`] fail.
+    pub fn append_only(&self) -> bool {
+        self.repo.config().append_only == Some(true)
+    }
+
     /// Makes the repository append-only, so [`Storage::forget`] fails.
     #[cfg(test)]
     pub(crate) fn set_append_only(&mut self) {

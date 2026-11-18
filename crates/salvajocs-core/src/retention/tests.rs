@@ -356,7 +356,8 @@ fn apply_keep_last_one_leaves_the_newest_restorable() {
         cleanup,
         Cleanup {
             forgotten: 1,
-            pruned: true
+            pruned: true,
+            append_only_kept: 0,
         }
     );
     assert_eq!(repo.ids(APP_TAG), std::slice::from_ref(&newest.id));
@@ -391,7 +392,8 @@ fn a_backup_reusing_a_marked_pack_is_recovered_by_the_next_cleanup() {
         cleanup,
         Cleanup {
             forgotten: 0,
-            pruned: true
+            pruned: true,
+            append_only_kept: 0,
         }
     );
     assert!(repo.restores(&theirs, "old"));
@@ -452,9 +454,39 @@ fn apply_off_still_prunes_marked_packs() {
         cleanup,
         Cleanup {
             forgotten: 0,
-            pruned: true
+            pruned: true,
+            append_only_kept: 0,
         }
     );
+}
+
+#[test]
+fn apply_in_an_append_only_repository_only_counts() {
+    let mut repo = Repo::new();
+    repo.backup("old");
+    repo.backup("new");
+    let now = SystemTime::now();
+    apply(&mut repo.storage, &keep_last(1), &[], now).unwrap();
+    repo.storage.set_append_only();
+
+    // Marked packs wait without a prune, which would fail.
+    let off = Retention::default();
+    assert_eq!(
+        apply(&mut repo.storage, &off, &[], now).unwrap(),
+        Cleanup::default()
+    );
+    repo.backup("newer");
+    let cleanup = apply(&mut repo.storage, &keep_last(1), &[], now).unwrap();
+    assert_eq!(
+        cleanup,
+        Cleanup {
+            forgotten: 0,
+            pruned: false,
+            append_only_kept: 1,
+        }
+    );
+    assert_eq!(repo.ids(APP_TAG).len(), 2);
+    assert!(repo.storage.has_marked_packs().unwrap());
 }
 
 /// Every file below `dir`.

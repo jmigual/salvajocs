@@ -138,12 +138,15 @@ pub struct Cleanup {
     pub forgotten: usize,
     /// Whether a prune ran: after a forget, or while packs wait marked for deletion.
     pub pruned: bool,
+    /// How many snapshots the policy forgets that stayed because the repository is append-only.
+    pub append_only_kept: usize,
 }
 
 /// Forgets the snapshots `policy` forgets at `now` ([`to_forget`] over every `salvajocs`
 /// snapshot), never one of `keep`. Then prunes if anything was forgotten or the repository has
 /// packs marked for deletion, which only a later prune frees, or recovers when a backup made
-/// since uses them. An off policy forgets nothing but still prunes marked packs.
+/// since uses them. An off policy forgets nothing but still prunes marked packs. An append-only
+/// repository is neither forgotten from nor pruned: the snapshots to forget are only counted.
 ///
 /// # Errors
 /// The repository error of the listing, the forget or the prune.
@@ -153,19 +156,29 @@ pub fn apply(
     keep: &[&str],
     now: SystemTime,
 ) -> Result<Cleanup, StorageError> {
-    let mut forgotten = 0;
+    let append_only = storage.append_only();
+    let (mut forgotten, mut append_only_kept) = (0, 0);
     if !policy.is_off() {
         let ids = to_forget(policy, &storage.snapshots(APP_TAG)?, keep, now);
-        if !ids.is_empty() {
-            storage.forget(&ids.iter().map(String::as_str).collect::<Vec<_>>())?;
+        if append_only {
+            append_only_kept = ids.len();
+        } else {
+            if !ids.is_empty() {
+                storage.forget(&ids.iter().map(String::as_str).collect::<Vec<_>>())?;
+            }
+            forgotten = ids.len();
         }
-        forgotten = ids.len();
     }
-    let pruned = forgotten > 0 || storage.has_marked_packs()?;
+    // rustic refuses an append-only prune only after planning it, which walks every tree.
+    let pruned = forgotten > 0 || (!append_only && storage.has_marked_packs()?);
     if pruned {
         storage.prune()?;
     }
-    Ok(Cleanup { forgotten, pruned })
+    Ok(Cleanup {
+        forgotten,
+        pruned,
+        append_only_kept,
+    })
 }
 
 /// The `game:` tag of a snapshot retention may forget.
