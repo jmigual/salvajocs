@@ -3,21 +3,23 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use common::{
-    env, harness, harness_sized, init_repo, local_config, replace_text, repo_dir, run_settled,
-    run_until, run_until_ready, save_config, shows,
+    env, harness, harness_sized, init_repo, local_config, pick, replace_text, repo_dir,
+    run_settled, run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::Vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
-use salvajocs_core::layout::Base;
+use salvajocs_core::layout::{Base, Context, LinuxFolders};
 use salvajocs_core::manifest::{
-    self, CustomGame, FileRule, GameEntry, Integration, Manifest, Os, Pair, RegistryRule, Steam,
-    Tag, When,
+    self, CustomFile, CustomGame, FileRule, GameEntry, Integration, Manifest, Os, Pair,
+    RegistryRule, Steam, Tag, When,
 };
+use salvajocs_core::scan::Environment;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -28,8 +30,18 @@ fn open_tab(
     games: Vec<CustomGame>,
     manifest_titles: &[&str],
 ) -> (Harness<'static, App>, Env, TempDir) {
+    open_tab_with(games, manifest_titles, |_, _| {})
+}
+
+/// Like `open_tab`, after `setup` adjusted the environment, given the temp dir.
+fn open_tab_with(
+    games: Vec<CustomGame>,
+    manifest_titles: &[&str],
+    setup: impl FnOnce(&mut Env, &Path),
+) -> (Harness<'static, App>, Env, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let env = env(&tmp);
+    let mut env = env(&tmp);
+    setup(&mut env, tmp.path());
     let manifest = Manifest {
         games: manifest_titles
             .iter()
@@ -137,11 +149,21 @@ fn skipped_game(title: &str) -> CustomGame {
     config.custom_games.remove(0)
 }
 
-fn save_rule() -> FileRule {
-    FileRule {
-        tags: vec![Tag::Save],
-        when: Vec::new(),
+/// This machine as a native Linux system whose home is `home`.
+fn linux_environment(home: &Path) -> Environment {
+    Environment {
+        native: Some(Context::Linux(LinuxFolders {
+            user: "me".into(),
+            home: home.into(),
+            xdg_data: home.join(".local/share"),
+            xdg_config: home.join(".config"),
+        })),
+        steam_roots: Vec::new(),
     }
+}
+
+fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
+    harness.get_by_label(label).accesskit_node().is_disabled()
 }
 
 fn pair(linux: &str, windows: &str) -> Pair {
@@ -187,23 +209,21 @@ fn custom_games_without_games_says_what_they_are_for() {
 }
 
 #[test]
-fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
+fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() {
     let (mut harness, env, _tmp) = open_tab(Vec::new(), &[]);
 
     harness.get_by_label("Add game").click();
     run_settled(&mut harness);
     replace_text(&mut harness, "Name", "My Game");
-    replace_text(&mut harness, "Files", "<winDocuments>/My Game/*.sav");
+    harness.get_by_label("Add file").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Linux path", "<xdgData>/mygame/*.sav");
     replace_text(
         &mut harness,
         "Registry keys",
         "HKEY_CURRENT_USER/Software/My Game",
     );
     replace_text(&mut harness, "Wine prefix", "/prefixes/mygame");
-    harness.get_by_label("Add pair").click();
-    run_settled(&mut harness);
-    replace_text(&mut harness, "Linux 1", "<xdgData>/mygame");
-    replace_text(&mut harness, "Windows 1", "<winDocuments>/My Game");
     harness.get_by_label("Save game").click();
     run_settled(&mut harness);
 
@@ -212,9 +232,11 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
         saved,
         [CustomGame {
             name: "My Game".into(),
-            files: Vec::new(),
+            files: vec![CustomFile {
+                linux: Some("<xdgData>/mygame/*.sav".into()),
+                windows: None,
+            }],
             entry: GameEntry {
-                files: BTreeMap::from([("<winDocuments>/My Game/*.sav".to_owned(), save_rule())]),
                 registry: BTreeMap::from([(
                     "HKEY_CURRENT_USER/Software/My Game".to_owned(),
                     RegistryRule::default(),
@@ -223,7 +245,7 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
             },
             integration: Integration::Extend,
             wine_prefix: Some("/prefixes/mygame".into()),
-            pairs: vec![pair("<xdgData>/mygame", "<winDocuments>/My Game")],
+            pairs: Vec::new(),
             skips: Vec::new(),
         }]
     );
@@ -231,6 +253,66 @@ fn custom_games_add_game_with_pair_saves_the_entry_to_the_config() {
     assert!(
         !shows(&harness, "Save game"),
         "the form closes after saving"
+    );
+}
+
+#[test]
+fn custom_games_invalid_file_row_shows_its_error_and_cannot_be_saved() {
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), &[]);
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "My Game");
+    harness.get_by_label("Add file").click();
+    run_settled(&mut harness);
+    assert!(!disabled(&harness, "Save game"), "a blank row is unused");
+    replace_text(&mut harness, "Windows path", "<xdgData>/mygame");
+    assert!(shows(&harness, "not a Windows path"));
+    assert!(disabled(&harness, "Save game"));
+
+    harness.get_by_label("Remove file").click();
+    run_settled(&mut harness);
+    assert!(!disabled(&harness, "Save game"));
+}
+
+#[test]
+fn custom_games_browse_fills_the_linux_path_from_the_picked_folder() {
+    let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), &[], |env, tmp| {
+        let home = tmp.join("home");
+        env.environment = Some(linux_environment(&home));
+        pick(env, home.join(".local/share/my-game"));
+    });
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Add file").click();
+    run_settled(&mut harness);
+    harness.query_all_by_label("Browse").next().unwrap().click();
+    run_until(&mut harness, "the picked folder", |h| {
+        h.get_by_label("Linux path").value().as_deref() == Some("<xdgData>/my-game")
+    });
+}
+
+#[cfg(not(windows))]
+#[test]
+fn custom_games_browse_for_a_windows_path_outside_a_prefix_shows_an_error() {
+    let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), &[], |env, tmp| {
+        env.environment = Some(linux_environment(&tmp.join("home")));
+        pick(env, tmp.join("home/Games"));
+    });
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Add file").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Windows path", "<winAppData>/Kept");
+    harness.query_all_by_label("Browse").nth(1).unwrap().click();
+    run_until(&mut harness, "the pick to fail", |h| {
+        shows(h, "Pick a folder inside a Wine prefix")
+    });
+    assert_eq!(
+        harness.get_by_label("Windows path").value().as_deref(),
+        Some("<winAppData>/Kept")
     );
 }
 
