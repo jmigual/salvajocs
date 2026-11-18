@@ -235,8 +235,9 @@ impl CustomGame {
     }
 
     /// The Linux/Windows mapping of each row with two different sides: their glob-free prefixes,
-    /// when both are placeholder templates with, on a Linux or Windows base, a folder below the
-    /// placeholder. A row with an absolute side gives none; its roots map as one-sided rows do.
+    /// when both are placeholder templates followed by the same text (none, or the same glob)
+    /// with, on a Linux or Windows base, a folder below the placeholder. Any other row gives
+    /// none; its roots map as one-sided rows do.
     pub fn file_pairs(&self) -> Vec<Pair> {
         self.files
             .iter()

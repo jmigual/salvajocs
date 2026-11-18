@@ -316,14 +316,20 @@ fn check_side(template: &str, family: Family) -> Result<(), FileError> {
 }
 
 /// The mapping a file row with the sides `linux` and `windows` declares: their glob-free
-/// prefixes, when both pass [`validate_pair`] (so no absolute paths) and, on a Linux or Windows
-/// base, hold a folder below the placeholder; a bare base would also map every other root of
-/// that base.
+/// prefixes, when both pass [`validate_pair`] (so no absolute paths), the text after both
+/// prefixes is the same (none, or the same glob such as `/*.sav`) and, on a Linux or Windows
+/// base, each holds a folder below the placeholder; a bare base would also map every other root
+/// of that base.
 pub(crate) fn row_pair(linux: &str, windows: &str) -> Option<Pair> {
     let pair = Pair {
         linux: layout::glob_free_prefix(linux).to_owned(),
         windows: layout::glob_free_prefix(windows).to_owned(),
     };
+    // A glob part only one side has (or an escaped `[[]` folder name) would cut that side short
+    // of the folder that matches the other.
+    if linux[pair.linux.len()..] != windows[pair.windows.len()..] {
+        return None;
+    }
     validate_pair(&pair).ok()?;
     let bare = |side| {
         classify(pair_side(&pair, side), side).is_some_and(|(base, rest)| {

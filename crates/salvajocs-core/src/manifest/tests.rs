@@ -259,6 +259,9 @@ fn file_pairs_map_rows_with_two_different_sides_through_their_glob_free_prefixes
         row(Some("<xdgData>/only"), None),
         row(Some("/opt/g"), Some("<winAppData>/G")),
         row(Some("<home>/*.sav"), Some("<winDocuments>/G/*.sav")),
+        // What Browse makes of a folder named `Bar [x]`: the escape cuts the prefix at `Foo`.
+        row(Some("<xdgData>/b"), Some("<winDocuments>/Foo/Bar [[]x[]]")),
+        row(Some("<xdgData>/s"), Some("<winDocuments>/S/slot*/data.sav")),
     ]);
     assert_eq!(
         game.file_pairs(),
