@@ -236,6 +236,35 @@ fn backend_option_marked_secret_not_written_to_config() {
 }
 
 #[test]
+fn an_advanced_key_the_backend_does_not_read_gets_a_warning() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+    choose(&mut harness, "Backend", "WebDAV");
+    harness.get_by_label("Advanced options").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Add option").click();
+    run_settled(&mut harness);
+
+    fill(&mut harness, "Option 1 key", "disable_create_dirs");
+    assert!(shows(&harness, "Not an option of this backend"), "a typo");
+
+    replace_text(&mut harness, "Option 1 key", "Disable_Create_Dir");
+    assert!(
+        !shows(&harness, "Not an option of this backend"),
+        "any letter case"
+    );
+
+    replace_text(&mut harness, "Option 1 key", "retry");
+    assert!(
+        !shows(&harness, "Not an option of this backend"),
+        "rustic's own key"
+    );
+}
+
+#[test]
 fn webdav_needs_its_server_url() {
     let tmp = tempfile::tempdir().unwrap();
     let mut harness = harness(env(&tmp));

@@ -28,6 +28,9 @@ struct OptionRow {
     key: String,
     value: String,
     secret: bool,
+    /// Whether the backend does not read the key. Kept here because working it out is too slow
+    /// for every frame; it is redone when the key or the backend changes.
+    unknown: bool,
 }
 
 /// An option the form would save, as typed.
@@ -83,15 +86,26 @@ fn fields_of(kind: BackendKind) -> &'static [BackendField] {
     }
 }
 
+/// The warning under an Advanced key the backend does not read.
+const UNKNOWN_KEY: &str = "Not an option of this backend, so it probably does nothing. Check the spelling in the option reference.";
+
+/// Whether an Advanced key is typed but is not one the backend reads. Allowed, but a typo would
+/// otherwise be ignored without a word.
+fn is_unknown_key(kind: BackendKind, key: &str) -> bool {
+    let key = key.trim();
+    !key.is_empty() && !config::option_key_known(kind, key)
+}
+
 /// The section of the options reference for a kind. Its heading is the picker entry, and GitHub
-/// makes the anchor from the heading: lowercase, spaces to hyphens, other punctuation dropped.
+/// makes the anchor from the heading: lowercase, spaces to hyphens, punctuation other than `-`
+/// and `_` dropped.
 fn options_docs_url(kind: BackendKind) -> String {
     let anchor: String = kind_label(kind)
         .to_lowercase()
         .chars()
         .filter_map(|c| match c {
             ' ' => Some('-'),
-            c if c.is_alphanumeric() => Some(c),
+            c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
             _ => None,
         })
         .collect();
@@ -154,6 +168,7 @@ impl BackendForm {
                     key: option.key.clone(),
                     value,
                     secret: option.secret,
+                    unknown: is_unknown_key(kind, &option.key),
                 });
             }
         }
@@ -203,11 +218,20 @@ impl BackendForm {
     }
 
     /// The key of the field that `key` stands for: itself, or the key opendal reads an alias as.
-    fn canonical_key<'a>(&self, key: &'a str) -> &'a str {
+    /// opendal reads keys in any letter case; rustic's own keys are exact.
+    fn canonical_key(&self, key: &str) -> String {
+        if !matches!(self.kind, BackendKind::OpenDal(_)) {
+            return key.to_string();
+        }
+        let lower = key.to_ascii_lowercase();
+        // `Retry` is not rustic's `retry`, and opendal ignores both, so neither clashes.
+        if config::is_rustic_key(self.kind, &lower) {
+            return key.to_string();
+        }
         fields_of(self.kind)
             .iter()
-            .find(|field| field.key == key || field.aliases.contains(&key))
-            .map_or(key, |field| field.key)
+            .find(|field| field.key == lower || field.aliases.contains(&lower.as_str()))
+            .map_or(lower, |field| field.key.to_string())
     }
 
     /// A key that would be saved twice, which `location()` would resolve by dropping one and
@@ -217,8 +241,7 @@ impl BackendForm {
         self.entries()
             .into_iter()
             .map(|entry| self.canonical_key(entry.key))
-            .find(|key| !seen.insert(*key))
-            .map(str::to_string)
+            .find(|key| !seen.insert(key.clone()))
     }
 
     /// The error shown for a duplicate key, saying where the two are.
@@ -272,6 +295,9 @@ impl BackendForm {
             self.stashed.insert(service, secrets);
         }
         self.kind = kind;
+        for row in &mut self.options {
+            row.unknown = is_unknown_key(kind, &row.key);
+        }
         if let BackendKind::OpenDal(service) = kind
             && let Some(secrets) = self.stashed.remove(service)
         {
@@ -498,14 +524,24 @@ impl BackendForm {
     }
 
     fn options_ui(&mut self, ui: &mut Ui) {
+        let kind = self.kind;
         let mut remove = None;
         for (index, row) in self.options.iter_mut().enumerate() {
             let number = index + 1;
-            labelled_edit(ui, &format!("Option {number} key"), &mut row.key, false);
+            let key_edit = labelled_edit(ui, &format!("Option {number} key"), &mut row.key, false);
+            if key_edit.changed() {
+                row.unknown = is_unknown_key(kind, &row.key);
+            }
             if ui.button("Remove").clicked() {
                 remove = Some(index);
             }
             ui.end_row();
+            if row.unknown {
+                ui.label("");
+                let color = ui.visuals().warn_fg_color;
+                field_status(ui, icons::WARNING, color, UNKNOWN_KEY);
+                ui.end_row();
+            }
             labelled_edit(
                 ui,
                 &format!("Option {number} value"),
@@ -532,6 +568,7 @@ impl BackendForm {
             key: key.to_string(),
             value: value.to_string(),
             secret,
+            unknown: is_unknown_key(self.kind, key),
         });
     }
 
@@ -552,11 +589,17 @@ mod tests {
     /// link pointing at the top of the page.
     #[test]
     fn every_backend_has_a_section_in_the_options_reference() {
-        let page = include_str!("../../../../docs/guide/advanced-options.md");
+        // The page is not in the crates.io tarball, so the test is skipped there.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/guide/advanced-options.md");
+        let Ok(page) = std::fs::read_to_string(&path) else {
+            eprintln!("skipped: {} is not here", path.display());
+            return;
+        };
         for kind in config::backend_kinds() {
-            let heading = format!("\n## {}\n", kind_label(kind));
+            let heading = format!("## {}", kind_label(kind));
             assert!(
-                page.contains(&heading),
+                page.lines().any(|line| line == heading),
                 "no section for {}",
                 kind_label(kind)
             );
@@ -567,7 +610,7 @@ mod tests {
     fn options_link_names_the_tag_and_the_section() {
         let url = options_docs_url(BackendKind::OpenDal("s3"));
         assert!(url.starts_with("https://github.com/jmigual/salvajocs/blob/v"));
-        assert!(url.contains(env!("CARGO_PKG_VERSION")));
+        assert!(url.contains(&format!("/blob/v{}/docs/", env!("CARGO_PKG_VERSION"))));
         assert!(url.ends_with("/docs/guide/advanced-options.md#amazon-s3-or-compatible"));
         assert!(options_docs_url(BackendKind::OpenDal("ipmfs")).ends_with("#ipfs-mfs"));
         assert!(options_docs_url(BackendKind::Rest).ends_with("#rest-server"));
@@ -917,6 +960,81 @@ mod tests {
             BackendForm::from_config(&config("opendal:webdav", Vec::new()), &BTreeMap::new());
         form.push_option("endpoint", "https://dav.example.com", false);
         assert!(form.is_complete());
+    }
+
+    #[test]
+    fn a_key_the_backend_does_not_read_is_unknown() {
+        let webdav = BackendKind::OpenDal("webdav");
+        assert!(is_unknown_key(webdav, "disable_create_dirs"), "a typo");
+        assert!(!is_unknown_key(webdav, "disable_create_dir"));
+        assert!(
+            !is_unknown_key(webdav, "Disable_Create_Dir"),
+            "any letter case"
+        );
+        assert!(!is_unknown_key(webdav, " retry "), "rustic's key, trimmed");
+        assert!(
+            !is_unknown_key(BackendKind::OpenDal("s3"), "aws_region"),
+            "an alias"
+        );
+        assert!(
+            !is_unknown_key(webdav, "  "),
+            "an empty row says nothing yet"
+        );
+        assert!(
+            is_unknown_key(BackendKind::Local, "retry"),
+            "another backend's key"
+        );
+    }
+
+    #[test]
+    fn opendal_keys_clash_in_any_letter_case_and_by_alias() {
+        let mut form =
+            BackendForm::from_config(&config("opendal:s3", Vec::new()), &BTreeMap::new());
+        form.set_named("region", "eu-west-1");
+        form.push_option("AWS_REGION", "us-east-1", false);
+        assert_eq!(
+            form.duplicate_key().as_deref(),
+            Some("region"),
+            "alias, any case"
+        );
+
+        form.options.clear();
+        form.push_option("custom", "1", false);
+        form.push_option("Custom", "2", false);
+        assert!(
+            form.duplicate_key().is_some(),
+            "opendal reads both as one key"
+        );
+        assert!(!form.is_complete());
+    }
+
+    #[test]
+    fn rustic_keys_are_exact_so_letter_case_does_not_clash() {
+        let mut form =
+            BackendForm::from_config(&config("rest:https://host", Vec::new()), &BTreeMap::new());
+        form.push_option("retry", "1", false);
+        form.push_option("Retry", "2", false);
+        assert_eq!(form.duplicate_key(), None);
+
+        let mut form =
+            BackendForm::from_config(&config("opendal:s3", Vec::new()), &BTreeMap::new());
+        form.push_option("retry", "1", false);
+        form.push_option("Retry", "2", false);
+        assert_eq!(
+            form.duplicate_key(),
+            None,
+            "also next to an opendal service"
+        );
+    }
+
+    #[test]
+    fn the_unknown_mark_follows_the_backend() {
+        let mut form =
+            BackendForm::from_config(&config("opendal:webdav", Vec::new()), &BTreeMap::new());
+        form.push_option("post-create-command", "x", false);
+        assert!(form.options[0].unknown);
+        form.switch_kind(BackendKind::Local);
+        assert!(!form.options[0].unknown, "a key of the local backend");
     }
 
     #[test]
