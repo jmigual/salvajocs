@@ -1488,3 +1488,20 @@ fn a_row_pair_does_not_trust_the_whole_install_dir() {
     assert_eq!(targets_of(&plan), [root.path().join("Install Dir/a.sav")]);
     assert_eq!(skip_reasons(&plan), [SkipReason::UndeclaredRoot]);
 }
+
+#[test]
+fn a_single_row_whose_sides_end_differently_asks_where_its_files_go() {
+    for windows in [
+        "<winDocuments>/Foo/Bar [[]x[]]",
+        "<winDocuments>/S/slot*/data.sav",
+    ] {
+        // One Linux and one Windows template, so the auto-pair sees this row too.
+        let game = rows_info(vec![file_row(Some("<xdgData>/b"), Some(windows))]);
+        let staged = staged(&[(Base::XdgData, "b")], &[(Base::XdgData, "b/s.sav")]);
+        let result = prepare(&staged, &win_only(native_win()), &vars(), &game, &[]);
+        assert!(
+            matches!(result, Err(PrepareError::NeedsMapping(_))),
+            "{windows}: {result:?}"
+        );
+    }
+}
