@@ -44,4 +44,5 @@ jobs:
       - if: runner.os == 'Linux'
         run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace -- --include-ignored ${{ matrix.test-args }}
+      # --no-fail-fast: one failing test binary does not hide the failures in the others.
+      - run: cargo test --workspace --no-fail-fast -- --include-ignored ${{ matrix.test-args }}
