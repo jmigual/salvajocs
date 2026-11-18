@@ -222,6 +222,69 @@ fn dragging_the_bar_moves_the_window() {
 }
 
 #[test]
+fn the_first_motion_after_a_press_on_the_bar_moves_the_window() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.hover_at(empty);
+    harness.event(button(empty, true));
+    harness.step();
+    assert_eq!(commands(&harness), [], "a press alone may be a click");
+    harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
+    // The compositor keeps the release, so egui still holds the button down.
+    harness.event(Event::PointerMoved(empty + Vec2::new(20.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), [], "one move per press");
+}
+
+#[test]
+fn the_bar_still_clicks_after_the_compositor_kept_the_release() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.hover_at(empty);
+    harness.event(button(empty, true));
+    harness.step();
+    harness.event(Event::PointerMoved(empty + Vec2::new(2.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), [ViewportCommand::StartDrag]);
+    harness.event(Event::PointerGone);
+    harness.step();
+    harness.hover_at(empty);
+    harness.step();
+    assert_eq!(commands(&harness), [], "the pointer back over the bar");
+    for pressed in [true, false] {
+        harness.event(button(empty, pressed));
+        harness.step();
+        assert_eq!(commands(&harness), [], "a click does not move the window");
+    }
+    // Past the double-click time, so the next two clicks are a double click and not a triple.
+    harness.step();
+    harness.step();
+    for pressed in [true, false, true, false] {
+        harness.input_mut().events.push(button(empty, pressed));
+    }
+    harness.step();
+    assert_eq!(commands(&harness), [ViewportCommand::Maximized(true)]);
+}
+
+#[test]
+fn a_press_whose_release_went_with_the_focus_does_not_move_the_window() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.hover_at(empty);
+    harness.event(button(empty, true));
+    harness.step();
+    for focused in [false, true] {
+        harness.event(Event::WindowFocused(focused));
+        harness.step();
+    }
+    harness.event(Event::PointerMoved(empty + Vec2::new(1.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), []);
+}
+
+#[test]
 fn dragging_the_manifest_status_moves_the_window() {
     let (_tmp, mut harness) = ready();
     let status = harness
@@ -244,6 +307,20 @@ fn only_the_primary_button_moves_the_window() {
 }
 
 #[test]
+fn a_secondary_drag_after_a_click_on_the_bar_leaves_the_window_be() {
+    let (_tmp, mut harness) = ready();
+    let empty = empty_bar(&harness);
+    harness.hover_at(empty);
+    for pressed in [true, false] {
+        harness.event(button(empty, pressed));
+        harness.step();
+    }
+    harness.step();
+    harness.step();
+    assert_eq!(drag(&mut harness, empty, PointerButton::Secondary), []);
+}
+
+#[test]
 fn dragging_from_a_tab_leaves_the_window_and_the_tab_be() {
     let (_tmp, mut harness) = ready();
     let tab = harness.get_by_label(Tab::Restore.label()).rect().center();
@@ -258,6 +335,18 @@ fn dragging_from_a_tab_leaves_the_window_and_the_tab_be() {
     harness.get_by_label(Tab::Restore.label()).click();
     common::run_settled(&mut harness);
     assert!(shows(&harness, "Load backups"), "the tab still opens");
+}
+
+#[test]
+fn nudging_a_tab_leaves_the_window_be() {
+    let (_tmp, mut harness) = ready();
+    let tab = harness.get_by_label(Tab::Restore.label()).rect().center();
+    harness.hover_at(tab);
+    harness.event(button(tab, true));
+    harness.step();
+    harness.event(Event::PointerMoved(tab + Vec2::new(1.0, 0.0)));
+    harness.step();
+    assert_eq!(commands(&harness), []);
 }
 
 #[test]

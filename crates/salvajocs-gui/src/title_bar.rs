@@ -2,9 +2,9 @@
 //! the window by its bar, the minimize, maximize and close buttons, and resizing from the edges.
 
 use eframe::egui::{
-    self, Align, Area, Button, ColorImage, CursorIcon, Id, Layout, Margin, Order, PointerButton,
-    Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Ui, Vec2, ViewportCommand,
-    viewport::ResizeDirection,
+    self, Align, Area, Button, ColorImage, CursorIcon, Event, Id, Layout, Margin, Order,
+    PointerButton, Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Ui, Vec2,
+    ViewportCommand, viewport::ResizeDirection,
 };
 
 use crate::theme::{self, icons};
@@ -37,17 +37,29 @@ pub fn drag_area(ui: &mut Ui, margin: Margin) -> Rect {
 /// Moves the window when `response` is dragged and maximizes or restores it when double-clicked,
 /// both with the primary button.
 fn move_window(ctx: &egui::Context, response: &Response) {
-    // egui gives a drag that starts on a click-only widget, such as a tab, to the bar under it;
-    // only a press on the bar itself moves the window.
-    if ctx.input(|i| i.pointer.button_pressed(PointerButton::Primary)) {
+    let (pressed, down, moved, focus_lost) = ctx.input(|i| {
+        (
+            i.pointer.button_pressed(PointerButton::Primary),
+            i.pointer.button_down(PointerButton::Primary),
+            i.pointer.press_origin() != i.pointer.latest_pos(),
+            i.events.contains(&Event::WindowFocused(false)),
+        )
+    });
+    // Only a press on the bar itself moves the window, not one on a tab or button over it. A
+    // release lost with the focus disarms it.
+    if pressed || focus_lost {
         let on_bar =
             ctx.viewport(|viewport| viewport.hits.click.map(|hit| hit.id)) == Some(response.id);
-        ctx.data_mut(|data| data.insert_temp(response.id, on_bar));
+        ctx.data_mut(|data| data.insert_temp(response.id, pressed && on_bar));
     }
-    let pressed_on_bar = ctx.data(|data| data.get_temp(response.id)).unwrap_or(false);
+    let armed = ctx.data(|data| data.get_temp(response.id)).unwrap_or(false);
     if response.double_clicked_by(PointerButton::Primary) {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized(ctx)));
-    } else if response.drag_started_by(PointerButton::Primary) && pressed_on_bar {
+    } else if armed && down && moved {
+        // Not egui's `drag_started`: it waits for 6 points of motion (`max_click_dist`) or 0.8 s
+        // (`max_click_duration`), and the compositor should get the move while the press is fresh.
+        // Once only: when the compositor takes the release, egui still holds the button down.
+        ctx.data_mut(|data| data.insert_temp(response.id, false));
         ctx.send_viewport_cmd(ViewportCommand::StartDrag);
     }
 }
