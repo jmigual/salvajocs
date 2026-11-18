@@ -50,5 +50,4 @@ and paths by default.
   - Measured in plan step 12 (release build, 2026-11-16, local repo on tmpfs): one reindex plus
     20 per-game backups of one 100 kB file each takes 0.32-0.38 s when all 20 are new and
     0.29 s when all are unchanged and skipped.
-- Retention (`forget`/`prune`) is out of scope for v1. Snapshots accumulate; dedup keeps the data
-  small.
+- Retention (`forget`/`prune`) was out of scope for v1, so snapshots accumulated; see ADR-0015.

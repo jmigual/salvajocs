@@ -18,6 +18,10 @@ Not tested: the `rustic` command line, a repository with a password, and `restic
 `restic prune` on a salvajocs repository. The Restore tab and the undo of a restore need the
 snapshots, so do not remove any without a copy of the repository.
 
+Do not run `restic prune` while salvajocs may back up into the repository. salvajocs does not
+take restic's locks, and `restic prune` deletes unused data at once, so it can remove data a
+salvajocs backup running at the same time is about to use.
+
 ## Opening the repository
 
 restic must be able to open the repository location with one of its own backends, for example a
