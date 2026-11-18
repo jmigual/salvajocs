@@ -1,9 +1,10 @@
-//! The window: startup stages, the tab strip and the dialogs in front of the tabs.
+//! The window: startup stages, the title bar with the tab strip and the dialogs in front of the
+//! tabs.
 
 use std::mem;
 use std::sync::Arc;
 
-use eframe::egui::{self, Margin, Ui};
+use eframe::egui::{self, Margin, Rect, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
@@ -18,6 +19,7 @@ use crate::tabs::{
     settings::SettingsTab,
 };
 use crate::theme::{self, icons};
+use crate::title_bar;
 use crate::update::Updater;
 
 /// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
@@ -326,8 +328,11 @@ impl eframe::App for App {
         self.poll_manifest();
         self.state.poll(&ctx);
 
-        let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 8));
+        let margin = Margin::symmetric(16, 8);
+        let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(margin);
+        let (mut bar, mut buttons) = (Rect::NOTHING, Rect::NOTHING);
         egui::Panel::top("tabs").frame(frame).show(ui, |ui| {
+            bar = title_bar::drag_area(ui, margin);
             self.updater.poll(&mut self.state);
             // The dialog of these stages covers the bar, so it shows the notice instead.
             let dialog_open = matches!(self.stage, Stage::FirstRun(_) | Stage::Prompt(_));
@@ -339,8 +344,13 @@ impl eframe::App for App {
             );
             theme::row(
                 ui,
-                |ui| tabs_ui(tab, ui),
                 |ui| {
+                    title_bar::app_icon(ui);
+                    tabs_ui(tab, ui);
+                },
+                |ui| {
+                    // Text you cannot select is bar space, so dragging it moves the window.
+                    ui.style_mut().interaction.selectable_labels = false;
                     if !dialog_open {
                         updater.ui(ui, state);
                     }
@@ -351,6 +361,8 @@ impl eframe::App for App {
                         (None, true) => ui.weak("Manifest: loading"),
                         (None, false) => ui.weak("Manifest: not available"),
                     };
+                    // The sizing pass runs first, so the slot of the real pass is kept.
+                    buttons = title_bar::reserve_buttons(ui);
                 },
             );
             self.status_ui(ui);
@@ -383,6 +395,7 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.advance(ui);
+        title_bar::controls(ui, bar, buttons);
         // Last, so a job started in this frame holds the update back.
         let busy = self.busy();
         self.updater.install_when_idle(&ctx, &mut self.state, busy);

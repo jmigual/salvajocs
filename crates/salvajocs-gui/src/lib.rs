@@ -9,6 +9,7 @@ pub mod startup;
 pub mod state;
 pub mod tabs;
 pub mod theme;
+pub mod title_bar;
 pub mod update;
 pub mod widgets;
 
@@ -20,6 +21,9 @@ use std::path::{Path, PathBuf};
 /// The default application ID; Wayland matches it against the `.desktop` file name to find the
 /// icon. An AppImage started from an integrator's renamed `.desktop` file uses that name instead.
 const APP_ID: &str = "io.github.jmigual.salvajocs";
+
+/// The 256 px app icon.
+const ICON_PNG: &[u8] = include_bytes!("../assets/io.github.jmigual.salvajocs.png");
 
 /// Opens the main window and blocks until it is closed.
 pub fn run() -> eframe::Result {
@@ -112,14 +116,17 @@ fn exec_args(command: &str) -> Vec<String> {
     args
 }
 
-/// The window options: the default ones plus `app_id` and the embedded 256 px icon.
+/// The window options: the default ones plus `app_id`, the embedded 256 px icon and no OS
+/// decorations, as [`title_bar`] draws the bar.
 fn native_options(app_id: String) -> eframe::Result<eframe::NativeOptions> {
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!(
-        "../assets/io.github.jmigual.salvajocs.png"
-    ))
-    .map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
+    let icon = eframe::icon_data::from_png_bytes(ICON_PNG)
+        .map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
     let mut options = eframe::NativeOptions::default();
-    options.viewport = options.viewport.with_app_id(app_id).with_icon(icon);
+    options.viewport = options
+        .viewport
+        .with_app_id(app_id)
+        .with_icon(icon)
+        .with_decorations(false);
     Ok(options)
 }
 
@@ -128,11 +135,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_options_set_the_app_id_and_icon() {
+    fn native_options_set_the_app_id_icon_and_no_decorations() {
         let options = native_options(APP_ID.to_owned()).expect("the embedded icon decodes");
         assert_eq!(options.viewport.app_id.as_deref(), Some(APP_ID));
         let icon = options.viewport.icon.expect("an icon is set");
         assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(options.viewport.decorations, Some(false));
     }
 
     const APPIMAGE: &str = "/home/u/AppImages/salvajocs.appimage";

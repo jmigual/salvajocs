@@ -19,6 +19,7 @@ All notable changes to salvajocs. The format follows
   names, as opendal reads them.
 - The **Option reference** link of the repository form opens that page, in the docs of the
   running version, instead of docs.rs or the rustic config.
+- The app draws its own title bar, with the tabs and the window buttons in one bar.
 
 ### Removed
 
