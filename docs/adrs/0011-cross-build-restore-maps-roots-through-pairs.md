@@ -56,7 +56,8 @@ Engine layouts, from primary sources:
 - **Pair:** `Pair { linux: String, windows: String }`, two glob-free path templates naming the
   same logical directory. A custom game (or an `extend` override of a manifest game, ADR-0008)
   carries `pairs: Vec<Pair>`. There is no general redirect engine. A custom game's file row
-  with a Linux and a Windows path is a pair too, ranked below the saved ones (ADR-0016).
+  with two placeholder paths also proposes a pair, ranked below the saved ones, that declares
+  no roots (ADR-0016).
 - **Skip:** a root the user skipped is stored as its placeholder template in
   `skips: Vec<String>` on the same custom game, so the dialog does not return for it. A skip
   has no family: it matches a root of the source family whose base and rest equal its own
