@@ -47,13 +47,31 @@ A game with unreadable paths shows how many, because its backup may be incomplet
 
 ## Choose and back up
 
-Each game found has a checkbox and a line such as `3 files, 1.2 MiB, plus registry keys`. Open
-the line to see the files. New games start selected. **Select all** and **Deselect all** change
-every game at once.
+Each game found has a checkbox and a line such as `3 files, 1.2 MiB, plus registry keys`. A
+game's checkbox says whether it is backed up at all. New games start selected. **Select all** and
+**Deselect all** change every game at once.
 
-Click **Back up N games**. The tab scans again first, so a save written since the last scan
-is included. It then backs up the games one by one and shows the result per game under
-**Last backup**:
+Open the line to see the game's files as a tree of folders, each with a checkbox, and its registry
+keys under **Registry**:
+
+- Unchecking a folder leaves out every file below it; checking it takes them all back. A folder
+  with only some files checked shows a dash.
+- The line counts only the files that are backed up, and says how many are excluded, as in
+  `2 files, 1.1 MiB, 1 excluded`.
+- A game with every file and key unchecked gets no snapshot.
+- Below Windows folders, names that differ only in upper and lower case are one folder.
+
+The choices are kept in the repository, so every machine that uses it shares them. A click is
+not stored there right away: it waits in `pending-selection.json` in the config folder, which
+keeps it if the app closes, and **Back up** saves it to the repository first. Other machines see
+it after that backup. The checkboxes stay greyed out until the repository is open and the choices
+are loaded from it. If a game's choices cannot be read, for example because a newer salvajocs
+wrote them, the tab says so and backs up all of that game.
+
+Click **Back up N games**. The tab saves your changed choices to the repository and reads every
+game's choices again, so a choice another machine saved since counts. It then scans again, so a
+save written since the last scan is included, backs up the games one by one and shows the result
+per game under **Last backup**:
 
 | Result | Meaning |
 | --- | --- |
@@ -72,6 +90,10 @@ as absolute paths of this machine. That is why a save can be restored on another
 operating system. See [Cross-OS restore](cross-os-restore.md).
 
 salvajocs never deletes snapshots. They accumulate, and deduplication keeps the size small.
+
+A game's choices of what to back up are a separate small snapshot, tagged `salvajocs-settings`
+and `settings:<slug>`, which the restore list does not show. Saving new choices forgets the
+game's older choices snapshots, the one exception to the rule above.
 
 ## Next
 

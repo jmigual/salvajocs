@@ -11,6 +11,9 @@ All notable changes to salvajocs. The format follows
 - An [advanced storage options reference](docs/guide/advanced-options.md): how the key and value
   pairs are read, which values are accepted, and the keys of every backend.
 - A warning under an Advanced option key that the chosen backend does not read.
+- On the Backup tab, choose which files, folders and registry keys of each game are backed up in
+  a tree of checkboxes. The choices are saved in the repository at the next backup, so every
+  machine that uses it shares them.
 
 ### Changed
 
