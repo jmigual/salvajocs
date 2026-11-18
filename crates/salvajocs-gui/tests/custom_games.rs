@@ -6,23 +6,29 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::{
-    env, harness, harness_sized, init_repo, local_config, pick, replace_text, repo_dir,
-    run_settled, run_until, run_until_ready, save_config, shows,
+    env, harness, harness_sized, init_repo, local_config, replace_text, repo_dir, run_settled,
+    run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::{Key, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
-use salvajocs_core::layout::{Base, Context, LinuxFolders};
+use salvajocs_core::layout::Base;
+#[cfg(not(windows))]
+use salvajocs_core::layout::{Context, LinuxFolders};
 use salvajocs_core::manifest::{
     self, CustomFile, CustomGame, FileRule, GameEntry, InstallDir, Integration, Manifest, Os, Pair,
     RegistryRule, Steam, Tag, When,
 };
+#[cfg(not(windows))]
 use salvajocs_core::scan::Environment;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
+
+#[cfg(not(windows))]
+use common::pick;
 
 /// An app with the repository open and the Custom games tab in front, starting from `games`
 /// and a cached manifest that holds the titles `manifest_titles`.
@@ -151,6 +157,7 @@ fn skipped_game(title: &str) -> CustomGame {
 }
 
 /// This machine as a native Linux system whose home is `home`.
+#[cfg(not(windows))]
 fn linux_environment(home: &Path) -> Environment {
     Environment {
         native: Some(Context::Linux(LinuxFolders {
@@ -299,6 +306,7 @@ fn custom_games_install_folder_that_is_a_path_shows_its_error_and_cannot_be_save
     assert!(!disabled(&harness, "Save game"));
 }
 
+#[cfg(not(windows))]
 #[test]
 fn custom_games_install_folder_makes_a_browsed_folder_base_relative() {
     let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), &[], |env, tmp| {
@@ -352,6 +360,7 @@ fn custom_games_invalid_file_row_shows_its_error_and_cannot_be_saved() {
     assert!(harness.query_by_label("Linux path 2").is_none());
 }
 
+#[cfg(not(windows))]
 #[test]
 fn custom_games_browse_fills_the_linux_path_from_the_picked_folder() {
     let (mut harness, _env, _tmp) = open_tab_with(Vec::new(), &[], |env, tmp| {
