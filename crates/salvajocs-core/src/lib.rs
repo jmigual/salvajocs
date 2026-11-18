@@ -11,6 +11,7 @@ pub mod restore;
 pub mod retention;
 pub mod scan;
 pub mod secret;
+pub mod selection;
 pub mod slug;
 pub mod storage;
 pub mod update;
