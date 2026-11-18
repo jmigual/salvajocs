@@ -6,6 +6,10 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A dialog taller than the window, such as the one that creates a repository, scrolls.
+
 ## [0.3.1] - 2026-11-17
 
 ### Changed

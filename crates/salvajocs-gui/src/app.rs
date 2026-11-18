@@ -164,7 +164,7 @@ impl App {
         self.stage = match mem::replace(&mut self.stage, Stage::Ready) {
             Stage::Starting => Stage::Starting,
             Stage::FirstRun(mut connect) => {
-                let connected = dialog(&ctx, "first_run", |ui| {
+                let connected = theme::modal(&ctx, "first_run", 560.0, |ui| {
                     ui.heading("Welcome to salvajocs");
                     ui.weak("Pick a folder or server for your backups. You can change it later in Settings.");
                     connect.ui(ui, &self.state.env)
@@ -192,7 +192,7 @@ impl App {
             Stage::Prompt(mut prompt) => {
                 // Read before the prompt hands its answers over.
                 let asks_password = prompt.asks_password();
-                match dialog(&ctx, "secret_prompt", |ui| {
+                match theme::modal(&ctx, "secret_prompt", 560.0, |ui| {
                     ui.heading("Repository secrets");
                     prompt.ui(ui)
                 }) {
@@ -309,16 +309,6 @@ fn tabs_ui(current: &mut Tab, ui: &mut Ui) {
             }
         }
     });
-}
-
-/// Shows `content` in a modal dialog.
-fn dialog<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut Ui) -> R) -> R {
-    theme::modal(ctx, id)
-        .show(ctx, |ui| {
-            ui.set_width(560.0);
-            content(ui)
-        })
-        .inner
 }
 
 impl eframe::App for App {

@@ -633,13 +633,10 @@ impl RestoreTab {
         let Some((fetched, dialog)) = &mut self.mapping else {
             return;
         };
-        let action = theme::modal(ctx, "restore_mapping")
-            .show(ctx, |ui| {
-                ui.set_width(720.0);
-                let offer_prefix = fetched.targets.win.is_none();
-                dialog.ui(ui, &fetched.title, busy, offer_prefix, error.as_deref())
-            })
-            .inner;
+        let action = theme::modal(ctx, "restore_mapping", 720.0, |ui| {
+            let offer_prefix = fetched.targets.win.is_none();
+            dialog.ui(ui, &fetched.title, busy, offer_prefix, error.as_deref())
+        });
         match action {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
                 let fetched = fetched.clone();

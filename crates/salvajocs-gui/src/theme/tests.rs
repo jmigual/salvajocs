@@ -136,8 +136,7 @@ fn a_new_button_row_is_in_place_on_its_first_frame() {
     let mut harness = harness(
         |ui, confirm: &mut bool| {
             let confirm = *confirm;
-            modal(ui.ctx(), "dialog").show(ui.ctx(), |ui| {
-                ui.set_width(400.0);
+            modal(ui.ctx(), "dialog", 400.0, |ui| {
                 ui.label("A dialog");
                 row_end(ui, |ui| {
                     if confirm {

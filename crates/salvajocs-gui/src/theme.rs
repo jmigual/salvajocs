@@ -230,10 +230,27 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
     icon_label(ui, glyph, color, RichText::new(text).color(color));
 }
 
-/// A modal dialog in the window frame: 20 px margins and the dialog corner radius, rather than
-/// the smaller popup frame egui gives modals.
-pub fn modal(ctx: &egui::Context, id: &str) -> Modal {
-    Modal::new(egui::Id::unique(id)).frame(Frame::window(&ctx.global_style()))
+/// Shows `content` in a modal dialog `width` wide, in the window frame: 20 px margins and the
+/// dialog corner radius, rather than the smaller popup frame egui gives modals. `content`
+/// scrolls when the window is too short for it.
+pub fn modal<R>(
+    ctx: &egui::Context,
+    id: &str,
+    width: f32,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let frame = Frame::window(&ctx.global_style());
+    let max_height = (ctx.content_rect().height() - frame.total_margin().sum().y).max(0.0);
+    Modal::new(egui::Id::unique(id))
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            // An area's `max_rect` is its last size: without this the dialog keeps its last
+            // height when the window shrinks, and its lower part is clipped without scrolling.
+            ui.set_max_height(max_height);
+            ScrollArea::vertical().show(ui, content).inner
+        })
+        .inner
 }
 
 /// A row of `end` against the right edge, such as a dialog's or form's buttons with the primary
