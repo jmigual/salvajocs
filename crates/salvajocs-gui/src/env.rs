@@ -133,6 +133,8 @@ pub struct Env {
     pub run_installer: fn(&Path) -> Result<(), UpdateError>,
     /// Lists the rclone remotes (`config::rclone_remotes`).
     pub rclone_remotes: fn() -> io::Result<Vec<String>>,
+    /// Asks the user for a folder; `None` when they cancel. Blocks, so call it from a worker.
+    pub pick_folder: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
 }
 
 impl Env {
@@ -149,6 +151,7 @@ impl Env {
             installed_by_installer,
             run_installer: update::run_installer,
             rclone_remotes: config::rclone_remotes,
+            pick_folder: Arc::new(|| rfd::FileDialog::new().pick_folder()),
         })
     }
 }

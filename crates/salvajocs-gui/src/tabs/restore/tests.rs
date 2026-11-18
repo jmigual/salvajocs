@@ -54,6 +54,7 @@ fn state(dir: &Path) -> State {
         installed_by_installer: || false,
         run_installer: |_| panic!("tests never start an installer"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
+        pick_folder: Arc::new(|| None),
     });
     state.config = Some(AppConfig {
         repository: String::new(),

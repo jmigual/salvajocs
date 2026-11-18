@@ -35,6 +35,7 @@ fn state(dir: &Path) -> State {
         installed_by_installer: || true,
         run_installer: fake_installer,
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
+        pick_folder: Arc::new(|| None),
     })
 }
 

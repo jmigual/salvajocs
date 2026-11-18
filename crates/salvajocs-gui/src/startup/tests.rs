@@ -22,6 +22,7 @@ fn env(secrets: Arc<dyn SecretStore>) -> Env {
         installed_by_installer: || false,
         run_installer: |_| panic!("tests never start an installer"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
+        pick_folder: Arc::new(|| None),
     }
 }
 

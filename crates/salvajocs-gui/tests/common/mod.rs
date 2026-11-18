@@ -5,7 +5,7 @@
 // code in the rest.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -76,7 +76,13 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         installed_by_installer: || false,
         run_installer: |_| panic!("tests never start an installer"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
+        pick_folder: Arc::new(|| None),
     }
+}
+
+/// Makes the folder picker of `env` return `path`, as if the user chose it.
+pub fn pick(env: &mut Env, path: PathBuf) {
+    env.pick_folder = Arc::new(move || Some(path.clone()));
 }
 
 /// Where the tests keep their repository.
