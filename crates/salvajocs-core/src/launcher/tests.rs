@@ -423,6 +423,10 @@ fn lutris_null_key_is_ignored() {
         ".local/share/lutris/games/foo-1.yml",
         "system: {}\nnull: {}\ngame:\n  prefix: ~/Games/foo\n",
     );
+    h.write(
+        ".local/share/lutris/games/null-1.yml",
+        "game:\n  prefix: ~\n  exe: null\n",
+    );
     let (prefixes, problems) = h.detect();
     assert_eq!(problems, [], "{}", steam.display());
     assert_eq!(prefixes, [lutris_foo(prefix)]);
@@ -506,6 +510,17 @@ fn bottles_placeholder_path() {
             found(Launcher::Bottles, placed, None),
         ]
     );
+}
+
+#[test]
+fn bottles_empty_placeholder_path_falls_back_to_the_bottle() {
+    let h = Home::new();
+    let bottle = h.prefix(".local/share/bottles/bottles/Foo");
+    h.write(
+        ".local/share/bottles/bottles/Foo/placeholder.yml",
+        "Path:\n",
+    );
+    assert_eq!(h.prefixes(), [found(Launcher::Bottles, bottle, None)]);
 }
 
 #[test]

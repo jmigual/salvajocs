@@ -365,9 +365,10 @@ impl Found {
                     continue;
                 }
             }
-            let path = if let Some(placeholder) =
-                self.yaml::<BottlePlaceholder>(&bottle.join("placeholder.yml"))
-            {
+            let placeholder = self
+                .yaml::<BottlePlaceholder>(&bottle.join("placeholder.yml"))
+                .filter(|placeholder| Path::new(&placeholder.path).is_absolute());
+            let path = if let Some(placeholder) = placeholder {
                 host_path(&placeholder.path)
             } else if self.is_prefix(&bottle) {
                 bottle
