@@ -19,13 +19,17 @@ hold the same file or folder.
   windows: Option<String> }`. Registry keys and install folders stay in `entry.registry` and
   `entry.install_dir`. The app no longer writes a custom game's `entry.files`; it still reads
   it as-is.
-- **Breaking change in 0.4.0.** Configs from 0.3.x are not converted: custom games must be
-  entered again. Nobody has backups that depend on them yet.
+- **Breaking change in 0.4.0.** Configs from 0.3.x are not converted. Their `entry.files`
+  templates are still backed up, on every OS where they classify, but the form does not show
+  them; to edit them, the user removes the game and adds it again. Nobody has backups that
+  depend on them yet.
 - **Backup:** `CustomGame::game_entry()` returns `entry` plus one save-tagged `FileRule` per
   side, with `when.os: linux` for the Linux side (native Linux build) and `when.os: windows` for
   the Windows side (native Windows or a Wine/Proton prefix), the same meaning `when.os` has for
   manifest entries (ADR-0008). A template on both sides, or in several rows, gets both OSes.
-  A template already in `entry.files` keeps its rule. A Windows drive path is stored with `/`
+  A template already in `entry.files` keeps its rule: an old hidden template equal to a row's
+  keeps applying on every OS, so the row's per-side setting takes effect only after the game is
+  removed and added again. A Windows drive path is stored with `/`
   separators, since globbing and the glob-free prefix split on `/`. `merge_custom` uses
   `game_entry()`.
 - **Validation (`crossbuild::validate_file`)**, textual so every host gives the same answer:
@@ -42,9 +46,15 @@ hold the same file or folder.
     hold both paths.
 - **Restore:** each row with two different sides gives a pair of its glob-free prefixes
   (`CustomGame::file_pairs`), e.g. `<xdgData>/g/*.sav` and `<winDocuments>/G/Saves/*.sav` give
-  `<xdgData>/g` and `<winDocuments>/G/Saves`, when both are valid pair sides (ADR-0011) and a
-  prefix on a Linux or Windows base keeps a folder below the placeholder (a bare `<home>` would
-  map every other `Home` root too). A row with an absolute side, or a bare base, gives no pair.
+  `<xdgData>/g` and `<winDocuments>/G/Saves`, when both are valid pair sides (ADR-0011), the
+  text after both prefixes is the same (none, or the same glob such as `/*.sav`), and a prefix
+  on a Linux or Windows base keeps a folder below the placeholder (a bare `<home>` would map
+  every other `Home` root too). Any other row gives no pair: an absolute side, a bare base, or
+  different tails, such as `<xdgData>/g` with `<winDocuments>/G/slot*/data.sav`, or a folder
+  name Browse escaped (`Bar [x]` becomes `Bar [[]x[]]`, whose glob-free prefix stops before
+  it). `glob_free_prefix` keeps treating an escaped class as a glob: reading it as a literal
+  would need it to unescape and return an owned string for every caller, since snapshot roots
+  hold real folder names.
   `restore::game_info` returns these as `row_pairs`, apart from the saved `pairs`, minus those a
   saved skip names (base equal, rest equal, ASCII case ignored on the Windows side).
   `restore::prepare` proposes row pairs before the saved pairs, so a saved pair wins a tie.
