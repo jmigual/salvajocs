@@ -17,6 +17,9 @@ All notable changes to salvajocs. The format follows
 - **Browse** next to each path of a custom game file turns a picked folder into a path template;
   on Linux, a Windows path is picked inside a Wine prefix.
 - Install folders of a custom game can be edited, for `<base>` paths.
+- In Settings, choose which old backups to keep: the last N of each game, those newer than a
+  span, or both. The rules are stored in the repository, and old backups are removed after each
+  backup.
 
 ### Changed
 

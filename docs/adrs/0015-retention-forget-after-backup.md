@@ -26,8 +26,8 @@ label and paths, so two machines with the same files each write their own snapsh
   error like a parse failure. `selection::load_all` skips this snapshot: no game slug is
   `retention`, since every slug holds a hex hash.
 - **Unknown fields are an error** (`deny_unknown_fields`), so an older app never applies only
-  the rules it knows. A policy that fails to parse means no cleanup (forget nothing), and the
-  caller reports the error instead of treating it as off.
+  the rules it knows. A policy that fails to parse forgets nothing, and the caller reports the
+  error instead of treating it as off.
 - **Candidates:** snapshots tagged `salvajocs` and `game:<slug>` and not `salvajocs-settings`,
   by exact tag. Anything else in the repository is never forgotten.
 - **Grouping:** per game across all hosts. Each game has two sequences, regular and
@@ -87,11 +87,22 @@ label and paths, so two machines with the same files each write their own snapsh
   snapshots (200 index files): about 15 ms for the check, about 330 ms for the prune.
 - A newer-format or corrupt stored policy means nothing is forgotten, and every save of the
   policy fails until another version replaces it or it is forgotten by hand.
+- When the policy cannot be loaded for any reason, the cleanup after a backup applies the default
+  (every rule off) and shows the load error as a warning: nothing is forgotten, but marked packs
+  are still pruned.
+- In an append-only repository the cleanup neither forgets nor prunes, since rustic refuses both
+  (a refused prune would first plan it in full). The snapshots the policy would forget are
+  counted, and the backup shows that count once as a warning. A server that enforces
+  append-only itself (`rest-server --append-only`) leaves the repository config unmarked, so
+  every cleanup with something to forget fails; turning the rules off avoids it.
 - The last save wins: two machines editing the policy at once each write their own, and the
   newer one stays. The Settings tab reloads the policy each time it is shown, unless an edit is
   still being saved, but a tab left open shows its own copy until then.
 - `keep_within` counts from the local clock: a machine whose clock jumps far ahead forgets
   everything that `keep_last` and the newest-per-host guard do not keep.
+- Clock skew also affects `keep_delete`: a pruning machine whose clock is about 23 h or more
+  ahead can delete marked packs early, including one that another machine's in-flight backup
+  reuses.
 - Running `restic prune` while salvajocs may back up is unsafe: restic's lock does not stop
   salvajocs, and restic deletes unused packs at once, including ones a running backup is about to
   reference. The restic guide says so.

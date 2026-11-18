@@ -70,8 +70,9 @@ wrote them, the tab says so and backs up all of that game.
 
 Click **Back up N games**. The tab saves your changed choices to the repository and reads every
 game's choices again, so a choice another machine saved since counts. It then scans again, so a
-save written since the last scan is included, backs up the games one by one and shows the result
-per game under **Last backup**:
+save written since the last scan is included, backs up the games one by one, then removes old
+backups (see [What is stored](#what-is-stored)). It shows the result per game under
+**Last backup**:
 
 | Result | Meaning |
 | --- | --- |
@@ -89,11 +90,22 @@ label. Files are stored relative to named folders (for example `WinDocuments` or
 as absolute paths of this machine. That is why a save can be restored on another machine or
 operating system. See [Cross-OS restore](cross-os-restore.md).
 
-salvajocs never deletes snapshots. They accumulate, and deduplication keeps the size small.
+After each backup, even one where a game failed, salvajocs removes the old backups that the
+[Old backups](settings.md#old-backups) rules let go, never the ones this backup just made, and
+shows **Removed N old backups**. With no rule set, snapshots accumulate, and deduplication keeps
+the size small. If the rules cannot be read, or the repository is append-only, nothing is removed
+and a warning says so. If the cleanup stops partway, **Cleanup did not finish** says why, and
+**Removed N old backups** counts those that are gone, even if it stopped while removing them;
+this backup's snapshots are stored all the same.
+
+A server that makes the repository append-only by itself, such as `rest-server --append-only`,
+does not mark the repository as append-only, so salvajocs cannot tell. The cleanup then fails
+after every backup that has old backups to remove. Turn the rules off in Settings for such a
+repository.
 
 A game's choices of what to back up are a separate small snapshot, tagged `salvajocs-settings`
 and `settings:<slug>`, which the restore list does not show. Saving new choices forgets the
-game's older choices snapshots, the one exception to the rule above.
+game's older choices snapshots.
 
 ## Next
 
