@@ -190,9 +190,10 @@ fn write_file(path: &Path, len: usize) {
     fs::write(path, filler(len)).unwrap();
 }
 
-/// A Wine prefix under `tmp` that holds the saves of five games and the registry key of one.
-fn windows_prefix(tmp: &TempDir) -> PathBuf {
-    let prefix = tmp.path().join("pfx");
+/// A Wine prefix under `DEMO_ROOT`, a fixed path the screens can show, that holds the saves of
+/// five games and the registry key of one. The caller owns `DEMO_ROOT`.
+fn windows_prefix() -> PathBuf {
+    let prefix = Path::new(DEMO_ROOT).join("Games/Heroic/Prefixes/default/pfx");
     let home = prefix.join("drive_c/users/steamuser");
     let saves = [
         (
@@ -259,7 +260,7 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     let (_turn, repository) = demo_repository();
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
-    let prefix = windows_prefix(&tmp);
+    let prefix = windows_prefix();
     let mut config = local_config(&repository);
     config.roots = vec![Root {
         path: prefix.clone(),
