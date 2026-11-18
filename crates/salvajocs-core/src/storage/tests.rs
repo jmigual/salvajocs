@@ -223,6 +223,70 @@ fn forgotten_snapshot_is_no_longer_listed() {
 }
 
 #[test]
+fn a_failed_prune_leaves_the_index_stale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    storage.set_append_only();
+    assert!(storage.prune().is_err());
+    assert!(storage.stale);
+}
+
+#[test]
+fn data_only_in_marked_packs_is_written_again_after_a_prune() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let old = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    fs::write(src.join("a.sav"), "newer").unwrap();
+    storage.reindex().unwrap();
+    storage.backup_dir(&src, AS_PATH, TAGS, "Test").unwrap();
+    storage.forget(&[&old.id]).unwrap();
+    storage.prune().unwrap();
+    assert!(!storage.stale);
+
+    // "alpha" is now only in a marked pack, which the reloaded index no longer offers to reuse.
+    fs::write(src.join("a.sav"), "alpha").unwrap();
+    let again = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut fresh = Storage::open(&local(&tmp.path().join("repo")), "").unwrap();
+    let out = tmp.path().join("out");
+    fresh.restore_path(&again.id, AS_PATH, &out).unwrap();
+    assert_eq!(fs::read_to_string(out.join("a.sav")).unwrap(), "alpha");
+}
+
+#[test]
+fn newest_snapshot_restores_after_forget_and_prune() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let old = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    fs::write(src.join("a.sav"), "newer").unwrap();
+    storage.reindex().unwrap();
+    let newest = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    assert!(!storage.has_marked_packs().unwrap());
+
+    storage.forget(&[&old.id]).unwrap();
+    storage.prune().unwrap();
+    assert!(storage.has_marked_packs().unwrap());
+
+    let out = tmp.path().join("out");
+    storage.restore_path(&newest.id, AS_PATH, &out).unwrap();
+    assert_eq!(fs::read_to_string(out.join("a.sav")).unwrap(), "newer");
+    assert_eq!(fs::read_to_string(out.join("sub/b.sav")).unwrap(), "beta");
+}
+
+#[test]
 fn read_file_returns_a_file_of_a_snapshot_written_this_session() {
     let tmp = tempfile::tempdir().unwrap();
     let src = save_dir(tmp.path());

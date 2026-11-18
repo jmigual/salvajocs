@@ -9,9 +9,9 @@ use std::time::{Duration, Instant, SystemTime};
 use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to_type_and_path};
 use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
-    LsOptions, PathList, Repository, RepositoryBackends, RepositoryOptions, RestoreOptions,
-    RusticError, SnapshotOptions,
-    repofile::{SnapshotFile, SnapshotId},
+    LsOptions, PathList, PruneOptions, Repository, RepositoryBackends, RepositoryOptions,
+    RestoreOptions, RusticError, SnapshotOptions,
+    repofile::{IndexFile, SnapshotFile, SnapshotId},
 };
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
@@ -224,7 +224,8 @@ pub struct Storage {
     backends: RepositoryBackends,
     password: String,
     repo: Repository<IndexedFullStatus>,
-    /// A snapshot was written since the index was loaded, so restoring it needs a reindex.
+    /// A snapshot was written or a prune ran since the index was loaded, so restoring needs a
+    /// reindex.
     stale: bool,
 }
 
@@ -352,6 +353,30 @@ impl Storage {
             .map(|id| id.parse::<SnapshotId>().map_err(backend))
             .collect::<Result<Vec<_>, _>>()?;
         self.repo.delete_snapshots(&ids).map_err(backend)
+    }
+
+    /// Removes data no snapshot needs, with rustic's default options: an unused pack is only
+    /// marked, and a later prune deletes it once `keep_delete` (23 h) has passed (ADR-0015).
+    /// Reindexes after a prune that succeeded, so marked packs no longer count as live.
+    pub fn prune(&mut self) -> Result<(), StorageError> {
+        let options = PruneOptions::default();
+        let plan = self.repo.prune_plan(&options).map_err(backend)?;
+        let pruned = self.repo.prune(&options, plan);
+        // Prune rewrites the index files, even when it fails partway.
+        self.stale = true;
+        pruned.map_err(backend)?;
+        self.reindex()
+    }
+
+    /// Whether any index file of the repository, as stored now, lists packs a prune marked for
+    /// deletion. Reads every index file, but no tree or pack.
+    pub fn has_marked_packs(&self) -> Result<bool, StorageError> {
+        for index in self.repo.stream_files::<IndexFile>().map_err(backend)? {
+            if !index.map_err(backend)?.1.packs_to_delete.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Makes the repository append-only, so [`Storage::forget`] fails.
