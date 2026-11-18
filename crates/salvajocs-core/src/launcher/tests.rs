@@ -1,6 +1,6 @@
 use super::*;
 
-/// A fake home with the XDG config directory inside it.
+/// A fake home with the XDG config and data directories inside it.
 struct Home {
     _dir: tempfile::TempDir,
     home: PathBuf,
@@ -15,6 +15,10 @@ impl Home {
 
     fn config(&self) -> PathBuf {
         self.home.join(".config")
+    }
+
+    fn data(&self) -> PathBuf {
+        self.home.join(".local/share")
     }
 
     /// Writes `content` to `path` below the home, creating its parents.
@@ -34,7 +38,7 @@ impl Home {
     }
 
     fn detect(&self) -> (Vec<LauncherPrefix>, Vec<ScanProblem>) {
-        detect(&self.home, &self.config())
+        detect(&self.home, &self.config(), &self.data())
     }
 
     /// Detects, expecting no problems.
@@ -325,6 +329,119 @@ fn unreadable_prefix_is_a_problem() {
             ..
         ]
     ));
+}
+
+#[test]
+fn lutris_installer_yml_name_slug_service() {
+    let h = Home::new();
+    let gog = h.prefix("Games/foo");
+    let steam = h.prefix("Games/bar");
+    h.write(
+        ".config/lutris/games/foo-gog-1700000000.yml",
+        "name: Foo\ngame_slug: foo\nservice: gog\nservice_id: '1207658924'\n\
+         game:\n  exe: /elsewhere/foo.exe\n  prefix: ~/Games/foo\n\
+         script:\n  files:\n  - setup: N/A\nwine:\n  version: lutris\n",
+    );
+    h.write(
+        ".config/lutris/games/bar-1700000001.yml",
+        "name: Bar\ngame_slug: bar-game\nservice: steam\nservice_id: 620\n\
+         game:\n  prefix: ~/Games/bar\n",
+    );
+    let bar = LauncherGame {
+        steam_id: Some(620),
+        lutris_slug: Some("bar-game".to_owned()),
+        ..titled("Bar")
+    };
+    let foo = LauncherGame {
+        gog_id: Some(1_207_658_924),
+        lutris_slug: Some("foo".to_owned()),
+        ..titled("Foo")
+    };
+    assert_eq!(
+        h.prefixes(),
+        [
+            found(Launcher::Lutris, steam, Some(bar)),
+            found(Launcher::Lutris, gog, Some(foo)),
+        ]
+    );
+}
+
+#[test]
+fn lutris_manual_yml_stem_slug_and_exe_prefix() {
+    let h = Home::new();
+    let prefix = h.prefix("Games/foo");
+    h.write(
+        ".config/lutris/games/foo-bar-1700000000.yml",
+        &format!(
+            "game:\n  exe: {}/drive_c/Games/Foo/foo.exe\n  prefix: ''\nwine:\n  version: lutris\n",
+            prefix.display()
+        ),
+    );
+    h.write(
+        ".config/lutris/games/relative-1700000001.yml",
+        "game:\n  exe: drive_c/foo.exe\n",
+    );
+    let game = LauncherGame {
+        lutris_slug: Some("foo-bar".to_owned()),
+        ..LauncherGame::default()
+    };
+    assert_eq!(h.prefixes(), [found(Launcher::Lutris, prefix, Some(game))]);
+}
+
+/// A hand-added Lutris game file for the prefix at `~/Games/foo`.
+const LUTRIS_FOO: &str = "game:\n  prefix: ~/Games/foo\n";
+
+fn lutris_foo(prefix: PathBuf) -> LauncherPrefix {
+    let game = LauncherGame {
+        lutris_slug: Some("foo".to_owned()),
+        ..LauncherGame::default()
+    };
+    found(Launcher::Lutris, prefix, Some(game))
+}
+
+#[test]
+fn lutris_reads_only_yml_games() {
+    let h = Home::new();
+    let prefix = h.prefix("Games/foo");
+    h.write(".config/lutris/games/foo-1.yaml", LUTRIS_FOO);
+    h.write(".config/lutris/games/foo-2.yml.bak", "game: [");
+    assert_eq!(h.prefixes(), [lutris_foo(prefix)]);
+}
+
+#[test]
+fn malformed_lutris_yml_is_a_problem() {
+    let h = Home::new();
+    let file = h.write(".config/lutris/games/foo-1.yml", "game: [");
+    let (prefixes, problems) = h.detect();
+    assert_eq!(prefixes, []);
+    assert!(matches!(
+        problems.as_slice(),
+        [ScanProblem { path, kind: ProblemKind::Unreadable(_) }] if *path == file
+    ));
+}
+
+#[test]
+fn lutris_falls_back_to_data_dir() {
+    let h = Home::new();
+    let prefix = h.prefix("Games/foo");
+    h.write(".local/share/lutris/games/foo-1.yml", LUTRIS_FOO);
+    assert_eq!(h.prefixes(), [lutris_foo(prefix)]);
+
+    fs::create_dir_all(h.config().join("lutris")).unwrap();
+    assert_eq!(h.prefixes(), []);
+}
+
+#[test]
+fn lutris_flatpak_dirs() {
+    for dir in ["config", "data"] {
+        let h = Home::new();
+        let prefix = h.prefix("Games/foo");
+        h.write(
+            &format!(".var/app/net.lutris.Lutris/{dir}/lutris/games/foo-1.yml"),
+            LUTRIS_FOO,
+        );
+        assert_eq!(h.prefixes(), [lutris_foo(prefix)], "{dir}");
+    }
 }
 
 // These normalize_title tests cover ludusavi's `can_normalize_title` cases (src/scan/title.rs).
