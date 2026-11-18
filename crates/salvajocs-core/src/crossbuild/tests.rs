@@ -1,5 +1,8 @@
+use std::fs;
+
 use super::*;
 use crate::config::PasswordMode;
+use crate::layout::{Root, RootKind};
 use crate::manifest::{RegistryRule, When};
 
 fn root(template: &str, family: Family) -> SnapshotRoot {
@@ -910,4 +913,187 @@ fn validate_pair_accepts_placeholder_templates_and_names_the_bad_side() {
         let error = validate_pair(&pair(linux, windows)).unwrap_err();
         assert_eq!(error.side, side, "{linux} / {windows}");
     }
+}
+
+fn linux_ctx() -> Context {
+    Context::Linux(LinuxFolders {
+        user: "me".into(),
+        home: "/home/me".into(),
+        xdg_data: "/home/me/.local/share".into(),
+        xdg_config: "/home/me/.config".into(),
+    })
+}
+
+fn prefix_ctx(prefix: &Path) -> Context {
+    Context::WinePrefix {
+        prefix: prefix.to_path_buf(),
+        folders: WinFolders::for_prefix(prefix, "steamuser"),
+    }
+}
+
+fn no_game() -> GameVars {
+    GameVars::new("Game", vec![], &[], None)
+}
+
+fn other_root(path: &str) -> Root {
+    Root {
+        path: path.into(),
+        kind: RootKind::Other,
+    }
+}
+
+fn template(path: &str, ctx: &Context, vars: &GameVars) -> Option<String> {
+    template_for(Path::new(path), ctx, vars)
+}
+
+#[test]
+fn template_for_prefers_the_deepest_base() {
+    let ctx = linux_ctx();
+    let vars = no_game();
+    assert_eq!(
+        template("/home/me/.config/Foo", &ctx, &vars).as_deref(),
+        Some("<xdgConfig>/Foo")
+    );
+    assert_eq!(
+        template("/home/me/Documents/Foo", &ctx, &vars).as_deref(),
+        Some("<home>/Documents/Foo")
+    );
+    // A base dir itself has no trailing slash.
+    assert_eq!(template("/home/me", &ctx, &vars).as_deref(), Some("<home>"));
+}
+
+#[test]
+fn template_for_prefers_game_dir_over_a_shallower_base() {
+    let vars = GameVars::new("Foo", vec![], &[other_root("/home/me/.local/share")], None);
+    let ctx = linux_ctx();
+    assert_eq!(
+        template("/home/me/.local/share/Foo/saves", &ctx, &vars).as_deref(),
+        Some("<base>/saves")
+    );
+    assert_eq!(
+        template("/home/me/.local/share/Foo", &ctx, &vars).as_deref(),
+        Some("<base>")
+    );
+    assert_eq!(
+        template("/home/me/.local/share/Other", &ctx, &vars).as_deref(),
+        Some("<xdgData>/Other")
+    );
+}
+
+#[test]
+fn template_for_store_root_itself_has_no_trailing_slash() {
+    let steam = Root {
+        path: "/games/steam".into(),
+        kind: RootKind::Steam,
+    };
+    let vars = GameVars::new("Foo", vec![], &[steam], None);
+    assert_eq!(
+        template("/games/steam", &linux_ctx(), &vars).as_deref(),
+        Some("<root>")
+    );
+}
+
+#[test]
+fn template_for_game_dir_wins_a_tie_with_a_family_base() {
+    // The game dir is `~/.config`, the same directory as `<xdgConfig>`.
+    let vars = GameVars::new(
+        "Game",
+        vec![".config".into()],
+        &[other_root("/home/me")],
+        None,
+    );
+    assert_eq!(
+        template("/home/me/.config/saves", &linux_ctx(), &vars).as_deref(),
+        Some("<base>/saves")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn template_for_escapes_glob_characters() {
+    let ctx = linux_ctx();
+    let vars = no_game();
+    assert_eq!(
+        template("/home/me/a[1]", &ctx, &vars).as_deref(),
+        Some("<home>/a[[]1[]]")
+    );
+    assert_eq!(
+        template("/mnt/a*b", &ctx, &vars).as_deref(),
+        Some("/mnt/a[*]b")
+    );
+}
+
+#[test]
+fn template_for_escaped_name_in_a_prefix_still_expands_to_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = prefix_ctx(dir.path());
+    let pick = dir
+        .path()
+        .join("drive_c/users/steamuser/AppData/Roaming/a[1]");
+    fs::create_dir_all(&pick).unwrap();
+    let vars = no_game();
+    let template = template_for(&pick, &ctx, &vars).unwrap();
+    assert_eq!(template, "<winAppData>/a[[]1[]]");
+    let (_, pattern) = layout::expand(&template, &ctx, &vars).remove(0);
+    let found: Vec<_> = glob::glob(&pattern).unwrap().flatten().collect();
+    assert_eq!(found, [pick]);
+}
+
+#[cfg(unix)]
+#[test]
+fn template_for_falls_back_to_the_absolute_path_on_native_linux() {
+    assert_eq!(
+        template("/mnt/games/Foo", &linux_ctx(), &no_game()).as_deref(),
+        Some("/mnt/games/Foo")
+    );
+}
+
+#[test]
+fn template_for_has_no_fallback_in_a_prefix() {
+    let ctx = prefix_ctx(Path::new("/pfx"));
+    assert_eq!(template("/mnt/games/Foo", &ctx, &no_game()), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn template_for_never_gives_a_template_that_resolves_elsewhere() {
+    // `<home>/.config/Foo` would classify to `<xdgConfig>/Foo`, which is `/cfg/Foo` here.
+    let Context::Linux(mut folders) = linux_ctx() else {
+        unreachable!()
+    };
+    folders.xdg_config = "/cfg".into();
+    assert_eq!(
+        template("/home/me/.config/Foo", &Context::Linux(folders), &no_game()).as_deref(),
+        Some("/home/me/.config/Foo")
+    );
+
+    // Redirected `%APPDATA%`: `<home>/AppData/Roaming/Foo` would classify to `<winAppData>/Foo`.
+    let prefix = Path::new("/pfx");
+    let mut folders = WinFolders::for_prefix(prefix, "steamuser");
+    folders.app_data = "/elsewhere".into();
+    let ctx = Context::WinePrefix {
+        prefix: prefix.to_path_buf(),
+        folders,
+    };
+    assert_eq!(
+        template(
+            "/pfx/drive_c/users/steamuser/AppData/Roaming/Foo",
+            &ctx,
+            &no_game()
+        ),
+        None
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn template_for_falls_back_to_a_drive_path_on_native_windows() {
+    let ctx = Context::WindowsNative(WinFolders::for_prefix(Path::new("C:/fake"), "me"));
+    let vars = no_game();
+    assert_eq!(
+        template(r"C:\Games\Foo", &ctx, &vars).as_deref(),
+        Some("C:/Games/Foo")
+    );
+    assert_eq!(template(r"C:\", &ctx, &vars).as_deref(), Some("C:/"));
+    assert_eq!(template(r"\\server\share\Foo", &ctx, &vars), None);
 }

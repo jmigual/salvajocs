@@ -46,6 +46,13 @@ pub fn validate_prefix(path: &Path) -> Result<(), PrefixError> {
     }
 }
 
+/// The first ancestor of `path` (itself included) that is a valid Wine prefix.
+pub fn enclosing_prefix(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| validate_prefix(dir).is_ok())
+        .map(Path::to_path_buf)
+}
+
 /// Like `Path::try_exists`, but a missing path or a non-directory parent is `false`, and any
 /// other error (such as permission denied) is `PrefixError::Io`.
 fn exists(path: &Path) -> Result<bool, PrefixError> {

@@ -212,7 +212,7 @@ impl Context {
         matches!(self, Context::WinePrefix { .. })
     }
 
-    fn win(&self) -> Option<&WinFolders> {
+    pub(crate) fn win(&self) -> Option<&WinFolders> {
         match self {
             Context::WindowsNative(folders) | Context::WinePrefix { folders, .. } => Some(folders),
             Context::Linux(_) => None,
@@ -288,7 +288,7 @@ impl GameVars {
 }
 
 /// The directories a base can resolve to, in priority order.
-fn base_dirs(base: Base, ctx: &Context, vars: &GameVars) -> Vec<PathBuf> {
+pub(crate) fn base_dirs(base: Base, ctx: &Context, vars: &GameVars) -> Vec<PathBuf> {
     let fixed = |dir: Option<&PathBuf>| dir.cloned().into_iter().collect();
     match base {
         Base::WinHome => fixed(ctx.win().map(|w| &w.home)),
@@ -321,7 +321,7 @@ pub fn base_dir(base: Base, ctx: &Context, vars: &GameVars) -> Option<PathBuf> {
     }
 }
 
-const WIN_LEADING: [(&str, Base); 8] = [
+pub(crate) const WIN_LEADING: [(&str, Base); 8] = [
     ("<home>", Base::WinHome),
     ("<winDocuments>", Base::WinDocuments),
     ("<winAppData>", Base::WinAppData),
@@ -331,12 +331,13 @@ const WIN_LEADING: [(&str, Base); 8] = [
     ("<winProgramData>", Base::WinProgramData),
     ("<winDir>", Base::WinDir),
 ];
-const LINUX_LEADING: [(&str, Base); 3] = [
+pub(crate) const LINUX_LEADING: [(&str, Base); 3] = [
     ("<home>", Base::Home),
     ("<xdgData>", Base::XdgData),
     ("<xdgConfig>", Base::XdgConfig),
 ];
-const ANY_LEADING: [(&str, Base); 2] = [("<base>", Base::GameDir), ("<root>", Base::StoreRoot)];
+pub(crate) const ANY_LEADING: [(&str, Base); 2] =
+    [("<base>", Base::GameDir), ("<root>", Base::StoreRoot)];
 const WIN_HOME_SUBDIRS: [(&str, Base); 3] = [
     ("AppData/Roaming", Base::WinAppData),
     ("AppData/Local", Base::WinLocalAppData),

@@ -2,10 +2,10 @@
 //! (native Linux build <-> Windows build) and resolves the user's choices (ADR-0011).
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::AppConfig;
-use crate::layout::{self, Base, Context, LinuxFolders, SnapshotMeta, WinFolders};
+use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta, WinFolders};
 use crate::manifest::{CustomGame, FileRule, GameEntry, Integration, Os, Pair, Tag};
 
 /// A snapshot root, `(base, rest)` as in [`SnapshotMeta::roots`].
@@ -543,6 +543,49 @@ pub fn root_template((base, rest): &SnapshotRoot) -> String {
         }
     };
     format!("{leading}/{rest}")
+}
+
+/// The path template for a folder the user picked, glob-escaped: the deepest base of `ctx`'s
+/// family, `GameDir` or `StoreRoot` that contains `path`. When the template would classify back
+/// to a different directory (`XDG_CONFIG_HOME` outside `<home>/.config`, a redirected
+/// `%APPDATA%`) or nothing contains `path`, the absolute path on a native context, else `None`.
+pub fn template_for(path: &Path, ctx: &Context, vars: &GameVars) -> Option<String> {
+    let leading = if ctx.win().is_some() {
+        &layout::WIN_LEADING[..]
+    } else {
+        &layout::LINUX_LEADING[..]
+    };
+    // `max_by_key` keeps the last maximum, so at equal depth `GameDir`/`StoreRoot` win.
+    let deepest = leading
+        .iter()
+        .chain(&layout::ANY_LEADING)
+        .flat_map(|&(_, base)| {
+            layout::base_dirs(base, ctx, vars)
+                .into_iter()
+                .map(move |dir| (base, dir))
+        })
+        .filter_map(|(base, dir)| {
+            Some((base, layout::tail_of(path, &dir)?, dir.components().count()))
+        })
+        .max_by_key(|&(.., depth)| depth);
+    let exact = deepest.and_then(|(base, tail, _)| {
+        let root = (base, glob::Pattern::escape(&tail));
+        let template = root_template(&root);
+        (layout::classify(&template, ctx).as_ref() == Some(&root)).then_some(template)
+    });
+    let template = exact.or_else(|| {
+        let root = match ctx {
+            Context::Linux(_) => (Base::Absolute, layout::tail_of(path, Path::new("/"))?),
+            Context::WindowsNative(_) => (Base::WinAbsolute, layout::tail_of(path, Path::new(""))?),
+            Context::WinePrefix { .. } => return None,
+        };
+        Some(root_template(&(root.0, glob::Pattern::escape(&root.1))))
+    })?;
+    // A pick of a base dir itself has an empty tail: `<home>`, not `<home>/`.
+    Some(match template.strip_suffix('/') {
+        Some(bare) if !bare.is_empty() && !bare.ends_with(':') => bare.to_owned(),
+        _ => template,
+    })
 }
 
 /// Saves each choice on the custom game `title`, creating an `Extend` custom game when there is

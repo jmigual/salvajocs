@@ -23,6 +23,35 @@ fn proton_prefix_picks_steamuser() {
 }
 
 #[test]
+fn enclosing_prefix_finds_the_prefix_above_a_pick() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(dir.path(), &["steamuser"]);
+    let pick = prefix.join("drive_c/users/steamuser/AppData/Roaming/Foo");
+    fs::create_dir_all(&pick).unwrap();
+    assert_eq!(enclosing_prefix(&pick), Some(prefix.clone()));
+
+    let user = wine_user(&prefix).unwrap();
+    let ctx = crate::layout::Context::WinePrefix {
+        folders: crate::layout::WinFolders::for_prefix(&prefix, &user),
+        prefix,
+    };
+    let vars = crate::layout::GameVars::new("Foo", vec![], &[], None);
+    assert_eq!(
+        crate::crossbuild::template_for(&pick, &ctx, &vars).as_deref(),
+        Some("<winAppData>/Foo")
+    );
+}
+
+#[test]
+fn enclosing_prefix_is_none_outside_a_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    make_prefix(dir.path(), &["steamuser"]);
+    let outside = dir.path().join("elsewhere");
+    fs::create_dir(&outside).unwrap();
+    assert_eq!(enclosing_prefix(&outside), None);
+}
+
+#[test]
 fn single_user_prefix_picks_that_user() {
     let dir = tempfile::tempdir().unwrap();
     let prefix = make_prefix(dir.path(), &["alice", "Public"]);
