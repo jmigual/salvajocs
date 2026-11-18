@@ -46,10 +46,16 @@ dependency yet; once added, the two builds unify.
   - `registry: {key: {tags, when: [{store}]}}`
   - `installDir: {name: {}}`
   - `steam.id`
+  - `gog.id` (integer) and `id: {lutris, gogExtra[], steamExtra[]}`, which match a launcher's
+    games (Heroic, Lutris) to manifest titles. `flatpak` is dropped.
   - `alias`: entries that have it are skipped as nicknames.
-- **Cache:** `<cache>/salvajocs/manifest.json` (serde_json of the typed subset) plus
-  `manifest.etag`. On start the cache is loaded and a refresh runs in the background. With no
-  cache and no network, only custom games are available, and a banner says so.
+- **Cache:** `<cache>/salvajocs/manifest-v2.json` (serde_json of the typed subset) plus
+  `manifest.etag`. The `-v2` name marks the subset that gained `gog` and `id`: a cache
+  written before it lacks them, and a 304 would keep it, so `manifest.json` is never read.
+  With no `manifest-v2.json`, no ETag is sent and one full download follows; a successful
+  refresh deletes the old `manifest.json`. Bump the name again when the subset gains fields.
+  On start the cache is loaded and a refresh runs in the background. With no cache and no
+  network, only custom games are available, and a banner says so.
 - **Placeholders/rules** per research.md §1: substitute, then glob; a folder matches recursively;
   relative paths are ignored. `<storeUserId>` becomes `*`. A `when.os` entry is evaluated against
   the context: Windows-like matches `windows`, Linux-native matches `linux`. `when.store` matches
@@ -98,5 +104,5 @@ dependency yet; once added, the two builds unify.
 ## Consequences
 
 - The first start needs the network to have any manifest games.
-- The typed subset gains fields only when a feature uses them (e.g. `gog.id` for a future
-  launcher).
+- The typed subset gains fields only when a feature uses them (`gog.id` and `id` for
+  launcher matching), and each gain renames the cache file so one full download refills it.
