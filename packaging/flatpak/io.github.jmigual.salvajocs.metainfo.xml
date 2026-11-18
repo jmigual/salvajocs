@@ -52,6 +52,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.4.0" date="2026-11-18">
+      <description>
+        <p>Choose which files, folders and registry keys of each game are backed up, and which
+        old backups to keep. Delete backups from the Restore tab. On Linux, the scan finds the
+        Wine prefixes of Heroic, Lutris and Bottles, and shows its progress. The app draws its
+        own title bar. Custom game files have a Linux and a Windows path; files of custom games
+        from 0.3.x must be added again.</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-11-17">
       <description>
         <p>The app is called Salvajocs. On Wayland, the task bar and title bar show the app icon

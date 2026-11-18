@@ -6,6 +6,8 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
 ### Added
 
 - An [advanced storage options reference](docs/guide/advanced-options.md): how the key and value
@@ -50,6 +52,8 @@ All notable changes to salvajocs. The format follows
   "Saved restore mappings" only when a restore saved some.
 - The scan skips a path whose first folder is not on disk without searching it, so each Wine
   prefix checked for every game adds about a tenth of the time it did.
+- The manifest cache keeps the GOG, Steam and Lutris ids of each game and is now
+  `manifest-v2.json`, so the first start of this version downloads the full manifest once.
 
 ### Removed
 
@@ -126,7 +130,8 @@ First release.
 - Custom games, Wine prefixes and cross-OS game pairs.
 - Windows installer with in-app updates, Windows zip, Linux AppImage and tarball, and crates.io.
 
-[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jmigual/salvajocs/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jmigual/salvajocs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jmigual/salvajocs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jmigual/salvajocs/compare/v0.1.0...v0.2.0
