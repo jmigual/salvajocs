@@ -1,7 +1,7 @@
 //! Wine prefixes of the Heroic, Lutris and Bottles launchers, and the title normalization used
 //! to match a launcher's game to a manifest entry.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::manifest::Manifest;
 use crate::prefix::{PrefixError, enclosing_prefix, validate_prefix};
 use crate::scan::{ProblemKind, ScanProblem};
 
@@ -458,6 +459,87 @@ impl Found {
             path: path.to_path_buf(),
             kind: ProblemKind::Unreadable(error),
         });
+    }
+}
+
+/// The games of a manifest by the ids and titles launchers report, to map a launcher's prefix
+/// to the game it runs (ADR-0017).
+pub struct GameIndex<'a> {
+    gog: HashMap<u64, Vec<&'a str>>,
+    steam: HashMap<u32, Vec<&'a str>>,
+    lutris: HashMap<&'a str, Vec<&'a str>>,
+    titles: HashSet<&'a str>,
+    normalized: HashMap<String, Vec<&'a str>>,
+}
+
+impl<'a> GameIndex<'a> {
+    /// Indexes every game of `manifest` by its GOG and Steam ids (with the extra ones), its
+    /// Lutris slug, its title and its [`normalize_title`].
+    pub fn new(manifest: &'a Manifest) -> Self {
+        let mut index = Self {
+            gog: HashMap::new(),
+            steam: HashMap::new(),
+            lutris: HashMap::new(),
+            titles: HashSet::new(),
+            normalized: HashMap::new(),
+        };
+        for (title, entry) in &manifest.games {
+            let title = title.as_str();
+            let ids = entry.id.as_ref();
+            let gog = entry.gog.as_ref().and_then(|gog| gog.id);
+            let gog_extra = ids
+                .into_iter()
+                .flat_map(|ids| ids.gog_extra.iter().copied());
+            for id in gog.into_iter().chain(gog_extra) {
+                index.gog.entry(id).or_default().push(title);
+            }
+            let steam = entry.steam.as_ref().and_then(|steam| steam.id);
+            let steam_extra = ids
+                .into_iter()
+                .flat_map(|ids| ids.steam_extra.iter().copied());
+            for id in steam.into_iter().chain(steam_extra) {
+                index.steam.entry(id).or_default().push(title);
+            }
+            if let Some(slug) = ids.and_then(|ids| ids.lutris.as_deref()) {
+                index.lutris.entry(slug).or_default().push(title);
+            }
+            index.titles.insert(title);
+            let normalized = index.normalized.entry(normalize_title(title)).or_default();
+            normalized.push(title);
+        }
+        index
+    }
+
+    /// The title of the game run in `prefix`: the one game its ids match, else the game of its
+    /// exact title, else the one game of its normalized title. `None` when the launcher ties no
+    /// game to the prefix, nothing matches, or the normalized title matches several games.
+    pub fn title(&self, prefix: &LauncherPrefix) -> Option<&'a str> {
+        let game = prefix.game.as_ref()?;
+        let gog = game.gog_id.and_then(|id| self.gog.get(&id));
+        let steam = game.steam_id.and_then(|id| self.steam.get(&id));
+        let lutris = (game.lutris_slug.as_deref()).and_then(|slug| self.lutris.get(slug));
+        let by_id: BTreeSet<&'a str> = [gog, steam, lutris]
+            .into_iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .collect();
+        // Ids of several games say nothing about which one runs here, so the title decides.
+        if by_id.len() == 1 {
+            return by_id.first().copied();
+        }
+        let title = game.title.as_deref()?;
+        if let Some(&exact) = self.titles.get(title) {
+            return Some(exact);
+        }
+        match self
+            .normalized
+            .get(&normalize_title(title))
+            .map(Vec::as_slice)
+        {
+            Some(&[title]) => Some(title),
+            _ => None,
+        }
     }
 }
 

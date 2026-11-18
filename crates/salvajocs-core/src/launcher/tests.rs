@@ -1,4 +1,5 @@
 use super::*;
+use crate::manifest::{GameEntry, Gog, Ids, Steam};
 
 /// A fake home with the XDG config and data directories inside it.
 struct Home {
@@ -596,4 +597,161 @@ fn normalize_title_salvajocs_cases() {
     assert_eq!(normalize_title("Foo Bar (Remake)"), "foo bar (remake)");
     assert_eq!(normalize_title("Foo’s “Bar”"), "foos bar");
     assert_eq!(normalize_title("\tFoo Bar\n"), "foo bar");
+}
+
+/// A manifest of `games`, each a title with its entry.
+fn manifest(games: &[(&str, GameEntry)]) -> Manifest {
+    Manifest {
+        games: games
+            .iter()
+            .map(|(title, entry)| ((*title).to_owned(), entry.clone()))
+            .collect(),
+    }
+}
+
+fn gog_game(id: u64) -> GameEntry {
+    GameEntry {
+        gog: Some(Gog { id: Some(id) }),
+        ..GameEntry::default()
+    }
+}
+
+fn steam_game(id: u32) -> GameEntry {
+    GameEntry {
+        steam: Some(Steam { id: Some(id) }),
+        ..GameEntry::default()
+    }
+}
+
+fn ids_game(ids: Ids) -> GameEntry {
+    GameEntry {
+        id: Some(ids),
+        ..GameEntry::default()
+    }
+}
+
+fn mapped(manifest: &Manifest, game: LauncherGame) -> Option<&str> {
+    GameIndex::new(manifest).title(&found(Launcher::Heroic, PathBuf::new(), Some(game)))
+}
+
+#[test]
+fn maps_by_gog_id_and_gog_extra() {
+    let m = manifest(&[
+        ("Foo", gog_game(1)),
+        (
+            "Bar",
+            ids_game(Ids {
+                gog_extra: vec![2],
+                ..Ids::default()
+            }),
+        ),
+    ]);
+    let gog = |id| LauncherGame {
+        gog_id: Some(id),
+        ..titled("Other")
+    };
+    assert_eq!(mapped(&m, gog(1)), Some("Foo"));
+    assert_eq!(mapped(&m, gog(2)), Some("Bar"));
+}
+
+#[test]
+fn maps_by_steam_id_and_steam_extra() {
+    let m = manifest(&[
+        ("Foo", steam_game(10)),
+        (
+            "Bar",
+            ids_game(Ids {
+                steam_extra: vec![20],
+                ..Ids::default()
+            }),
+        ),
+    ]);
+    let steam = |id| LauncherGame {
+        steam_id: Some(id),
+        ..titled("Other")
+    };
+    assert_eq!(mapped(&m, steam(10)), Some("Foo"));
+    assert_eq!(mapped(&m, steam(20)), Some("Bar"));
+}
+
+#[test]
+fn maps_by_lutris_slug() {
+    let m = manifest(&[(
+        "Foo",
+        ids_game(Ids {
+            lutris: Some("foo-slug".to_owned()),
+            ..Ids::default()
+        }),
+    )]);
+    let game = LauncherGame {
+        lutris_slug: Some("foo-slug".to_owned()),
+        ..titled("Other")
+    };
+    assert_eq!(mapped(&m, game), Some("Foo"));
+}
+
+#[test]
+fn an_id_beats_the_title() {
+    let m = manifest(&[("Foo", gog_game(1)), ("Bar", GameEntry::default())]);
+    let game = LauncherGame {
+        gog_id: Some(1),
+        ..titled("Bar")
+    };
+    assert_eq!(mapped(&m, game), Some("Foo"));
+}
+
+#[test]
+fn ids_of_several_games_fall_through_to_the_title() {
+    let m = manifest(&[
+        ("Foo", gog_game(1)),
+        ("Bar", steam_game(10)),
+        ("Baz", GameEntry::default()),
+    ]);
+    let game = LauncherGame {
+        gog_id: Some(1),
+        steam_id: Some(10),
+        ..titled("Baz")
+    };
+    assert_eq!(mapped(&m, game), Some("Baz"));
+}
+
+#[test]
+fn an_exact_title_beats_a_normalized_one() {
+    let m = manifest(&[
+        ("Foo: Bar", GameEntry::default()),
+        ("Foo Bar", GameEntry::default()),
+    ]);
+    assert_eq!(mapped(&m, titled("Foo: Bar")), Some("Foo: Bar"));
+}
+
+#[test]
+fn maps_by_normalized_title() {
+    let m = manifest(&[("Foo Bar", GameEntry::default())]);
+    assert_eq!(mapped(&m, titled("FOO: Bar™")), Some("Foo Bar"));
+}
+
+#[test]
+fn a_normalized_title_of_several_games_is_ambiguous() {
+    let m = manifest(&[
+        ("Foo: Bar", GameEntry::default()),
+        ("Foo Bar", GameEntry::default()),
+    ]);
+    assert_eq!(mapped(&m, titled("foo bar")), None);
+}
+
+#[test]
+fn an_unknown_game_is_not_mapped() {
+    let m = manifest(&[("Foo", gog_game(1))]);
+    let game = LauncherGame {
+        gog_id: Some(2),
+        ..titled("Bar")
+    };
+    assert_eq!(mapped(&m, game), None);
+}
+
+#[test]
+fn a_prefix_without_a_game_is_not_mapped() {
+    let m = manifest(&[("Foo", GameEntry::default())]);
+    let bottle = found(Launcher::Bottles, PathBuf::new(), None);
+    assert_eq!(GameIndex::new(&m).title(&bottle), None);
 }
