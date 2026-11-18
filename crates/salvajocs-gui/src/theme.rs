@@ -32,6 +32,10 @@ pub mod icons {
     pub const ARROW_RIGHT: &str = "\u{E06C}";
     pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
     pub const ARROW_CIRCLE_UP: &str = "\u{E030}";
+    pub const MINUS: &str = "\u{E32A}";
+    pub const SQUARE: &str = "\u{E45E}";
+    pub const COPY: &str = "\u{E1CA}";
+    pub const X: &str = "\u{E4F6}";
 }
 
 /// The colors of one theme. Contrast floors (WCAG) are checked by the tests.
