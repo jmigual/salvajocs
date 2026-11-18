@@ -52,21 +52,21 @@ fn move_window(ctx: &egui::Context, response: &Response) {
             i.events.contains(&Event::WindowFocused(false)),
         )
     });
-    // Only a press on the bar itself moves the window, not one on a tab or button over it. A
-    // release lost with the focus disarms it.
+    // Only a press on the bar itself moves the window, not one on a tab or button over it. One
+    // slot for the bar and its stand-in, as `drag_area` rewrites it on every press.
+    let key = Id::unique("title_bar_press");
     if pressed || focus_lost {
-        let on_bar =
-            ctx.viewport(|viewport| viewport.hits.click.map(|hit| hit.id)) == Some(response.id);
-        ctx.data_mut(|data| data.insert_temp(response.id, pressed && on_bar));
+        let hit = ctx.viewport(|viewport| viewport.hits.click.map(|hit| hit.id));
+        ctx.data_mut(|data| data.insert_temp(key, hit.filter(|_| pressed)));
     }
-    let armed = ctx.data(|data| data.get_temp(response.id)).unwrap_or(false);
+    let armed = ctx.data(|data| data.get_temp::<Option<Id>>(key)).flatten() == Some(response.id);
     if response.double_clicked_by(PointerButton::Primary) {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized(ctx)));
     } else if armed && down && moved && focused {
-        // Not egui's `drag_started`, which waits for 6 points (`max_click_dist`) or 0.8 s. Once per
-        // press, as egui still holds a button the compositor took; the backend drops it unfocused.
-        ctx.data_mut(|data| data.insert_temp(response.id, false));
+        // Not drag_started: it waits for 6 pt or 0.8 s. egui-winit ignores StartDrag without focus.
         ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+        // Once per press: the compositor keeps the release, so egui still sees the button down.
+        ctx.data_mut(|data| data.insert_temp(key, None::<Id>));
     }
 }
 

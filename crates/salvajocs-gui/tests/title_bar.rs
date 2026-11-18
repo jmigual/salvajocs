@@ -2,8 +2,11 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use common::{
-    env, init_repo, local_config, repo_dir, run_until, run_until_ready, save_config, shows,
+    MemorySecrets, env, env_with, init_repo, init_repo_with, local_config, repo_dir, run_until,
+    run_until_ready, save_config, shows,
 };
 use eframe::egui::{
     Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, Shape, Ui, UiBuilder, Vec2,
@@ -11,6 +14,10 @@ use eframe::egui::{
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use salvajocs_core::config::PasswordMode;
+use salvajocs_core::secret::SecretKey;
+use salvajocs_core::storage::Compression;
+use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 
@@ -208,6 +215,63 @@ fn the_bar_moves_the_window_while_the_first_run_dialog_is_open() {
         drag(&mut harness, bar, PointerButton::Primary),
         [ViewportCommand::StartDrag]
     );
+}
+
+#[test]
+fn a_click_on_the_bar_over_a_dialog_does_not_arm_it_for_a_later_press() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    let repository = repo_dir(&tmp);
+    init_repo_with(&repository, "right", Compression::Default);
+    let mut config = local_config(&repository);
+    config.password = PasswordMode::Keyring;
+    secrets
+        .set(&config.secret_scope(), &SecretKey::Password, "bad")
+        .unwrap();
+    save_config(&env, &config);
+    let mut harness = harness(env, Vec2::new(1000.0, 1400.0));
+    run_until(&mut harness, "the password prompt", |h| {
+        shows(h, "Wrong encryption password")
+    });
+    harness.step();
+    let minimize = harness.get_by_label("Minimize").rect();
+    let bar = Pos2::new(minimize.left() - 40.0, minimize.center().y);
+    harness.hover_at(bar);
+    for pressed in [true, false] {
+        harness.event(button(bar, pressed));
+        harness.step();
+    }
+
+    let field = harness.get_by_label("Encryption password");
+    field.focus();
+    field.type_text("worse");
+    harness.step();
+    // Not `click`: its pointer press would rewrite the bar's state while the dialog is open.
+    harness.get_by_label("Open repository").click_accesskit();
+    run_until(&mut harness, "the repository to be opening", |h| {
+        shows(h, "Opening the repository")
+    });
+    let elsewhere = harness.ctx.viewport_rect().center();
+    harness.hover_at(elsewhere);
+    harness.event(button(elsewhere, true));
+    harness.step();
+    assert!(
+        shows(&harness, "Opening the repository"),
+        "pressed while no dialog is open"
+    );
+    run_until(&mut harness, "the password prompt again", |h| {
+        shows(h, "Wrong encryption password")
+    });
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        harness.step();
+        sent.extend(commands(&harness));
+    }
+    harness.event(Event::PointerMoved(elsewhere + Vec2::new(3.0, 0.0)));
+    harness.step();
+    sent.extend(commands(&harness));
+    assert_eq!(sent, []);
 }
 
 #[test]
