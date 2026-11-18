@@ -23,7 +23,7 @@ use crate::prefix::{proton_prefix, wine_user};
 use crate::registry::windows::WindowsRegistryError;
 use crate::registry::wine::RegFile;
 use crate::registry::{RegistryError, RegistryExport};
-use crate::scan::{Environment, FoundFile, GameScan, RegistrySource};
+use crate::scan::{Environment, FoundFile, GameScan, RegistrySource, launcher_prefixes};
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 /// The extra tag of a safety backup made before a restore (ADR-0010).
@@ -78,8 +78,8 @@ pub fn list(storage: &Storage) -> Result<Vec<GameBackups>, StorageError> {
 /// The targets a restore of `title` starts with (ADR-0005). On Windows the native folders; on
 /// Linux the native folders plus, when it exists, the game's own prefix: the custom game's
 /// `wine_prefix`, else its Proton prefix under `env.steam_roots` or a configured Steam root,
-/// as the scan looks them up. The user may change them. A prefix whose Wine user cannot be
-/// determined is passed over.
+/// else its launcher prefix not in `config.ignored_prefixes` (ADR-0017), as the scan looks them
+/// up. The user may change them. A prefix whose Wine user cannot be determined is passed over.
 pub fn default_targets(
     title: &str,
     manifest: &Manifest,
@@ -106,7 +106,10 @@ pub fn default_targets(
             let proton = (env.steam_roots.iter())
                 .chain(configured)
                 .filter_map(|root| proton_prefix(root, steam_id?));
-            let win = custom_prefix.into_iter().chain(proton).find_map(|prefix| {
+            let (mut launcher, _) = launcher_prefixes(manifest, config, env);
+            let launcher = launcher.remove(title).unwrap_or_default();
+            let mut candidates = custom_prefix.into_iter().chain(proton).chain(launcher);
+            let win = candidates.find_map(|prefix| {
                 let user = wine_user(&prefix).ok()?;
                 let folders = WinFolders::for_prefix(&prefix, &user);
                 Some(Context::WinePrefix { prefix, folders })

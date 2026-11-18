@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::backup::backup_games;
 use crate::config::{AppConfig, PasswordMode};
+use crate::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair, Steam};
 use crate::registry::{RegData, RegValue};
@@ -286,6 +287,50 @@ fn default_targets_finds_proton_in_configured_steam_library() {
 
     let targets = default_targets("Foo", &steam_game(620), &config(roots), &env);
     assert_eq!(targets.win, Some(in_prefix(&pfx, "steamuser")));
+}
+
+/// `env` with a Heroic prefix at `path` for the game titled `title`.
+fn with_launcher_prefix(mut env: Environment, path: &Path, title: &str) -> Environment {
+    env.launcher_prefixes.push(LauncherPrefix {
+        launcher: Launcher::Heroic,
+        path: path.to_path_buf(),
+        game: Some(LauncherGame {
+            title: Some(title.to_owned()),
+            ..LauncherGame::default()
+        }),
+    });
+    env
+}
+
+#[test]
+fn default_targets_uses_the_launcher_prefix_after_proton() {
+    let tmp = tempfile::tempdir().unwrap();
+    let steam = tmp.path().join("steam");
+    let heroic = make_prefix(&tmp.path().join("heroic"), "me");
+    let env = linux_env(&tmp.path().join("home"), vec![steam.clone()]);
+    let env = with_launcher_prefix(env, &heroic, "Foo");
+
+    let targets = default_targets("Foo", &steam_game(620), &config(vec![]), &env);
+    assert_eq!(targets.win, Some(in_prefix(&heroic, "me")));
+
+    let pfx = make_prefix(&steam.join("steamapps/compatdata/620/pfx"), "steamuser");
+    let targets = default_targets("Foo", &steam_game(620), &config(vec![]), &env);
+    assert_eq!(targets.win, Some(in_prefix(&pfx, "steamuser")));
+}
+
+#[test]
+fn default_targets_pass_over_ignored_and_other_games_launcher_prefixes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ignored = make_prefix(&tmp.path().join("ignored"), "me");
+    let other = make_prefix(&tmp.path().join("other"), "me");
+    let env = linux_env(&tmp.path().join("home"), vec![]);
+    let env = with_launcher_prefix(env, &ignored, "Foo");
+    let env = with_launcher_prefix(env, &other, "Unknown");
+    let mut config = config(vec![]);
+    config.ignored_prefixes = vec![ignored];
+
+    let targets = default_targets("Foo", &steam_game(620), &config, &env);
+    assert_eq!(targets.win, None);
 }
 
 #[test]
