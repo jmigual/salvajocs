@@ -20,13 +20,12 @@ use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
-use crate::tabs::count;
+use crate::tabs::tree::{Clicked, FileTree};
+use crate::tabs::{count, format_size};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
-use tree::{Clicked, FileTree};
 
 mod choices;
-mod tree;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,21 +66,6 @@ fn summarize(backup: &GameBackup) -> GameResult {
         title: backup.title.clone(),
         outcome,
     }
-}
-
-/// A byte count with a binary unit, such as `1.5 MiB`.
-fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    let mut value = bytes as f64 / 1024.0;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    format!("{value:.1} {}", UNITS[unit])
 }
 
 /// What the scan found for a game: the count and size of the files backed up, given as

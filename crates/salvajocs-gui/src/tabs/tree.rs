@@ -20,7 +20,7 @@ struct File {
 }
 
 /// What the user clicked in a [`FileTree`].
-pub(super) enum Clicked {
+pub(crate) enum Clicked {
     /// A folder's or file's checkbox: its key and new value. A folder's key covers every file
     /// below it.
     Toggle(String, bool),
@@ -64,7 +64,7 @@ struct Included {
 
 /// The files of a game as a tree of Bases and folders. It holds no selection: the caller says
 /// which file keys are included and gets back what the user toggled.
-pub(super) struct FileTree {
+pub(crate) struct FileTree {
     files: Vec<File>,
     root: Folder,
     /// `included[i]` is the [`Included`] total of `files[..i]`, so a folder's is a difference of
@@ -75,7 +75,7 @@ pub(super) struct FileTree {
 impl FileTree {
     /// Builds the tree from `(key, size, real)` triples, `key` being `Base/dir/file` and `real`
     /// the file on disk, whose last components are those of `key` below its Base.
-    pub(super) fn new(keys: impl IntoIterator<Item = (String, u64, PathBuf)>) -> Self {
+    pub(crate) fn new(keys: impl IntoIterator<Item = (String, u64, PathBuf)>) -> Self {
         let mut files: Vec<File> = keys
             .into_iter()
             .map(|(key, size, real)| {
@@ -136,12 +136,12 @@ impl FileTree {
 
     /// Forgets the cached counts. Call it whenever the set of included keys changes, such as after
     /// applying the toggle [`FileTree::ui`] returned.
-    pub(super) fn invalidate(&mut self) {
+    pub(crate) fn invalidate(&mut self) {
         self.included = None;
     }
 
     /// How many files `included` accepts and their size, from the cached counts.
-    pub(super) fn included(&mut self, included: &dyn Fn(&str) -> bool) -> (usize, u64) {
+    pub(crate) fn included(&mut self, included: &dyn Fn(&str) -> bool) -> (usize, u64) {
         let totals = totals(&mut self.included, &self.files, included);
         let all = totals.last().copied().unwrap_or_default();
         (all.files, all.size)
@@ -150,7 +150,7 @@ impl FileTree {
     /// Draws the tree and returns what was clicked this frame. `included` says whether a file key
     /// is currently included; `enabled` false greys the checkboxes, not the open buttons. The
     /// caller scopes the ids (`ui.push_id`) when it draws several trees.
-    pub(super) fn ui(
+    pub(crate) fn ui(
         &mut self,
         ui: &mut Ui,
         included: &dyn Fn(&str) -> bool,
