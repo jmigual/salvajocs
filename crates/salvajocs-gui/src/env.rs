@@ -129,12 +129,17 @@ pub struct Env {
     pub environment: Option<Environment>,
     /// Whether a wineserver runs (`prefix::wineserver_running`).
     pub wineserver_running: fn() -> bool,
-    /// Looks for a newer release at start; `None` skips it, as on every OS but Windows (ADR-0013).
+    /// Looks for a newer release at start; `None` skips it, as everywhere but on Windows and in an
+    /// AppImage (ADR-0013, ADR-0022).
     pub check_update: Option<CheckUpdate>,
     /// Whether the Windows installer installed the running app, so it can update itself.
     pub installed_by_installer: fn() -> bool,
     /// Starts a downloaded installer (`update::run_installer`).
     pub run_installer: fn(&Path) -> Result<(), UpdateError>,
+    /// The AppImage the app runs from (`update::running_appimage`), which an update replaces.
+    pub appimage: Option<PathBuf>,
+    /// Starts the replaced AppImage (`update::restart_appimage`).
+    pub restart_appimage: fn(&Path) -> Result<(), UpdateError>,
     /// Lists the rclone remotes (`config::rclone_remotes`).
     pub rclone_remotes: fn() -> io::Result<Vec<String>>,
     /// Asks the user for a folder; `None` when they cancel. Blocks, so call it from a worker.
@@ -146,6 +151,7 @@ pub struct Env {
 impl Env {
     /// The real environment, or `None` when the OS has no config or cache directory.
     pub fn system() -> Option<Self> {
+        let appimage = running_appimage();
         Some(Self {
             config_dir: config::default_dir()?,
             cache_dir: dirs::cache_dir()?.join("salvajocs"),
@@ -153,9 +159,12 @@ impl Env {
             refresh_manifest: fetch::refresh,
             environment: None,
             wineserver_running: prefix::wineserver_running,
-            check_update: cfg!(windows).then_some(update::check as CheckUpdate),
+            check_update: (cfg!(windows) || appimage.is_some())
+                .then_some(update::check as CheckUpdate),
             installed_by_installer,
             run_installer: update::run_installer,
+            appimage,
+            restart_appimage: update::restart_appimage,
             rclone_remotes: config::rclone_remotes,
             pick_folder: Arc::new(|| rfd::FileDialog::new().pick_folder()),
             open_folder: Arc::new(open_folder),
@@ -192,4 +201,12 @@ fn installed_by_installer() -> bool {
         .as_deref()
         .and_then(Path::parent)
         .is_some_and(update::installed_by_installer)
+}
+
+fn running_appimage() -> Option<PathBuf> {
+    update::running_appimage(
+        &std::env::current_exe().ok()?,
+        std::env::var_os("APPIMAGE")?.into(),
+        Path::new(&std::env::var_os("APPDIR")?),
+    )
 }

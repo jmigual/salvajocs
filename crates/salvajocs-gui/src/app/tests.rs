@@ -22,6 +22,13 @@ fn fake_installer(_: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
+static RESTARTED: AtomicUsize = AtomicUsize::new(0);
+
+fn fake_restart(_: &Path) -> Result<(), UpdateError> {
+    RESTARTED.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
 /// An app on a new repository in `dir`, without a password.
 fn app(dir: &Path) -> App {
     fn offline(_: &Path) -> Result<Freshness, FetchError> {
@@ -38,6 +45,8 @@ fn app(dir: &Path) -> App {
         check_update: None,
         installed_by_installer: || true,
         run_installer: fake_installer,
+        appimage: None,
+        restart_appimage: fake_restart,
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
         pick_folder: Arc::new(|| None),
         open_folder: Arc::new(|_| Ok(())),
@@ -119,6 +128,87 @@ fn downloaded_update_waits_for_every_running_job() {
         closed(&harness),
         "the window closes once the installer started"
     );
+}
+
+#[test]
+fn replaced_appimage_starts_on_exit_after_the_jobs_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(1000.0, 900.0))
+        .build_ui_state(
+            |ui, app| {
+                let mut frame = eframe::Frame::_new_kittest();
+                eframe::App::ui(app, ui, &mut frame);
+            },
+            app(dir.path()),
+        );
+    step_until(&mut harness, "the repository to open", |app| {
+        matches!(app.stage, Stage::Ready) && !app.busy()
+    });
+
+    let ctx = harness.ctx.clone();
+    let app = harness.state_mut();
+    let end_backup = app.backup.hold_backup(&ctx);
+    app.updater
+        .set_restarting(dir.path().join("salvajocs.AppImage"));
+    for _ in 0..3 {
+        harness.step();
+        assert!(!closed(&harness));
+    }
+
+    drop(end_backup);
+    // The jobs the backup's end starts hold the close too.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !closed(&harness) {
+        assert!(Instant::now() < deadline, "timed out waiting for the close");
+        assert_eq!(RESTARTED.load(Ordering::SeqCst), 0);
+        harness.step();
+    }
+    assert_eq!(RESTARTED.load(Ordering::SeqCst), 0);
+    eframe::App::on_exit(harness.state_mut(), None);
+    assert_eq!(RESTARTED.load(Ordering::SeqCst), 1);
+}
+
+static RESTARTED_AFTER_WAIT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn restart_whose_close_was_cancelled_waits_for_the_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().state.env.restart_appimage = |_| {
+        RESTARTED_AFTER_WAIT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    };
+    harness
+        .state_mut()
+        .updater
+        .set_restarting(dir.path().join("salvajocs.AppImage"));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !closed(&harness) {
+        assert!(Instant::now() < deadline, "timed out waiting for the close");
+        harness.step();
+    }
+
+    // A job started before the close arrived: the user picks Wait.
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    assert!(sent(&harness, egui::ViewportCommand::CancelClose));
+    eframe::App::on_exit(harness.state_mut(), None);
+    assert_eq!(
+        RESTARTED_AFTER_WAIT.load(Ordering::SeqCst),
+        0,
+        "a later quit does not restart"
+    );
+
+    drop(end_backup);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !closed(&harness) {
+        assert!(Instant::now() < deadline, "timed out waiting for the close");
+        harness.step();
+    }
+    eframe::App::on_exit(harness.state_mut(), None);
+    assert_eq!(RESTARTED_AFTER_WAIT.load(Ordering::SeqCst), 1);
 }
 
 #[test]

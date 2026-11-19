@@ -201,6 +201,7 @@ impl App {
         let requested = ctx.input(|i| i.viewport().close_requested());
         if requested && !self.closing && self.writing() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.updater.cancel_restart();
             // `ui` draws the dialog and does not run while the window is minimized. This does
             // nothing on Wayland or for an occluded window; the dialog waits until it is shown.
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -541,6 +542,7 @@ impl eframe::App for App {
         if let Err(err) = self.backup.flush(&self.state.env.config_dir) {
             eprintln!("salvajocs: could not write the unsaved choices: {err:#}");
         }
+        self.updater.restart(&self.state);
     }
 }
 

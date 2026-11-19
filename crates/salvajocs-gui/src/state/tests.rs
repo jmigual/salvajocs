@@ -59,6 +59,8 @@ fn state_with(store: crate::env::MemorySecrets) -> State {
         check_update: None,
         installed_by_installer: || false,
         run_installer: |_| panic!("tests never start an installer"),
+        appimage: None,
+        restart_appimage: |_| panic!("tests never restart the app"),
         rclone_remotes: || Err(std::io::ErrorKind::NotFound.into()),
         pick_folder: Arc::new(|| None),
         open_folder: Arc::new(|_| Ok(())),

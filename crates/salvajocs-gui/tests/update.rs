@@ -59,6 +59,57 @@ fn app_not_from_the_installer_links_the_release_page() {
     assert!(!shows(&harness, "Update now"));
 }
 
+/// An environment like [`update_env`] that runs from an AppImage in `tmp`, not installed.
+fn appimage_env(tmp: &TempDir) -> (Env, std::path::PathBuf) {
+    let mut env = update_env(tmp, || false);
+    let folder = tmp.path().join("AppImages");
+    std::fs::create_dir(&folder).unwrap();
+    let appimage = folder.join("salvajocs.AppImage");
+    std::fs::write(&appimage, b"old").unwrap();
+    env.appimage = Some(appimage.clone());
+    (env, appimage)
+}
+
+#[test]
+fn appimage_in_a_writable_folder_offers_update_now() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (env, appimage) = appimage_env(&tmp);
+    let mut harness = harness(env);
+    wait_for_notice(&mut harness);
+    assert!(shows(&harness, "Update now"));
+    assert!(!shows(&harness, "Release page"));
+
+    harness.get_by_label("Update now").click();
+    // The fake release has no AppImage asset, so the download fails at once.
+    run_until(&mut harness, "the failed download", |h| {
+        shows(h, "The update failed")
+    });
+    assert!(shows(&harness, "salvajocs-99.0.0-x86_64.AppImage"));
+    assert_eq!(std::fs::read(&appimage).unwrap(), b"old");
+    assert!(shows(&harness, "Update now"), "the user can try again");
+}
+
+#[cfg(unix)]
+#[test]
+fn appimage_in_a_read_only_folder_links_the_release_page() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (env, appimage) = appimage_env(&tmp);
+    let folder = appimage.parent().unwrap().to_path_buf();
+    let set_mode = |mode| std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode));
+    set_mode(0o555).unwrap();
+    let mut harness = harness(env);
+    wait_for_notice(&mut harness);
+    let (link, button) = (
+        shows(&harness, "Release page"),
+        shows(&harness, "Update now"),
+    );
+    set_mode(0o755).unwrap();
+    assert!(link);
+    assert!(!button);
+}
+
 static CHECKS: AtomicUsize = AtomicUsize::new(0);
 
 fn counted(current: &str) -> Result<Option<Release>, UpdateError> {

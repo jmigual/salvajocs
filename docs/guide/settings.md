@@ -116,8 +116,9 @@ saved in `config.yaml`.
 
 ## Updates
 
-On Windows, **Check for updates at start** (on by default) asks GitHub for a newer release each
-time salvajocs starts. Untick it to stop the check. Other systems do not show this setting.
+On Windows and in the AppImage, **Check for updates at start** (on by default) asks GitHub for a
+newer release each time salvajocs starts. Untick it to stop the check. Other builds do not show
+this setting.
 
 ## Where settings are stored
 

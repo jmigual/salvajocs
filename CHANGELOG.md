@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The AppImage checks for updates at start and updates itself: **Update now** replaces the
+  AppImage with the new release, checked against `SHA256SUMS`, and **Restart now** starts it.
+
 ### Changed
 
 - On the Backup tab, a file shown as changed by modified time only, because its backup has no

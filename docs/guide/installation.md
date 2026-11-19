@@ -15,7 +15,12 @@ chmod +x salvajocs-*-x86_64.AppImage
 It needs glibc 2.35 or newer (Ubuntu 22.04 or later), OpenGL and FUSE 2. Without FUSE 2, run it
 with `--appimage-extract-and-run`.
 
-The file embeds update information that points at the latest GitHub release. Open it in
+The app offers updates when a newer release exists. When the folder that holds the AppImage is
+writable, **Update now** downloads the new AppImage, checks it against the release's `SHA256SUMS`
+and replaces the file, keeping its name. **Restart now** then starts the new version once no
+backup or restore runs. In a read-only folder the notice links the release page instead.
+
+The file also embeds update information that points at the latest GitHub release. Open it in
 [Gear Lever](https://github.com/mijorus/gearlever) or run
 [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) on it. Both download only the
 blocks that changed, using the `.zsync` file next to each release.

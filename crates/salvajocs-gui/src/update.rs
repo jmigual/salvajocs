@@ -1,4 +1,4 @@
-//! The "Update available" notice in the bottom bar and the one-click update (ADR-0013).
+//! The "Update available" notice in the bottom bar and the one-click update (ADR-0013, ADR-0022).
 
 use std::path::PathBuf;
 
@@ -20,9 +20,16 @@ pub struct Updater {
     release: Option<Release>,
     /// Whether the installer installed this app, read once the release is known.
     installed: bool,
+    /// The running AppImage when its folder takes the new one, read once the release is known.
+    appimage: Option<PathBuf>,
     downloading: Option<Job<PathBuf>>,
-    /// A verified installer, waiting for background jobs to end.
+    /// The AppImage was replaced by the new release, so **Restart now** starts it.
+    replaced: bool,
+    /// A verified installer, or the replaced AppImage after **Restart now**, waiting for
+    /// background jobs to end.
     ready: Option<PathBuf>,
+    /// The replaced AppImage, started by [`Updater::restart`] once the window closed.
+    restart: Option<PathBuf>,
 }
 
 impl Updater {
@@ -50,6 +57,12 @@ impl Updater {
             match result {
                 Ok(release) => {
                     self.installed = (state.env.installed_by_installer)();
+                    // Before any download, so a read-only folder gets the link, not a failure.
+                    self.appimage = state
+                        .env
+                        .appimage
+                        .clone()
+                        .filter(|appimage| release.is_some() && update::replaceable(appimage));
                     self.release = release;
                 }
                 // Offline users and GitHub's rate limit are no reason to bother anyone.
@@ -61,6 +74,7 @@ impl Updater {
         {
             self.downloading = None;
             match result {
+                Ok(_) if self.appimage.is_some() => self.replaced = true,
                 Ok(installer) => self.ready = Some(installer),
                 Err(err) => state.notices.push(format!("The update failed: {err:#}")),
             }
@@ -72,9 +86,10 @@ impl Updater {
         let Some(release) = &self.release else {
             return;
         };
-        let (installed, downloading, ready) = (
-            self.installed,
+        let (updatable, downloading, replaced, ready) = (
+            self.installed || self.appimage.is_some(),
             self.downloading.is_some(),
+            self.replaced,
             self.ready.is_some(),
         );
         let notice = format!("Update available: v{}", release.version);
@@ -85,7 +100,9 @@ impl Updater {
                 false
             } else if ready {
                 false
-            } else if installed {
+            } else if replaced {
+                theme::primary(ui, true, None, "Restart now").clicked()
+            } else if updatable {
                 theme::primary(ui, true, None, "Update now").clicked()
             } else {
                 let link = ui.hyperlink_to("Release page", &release.html_url);
@@ -119,14 +136,28 @@ impl Updater {
             });
         }
         if fixed(ui, !text) {
-            let (release, dir) = (release.clone(), state.env.cache_dir.join("update"));
-            self.downloading = Some(Job::spawn(ui.ctx(), move || {
-                Ok(update::download_installer(&release, VERSION, &dir)?)
-            }));
+            if replaced {
+                self.ready = self.appimage.clone();
+            } else if let Some(appimage) = self.appimage.clone() {
+                let release = release.clone();
+                self.downloading = Some(Job::spawn(ui.ctx(), move || {
+                    update::download_appimage(&release, VERSION, &appimage)?;
+                    Ok(appimage)
+                }));
+            } else {
+                let (release, dir) = (release.clone(), state.env.cache_dir.join("update"));
+                self.downloading = Some(Job::spawn(ui.ctx(), move || {
+                    Ok(update::download_installer(&release, VERSION, &dir)?)
+                }));
+            }
         }
         if downloading {
             status_bar::status_text(ui, |ui| {
                 ui.label("Downloading the update");
+            });
+        } else if ready && replaced {
+            status_bar::status_text(ui, |ui| {
+                ui.weak("Restarts when the running task finishes");
             });
         } else if ready {
             status_bar::status_text(ui, |ui| {
@@ -146,8 +177,9 @@ impl Updater {
         }
     }
 
-    /// Starts the downloaded installer and closes the window, unless `busy`: closing would cut
-    /// a running job, such as a backup, a restore or a config save, short.
+    /// Starts the downloaded installer and closes the window, or closes it for a restart into the
+    /// replaced AppImage, unless `busy`: closing would cut a running job, such as a backup, a
+    /// restore or a config save, short.
     pub fn install_when_idle(&mut self, ctx: &egui::Context, state: &mut State, busy: bool) {
         if busy {
             return;
@@ -155,10 +187,33 @@ impl Updater {
         let Some(installer) = self.ready.take() else {
             return;
         };
+        if self.replaced {
+            // Unlike the installer, the new AppImage does not wait for this one to exit.
+            self.restart = Some(installer);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         match (state.env.run_installer)(&installer) {
             // The installer waits for the app to close, then starts it again.
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Err(err) => state.notices.push(format!("The update failed: {err:#}")),
+        }
+    }
+
+    /// Puts back a restart whose close was cancelled, so it closes again once no job runs.
+    pub fn cancel_restart(&mut self) {
+        if let Some(appimage) = self.restart.take() {
+            self.ready = Some(appimage);
+        }
+    }
+
+    /// Starts the replaced AppImage after **Restart now** closed the window. Call it on exit,
+    /// after the last writes, which the new instance reads at start.
+    pub fn restart(&mut self, state: &State) {
+        if let Some(appimage) = self.restart.take()
+            && let Err(err) = (state.env.restart_appimage)(&appimage)
+        {
+            eprintln!("salvajocs: could not restart: {err:#}");
         }
     }
 }
@@ -168,6 +223,13 @@ impl Updater {
 impl Updater {
     pub(crate) fn set_ready(&mut self, installer: PathBuf) {
         self.ready = Some(installer);
+    }
+
+    /// Makes `appimage` the replaced AppImage, as if the user had clicked **Restart now**.
+    pub(crate) fn set_restarting(&mut self, appimage: PathBuf) {
+        self.appimage = Some(appimage.clone());
+        self.replaced = true;
+        self.ready = Some(appimage);
     }
 
     /// Offers `release` as if the check found it.

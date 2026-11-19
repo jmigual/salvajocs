@@ -189,7 +189,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # One `sha256sum` line per asset; the in-app updater verifies the installer against it.
+      # One `sha256sum` line per asset; the in-app updater verifies the installer and the AppImage
+      # against it.
       - name: Checksums
         run: cd dist && sha256sum -- * > SHA256SUMS
       - name: Create the release
