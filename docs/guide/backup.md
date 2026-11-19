@@ -62,6 +62,8 @@ keys under **Registry**:
 
 - Unchecking a folder leaves out every file below it; checking it takes them all back. A folder
   with only some files checked shows a dash.
+- A folder that holds only another folder is shown on one line with it, as `Home/.var/app`. The
+  checkbox covers the whole line, and the button opens the last folder.
 - The line counts only the files that are backed up, and says how many are excluded, as in
   `2 files, 1.1 MiB, 1 excluded`.
 - A game with every file and key unchecked gets no snapshot.

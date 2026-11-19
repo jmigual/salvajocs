@@ -20,7 +20,7 @@ use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
 use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, parse_yaml};
 use salvajocs_core::retention::{self, Retention};
-use salvajocs_core::selection::{Change, Pending};
+use salvajocs_core::selection::{Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{RepoLocation, Storage};
 use salvajocs_gui::tabs::Tab;
@@ -484,15 +484,12 @@ fn a_folder_button_opens_the_folder_on_disk() {
     scan(&mut harness, "2 games found");
     click(&mut harness, "2 files, 5 B");
 
-    click(&mut harness, "Show WinAppData in the file manager");
-    click(&mut harness, "Open WinAppData");
-    click(&mut harness, "Show Alpha in the file manager");
+    click(&mut harness, "Show WinAppData/Alpha in the file manager");
+    click(&mut harness, "Open WinAppData/Alpha");
+    click(&mut harness, "Show sub in the file manager");
 
-    let roaming = prefix.join("drive_c/users/steamuser/AppData/Roaming");
-    assert_eq!(
-        *opened.lock().unwrap(),
-        [roaming.clone(), roaming.join("Alpha")]
-    );
+    let alpha = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
+    assert_eq!(*opened.lock().unwrap(), [alpha.clone(), alpha.join("sub")]);
 }
 
 #[test]
@@ -508,12 +505,53 @@ fn a_merged_case_variant_folder_opens_the_first_variant() {
         open_tab_recording(vec![custom_game("Alpha", false, &prefix)]);
     scan(&mut harness, "1 game found");
     click(&mut harness, "2 files, 2 B");
-    click(&mut harness, "Open WinAppData");
-    click(&mut harness, "Open Alpha");
 
-    click(&mut harness, "Show Sub in the file manager");
+    click(
+        &mut harness,
+        "Show WinAppData/Alpha/Sub in the file manager",
+    );
 
     assert_eq!(*opened.lock().unwrap(), [alpha.join("Sub")]);
+}
+
+#[test]
+fn ticking_a_merged_row_clears_a_saved_choice_on_its_upper_folder() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_with_sub_and_beta(&scratch);
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let env = env(&tmp);
+    // `WinAppData` is the upper folder of the row `WinAppData/Alpha`.
+    let excluded = Change::Path {
+        node: "WinAppData".into(),
+        included: false,
+    };
+    let mut pending = Pending::default();
+    pending
+        .games_mut(&local_config(&repository))
+        .insert("Alpha".into(), vec![excluded.clone()]);
+    pending.save(&env.config_dir).unwrap();
+    let (mut harness, env) = start_app(env, &repository, Vec::new(), games, true);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "0 files, 0 B, 2 excluded");
+    assert!(!checked(&harness, "WinAppData/Alpha"));
+
+    click(&mut harness, "WinAppData/Alpha");
+
+    let ticked = Change::Path {
+        node: "WinAppData".into(),
+        included: true,
+    };
+    run_until_pending(
+        &mut harness,
+        &env,
+        "Alpha",
+        &[excluded.clone(), ticked.clone()],
+    );
+    let mut settings = GameSettings::default();
+    settings.apply_changes(&[excluded, ticked]);
+    assert!(settings.paths.is_empty(), "{:?}", settings.paths);
 }
 
 #[test]
@@ -523,8 +561,7 @@ fn an_excluded_folder_is_left_out_of_the_backup() {
     let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
     scan(&mut harness, "2 games found");
     click(&mut harness, "2 files, 5 B");
-    click(&mut harness, "Open WinAppData");
-    click(&mut harness, "Open Alpha");
+    click(&mut harness, "Open WinAppData/Alpha");
     click(&mut harness, "sub");
     assert!(shows(&harness, "1 file, 3 B, 1 excluded"));
 
@@ -549,7 +586,7 @@ fn a_game_with_every_file_excluded_gets_no_snapshot() {
     let (mut harness, _env, tmp) = open_tab(Vec::new(), games);
     scan(&mut harness, "2 games found");
     click(&mut harness, "2 files, 5 B");
-    click(&mut harness, "WinAppData");
+    click(&mut harness, "WinAppData/Alpha");
     assert!(shows(&harness, "0 files, 0 B, 2 excluded"));
 
     back_up_until_beta(&mut harness, "Back up 1 game");

@@ -173,9 +173,9 @@ const KEYS: [&str; 2] = ["WinAppData/Foo/a.sav", "WinAppData/Foo/b.sav"];
 #[test]
 fn clicking_a_checked_folder_unchecks_it() {
     let mut harness = harness(&KEYS, &KEYS, true);
-    assert_eq!(toggled(&harness, "WinAppData"), Some(Toggled::True));
+    assert_eq!(toggled(&harness, "WinAppData/Foo"), Some(Toggled::True));
 
-    harness.get_by_label("WinAppData").click();
+    harness.get_by_label("WinAppData/Foo").click();
     harness.run();
 
     assert_eq!(
@@ -187,9 +187,9 @@ fn clicking_a_checked_folder_unchecks_it() {
 #[test]
 fn clicking_an_unchecked_folder_checks_it() {
     let mut harness = harness(&KEYS, &[], true);
-    assert_eq!(toggled(&harness, "WinAppData"), Some(Toggled::False));
+    assert_eq!(toggled(&harness, "WinAppData/Foo"), Some(Toggled::False));
 
-    harness.get_by_label("WinAppData").click();
+    harness.get_by_label("WinAppData/Foo").click();
     harness.run();
 
     assert_eq!(
@@ -201,9 +201,9 @@ fn clicking_an_unchecked_folder_checks_it() {
 #[test]
 fn clicking_a_mixed_folder_checks_everything() {
     let mut harness = harness(&KEYS, &KEYS[..1], true);
-    assert_eq!(toggled(&harness, "WinAppData"), Some(Toggled::Mixed));
+    assert_eq!(toggled(&harness, "WinAppData/Foo"), Some(Toggled::Mixed));
 
-    harness.get_by_label("WinAppData").click();
+    harness.get_by_label("WinAppData/Foo").click();
     harness.run();
 
     assert_eq!(
@@ -227,12 +227,12 @@ fn a_disabled_tree_toggles_nothing() {
     let mut harness = harness(&KEYS, &KEYS, false);
     assert!(
         harness
-            .get_by_label("WinAppData")
+            .get_by_label("WinAppData/Foo")
             .accesskit_node()
             .is_disabled()
     );
 
-    harness.get_by_label("WinAppData").click();
+    harness.get_by_label("WinAppData/Foo").click();
     harness.run();
 
     assert_eq!(harness.state().toggled, None);
@@ -241,15 +241,14 @@ fn a_disabled_tree_toggles_nothing() {
 #[test]
 fn only_open_folders_show_their_children() {
     let mut harness = harness(&KEYS, &KEYS, true);
-    assert_eq!(harness.query_all_by_label("Foo").count(), 0);
+    assert_eq!(harness.query_all_by_label("a.sav").count(), 0);
 
     // Clicking the label toggles the checkbox, so open the folder by its arrow.
-    assert_eq!(harness.query_all_by_label("Open WinAppData").count(), 1);
+    assert_eq!(harness.query_all_by_label("Open WinAppData/Foo").count(), 1);
     harness.get_by_role(Role::DisclosureTriangle).click();
     harness.run();
 
-    assert_eq!(harness.query_all_by_label("Foo").count(), 1);
-    assert_eq!(harness.query_all_by_label("a.sav").count(), 0);
+    assert_eq!(harness.query_all_by_label("a.sav").count(), 1);
 }
 
 #[test]
@@ -334,13 +333,57 @@ fn a_folder_opens_even_in_a_disabled_tree() {
     let mut harness = harness(&KEYS, &KEYS, false);
 
     harness
-        .get_by_label("Show WinAppData in the file manager")
+        .get_by_label("Show WinAppData/Foo in the file manager")
         .click();
     harness.run();
 
     assert_eq!(
         harness.state().opened,
-        Some(PathBuf::from("/disk/WinAppData"))
+        Some(PathBuf::from("/disk/WinAppData/Foo"))
     );
     assert_eq!(harness.state().toggled, None);
+}
+
+#[test]
+fn a_chain_of_single_folders_is_one_row_toggling_its_top_folder() {
+    let keys = ["a/b/c/x", "a/b/c/y"];
+    let mut harness = harness(&keys, &keys[..1], true);
+
+    assert_eq!(harness.query_all_by_label("a").count(), 0);
+    assert_eq!(harness.query_all_by_label("a/b").count(), 0);
+    assert_eq!(toggled(&harness, "a/b/c"), Some(Toggled::Mixed));
+    assert_eq!(harness.query_all_by_label("1 of 2 files, 10 B").count(), 1);
+    harness.get_by_label("a/b/c").click();
+    harness.run();
+    assert_eq!(harness.state().toggled, Some(("a".to_owned(), true)));
+
+    harness
+        .get_by_label("Show a/b/c in the file manager")
+        .click();
+    harness.run();
+    assert_eq!(harness.state().opened, Some(PathBuf::from("/disk/a/b/c")));
+}
+
+#[test]
+fn a_chain_stops_at_a_folder_with_a_file_or_several_folders() {
+    let mut harness = harness(&["a/b/c/x", "a/b/f", "a/g/y"], &[], true);
+    assert_eq!(harness.query_all_by_label("a").count(), 1);
+
+    harness.get_by_role(Role::DisclosureTriangle).click();
+    harness.run();
+
+    assert_eq!(harness.query_all_by_label("b").count(), 1);
+    assert_eq!(harness.query_all_by_label("g").count(), 1);
+}
+
+#[test]
+fn a_chain_ending_in_a_file_is_merged_up_to_the_last_folder() {
+    let mut harness = harness(&["a/b/x"], &[], true);
+    assert_eq!(harness.query_all_by_label("a/b").count(), 1);
+    assert_eq!(harness.query_all_by_label("x").count(), 0);
+
+    harness.get_by_role(Role::DisclosureTriangle).click();
+    harness.run();
+
+    assert_eq!(harness.query_all_by_label("x").count(), 1);
 }

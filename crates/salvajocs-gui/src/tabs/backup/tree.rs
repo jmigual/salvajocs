@@ -237,8 +237,17 @@ impl Drawing<'_> {
         }
     }
 
-    /// A folder as a collapsing header whose children are only built while it is open.
-    fn folder(&self, ui: &mut Ui, folder: &Folder, clicked: &mut Option<Clicked>) {
+    /// A folder as a collapsing header whose children are only built while it is open. A chain of
+    /// folders that each hold only the next one is one row, labelled with their joined names. Its
+    /// checkbox toggles the top folder, to clear saved choices on every level; counts and the open
+    /// button are the deepest folder's.
+    fn folder(&self, ui: &mut Ui, first: &Folder, clicked: &mut Option<Clicked>) {
+        let mut folder = first;
+        let mut label = folder.name.clone();
+        while let ([only], true) = (folder.folders.as_slice(), folder.files.is_empty()) {
+            folder = only;
+            label = format!("{label}/{}", folder.name);
+        }
         let Range { start, end } = folder.range;
         let total = end - start;
         let files = self.totals[end].files - self.totals[start].files;
@@ -251,9 +260,9 @@ impl Drawing<'_> {
                 // A mixed folder is drawn as unchecked, so a click on it checks everything.
                 let mut checked = files == total;
                 let mixed = files != 0 && !checked;
-                let checkbox = Checkbox::new(&mut checked, &folder.name).indeterminate(mixed);
+                let checkbox = Checkbox::new(&mut checked, &label).indeterminate(mixed);
                 if ui.add_enabled(self.enabled, checkbox).changed() {
-                    *clicked = Some(Clicked::Toggle(folder.key.clone(), checked));
+                    *clicked = Some(Clicked::Toggle(first.key.clone(), checked));
                 }
                 ui.weak(format!(
                     "{files} of {}, {}",
@@ -261,7 +270,7 @@ impl Drawing<'_> {
                     format_size(size)
                 ));
                 if let Some(real) = &folder.real {
-                    let name = format!("Show {} in the file manager", folder.name);
+                    let name = format!("Show {label} in the file manager");
                     let button = Button::new(theme::icon(icons::ARROW_SQUARE_OUT))
                         .frame_when_inactive(false);
                     let response = ui.add(button);
@@ -279,7 +288,7 @@ impl Drawing<'_> {
             WidgetInfo::labeled(
                 Role::DisclosureTriangle,
                 ui.is_enabled(),
-                format!("{verb} {}", folder.name),
+                format!("{verb} {label}"),
             )
         });
     }
