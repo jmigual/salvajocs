@@ -1,22 +1,86 @@
-//! A tree of a game's files, with a checkbox on every folder and file to choose what to back up.
+//! A tree of a game's files, with a checkbox on every folder and file to choose what to back up,
+//! or read-only, and a badge on each file that differs from a backup (ADR-0018).
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::collapsing_header::CollapsingState;
-use eframe::egui::{Button, Checkbox, Role, Ui, WidgetInfo};
+use eframe::egui::{Button, Checkbox, Color32, Label, Role, Ui, WidgetInfo};
 use salvajocs_core::selection;
 
 use super::format_size;
 use crate::tabs::count;
 use crate::theme::{self, icons};
 
-/// One file: its `Base/dir/file` key, the last component of it, its size and its path on disk.
+/// One row of a [`FileTree`].
+pub(crate) struct Row {
+    /// The `Base/dir/file` key.
+    pub(crate) key: String,
+    /// Size in bytes; for a removed row, the backup's.
+    pub(crate) size: u64,
+    /// The file on disk, whose last components are those of `key` below its Base; `None` when
+    /// there is none.
+    pub(crate) real: Option<PathBuf>,
+    /// The file is only in the backup: a greyed row without a checkbox.
+    pub(crate) removed: bool,
+}
+
+/// How a file differs from the backup it is compared with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Badge {
+    /// Not in the backup.
+    New,
+    /// In the backup with other content.
+    Changed,
+    /// In the backup, but the next backup will not hold it.
+    Removed,
+    /// Could not be read to compare it.
+    Unknown,
+}
+
+impl Badge {
+    fn text(self) -> &'static str {
+        match self {
+            Badge::New => "new",
+            Badge::Changed => "changed",
+            Badge::Removed => "removed",
+            Badge::Unknown => "could not be compared",
+        }
+    }
+
+    fn color(self, ui: &Ui) -> Color32 {
+        match self {
+            Badge::New => theme::palette(ui).accent,
+            Badge::Changed => ui.visuals().warn_fg_color,
+            Badge::Removed => ui.visuals().weak_text_color(),
+            Badge::Unknown => ui.visuals().error_fg_color,
+        }
+    }
+}
+
+/// How a [`FileTree`] is drawn.
+pub(crate) enum Mode<'a> {
+    /// A checkbox on every folder and present file; `included` says whether a file key is
+    /// included, `enabled` false greys the checkboxes, not the open buttons.
+    Select {
+        included: &'a dyn Fn(&str) -> bool,
+        enabled: bool,
+    },
+    /// Names only: nothing can be toggled.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "for the restore's confirm tree")
+    )]
+    ReadOnly,
+}
+
+/// One file of the tree, from its [`Row`], with the last component of its key as `name`.
 struct File {
     key: String,
     name: String,
     size: u64,
-    real: PathBuf,
+    real: Option<PathBuf>,
+    removed: bool,
 }
 
 /// What the user clicked in a [`FileTree`].
@@ -33,8 +97,9 @@ pub(crate) enum Clicked {
 struct Folder {
     key: String,
     name: String,
-    /// The folder on disk, from its first file; `None` for the root and, on Windows, for the
-    /// `WinAbsolute` Base, which is above the drive roots.
+    /// The folder on disk, from its first present file; `None` for the root, for a folder with
+    /// only removed files and, on Windows, for the `WinAbsolute` Base, which is above the drive
+    /// roots.
     real: Option<PathBuf>,
     range: Range<usize>,
     folders: Vec<Folder>,
@@ -53,13 +118,29 @@ impl Folder {
             files: Vec::new(),
         }
     }
+
+    /// Drops `real` here and below where it is not a directory.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "for the restore's confirm tree")
+    )]
+    fn keep_existing(&mut self) {
+        self.real = self.real.take().filter(|real| real.is_dir());
+        self.folders.iter_mut().for_each(Folder::keep_existing);
+    }
 }
 
-/// How many files are included, and their size.
+/// How many present files are included and their size, and how many files there are of each
+/// kind.
 #[derive(Clone, Copy, Default)]
 struct Included {
     files: usize,
     size: u64,
+    present: usize,
+    new: usize,
+    changed: usize,
+    removed: usize,
+    unknown: usize,
 }
 
 /// The files of a game as a tree of Bases and folders. It holds no selection: the caller says
@@ -73,18 +154,18 @@ pub(crate) struct FileTree {
 }
 
 impl FileTree {
-    /// Builds the tree from `(key, size, real)` triples, `key` being `Base/dir/file` and `real`
-    /// the file on disk, whose last components are those of `key` below its Base.
-    pub(crate) fn new(keys: impl IntoIterator<Item = (String, u64, PathBuf)>) -> Self {
-        let mut files: Vec<File> = keys
+    /// Builds the tree from its rows.
+    pub(crate) fn new(rows: impl IntoIterator<Item = Row>) -> Self {
+        let mut files: Vec<File> = rows
             .into_iter()
-            .map(|(key, size, real)| {
-                let name = key.rsplit('/').next().unwrap_or_default().to_owned();
+            .map(|row| {
+                let name = row.key.rsplit('/').next().unwrap_or_default().to_owned();
                 File {
-                    key,
+                    key: row.key,
                     name,
-                    size,
-                    real,
+                    size: row.size,
+                    real: row.real,
+                    removed: row.removed,
                 }
             })
             .collect();
@@ -109,10 +190,12 @@ impl FileTree {
                             name == dir
                         }
                     };
+                    // For merged case variants, the first present one's.
+                    let below = file.key[end..].matches('/').count();
+                    let real = (file.real.as_deref())
+                        .filter(|_| !file.removed)
+                        .and_then(|real| real.ancestors().nth(below));
                     if folder.folders.last().is_none_or(|last| !same(&last.name)) {
-                        // For merged case variants, the first one's.
-                        let below = file.key[end..].matches('/').count();
-                        let real = file.real.ancestors().nth(below);
                         folder
                             .folders
                             .push(Folder::new(&file.key[..end], dir, at, real));
@@ -122,6 +205,9 @@ impl FileTree {
                         .folders
                         .last_mut()
                         .expect("a folder was just pushed or matched");
+                    if folder.real.is_none() {
+                        folder.real = real.map(Path::to_path_buf);
+                    }
                     folder.range.end = at + 1;
                 }
             }
@@ -134,38 +220,59 @@ impl FileTree {
         }
     }
 
-    /// Forgets the cached counts. Call it whenever the set of included keys changes, such as after
-    /// applying the toggle [`FileTree::ui`] returned.
+    /// The tree without the open button of each folder that is not a directory now. Checks each
+    /// folder once, so call it when the tree is built, not per frame.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "for the restore's confirm tree")
+    )]
+    pub(crate) fn existing_folders_only(mut self) -> Self {
+        self.root.keep_existing();
+        self
+    }
+
+    /// Forgets the cached counts. Call it whenever the set of included keys or the badges change,
+    /// such as after applying the toggle [`FileTree::ui`] returned.
     pub(crate) fn invalidate(&mut self) {
         self.included = None;
     }
 
-    /// How many files `included` accepts and their size, from the cached counts.
-    pub(crate) fn included(&mut self, included: &dyn Fn(&str) -> bool) -> (usize, u64) {
-        let totals = totals(&mut self.included, &self.files, included);
+    /// How many present files `included` accepts and their size, from the cached counts.
+    /// `badge` must be the one [`FileTree::ui`] draws with.
+    pub(crate) fn included(
+        &mut self,
+        included: &dyn Fn(&str) -> bool,
+        badge: &dyn Fn(&str) -> Option<Badge>,
+    ) -> (usize, u64) {
+        let totals = totals(&mut self.included, &self.files, included, badge);
         let all = totals.last().copied().unwrap_or_default();
         (all.files, all.size)
     }
 
-    /// Draws the tree and returns what was clicked this frame. `included` says whether a file key
-    /// is currently included; `enabled` false greys the checkboxes, not the open buttons. The
-    /// caller scopes the ids (`ui.push_id`) when it draws several trees.
+    /// Draws the tree in `mode` and returns what was clicked this frame. `badge` gives a present
+    /// file's badge by key; removed files always have [`Badge::Removed`]. The caller scopes the
+    /// ids (`ui.push_id`) when it draws several trees.
     pub(crate) fn ui(
         &mut self,
         ui: &mut Ui,
-        included: &dyn Fn(&str) -> bool,
-        enabled: bool,
+        mode: Mode<'_>,
+        badge: &dyn Fn(&str) -> Option<Badge>,
     ) -> Option<Clicked> {
         let FileTree {
             files,
             root,
             included: cache,
         } = self;
+        let all = |_: &str| true;
+        let included = match mode {
+            Mode::Select { included, .. } => included,
+            Mode::ReadOnly => &all,
+        };
         let drawing = Drawing {
             files,
-            totals: totals(cache, files, included),
-            enabled,
-            included,
+            totals: totals(cache, files, included, badge),
+            mode,
+            badge,
         };
         let mut clicked = None;
         drawing.children(ui, root, &mut clicked);
@@ -190,19 +297,39 @@ fn folded(key: &str) -> Vec<String> {
         .collect()
 }
 
-/// The running totals in `cache`, computed from `included` when missing.
+/// The badge of `file`: [`Badge::Removed`] when it is a removed row, else what `badge` says.
+fn badge_of(file: &File, badge: &dyn Fn(&str) -> Option<Badge>) -> Option<Badge> {
+    if file.removed {
+        Some(Badge::Removed)
+    } else {
+        badge(&file.key)
+    }
+}
+
+/// The running totals in `cache`, computed from `included` and `badge` when missing.
 fn totals<'a>(
     cache: &'a mut Option<Vec<Included>>,
     files: &[File],
     included: &dyn Fn(&str) -> bool,
+    badge: &dyn Fn(&str) -> Option<Badge>,
 ) -> &'a [Included] {
     cache.get_or_insert_with(|| {
         let mut sum = Included::default();
         let mut totals = vec![sum];
         for file in files {
-            if included(&file.key) {
-                sum.files += 1;
-                sum.size += file.size;
+            if !file.removed {
+                sum.present += 1;
+                if included(&file.key) {
+                    sum.files += 1;
+                    sum.size += file.size;
+                }
+            }
+            match badge_of(file, badge) {
+                Some(Badge::New) => sum.new += 1,
+                Some(Badge::Changed) => sum.changed += 1,
+                Some(Badge::Removed) => sum.removed += 1,
+                Some(Badge::Unknown) => sum.unknown += 1,
+                None => {}
             }
             totals.push(sum);
         }
@@ -210,12 +337,26 @@ fn totals<'a>(
     })
 }
 
+/// `, 2 new, 1 changed, 1 removed`, leaving out the kinds there are none of.
+fn badge_counts(totals: &Included) -> String {
+    [
+        (totals.new, Badge::New),
+        (totals.changed, Badge::Changed),
+        (totals.removed, Badge::Removed),
+        (totals.unknown, Badge::Unknown),
+    ]
+    .into_iter()
+    .filter(|&(count, _)| count > 0)
+    .map(|(count, badge)| format!(", {count} {}", badge.text()))
+    .collect()
+}
+
 /// What one call of [`FileTree::ui`] draws with.
 struct Drawing<'a> {
     files: &'a [File],
     totals: &'a [Included],
-    enabled: bool,
-    included: &'a dyn Fn(&str) -> bool,
+    mode: Mode<'a>,
+    badge: &'a dyn Fn(&str) -> Option<Badge>,
 }
 
 impl Drawing<'_> {
@@ -226,13 +367,39 @@ impl Drawing<'_> {
         }
         for &at in &parent.files {
             let file = &self.files[at];
+            let badge = badge_of(file, self.badge);
+            // The badge joins the name for screen readers, so each row reads as one item.
+            let name = match badge {
+                Some(badge) => format!("{}, {}", file.name, badge.text()),
+                None => file.name.clone(),
+            };
             ui.horizontal(|ui| {
-                let mut checked = (self.included)(&file.key);
-                let checkbox = Checkbox::new(&mut checked, &file.name);
-                if ui.add_enabled(self.enabled, checkbox).changed() {
-                    *clicked = Some(Clicked::Toggle(file.key.clone(), checked));
+                match &self.mode {
+                    Mode::Select { included, enabled } if !file.removed => {
+                        let mut checked = included(&file.key);
+                        let checkbox = Checkbox::new(&mut checked, &file.name);
+                        let response = ui.add_enabled(*enabled, checkbox);
+                        if response.changed() {
+                            *clicked = Some(Clicked::Toggle(file.key.clone(), checked));
+                        }
+                        response.widget_info(|| {
+                            WidgetInfo::selected(Role::CheckBox, *enabled, checked, &name)
+                        });
+                    }
+                    _ => {
+                        let label = if file.removed {
+                            Label::new(weak_text(ui, &file.name))
+                        } else {
+                            Label::new(&file.name)
+                        };
+                        ui.add(label)
+                            .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+                    }
                 }
                 ui.weak(format_size(file.size));
+                if let Some(badge) = badge {
+                    ui.colored_label(badge.color(ui), badge.text());
+                }
             });
         }
     }
@@ -240,7 +407,7 @@ impl Drawing<'_> {
     /// A folder as a collapsing header whose children are only built while it is open. A chain of
     /// folders that each hold only the next one is one row, labelled with their joined names. Its
     /// checkbox toggles the top folder, to clear saved choices on every level; counts and the open
-    /// button are the deepest folder's.
+    /// button are the deepest folder's. A folder with only removed files has no checkbox.
     fn folder(&self, ui: &mut Ui, first: &Folder, clicked: &mut Option<Clicked>) {
         let mut folder = first;
         let mut label = folder.name.clone();
@@ -249,26 +416,52 @@ impl Drawing<'_> {
             label = format!("{label}/{}", folder.name);
         }
         let Range { start, end } = folder.range;
-        let total = end - start;
-        let files = self.totals[end].files - self.totals[start].files;
-        let size = self.totals[end].size - self.totals[start].size;
+        let (to, from) = (&self.totals[end], &self.totals[start]);
+        let totals = Included {
+            files: to.files - from.files,
+            size: to.size - from.size,
+            present: to.present - from.present,
+            new: to.new - from.new,
+            changed: to.changed - from.changed,
+            removed: to.removed - from.removed,
+            unknown: to.unknown - from.unknown,
+        };
         let id = ui.make_persistent_id(&folder.key);
         let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
         let verb = if state.is_open() { "Close" } else { "Open" };
         let (arrow, ..) = state
             .show_header(ui, |ui| {
-                // A mixed folder is drawn as unchecked, so a click on it checks everything.
-                let mut checked = files == total;
-                let mixed = files != 0 && !checked;
-                let checkbox = Checkbox::new(&mut checked, &label).indeterminate(mixed);
-                if ui.add_enabled(self.enabled, checkbox).changed() {
-                    *clicked = Some(Clicked::Toggle(first.key.clone(), checked));
+                let counts = badge_counts(&totals);
+                match &self.mode {
+                    Mode::Select { enabled, .. } if totals.present > 0 => {
+                        // A mixed folder is drawn as unchecked, so a click on it checks everything.
+                        let mut checked = totals.files == totals.present;
+                        let mixed = totals.files != 0 && !checked;
+                        let checkbox = Checkbox::new(&mut checked, &label).indeterminate(mixed);
+                        if ui.add_enabled(*enabled, checkbox).changed() {
+                            *clicked = Some(Clicked::Toggle(first.key.clone(), checked));
+                        }
+                        ui.weak(format!(
+                            "{} of {}, {}{counts}",
+                            totals.files,
+                            count(totals.present, "file"),
+                            format_size(totals.size)
+                        ));
+                    }
+                    Mode::Select { .. } => {
+                        ui.label(weak_text(ui, &label));
+                        // Only removed files: `, 2 removed` without its comma.
+                        ui.weak(counts.trim_start_matches(", "));
+                    }
+                    Mode::ReadOnly => {
+                        ui.label(&label);
+                        ui.weak(format!(
+                            "{}, {}{counts}",
+                            count(totals.present, "file"),
+                            format_size(totals.size)
+                        ));
+                    }
                 }
-                ui.weak(format!(
-                    "{files} of {}, {}",
-                    count(total, "file"),
-                    format_size(size)
-                ));
                 if let Some(real) = &folder.real {
                     let name = format!("Show {label} in the file manager");
                     let button = Button::new(theme::icon(icons::ARROW_SQUARE_OUT))
@@ -292,6 +485,11 @@ impl Drawing<'_> {
             )
         });
     }
+}
+
+/// `text` in the weak text color, for what is only in the backup.
+fn weak_text(ui: &Ui, text: &str) -> eframe::egui::RichText {
+    eframe::egui::RichText::new(text).color(ui.visuals().weak_text_color())
 }
 
 #[cfg(test)]

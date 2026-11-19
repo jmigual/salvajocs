@@ -20,7 +20,7 @@ use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
-use crate::tabs::tree::{Clicked, FileTree};
+use crate::tabs::tree::{Clicked, FileTree, Mode, Row};
 use crate::tabs::{count, format_size};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
@@ -263,9 +263,12 @@ impl BackupTab {
             .iter()
             .map(|game| {
                 let keys = game.files.iter();
-                FileTree::new(
-                    keys.map(|file| (selection::path_key(file), file.size, file.real.clone())),
-                )
+                FileTree::new(keys.map(|file| Row {
+                    key: selection::path_key(file),
+                    size: file.size,
+                    real: Some(file.real.clone()),
+                    removed: false,
+                }))
             })
             .collect();
         self.prefixes = report
@@ -309,7 +312,7 @@ impl BackupTab {
         games
             .map(|(game, tree)| match choices.game(&game.title) {
                 Ok(settings) => {
-                    let (files, _) = tree.included(&|key| settings.path_included(key));
+                    let (files, _) = tree.included(&|key| settings.path_included(key), &|_| None);
                     let keys = &game.registry_keys;
                     !settings.skip
                         && (files > 0
@@ -938,7 +941,7 @@ fn files_ui(
     opened: &mut Option<PathBuf>,
 ) -> Option<Change> {
     let included = |key: &str| settings.path_included(key);
-    let summary = summary(game, tree.included(&included), settings);
+    let summary = summary(game, tree.included(&included, &|_| None), settings);
     if game.files.is_empty() && game.registry_source.is_none() {
         ui.weak(summary);
         return None;
@@ -947,7 +950,11 @@ fn files_ui(
     egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
         .show(ui, |ui| {
-            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, &included, enabled));
+            let mode = Mode::Select {
+                included: &included,
+                enabled,
+            };
+            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &|_| None));
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {

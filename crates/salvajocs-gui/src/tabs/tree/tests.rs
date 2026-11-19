@@ -8,11 +8,26 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use super::*;
 use crate::theme;
 
+fn row(key: &str) -> Row {
+    Row {
+        key: key.to_owned(),
+        size: 10,
+        real: Some(Path::new("/disk").join(key)),
+        removed: false,
+    }
+}
+
+/// A row only in the backup.
+fn removed(key: &str) -> Row {
+    Row {
+        real: None,
+        removed: true,
+        ..row(key)
+    }
+}
+
 fn tree(keys: &[&str]) -> FileTree {
-    FileTree::new(
-        keys.iter()
-            .map(|key| ((*key).to_owned(), 10, Path::new("/disk").join(key))),
-    )
+    FileTree::new(keys.iter().map(|key| row(key)))
 }
 
 /// The folder at `path` below the root, one component at a time.
@@ -44,7 +59,7 @@ fn included_in(tree: &mut FileTree, folder: &[&str], included: &dyn Fn(&str) -> 
         let range = &self::folder(tree, folder).range;
         (range.start, range.end)
     };
-    let totals = totals(&mut tree.included, &tree.files, included);
+    let totals = totals(&mut tree.included, &tree.files, included, &|_| None);
     totals[end].files - totals[start].files
 }
 
@@ -130,16 +145,34 @@ fn counts_are_kept_until_invalidated() {
 struct Fixture {
     tree: FileTree,
     included: BTreeSet<String>,
+    /// Draw with checkboxes, else read-only.
+    select: bool,
     enabled: bool,
+    badges: Vec<(String, Badge)>,
     toggled: Option<(String, bool)>,
     opened: Option<PathBuf>,
 }
 
 fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, Fixture> {
+    harness_of(tree(keys), included, enabled, &[], true)
+}
+
+/// A harness drawing `tree` with `badges` by key, with checkboxes when `select`.
+fn harness_of(
+    tree: FileTree,
+    included: &[&str],
+    enabled: bool,
+    badges: &[(&str, Badge)],
+    select: bool,
+) -> Harness<'static, Fixture> {
     let fixture = Fixture {
-        tree: tree(keys),
+        tree,
         included: included.iter().map(|key| (*key).to_owned()).collect(),
+        select,
         enabled,
+        badges: (badges.iter())
+            .map(|(key, badge)| ((*key).to_owned(), *badge))
+            .collect(),
         toggled: None,
         opened: None,
     };
@@ -148,11 +181,27 @@ fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, 
             let Fixture {
                 tree,
                 included,
+                select,
                 enabled,
+                badges,
                 toggled,
                 opened,
             } = state;
-            match tree.ui(ui, &|key| included.contains(key), *enabled) {
+            let included = |key: &str| included.contains(key);
+            let mode = if *select {
+                Mode::Select {
+                    included: &included,
+                    enabled: *enabled,
+                }
+            } else {
+                Mode::ReadOnly
+            };
+            let badge = |key: &str| {
+                (badges.iter())
+                    .find(|(badged, _)| badged == key)
+                    .map(|(_, badge)| *badge)
+            };
+            match tree.ui(ui, mode, &badge) {
                 Some(Clicked::Toggle(key, on)) => *toggled = Some((key, on)),
                 Some(Clicked::Open(path)) => *opened = Some(path),
                 None => {}
@@ -162,6 +211,19 @@ fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, 
     );
     harness.run();
     harness
+}
+
+/// Opens every folder of `harness`, one at a time.
+fn open_all(harness: &mut Harness<'static, Fixture>) {
+    loop {
+        let closed = harness
+            .query_all_by_role(Role::DisclosureTriangle)
+            .filter_map(|arrow| arrow.accesskit_node().label())
+            .find(|label| label.starts_with("Open "));
+        let Some(label) = closed else { return };
+        harness.get_by_label(&label).click();
+        harness.run();
+    }
 }
 
 fn toggled(harness: &Harness<'_, Fixture>, label: &str) -> Option<Toggled> {
@@ -305,7 +367,12 @@ fn folders_know_their_folder_on_disk() {
             ("WinAppData/Foo/b.sav", "/pfx/Roaming/Foo/b.sav"),
             ("WinAbsolute/C/Games/d.sav", "C:/Games/d.sav"),
         ]
-        .map(|(key, real)| (key.to_owned(), 1, PathBuf::from(real))),
+        .map(|(key, real)| Row {
+            key: key.to_owned(),
+            size: 1,
+            real: Some(PathBuf::from(real)),
+            removed: false,
+        }),
     );
 
     let real = |path: &[&str]| folder(&tree, path).real.clone();
@@ -386,4 +453,136 @@ fn a_chain_ending_in_a_file_is_merged_up_to_the_last_folder() {
     harness.run();
 
     assert_eq!(harness.query_all_by_label("x").count(), 1);
+}
+
+#[test]
+fn a_removed_row_has_no_checkbox_and_says_it_is_removed() {
+    let tree = FileTree::new([row("Base/kept.sav"), removed("Base/gone.sav")]);
+    let mut harness = harness_of(tree, &["Base/kept.sav"], true, &[], true);
+    open_all(&mut harness);
+
+    let gone = harness.get_by_label("gone.sav, removed");
+    assert_ne!(gone.accesskit_node().role(), Role::CheckBox);
+    assert_eq!(harness.query_all_by_label("gone.sav").count(), 0);
+    assert_eq!(
+        harness.get_by_label("kept.sav").accesskit_node().role(),
+        Role::CheckBox
+    );
+    // `N of M` counts present files only; the removed one is in the badge counts.
+    assert_eq!(
+        harness
+            .query_all_by_label("1 of 1 file, 10 B, 1 removed")
+            .count(),
+        1
+    );
+    assert_eq!(toggled(&harness, "Base"), Some(Toggled::True));
+}
+
+#[test]
+fn a_folder_of_removed_files_has_no_checkbox_and_no_open_button() {
+    let tree = FileTree::new([row("Base/kept.sav"), removed("Base/old/gone.sav")]);
+    let mut harness = harness_of(tree, &[], true, &[], true);
+    open_all(&mut harness);
+
+    let old = harness.get_by_label("old");
+    assert_ne!(old.accesskit_node().role(), Role::CheckBox);
+    assert_eq!(harness.query_all_by_label("1 removed").count(), 1);
+    assert_eq!(
+        harness
+            .query_all_by_label("Show old in the file manager")
+            .count(),
+        0
+    );
+    assert_eq!(
+        harness
+            .query_all_by_label("Show Base in the file manager")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_folder_opens_where_its_first_present_file_is() {
+    // `a.sav` sorts first but is only in the backup.
+    let tree = FileTree::new([removed("Base/dir/a.sav"), row("Base/dir/b.sav")]);
+    assert_eq!(
+        folder(&tree, &["Base", "dir"]).real,
+        Some(PathBuf::from("/disk/Base/dir"))
+    );
+    let only_removed = FileTree::new([removed("Base/dir/a.sav")]);
+    assert_eq!(folder(&only_removed, &["Base", "dir"]).real, None);
+}
+
+#[test]
+fn a_chain_through_a_folder_of_removed_files_still_merges() {
+    let tree = FileTree::new([removed("a/b/c/x")]);
+    let harness = harness_of(tree, &[], true, &[], true);
+    assert_eq!(harness.query_all_by_label("a/b/c").count(), 1);
+}
+
+#[test]
+fn badges_join_the_row_name_and_count_in_folder_headers() {
+    let keys = [
+        "Base/new.sav",
+        "Base/changed.sav",
+        "Base/same.sav",
+        "Base/locked.sav",
+    ];
+    let tree = FileTree::new(keys.map(row).into_iter().chain([removed("Base/gone.sav")]));
+    let badges = [
+        ("Base/new.sav", Badge::New),
+        ("Base/changed.sav", Badge::Changed),
+        ("Base/locked.sav", Badge::Unknown),
+    ];
+    let mut harness = harness_of(tree, &keys, true, &badges, true);
+    let header = "4 of 4 files, 40 B, 1 new, 1 changed, 1 removed, 1 could not be compared";
+    assert_eq!(harness.query_all_by_label(header).count(), 1);
+    open_all(&mut harness);
+    for label in [
+        "new.sav, new",
+        "changed.sav, changed",
+        "same.sav",
+        "gone.sav, removed",
+        "locked.sav, could not be compared",
+    ] {
+        assert_eq!(harness.query_all_by_label(label).count(), 1, "{label}");
+    }
+}
+
+#[test]
+fn a_read_only_tree_has_no_checkbox_and_toggles_nothing() {
+    let keys = ["Base/dir/a.sav", "Base/dir/b.sav"];
+    let badges = [("Base/dir/a.sav", Badge::New)];
+    let mut harness = harness_of(tree(&keys), &[], true, &badges, false);
+    assert_eq!(
+        harness.query_all_by_label("2 files, 20 B, 1 new").count(),
+        1
+    );
+    open_all(&mut harness);
+    assert_eq!(harness.query_all_by_role(Role::CheckBox).count(), 0);
+
+    harness.get_by_label("a.sav, new").click();
+    harness.get_by_label("Base/dir").click();
+    harness.run();
+    assert_eq!(harness.state().toggled, None);
+}
+
+#[test]
+fn only_existing_folders_keep_their_open_button() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("present/a.sav");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    let rows = [
+        Row {
+            real: Some(real),
+            ..row("Base/present/a.sav")
+        },
+        Row {
+            real: Some(tmp.path().join("missing/b.sav")),
+            ..row("Base/missing/b.sav")
+        },
+    ];
+    let tree = FileTree::new(rows).existing_folders_only();
+    assert!(folder(&tree, &["Base", "present"]).real.is_some());
+    assert_eq!(folder(&tree, &["Base", "missing"]).real, None);
 }
