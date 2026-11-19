@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
+use sha2::{Digest, Sha256};
+
 use super::*;
 use crate::layout::Base;
 use crate::registry::{HKCU, RegData, RegValue};
@@ -387,6 +389,152 @@ fn user_reg(prefix: &Path, value: &str) {
     write(
         &prefix.join("user.reg"),
         &format!("WINE REGISTRY Version 2\n\n[Software\\\\Foo] 1\n#time=0\n\"v\"=\"{value}\"\n"),
+    );
+}
+
+/// The hash list of `stage_dir`, read from disk, to check the staged `hashes.json` against.
+fn rehash(stage_dir: &Path) -> Hashes {
+    fn walk(dir: &Path, prefix: &str, out: &mut BTreeMap<String, FileHash>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let key = format!("{prefix}{}", entry.file_name().to_str().unwrap());
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &format!("{key}/"), out);
+            } else {
+                let file = FileHash {
+                    sha256: sha256(&entry.path()).unwrap(),
+                    size: fs::symlink_metadata(entry.path()).unwrap().len(),
+                    modified: mtime(&entry.path())
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .ok(),
+                };
+                out.insert(key, file);
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    let files_dir = stage_dir.join(FILES_DIR);
+    if files_dir.exists() {
+        walk(&files_dir, "", &mut files);
+    }
+    Hashes {
+        format: HASHES_FORMAT,
+        meta: sha256(&stage_dir.join(META_FILE)).unwrap(),
+        registry: sha256(&stage_dir.join(REGISTRY_FILE)),
+        files,
+    }
+}
+
+/// The SHA-256 of the file at `path` in hex, `None` when there is none.
+fn sha256(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+/// The staged `hashes.json` of `stage_dir`.
+fn hash_list(stage_dir: &Path) -> Hashes {
+    Hashes::from_json(&fs::read(stage_dir.join(HASHES_FILE)).unwrap()).unwrap()
+}
+
+#[test]
+fn the_hash_list_follows_every_restage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let save = write(&tmp.path().join("src/save.dat"), "save");
+    let other = write(&tmp.path().join("src/sub/other.dat"), "other");
+    let scan = game(
+        "Foo",
+        vec![
+            found(Base::WinAppData, "Foo/save.dat", &save),
+            found(Base::WinAppData, "Foo/sub/other.dat", &other),
+        ],
+    );
+    let stage_dir = tmp.path().join("stage");
+    let hashes_file = stage_dir.join(HASHES_FILE);
+    let restage = || {
+        let hashes = stage(&scan, &registry("a"), &stage_dir).unwrap();
+        assert_eq!(hashes, rehash(&stage_dir));
+        assert_eq!(hash_list(&stage_dir), hashes);
+        hashes
+    };
+    let first = restage();
+    assert_eq!(
+        first.files.keys().collect::<Vec<_>>(),
+        ["WinAppData/Foo/save.dat", "WinAppData/Foo/sub/other.dat"]
+    );
+    assert!(first.registry.is_some());
+
+    // Unchanged: the list keeps its mtime, so rustic still sees an unchanged tree.
+    let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    set_mtime(&hashes_file, old);
+    assert_eq!(restage(), first);
+    assert_eq!(mtime(&hashes_file), old);
+
+    // Changed bytes, then the same bytes with a new mtime.
+    write(&save, "saved again");
+    let changed = restage();
+    assert_ne!(changed, first);
+    set_mtime(&save, mtime(&save) + Duration::from_secs(10));
+    let touched = restage();
+    assert!(touched.same_content(&changed));
+
+    // A lost list is rebuilt by reading the staged files.
+    fs::remove_file(&hashes_file).unwrap();
+    assert_eq!(restage(), touched);
+
+    // An entry that no longer matches its staged file's mtime, as an older version that copied
+    // without updating the list leaves it, is read again.
+    let mut stale = touched.clone();
+    let entry = stale.files.get_mut("WinAppData/Foo/save.dat").unwrap();
+    entry.sha256 = "0".repeat(64);
+    entry.modified = Some(Duration::from_secs(1));
+    fs::write(&hashes_file, serde_json::to_vec(&stale).unwrap()).unwrap();
+    assert_eq!(restage(), touched);
+}
+
+#[test]
+fn the_hash_list_keeps_files_staged_while_the_source_is_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kept = write(&tmp.path().join("src/a.sav"), "a");
+    let hidden = write(&tmp.path().join("src/sub/b.sav"), "b");
+    let stage_dir = tmp.path().join("stage");
+    let both = game(
+        "Foo",
+        vec![
+            found(Base::WinAppData, "Foo/a.sav", &kept),
+            found(Base::WinAppData, "Foo/sub/b.sav", &hidden),
+        ],
+    );
+    stage(&both, &RegistryExport::default(), &stage_dir).unwrap();
+
+    let mut partial = game("Foo", vec![found(Base::WinAppData, "Foo/a.sav", &kept)]);
+    partial.unreadable = vec![tmp.path().join("src/sub")];
+    let hashes = stage(&partial, &RegistryExport::default(), &stage_dir).unwrap();
+    assert!(hashes.files.contains_key("WinAppData/Foo/sub/b.sav"));
+    assert_eq!(hashes, rehash(&stage_dir));
+    assert_eq!(hashes.registry, None);
+}
+
+#[test]
+fn a_backup_stores_the_hash_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    let stage_root = tmp.path().join("stage");
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    let info = written(&outcomes)[0].clone().unwrap();
+    let slug = slug("Foo");
+    let stored = storage
+        .read_file_if_present(&info.id, &format!("/salvajocs/{slug}/{HASHES_FILE}"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        Hashes::from_json(&stored),
+        Some(hash_list(&stage_root.join(slug)))
     );
 }
 

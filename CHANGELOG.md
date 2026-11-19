@@ -19,6 +19,8 @@ All notable changes to salvajocs. The format follows
   ([advanced options](docs/guide/advanced-options.md#rclone-remote)).
 - Closing the window while a backup, restore, clean-up or other save is running asks first: wait
   for it or close anyway.
+- Each game backup also holds `hashes.json`, the SHA-256 and size of every saved file. The first
+  backup of each game after updating therefore makes a new snapshot, even when nothing changed.
 
 ### Fixed
 

@@ -632,3 +632,61 @@ mod windows_absolute {
         assert_eq!(base_dir(Base::Absolute, &native(), &no_roots_vars()), None);
     }
 }
+
+fn file_hash(sha256: &str, size: u64, modified: u64) -> FileHash {
+    FileHash {
+        sha256: sha256.into(),
+        size,
+        modified: Some(Duration::from_secs(modified)),
+    }
+}
+
+fn hash_list(files: &[(&str, FileHash)]) -> Hashes {
+    Hashes {
+        format: HASHES_FORMAT,
+        meta: "meta".into(),
+        registry: None,
+        files: files
+            .iter()
+            .map(|(path, file)| ((*path).to_owned(), file.clone()))
+            .collect(),
+    }
+}
+
+#[test]
+fn hash_lists_compare_content_but_not_mtimes() {
+    let list = hash_list(&[("Home/a", file_hash("aa", 1, 1))]);
+    assert!(list.same_content(&hash_list(&[("Home/a", file_hash("aa", 1, 2))])));
+    for other in [
+        hash_list(&[("Home/a", file_hash("ab", 1, 1))]),
+        hash_list(&[("Home/a", file_hash("aa", 2, 1))]),
+        hash_list(&[("Home/b", file_hash("aa", 1, 1))]),
+        hash_list(&[]),
+        Hashes {
+            registry: Some("registry".into()),
+            ..list.clone()
+        },
+        Hashes {
+            meta: "other".into(),
+            ..list.clone()
+        },
+    ] {
+        assert!(!list.same_content(&other), "{other:?}");
+    }
+}
+
+#[test]
+fn a_hash_list_of_a_newer_format_is_not_read() {
+    let list = hash_list(&[("Home/a", file_hash("aa", 1, 1))]);
+    let json = serde_json::to_vec(&list).unwrap();
+    assert_eq!(Hashes::from_json(&json), Some(list.clone()));
+    let newer = Hashes {
+        format: HASHES_FORMAT + 1,
+        ..list
+    };
+    assert_eq!(
+        Hashes::from_json(&serde_json::to_vec(&newer).unwrap()),
+        None
+    );
+    assert_eq!(Hashes::from_json(b"not json"), None);
+}

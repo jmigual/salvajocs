@@ -1,8 +1,10 @@
 //! Pure path logic: semantic bases, target contexts, manifest template expansion and the
-//! snapshot format (ADR-0004, ADR-0005, ADR-0008).
+//! snapshot format (ADR-0004, ADR-0005, ADR-0008, ADR-0018).
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf, Prefix};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,10 @@ pub const FILES_DIR: &str = "files";
 pub const META_FILE: &str = "salvajocs.json";
 /// File name of the optional registry export in a staged game (ADR-0006).
 pub const REGISTRY_FILE: &str = "registry.json";
+/// File name of the serialized [`Hashes`] in a staged game (ADR-0018).
+pub const HASHES_FILE: &str = "hashes.json";
+/// Current value of [`Hashes::format`].
+pub const HASHES_FORMAT: u32 = 1;
 
 /// A semantic location a saved file is stored under, independent of the machine it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -619,6 +625,54 @@ pub struct SnapshotMeta {
     pub title: String,
     /// The glob-free prefix of each template that produced files, as `(base, rest)`.
     pub roots: Vec<(Base, String)>,
+}
+
+/// The `hashes.json` of a staged game: the SHA-256 of every other file in it (ADR-0018).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hashes {
+    /// Format version, [`HASHES_FORMAT`].
+    pub format: u32,
+    /// The SHA-256 of `salvajocs.json`, in hex.
+    pub meta: String,
+    /// The SHA-256 of `registry.json` in hex, `None` when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    /// Each file below `files/`, by its `<Base>/<tail>` path.
+    pub files: BTreeMap<String, FileHash>,
+}
+
+/// One file of [`Hashes`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileHash {
+    /// The SHA-256 of the file, in hex.
+    pub sha256: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// The staged file's mtime since the epoch, which tells whether the entry still describes
+    /// it; `None` when it is unknown or before the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<Duration>,
+}
+
+impl Hashes {
+    /// Parses a `hashes.json`; `None` when it is not one this version reads, such as a newer
+    /// format, so the caller falls back as if there were none.
+    pub fn from_json(bytes: &[u8]) -> Option<Self> {
+        serde_json::from_slice(bytes)
+            .ok()
+            .filter(|hashes: &Self| hashes.format <= HASHES_FORMAT)
+    }
+
+    /// Whether both lists describe the same content: the same `salvajocs.json` and
+    /// `registry.json`, and the same files with the same sizes and hashes. Mtimes are ignored.
+    pub fn same_content(&self, other: &Hashes) -> bool {
+        self.meta == other.meta
+            && self.registry == other.registry
+            && self.files.len() == other.files.len()
+            && (self.files.iter().zip(&other.files)).all(|((path, a), (other_path, b))| {
+                path == other_path && a.sha256 == b.sha256 && a.size == b.size
+            })
+    }
 }
 
 #[cfg(test)]
