@@ -97,8 +97,13 @@ jobs:
           install -Dm644 crates/salvajocs-gui/assets/$id.png AppDir/usr/share/icons/hicolor/256x256/apps/$id.png
           install -Dm644 crates/salvajocs-gui/assets/$id.svg AppDir/usr/share/icons/hicolor/scalable/apps/$id.svg
           install -Dm644 -t AppDir/usr/share/licenses/$id LICENSE crates/salvajocs-gui/assets/fonts/*LICENSE.txt crates/salvajocs-gui/assets/fonts/OFL.txt
+          # A script, not a symlink: the process is then named salvajocs, not AppRun.
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          exec "${APPDIR:-$(dirname "$0")}/usr/bin/salvajocs" "$@"
+          EOF
+          chmod 755 AppDir/AppRun
           # appimagetool wants the desktop file and icon at the AppDir root.
-          ln -s usr/bin/salvajocs AppDir/AppRun
           ln -s usr/share/applications/$id.desktop AppDir/$id.desktop
           ln -s usr/share/icons/hicolor/256x256/apps/$id.png AppDir/$id.png
           ln -s $id.png AppDir/.DirIcon

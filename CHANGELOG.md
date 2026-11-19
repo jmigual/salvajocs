@@ -12,6 +12,7 @@ All notable changes to salvajocs. The format follows
   to create a new one or choose another location.
 - When there is no repository at the chosen location, the form is replaced by the question
   "Do you want to create one?". The compression level is asked there, not in the form.
+- The AppImage's process is named `salvajocs`, not `AppRun`.
 
 ## [0.4.0] - 2026-11-18
 
