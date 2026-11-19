@@ -427,3 +427,83 @@ fn snapshot_path_is_the_same_on_every_os() {
     let real = format!("{}/sub/b.sav", src.to_str().unwrap().replace('\\', "/"));
     assert!(storage.restore_path(&info.id, &real, &out).is_err());
 }
+
+#[test]
+fn listed_files_carry_their_nested_path_size_and_mtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut listed = storage.snapshot_files(&info.id, AS_PATH).unwrap();
+    listed.sort_by(|a, b| a.path.cmp(&b.path));
+    let modified = |path: &str| fs::metadata(src.join(path)).unwrap().modified().ok();
+    assert_eq!(
+        listed,
+        [
+            SnapshotFile {
+                path: "a.sav".into(),
+                size: 5,
+                modified: modified("a.sav"),
+            },
+            SnapshotFile {
+                path: "sub/b.sav".into(),
+                size: 4,
+                modified: modified("sub/b.sav"),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_game_without_files_lists_none_below_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("stage");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("salvajocs.json"), "{}").unwrap();
+    fs::write(src.join("registry.json"), "{}").unwrap();
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut paths: Vec<_> = (storage.snapshot_files(&info.id, AS_PATH).unwrap())
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    paths.sort();
+    assert_eq!(paths, ["registry.json", "salvajocs.json"]);
+}
+
+#[test]
+fn reading_a_file_the_snapshot_lacks_gives_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut read = |path: &str| {
+        storage
+            .read_file_if_present(&info.id, &format!("{AS_PATH}/{path}"))
+            .unwrap()
+    };
+    assert_eq!(read("sub/b.sav"), Some(b"beta".to_vec()));
+    assert_eq!(read("missing.json"), None);
+    assert_eq!(read("missing/b.sav"), None);
+}
+
+#[test]
+fn hostname_is_the_host_snapshots_are_stored_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage.hostname().unwrap(), info.host);
+}

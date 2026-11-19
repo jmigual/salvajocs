@@ -13,7 +13,7 @@ use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
     LsOptions, PathList, PruneOptions, Repository, RepositoryBackends, RepositoryOptions,
     RestoreOptions, RusticError, SnapshotOptions,
-    repofile::{IndexFile, SnapshotFile, SnapshotId},
+    repofile::{IndexFile, SnapshotFile as RusticSnapshot, SnapshotId},
 };
 
 use rclone::Rclone;
@@ -228,7 +228,7 @@ pub struct SnapshotInfo {
     pub tags: Vec<String>,
 }
 
-fn snapshot_info(snap: &SnapshotFile) -> SnapshotInfo {
+fn snapshot_info(snap: &RusticSnapshot) -> SnapshotInfo {
     SnapshotInfo {
         id: snap.id.to_hex().to_string(),
         time: snap.time.timestamp().into(),
@@ -236,6 +236,27 @@ fn snapshot_info(snap: &SnapshotFile) -> SnapshotInfo {
         label: snap.label.clone(),
         tags: snap.tags.iter().cloned().collect(),
     }
+}
+
+/// A file in a snapshot, as [`Storage::snapshot_files`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotFile {
+    /// The path below the listed directory, `/`-separated.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// The mtime the snapshot stored, if any.
+    pub modified: Option<SystemTime>,
+}
+
+/// `path` with `/` between its components; a component that is not UTF-8 is an error.
+fn slash_path(path: &Path) -> Result<String, StorageError> {
+    let parts = path
+        .components()
+        .map(|part| part.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| StorageError::NonUtf8Path(path.to_path_buf()))?;
+    Ok(parts.join("/"))
 }
 
 /// Whether the backend lists a repository config at `location`; an unreadable local location is
@@ -467,6 +488,68 @@ impl Storage {
         self.repo
             .apply_config(&ConfigOptions::default().set_append_only(true))
             .unwrap();
+    }
+
+    /// The host name new snapshots are stored with, as rustic determines it.
+    pub fn hostname(&self) -> Result<String, StorageError> {
+        let snapshot = SnapshotOptions::default().to_snapshot().map_err(backend)?;
+        Ok(snapshot.hostname)
+    }
+
+    /// Every regular file below the directory `path_in_snapshot` of snapshot `snapshot_id`,
+    /// with its path relative to it.
+    pub fn snapshot_files(
+        &mut self,
+        snapshot_id: &str,
+        path_in_snapshot: &str,
+    ) -> Result<Vec<SnapshotFile>, StorageError> {
+        if self.stale {
+            self.reindex()?;
+        }
+        let repo = &self.repo;
+        let snap = repo
+            .get_snapshot_from_str(snapshot_id, |_| true)
+            .map_err(backend)?;
+        let node = repo
+            .node_from_snapshot_and_path(&snap, path_in_snapshot)
+            .map_err(backend)?;
+        let mut files = Vec::new();
+        for entry in repo.ls(&node, &LsOptions::default()).map_err(backend)? {
+            let (path, node) = entry.map_err(backend)?;
+            if node.is_file() {
+                files.push(SnapshotFile {
+                    path: slash_path(&path)?,
+                    size: node.meta.size,
+                    modified: node.meta.mtime.map(SystemTime::from),
+                });
+            }
+        }
+        Ok(files)
+    }
+
+    /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`, `None` when the
+    /// snapshot has nothing at that path.
+    pub fn read_file_if_present(
+        &mut self,
+        snapshot_id: &str,
+        path_in_snapshot: &str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        if self.stale {
+            self.reindex()?;
+        }
+        let repo = &self.repo;
+        let snap = repo
+            .get_snapshot_from_str(snapshot_id, |_| true)
+            .map_err(backend)?;
+        let found = repo
+            .find_nodes_from_path([snap.tree], Path::new(path_in_snapshot))
+            .map_err(backend)?;
+        let Some(&Some(at)) = found.matches.first() else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        repo.dump(&found.nodes[at], &mut bytes).map_err(backend)?;
+        Ok(Some(bytes))
     }
 
     /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`.
