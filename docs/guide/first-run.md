@@ -25,8 +25,8 @@ The **Backend** list offers:
 Each service shows its own fields, such as **Server URL**, **Bucket** or **Access key ID**.
 Fields marked **Required.** must be filled before **Continue** is enabled. Secret fields such as
 keys and tokens are masked, and their values are never written to the config file. With
-**Remember in the system keyring** ticked they go to the keyring. Otherwise salvajocs asks for
-them each session.
+**Remember passwords in the system keyring** ticked they go to the keyring. Otherwise salvajocs
+asks for them each session.
 
 **Advanced options** holds a free list of key and value pairs for settings that have no field,
 such as a retry count. The **Option reference** link opens the
@@ -70,7 +70,7 @@ account. Three modes exist, and the dialog picks one from what you type:
 | You do | Mode |
 | --- | --- |
 | Leave the encryption password empty | No password. Anyone who can reach the repository can read it. The dialog warns you. |
-| Type an encryption password and tick **Remember in the system keyring** | Stored in the keyring (Secret Service on Linux, Credential Manager on Windows). |
+| Type an encryption password and tick **Remember passwords in the system keyring** | Stored in the keyring (Secret Service on Linux, Credential Manager on Windows). |
 | Type an encryption password and untick it | Asked once each time you start the app. |
 
 If the keyring is missing or refuses the value, salvajocs shows a warning and asks for the secret

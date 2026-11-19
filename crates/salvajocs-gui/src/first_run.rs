@@ -89,7 +89,7 @@ impl Connect {
         Self {
             form: BackendForm::from_config(config, &credentials.options),
             password: credentials.password.clone(),
-            remember: config.password == PasswordMode::Keyring,
+            remember: config.password == PasswordMode::Keyring || credentials.options_remembered,
             submit: "Apply",
             ..Self::first_run()
         }
@@ -128,7 +128,10 @@ impl Connect {
                     );
                     ui.end_row();
                     ui.label("");
-                    ui.checkbox(&mut self.remember, "Remember in the system keyring");
+                    ui.checkbox(
+                        &mut self.remember,
+                        "Remember passwords in the system keyring",
+                    );
                     ui.end_row();
                     if self.password.is_empty() {
                         ui.label("");
@@ -248,9 +251,11 @@ impl Connect {
         };
         let mut config = AppConfig::new(self.form.repository(), password);
         config.repository_options = self.form.options();
+        let options = self.form.secrets();
         let credentials = Credentials {
             password: self.password.clone(),
-            options: self.form.secrets(),
+            options_remembered: self.remember && !options.is_empty(),
+            options,
         };
         let location = match config.location(&credentials.options) {
             Ok(location) => location,

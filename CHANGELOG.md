@@ -47,6 +47,9 @@ All notable changes to salvajocs. The format follows
 - On Windows, an rclone repository no longer opens a terminal window.
 - When the storage server refuses the login, the app says "The server refused the login. Check
   the user name and password." instead of "Path `config` does not exist".
+- Without an encryption password, Settings no longer deletes a remembered server password from
+  the keyring on **Apply**: the box, now **Remember passwords in the system keyring**, starts
+  ticked when a secret field is in the keyring.
 
 ## [0.5.0] - 2026-11-19
 

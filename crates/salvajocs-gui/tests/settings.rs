@@ -522,6 +522,84 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
     );
 }
 
+const REMEMBER: &str = "Remember passwords in the system keyring";
+
+/// A repository at `repository` without encryption password whose secret option `access_key`
+/// is in `secrets` when `remembered`.
+fn server_password_config(
+    env: &Env,
+    secrets: &MemorySecrets,
+    repository: &str,
+    remembered: bool,
+) -> AppConfig {
+    init_repo(repository);
+    let mut config = local_config(repository);
+    config
+        .repository_options
+        .push(RepoOption::new("access_key".into(), None, true));
+    if remembered {
+        let key = SecretKey::Option("access_key".into());
+        secrets.set(&config.secret_scope(), &key, "ak").unwrap();
+    }
+    save_config(env, &config);
+    config
+}
+
+fn remember_box(harness: &Harness<'static, App>) -> Option<Toggled> {
+    harness
+        .get_by_role_and_label(Role::CheckBox, REMEMBER)
+        .accesskit_node()
+        .toggled()
+}
+
+#[test]
+fn a_server_password_from_the_keyring_stays_remembered_after_apply() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    let config = server_password_config(&env, &secrets, &repo_dir(&tmp), true);
+    let mut harness = open_settings(env.clone());
+
+    assert_eq!(remember_box(&harness), Some(Toggled::True));
+    // Only an Apply writes the file again, after it stored or deleted the secrets.
+    std::fs::remove_file(env.config_dir.join("config.yaml")).unwrap();
+    harness.get_by_label("Apply").click();
+    run_until_saved(&mut harness, &env, |saved| {
+        saved.repository == config.repository
+    });
+
+    let key = SecretKey::Option("access_key".into());
+    assert_eq!(
+        secrets
+            .get(&config.secret_scope(), &key)
+            .unwrap()
+            .as_deref(),
+        Some("ak")
+    );
+}
+
+#[test]
+fn a_server_password_typed_at_startup_leaves_remember_unticked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    server_password_config(&env, &secrets, &repo_dir(&tmp), false);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the prompt", |h| {
+        shows(h, "Repository secrets")
+    });
+    fill(&mut harness, "Option access_key", "ak");
+    harness.get_by_label("Open repository").click();
+    run_until(&mut harness, "the repository to open", |h| {
+        !shows(h, "Repository secrets") && !shows(h, "Opening the repository")
+    });
+
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
+
+    assert_eq!(remember_box(&harness), Some(Toggled::False));
+}
+
 #[test]
 fn unreadable_config_blocks_settings_and_is_left_alone() {
     let tmp = tempfile::tempdir().unwrap();
@@ -858,6 +936,49 @@ fn a_refused_login_at_startup_is_said() {
         &format!("The repository could not be opened: {LOGIN_REFUSED}")
     ));
     assert!(!shows(&harness, "No repository at"));
+}
+
+#[test]
+fn after_a_refused_login_settings_keeps_the_remembered_server_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    let mut config = local_config("opendal:webdav");
+    config.repository_options = vec![
+        RepoOption::new("endpoint".into(), Some(refusing_server()), false),
+        RepoOption::new("password".into(), None, true),
+    ];
+    let key = SecretKey::Option("password".into());
+    secrets.set(&config.secret_scope(), &key, "old").unwrap();
+    save_config(&env, &config);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the failure", |h| shows(h, LOGIN_REFUSED));
+
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
+
+    assert_eq!(remember_box(&harness), Some(Toggled::True));
+}
+
+#[test]
+fn after_a_rest_refusal_settings_keeps_the_remembered_server_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    let mut config = local_config(&refusing_rest_repo());
+    config.repository_options = vec![RepoOption::new("password".into(), None, true)];
+    let key = SecretKey::Option("password".into());
+    secrets.set(&config.secret_scope(), &key, "old").unwrap();
+    save_config(&env, &config);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the failure", |h| {
+        shows(h, "could not be opened")
+    });
+
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
+
+    assert_eq!(remember_box(&harness), Some(Toggled::True));
 }
 
 #[test]

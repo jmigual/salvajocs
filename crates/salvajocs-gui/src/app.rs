@@ -304,7 +304,13 @@ impl App {
                     let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
                     Stage::RepositoryMissing(repository.to_string())
                 }
-                Some(Err(err)) => Stage::OpenFailed(failure_message(&err)),
+                Some(Err(err)) => {
+                    // Settings starts from these, so an Apply that fixes the location or the
+                    // login keeps the remembered ones.
+                    self.state.credentials = credentials;
+                    self.settings.reset();
+                    Stage::OpenFailed(failure_message(&err))
+                }
                 Some(Ok(storage)) => {
                     self.state.credentials = credentials;
                     if remember {

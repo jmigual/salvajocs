@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::secret::SecretError;
 
 use super::*;
 use crate::env::{MemorySecrets, SecretStore};
@@ -54,6 +55,48 @@ fn resolve_asks_only_for_what_the_keyring_lacks() {
     );
     assert_eq!(resolved.found.password, "pw");
     assert_eq!(resolved.found.options["access_key"], "ak");
+}
+
+#[test]
+fn resolve_marks_options_found_in_the_keyring_as_remembered() {
+    let secrets = Arc::new(MemorySecrets::new());
+    let config = config(PasswordMode::None);
+    let env = env(secrets.clone());
+    assert!(!resolve(&env, &config).found.options_remembered);
+
+    secrets
+        .set(
+            &config.secret_scope(),
+            &SecretKey::Option("access_key".into()),
+            "ak",
+        )
+        .unwrap();
+    assert!(resolve(&env, &config).found.options_remembered);
+}
+
+/// A keyring that cannot be read, such as a locked one.
+struct Unreadable;
+
+impl SecretStore for Unreadable {
+    fn get(&self, _: &str, _: &SecretKey) -> Result<Option<String>, SecretError> {
+        // Any error will do: the variant does not matter to `resolve`.
+        Err(SecretError::TooLong)
+    }
+
+    fn set(&self, _: &str, _: &SecretKey, _: &str) -> Result<(), SecretError> {
+        Err(SecretError::TooLong)
+    }
+
+    fn delete(&self, _: &str, _: &SecretKey) -> Result<(), SecretError> {
+        Err(SecretError::TooLong)
+    }
+}
+
+#[test]
+fn resolve_counts_an_unreadable_option_as_remembered() {
+    let resolved = resolve(&env(Arc::new(Unreadable)), &config(PasswordMode::None));
+    assert!(resolved.found.options_remembered);
+    assert_eq!(resolved.missing.len(), 2, "both options are asked for");
 }
 
 #[test]

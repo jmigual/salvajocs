@@ -15,6 +15,7 @@ fn credentials() -> Credentials {
     Credentials {
         password: "pw".to_string(),
         options: BTreeMap::from([("access_key".to_string(), "ak".to_string())]),
+        ..Credentials::default()
     }
 }
 
@@ -24,6 +25,18 @@ fn a_refused_login_says_what_to_check() {
     assert_eq!(failure_message(&refused), LOGIN_REFUSED);
     let other = anyhow::Error::from(StorageError::Missing);
     assert_eq!(failure_message(&other), format!("{other:#}"));
+}
+
+#[test]
+fn the_form_starts_ticked_only_when_something_is_remembered() {
+    let remembered = Credentials {
+        options_remembered: true,
+        ..credentials()
+    };
+    assert!(Connect::editing(&config(PasswordMode::None), &remembered).remember);
+    assert!(Connect::editing(&config(PasswordMode::Keyring), &credentials()).remember);
+    assert!(!Connect::editing(&config(PasswordMode::None), &credentials()).remember);
+    assert!(!Connect::editing(&config(PasswordMode::Ask), &credentials()).remember);
 }
 
 #[test]

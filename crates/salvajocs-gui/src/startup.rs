@@ -21,6 +21,9 @@ pub struct Credentials {
     pub password: String,
     /// The values of the secret options, by key.
     pub options: BTreeMap<String, String>,
+    /// Whether the secret options are kept in the keyring: one was found there at startup, or
+    /// the user chose to remember them. The repository form starts ticked from it.
+    pub options_remembered: bool,
 }
 
 /// Debug output hides the values: they are secrets.
@@ -29,6 +32,7 @@ impl fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("has_password", &!self.password.is_empty())
             .field("option_keys", &self.options.keys().collect::<Vec<_>>())
+            .field("options_remembered", &self.options_remembered)
             .finish()
     }
 }
@@ -66,10 +70,16 @@ pub fn resolve(env: &Env, config: &AppConfig) -> Resolved {
         .filter(|option| option.secret)
         .map(|option| SecretKey::Option(option.key.clone()))
         .chain((config.password == PasswordMode::Keyring).then_some(SecretKey::Password));
+    // An option the keyring could not read may still be stored there; counting it as remembered
+    // keeps an Apply in Settings from deleting it.
+    let mut unreadable_option = false;
     let looked_up: Vec<(SecretKey, String)> = candidates
-        .filter_map(|key| {
-            let value = env.secrets.get(&scope, &key).ok().flatten()?;
-            Some((key, value))
+        .filter_map(|key| match env.secrets.get(&scope, &key) {
+            Ok(value) => Some((key, value?)),
+            Err(_) => {
+                unreadable_option |= matches!(key, SecretKey::Option(_));
+                None
+            }
         })
         .collect();
     let missing = config::missing_secrets(config, |key| {
@@ -78,7 +88,13 @@ pub fn resolve(env: &Env, config: &AppConfig) -> Resolved {
             .find(|(found, _)| found == key)
             .map(|(_, value)| value.clone())
     });
-    let mut found = Credentials::default();
+    let mut found = Credentials {
+        options_remembered: unreadable_option
+            || looked_up
+                .iter()
+                .any(|(key, _)| matches!(key, SecretKey::Option(_))),
+        ..Credentials::default()
+    };
     found.answer(looked_up);
     Resolved { found, missing }
 }
