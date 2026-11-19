@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use common::{
-    env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
-    run_until_backed_up, run_until_ready, save_config, shows,
+    env, init_repo, local_config, replace_text, repo_dir, run_settled, run_until, run_until_ready,
+    save_config, shows,
 };
 use eframe::egui::{Theme, Vec2};
 use egui_kittest::Harness;
@@ -254,8 +254,8 @@ fn demo_repository() -> (MutexGuard<'static, ()>, String) {
     (turn, repository)
 }
 
-/// The Backup tab after a scan and two backups: the first saved everything, then one game's
-/// save changed, so the second run reports one game backed up and the rest up to date.
+/// The Backup tab after a scan, compared with a backup of every game from another machine: one
+/// save changed since, so its game shows a `changed` file.
 fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     let (_turn, repository) = demo_repository();
     let tmp = tempfile::tempdir().unwrap();
@@ -267,25 +267,36 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
         kind: RootKind::WinePrefix,
     }];
     save_config(&env, &config);
+    // Forged, so the comparison names a made-up host and time rather than this machine's.
+    let manifest = parse_yaml(MANIFEST).unwrap();
+    let report = salvajocs_core::scan::scan(&manifest, &config, &deck(), |_, _| {});
+    let snapshots: Vec<Forged> = (report.games.iter())
+        .map(|game| Forged {
+            game,
+            host: "steamdeck",
+            time: "2026-11-14T21:30:00Z",
+            pre_restore: false,
+        })
+        .collect();
+    forge(&tmp, &repository, &snapshots);
+    let knight = prefix.join("drive_c/users/steamuser/AppData/LocalLow/Team Cherry/Hollow Knight");
+    write_file(&knight.join("user3.dat"), 18_600);
     let mut harness = shot_harness(env, theme, 750.0);
     run_until_ready(&mut harness);
     run_settled(&mut harness);
 
     harness.get_by_label("Scan for games").click();
     run_until(&mut harness, "the scan", |h| shows(h, "5 games found"));
-    // What to back up may still be loading.
-    run_settled(&mut harness);
-    harness.get_by_label("Back up 5 games").click();
-    run_until_backed_up(&mut harness, "Terraria: backed up");
-
-    let saves = prefix.join("drive_c/users/steamuser/AppData/Roaming/StardewValley/Saves");
-    write_file(&saves.join("Ines_372841905/SaveGameInfo"), 3_300);
+    run_until(&mut harness, "the comparison", |h| {
+        shows(h, "1 changed since the backup from steamdeck")
+    });
     harness.get_by_label("Terraria").click();
-    run_settled(&mut harness);
-    harness.get_by_label("Back up 4 games").click();
-    run_until_backed_up(&mut harness, "Stardew Valley: backed up");
     harness
-        .get_by_label("3 files, 807.0 KiB, plus registry keys")
+        .get_by_label("3 files, 807.2 KiB, plus registry keys")
+        .click();
+    run_settled(&mut harness);
+    harness
+        .get_by_label("Open WinLocalAppDataLow/Team Cherry/Hollow Knight")
         .click();
     capture(&mut harness, dir, name);
     fs::remove_dir_all(DEMO_ROOT).unwrap();
@@ -437,15 +448,15 @@ fn hollow_knight(tmp: &TempDir) -> (GameScan, GameScan) {
     (windows, linux)
 }
 
-/// An app on the made-up Linux machine with `snapshots` in its repository, the Restore tab in
-/// front and the list loaded.
+/// An app in `env` with `snapshots` in its repository, the Restore tab in front and the list
+/// loaded.
 fn restore_app(
+    env: Env,
     tmp: &TempDir,
     snapshots: &[Forged],
     first: &str,
     height: f32,
 ) -> Harness<'static, App> {
-    let env = demo_env(tmp);
     let repository = repo_dir(tmp);
     init_repo(&repository);
     forge(tmp, &repository, snapshots);
@@ -539,7 +550,7 @@ fn restore_tab() {
             pre_restore: false,
         },
     ];
-    let mut harness = restore_app(&tmp, &snapshots, "Hades", 760.0);
+    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Hades", 760.0);
 
     harness.get_by_label("Hollow Knight").click();
     run_until(&mut harness, "the default targets", |h| {
@@ -550,6 +561,73 @@ fn restore_tab() {
     // The picker open shows the snapshots of every host and the safety backup.
     harness.get_by_label("Snapshot").click();
     capture(&mut harness, &dir, "restore");
+}
+
+#[test]
+#[ignore = "renders the README screenshots; needs a wgpu adapter and SALVAJOCS_SCREENSHOTS=1"]
+fn restore_batch() {
+    let Some(dir) = output_dir() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let (windows, _) = hollow_knight(&tmp);
+    let stardew = scan(
+        &tmp,
+        "Stardew Valley",
+        &[(
+            Base::WinAppData,
+            "StardewValley/Saves/Ines_372841905/SaveGameInfo",
+            3_300,
+        )],
+        &[(Base::WinAppData, "StardewValley/Saves")],
+    );
+    let snapshots = [
+        Forged {
+            game: &stardew,
+            host: "desktop-win",
+            time: "2026-11-14T10:20:00Z",
+            pre_restore: false,
+        },
+        Forged {
+            game: &windows,
+            host: "desktop-win",
+            time: "2026-11-15T22:10:00Z",
+            pre_restore: false,
+        },
+    ];
+    // A home on disk, so Stardew's save is already there and differs; no path of it is shown.
+    let home = tmp.path().join("home/deck");
+    write_file(
+        &home.join(".config/StardewValley/Saves/Ines_372841905/SaveGameInfo"),
+        3_100,
+    );
+    let mut env = demo_env(&tmp);
+    env.environment = Some(Environment {
+        native: Some(Context::Linux(LinuxFolders {
+            user: "deck".into(),
+            xdg_data: home.join(".local/share"),
+            xdg_config: home.join(".config"),
+            home,
+        })),
+        ..deck()
+    });
+    let mut harness = restore_app(env, &tmp, &snapshots, "Stardew Valley", 760.0);
+
+    // The confirm of a batch: each ticked game's files as a tree, labelled by what the restore
+    // does to them.
+    harness.get_by_label("Select all").click();
+    run_settled(&mut harness);
+    harness.get_by_label("Restore 2 games").click();
+    run_until(&mut harness, "the batch confirm", |h| {
+        h.query_by_label("Cancel").is_some()
+    });
+    harness
+        .get_by_label("Open XdgConfig/unity3d/Team Cherry/Hollow Knight")
+        .click();
+    // Opening the first tree moves the second down.
+    run_settled(&mut harness);
+    harness
+        .get_by_label("Open XdgConfig/StardewValley/Saves/Ines_372841905")
+        .click();
+    capture(&mut harness, &dir, "restore-batch");
 }
 
 #[test]
@@ -579,7 +657,7 @@ fn mapping_dialog() {
         time: "2026-11-14T20:31:00Z",
         pre_restore: false,
     }];
-    let mut harness = restore_app(&tmp, &snapshots, "Cuphead", 500.0);
+    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Cuphead", 500.0);
 
     harness.get_by_label("Cuphead").click();
     run_until(&mut harness, "the default targets", |h| {
