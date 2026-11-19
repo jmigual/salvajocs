@@ -17,6 +17,7 @@ use egui_kittest::kittest::Queryable;
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::Compression;
+use salvajocs_core::update::Release;
 use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env, MIN_WINDOW_SIZE};
@@ -521,14 +522,44 @@ fn pressing_the_right_edge_leaves_the_page_scroll_alone() {
     assert_eq!(harness.get_by_label("Roots").rect(), before);
 }
 
-/// The rects of the tabs, the manifest status and the window buttons in a window of `size`,
-/// by label.
-fn bar_items(size: Vec2) -> Vec<(&'static str, Rect)> {
-    let (_tmp, harness) = ready_sized(size);
+/// An app with its repository open and an update to install, in a window of `size`. The app was
+/// `installed` by the installer, or it is a portable one that links the release page.
+fn ready_with_update(size: Vec2, installed: bool) -> (tempfile::TempDir, Harness<'static, App>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(&tmp);
+    env.check_update = Some(|_| {
+        Ok(Some(Release {
+            version: "99.0.0".to_string(),
+            html_url: "https://example.invalid/releases/tag/v99.0.0".to_string(),
+            assets: Vec::new(),
+        }))
+    });
+    env.installed_by_installer = if installed { || true } else { || false };
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = harness(env, size);
+    run_until_ready(&mut harness);
+    run_until(&mut harness, "the update notice", |h| {
+        shows(h, "Update available")
+    });
+    (tmp, harness)
+}
+
+/// The rects of the bar's items, by label.
+fn bar_items(harness: &Harness<'static, App>) -> Vec<(&'static str, Rect)> {
     Tab::ALL
         .iter()
         .map(|tab| tab.label())
-        .chain(["Manifest", "Minimize", "Maximize", "Close"])
+        .chain([
+            "Update available",
+            "Update now",
+            "Release page",
+            "Manifest",
+            "Minimize",
+            "Maximize",
+            "Close",
+        ])
         .flat_map(|label| {
             harness
                 .query_all_by_label_contains(label)
@@ -538,17 +569,24 @@ fn bar_items(size: Vec2) -> Vec<(&'static str, Rect)> {
         .collect()
 }
 
-#[test]
-fn bar_items_fit_at_the_smallest_window() {
-    let [width, height] = MIN_WINDOW_SIZE;
-    let mut items = bar_items(Vec2::new(width, height));
-    let wide = bar_items(Vec2::new(1100.0, height));
-    for ((label, rect), (_, natural)) in items.iter().zip(&wide) {
+/// Checks that the bar's items of `harness` do not overlap, that its tabs are as wide as in
+/// `wide`, a window wide enough for all of the bar, and that the window buttons keep the bar's
+/// 16 pt margin.
+fn assert_bar_fits(harness: &Harness<'static, App>, wide: &Harness<'static, App>) {
+    let close = harness.get_by_label("Close").rect();
+    assert!(
+        close.right() <= harness.ctx.viewport_rect().right() - 16.0,
+        "the window buttons are in the bar's margin"
+    );
+    let mut items = bar_items(harness);
+    for ((label, rect), (_, natural)) in items.iter().zip(bar_items(wide)) {
         if Tab::ALL.iter().any(|tab| tab.label() == *label) {
             assert_eq!(rect.width(), natural.width(), "the {label} tab is squeezed");
         }
     }
     items.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
+    // The link that took over the dropped notice is found by both labels.
+    items.dedup_by(|a, b| a.1 == b.1);
     for pair in items.windows(2) {
         assert!(
             pair[0].1.right() <= pair[1].1.left(),
@@ -557,4 +595,51 @@ fn bar_items_fit_at_the_smallest_window() {
             pair[1].0
         );
     }
+}
+
+#[test]
+fn bar_items_fit_at_the_smallest_window() {
+    let [width, height] = MIN_WINDOW_SIZE;
+    let (_tmp, harness) = ready_sized(Vec2::new(width, height));
+    let (_wide_tmp, wide) = ready_sized(Vec2::new(1100.0, height));
+    assert_bar_fits(&harness, &wide);
+}
+
+#[test]
+fn update_notice_gives_way_in_the_smallest_window() {
+    let [width, height] = MIN_WINDOW_SIZE;
+    let (_tmp, mut harness) = ready_with_update(Vec2::new(width, height), true);
+    let (_wide_tmp, wide) = ready_with_update(Vec2::new(1100.0, height), true);
+    assert_bar_fits(&harness, &wide);
+    let notice = |h: &Harness<'static, App>| h.get_by_label("Update available: v99.0.0").rect();
+    assert!(
+        notice(&harness).width() < notice(&wide).width(),
+        "the notice is truncated, and its accessible label is whole"
+    );
+
+    harness.get_by_label("Update now").click();
+    // The fake release has no installer asset, so the started download fails at once.
+    run_until(&mut harness, "the failed download", |h| {
+        shows(h, "The update failed")
+    });
+}
+
+#[test]
+fn release_page_link_fits_in_the_smallest_window() {
+    let [width, height] = MIN_WINDOW_SIZE;
+    let (_tmp, harness) = ready_with_update(Vec2::new(width, height), false);
+    let (_wide_tmp, wide) = ready_with_update(Vec2::new(1100.0, height), false);
+    assert_bar_fits(&harness, &wide);
+}
+
+#[test]
+fn dropped_notice_stays_the_label_of_the_release_page_link() {
+    let (_tmp, harness) = ready_with_update(Vec2::new(MIN_WINDOW_SIZE[0] - 200.0, 480.0), false);
+    assert!(
+        harness
+            .query_by_label("Update available: v99.0.0")
+            .is_none(),
+        "the notice's text is dropped"
+    );
+    harness.get_by_label("Release page, Update available: v99.0.0");
 }

@@ -14,6 +14,8 @@ All notable changes to salvajocs. The format follows
   instead of being cut off on the left.
 - The window opens centered at 1100 by 640 points, not at the small default size, and cannot be
   made narrower than 840 points.
+- In a narrow window, the update notice and manifest status in the top bar are shortened with
+  "…" instead of overlapping the window buttons.
 
 ## [0.5.0] - 2026-11-19
 

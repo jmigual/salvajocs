@@ -385,29 +385,32 @@ impl eframe::App for App {
                 &self.state,
                 self.manifest.is_some(),
             );
-            theme::row(
-                ui,
-                |ui| {
-                    title_bar::app_icon(ui);
-                    tabs_ui(tab, ui);
-                },
-                |ui| {
+            ui.horizontal(|ui| {
+                title_bar::app_icon(ui);
+                tabs_ui(tab, ui);
+                // The tabs keep their width: the status gives way to them and the buttons.
+                let room = title_bar::status_room(ui);
+                theme::row_end(ui, |ui| {
                     // Text you cannot select is bar space, so dragging it moves the window.
                     ui.style_mut().interaction.selectable_labels = false;
-                    if !dialog_open {
-                        updater.ui(ui, state);
-                    }
-                    match (&state.manifest, loading) {
-                        (Some(manifest), _) => {
-                            ui.weak(format!("Manifest: {} games", manifest.games.len()))
+                    title_bar::status_area(ui, room, |ui| {
+                        if !dialog_open {
+                            updater.ui(ui, state);
                         }
-                        (None, true) => ui.weak("Manifest: loading"),
-                        (None, false) => ui.weak("Manifest: not available"),
-                    };
+                        title_bar::status_text(ui, |ui| {
+                            match (&state.manifest, loading) {
+                                (Some(manifest), _) => {
+                                    ui.weak(format!("Manifest: {} games", manifest.games.len()))
+                                }
+                                (None, true) => ui.weak("Manifest: loading"),
+                                (None, false) => ui.weak("Manifest: not available"),
+                            };
+                        });
+                    });
                     // The sizing pass runs first, so the slot of the real pass is kept.
                     buttons = title_bar::reserve_buttons(ui);
-                },
-            );
+                });
+            });
             self.status_ui(ui);
         });
 

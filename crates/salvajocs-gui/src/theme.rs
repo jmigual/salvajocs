@@ -274,6 +274,19 @@ pub fn row_end<R>(ui: &mut Ui, end: impl FnMut(&mut Ui) -> R) -> R {
     row(ui, |_| {}, end)
 }
 
+/// The width `add` takes laid out left to right in `ui`, found in an invisible, disabled sizing
+/// pass: it draws nothing, reports nothing to screen readers and takes no input.
+pub fn natural_width(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> f32 {
+    let measure = UiBuilder::new()
+        .id_salt("theme::natural_width")
+        .layout(Layout::left_to_right(Align::Center))
+        .sizing_pass()
+        .invisible();
+    let mut sizing = ui.new_child(measure);
+    add(&mut sizing);
+    sizing.min_rect().width()
+}
+
 /// A row with `start` from the left edge and `end` against the right edge, both added left to
 /// right so keyboard focus and screen readers follow the screen. `start` gets the width `end`
 /// leaves and truncates its text to it.
@@ -283,14 +296,9 @@ pub fn row_end<R>(ui: &mut Ui, end: impl FnMut(&mut Ui) -> R) -> R {
 pub fn row<R>(ui: &mut Ui, start: impl FnOnce(&mut Ui), mut end: impl FnMut(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         let layout = Layout::left_to_right(Align::Center);
-        let measure = UiBuilder::new()
-            .id_salt("theme::row measure")
-            .layout(layout)
-            .sizing_pass()
-            .invisible();
-        let mut sizing = ui.new_child(measure);
-        end(&mut sizing);
-        let end_width = sizing.min_rect().width();
+        let end_width = natural_width(ui, |ui| {
+            end(ui);
+        });
         let gap = ui.spacing().item_spacing.x;
         let start_width = (ui.available_width() - end_width - gap).max(0.0);
         let left = ui.cursor().min.x;

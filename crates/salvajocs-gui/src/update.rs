@@ -8,6 +8,7 @@ use salvajocs_core::update::{self, Release};
 use crate::job::Job;
 use crate::state::State;
 use crate::theme::{self, icons};
+use crate::title_bar;
 
 /// The running version, which the release is compared with.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -71,24 +72,66 @@ impl Updater {
         let Some(release) = &self.release else {
             return;
         };
-        theme::mark(ui, icons::ARROW_CIRCLE_UP, 16.0, theme::palette(ui).accent);
-        ui.label(format!("Update available: v{}", release.version));
-        if self.downloading.is_some() {
-            ui.spinner();
-            ui.label("Downloading the update");
-        } else if self.ready.is_some() {
-            ui.weak("Update ready, installs when the running task finishes");
-        } else if self.installed {
-            if theme::primary(ui, true, None, "Update now").clicked() {
-                let (release, dir) = (release.clone(), state.env.cache_dir.join("update"));
-                self.downloading = Some(Job::spawn(ui.ctx(), move || {
-                    Ok(update::download_installer(&release, VERSION, &dir)?)
-                }));
+        let (installed, downloading, ready) = (
+            self.installed,
+            self.downloading.is_some(),
+            self.ready.is_some(),
+        );
+        let notice = format!("Update available: v{}", release.version);
+        // What keeps its room while the text around it gives way: the spinner or the action.
+        let fixed = |ui: &mut Ui, notice_dropped: bool| {
+            if downloading {
+                ui.spinner();
+                false
+            } else if ready {
+                false
+            } else if installed {
+                theme::primary(ui, true, None, "Update now").clicked()
+            } else {
+                let link = ui.hyperlink_to("Release page", &release.html_url);
+                if notice_dropped {
+                    // Screen readers and the pointer still get what the dropped text said.
+                    let link = link.on_hover_text(&notice);
+                    ui.ctx().accesskit_node_builder(link.id, |node| {
+                        node.set_label(format!("Release page, {notice}"));
+                    });
+                }
+                let color = ui.visuals().hyperlink_color;
+                theme::mark(ui, icons::ARROW_SQUARE_OUT, 16.0, color);
+                false
             }
+        };
+        let reserved = if ready {
+            0.0
         } else {
-            ui.hyperlink_to("Release page", &release.html_url);
-            let color = ui.visuals().hyperlink_color;
-            theme::mark(ui, icons::ARROW_SQUARE_OUT, 16.0, color);
+            theme::natural_width(ui, |ui| {
+                fixed(ui, false);
+            }) + ui.spacing().item_spacing.x
+        };
+        let room = ui.available_width() - reserved;
+        let text = title_bar::text_fits(ui, room);
+        if text {
+            ui.scope(|ui| {
+                ui.set_max_width(room);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                theme::mark(ui, icons::ARROW_CIRCLE_UP, 16.0, theme::palette(ui).accent);
+                ui.label(&notice);
+            });
+        }
+        if fixed(ui, !text) {
+            let (release, dir) = (release.clone(), state.env.cache_dir.join("update"));
+            self.downloading = Some(Job::spawn(ui.ctx(), move || {
+                Ok(update::download_installer(&release, VERSION, &dir)?)
+            }));
+        }
+        if downloading {
+            title_bar::status_text(ui, |ui| {
+                ui.label("Downloading the update");
+            });
+        } else if ready {
+            title_bar::status_text(ui, |ui| {
+                ui.weak("Update ready, installs when the running task finishes");
+            });
         }
     }
 
@@ -125,6 +168,19 @@ impl Updater {
 impl Updater {
     pub(crate) fn set_ready(&mut self, installer: PathBuf) {
         self.ready = Some(installer);
+    }
+
+    /// Offers `release` as if the check found it.
+    pub(crate) fn offer(&mut self, release: Release, installed: bool) {
+        self.release = Some(release);
+        self.installed = installed;
+    }
+
+    /// Gives the updater a download that runs until the returned sender is dropped.
+    pub(crate) fn hold_download(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
+        let (release, job) = crate::job::held(ctx);
+        self.downloading = Some(job);
+        release
     }
 }
 
