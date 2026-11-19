@@ -2,6 +2,7 @@
 //! to restore into, a preview of the plan and the restore behind a safety backup (ADR-0005,
 //! ADR-0010, ADR-0011). Backups can also be deleted from the repository (ADR-0015).
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::mem;
@@ -15,8 +16,8 @@ use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
-    self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RunError,
-    SafetyBackup, SkippedItem, StagedGame, Targets,
+    self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
+    RunError, SafetyBackup, SkippedItem, StagedGame, Targets,
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
@@ -27,8 +28,10 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::theme::{self, icons};
 
+mod batch;
 mod mapping;
 
+use batch::Batch;
 use mapping::{Dialog, DialogAction};
 
 /// A UTC time as `YYYY-MM-DD HH:MM UTC`.
@@ -208,6 +211,55 @@ struct Restored {
     lines: Vec<(String, bool)>,
 }
 
+impl Restored {
+    /// What `run` did for the game `title` with `plan`, as lines to show.
+    fn new(title: String, plan: &RestorePlan, report: RestoreReport) -> Self {
+        let safety_backup = match report.safety_backup {
+            SafetyBackup::Created(snapshot) => format!(
+                "Safety backup: snapshot {} created, labelled pre-restore",
+                snapshot.id.get(..8).unwrap_or(&snapshot.id)
+            ),
+            SafetyBackup::Unchanged => {
+                "Safety backup: the repository already holds the replaced files".to_owned()
+            }
+            SafetyBackup::NothingExisted => {
+                "Safety backup: none needed, nothing existed at the targets".to_owned()
+            }
+        };
+        let mut lines: Vec<_> = (plan.writes.iter().zip(report.files))
+            .map(|(write, result)| match result {
+                Ok(()) => (format!("{}: restored", write.target.display()), false),
+                Err(err) => (
+                    format!("{}: failed: {:#}", write.target.display(), anyhow!(err)),
+                    true,
+                ),
+            })
+            .collect();
+        lines.extend(report.registry.map(|result| match result {
+            Ok(()) => ("Registry: restored".to_owned(), false),
+            Err(err) => (format!("Registry: failed: {:#}", anyhow!(err)), true),
+        }));
+        Self {
+            title,
+            safety_backup,
+            lines,
+        }
+    }
+
+    /// Draws the safety backup line and a line per write and for the registry.
+    fn lines_ui(&self, ui: &mut Ui) {
+        ui.label(&self.safety_backup);
+        let (accent, error_color) = (theme::palette(ui).accent, ui.visuals().error_fg_color);
+        for (line, failed) in &self.lines {
+            if *failed {
+                theme::status(ui, icons::X_CIRCLE, error_color, line);
+            } else {
+                theme::icon_label(ui, icons::CHECK_CIRCLE, accent, line);
+            }
+        }
+    }
+}
+
 /// Backups of one game waiting in the delete confirm dialog.
 struct Deletion {
     title: String,
@@ -227,6 +279,8 @@ pub struct RestoreTab {
     games: Vec<GameBackups>,
     /// The slug of the chosen game.
     selected: Option<String>,
+    /// The slugs of the games ticked for a batch restore.
+    checked: BTreeSet<String>,
     /// The chosen snapshot's index in the game's `snapshots`. It starts as the game's default, so
     /// `None` when every snapshot is a safety backup, which is never preselected (ADR-0010).
     snapshot: Option<usize>,
@@ -244,6 +298,7 @@ pub struct RestoreTab {
     /// How many backups the last delete removed.
     removed: Option<usize>,
     error: Option<String>,
+    batch: Batch,
     /// Counts [`RestoreTab::forget_plan`] calls, so a job's result for a closed dialog or
     /// changed targets is dropped.
     generation: u64,
@@ -262,15 +317,18 @@ impl RestoreTab {
         {
             self.forget_plan();
             self.drop_listing();
+            self.batch.close();
             self.detecting = None;
             self.pick = None;
             self.removed = None;
             self.error = None;
         }
         self.poll(ui.ctx(), state);
+        self.poll_batch(ui.ctx(), state);
         let busy = self.busy();
-        // `default_targets` looks the game's Steam id up in the manifest.
-        let idle = !busy && !manifest_loading;
+        // `default_targets` looks the game's Steam id up in the manifest. An open batch keeps the
+        // other controls out of reach until it runs or is cancelled.
+        let idle = !busy && !manifest_loading && !self.batch.open();
         if state.config.is_none() {
             theme::page(ui, |ui| ui.label("Choose a repository first."));
         } else if self.untouched() {
@@ -294,23 +352,29 @@ impl RestoreTab {
                 }
                 self.error_ui(ui);
                 self.removed_ui(ui);
-                self.preview_ui(ui, state);
+                if self.batch.open() {
+                    self.batch_ui(ui, state);
+                } else {
+                    self.preview_ui(ui, state);
+                }
                 self.restored_ui(ui);
+                self.batch_restored_ui(ui);
             });
         }
         self.mapping_ui(ui.ctx(), state);
         self.delete_ui(ui.ctx());
     }
 
-    /// Drops the listed backups, the chosen game and a delete waiting for its confirm, as after a
-    /// cleanup that may have forgotten one of them; "Load backups" lists them again. A running
-    /// preview or restore is kept.
+    /// Drops the listed backups, the chosen and ticked games and a delete waiting for its
+    /// confirm, as after a cleanup that may have forgotten one of them; "Load backups" lists them
+    /// again. A running preview or restore is kept.
     pub(crate) fn drop_listing(&mut self) {
         self.confirm_delete = None;
         self.repository = None;
         self.listing = None;
         self.games.clear();
         self.selected = None;
+        self.checked.clear();
         self.snapshot = None;
     }
 
@@ -322,6 +386,7 @@ impl RestoreTab {
             || self.preparing.is_some()
             || self.restoring.is_some()
             || self.deleting.is_some()
+            || self.batch.busy()
     }
 
     /// Whether the tab has nothing to show yet: no list loaded or loading, and no plan or report.
@@ -331,6 +396,7 @@ impl RestoreTab {
             && self.preview.is_none()
             && self.mapping.is_none()
             && self.restored.is_none()
+            && self.batch.untouched()
     }
 
     fn error_ui(&self, ui: &mut Ui) {
@@ -362,7 +428,13 @@ impl RestoreTab {
         {
             self.listing = None;
             match result {
-                Ok(games) => self.games = games,
+                Ok(games) => {
+                    // A delete may have taken a ticked game's last regular backup, or the game.
+                    self.checked.retain(|slug| {
+                        (games.iter()).any(|game| game.slug == *slug && game.default.is_some())
+                    });
+                    self.games = games;
+                }
                 Err(err) => self.error = Some(format!("The backups cannot be listed: {err:#}")),
             }
         }
@@ -518,21 +590,26 @@ impl RestoreTab {
         if self.games.is_empty() {
             return;
         }
+        self.select_all_ui(ui);
         let mut chosen = None;
         theme::group(ui, |ui| {
             theme::pill_list(ui);
             for game in &self.games {
-                let selected = self.selected.as_ref() == Some(&game.slug);
-                let row = egui::Button::selectable(selected, &game.title)
-                    .min_size(Vec2::new(ui.available_width(), 0.0));
-                if ui.add(row).clicked() && !selected {
-                    chosen = Some(game.clone());
-                }
+                ui.horizontal(|ui| {
+                    batch::include_ui(ui, &mut self.checked, game);
+                    let selected = self.selected.as_ref() == Some(&game.slug);
+                    let row = egui::Button::selectable(selected, &game.title)
+                        .min_size(Vec2::new(ui.available_width(), 0.0));
+                    if ui.add(row).clicked() && !selected {
+                        chosen = Some(game.clone());
+                    }
+                });
             }
         });
         if let Some(game) = chosen {
             self.choose(ui.ctx(), state, &game);
         }
+        self.batch_button_ui(ui, state);
     }
 
     /// The chosen game: its snapshot, the build to restore into and the preview button.
@@ -784,20 +861,9 @@ impl RestoreTab {
         };
         ui.add_space(16.0);
         ui.heading("Plan");
-        let (warn, error_color) = (ui.visuals().warn_fg_color, ui.visuals().error_fg_color);
+        let error_color = ui.visuals().error_fg_color;
         let muted = ui.visuals().weak_text_color();
-        if preview.plan.cross_build {
-            theme::status(
-                ui,
-                icons::WARNING,
-                warn,
-                "Cross-build restore: the other build may use a different save format. The \
-                 safety backup lets you undo it.",
-            );
-        }
-        for note in &preview.plan.notes {
-            theme::status(ui, icons::WARNING, warn, format!("Note: {note}"));
-        }
+        warnings_ui(ui, &preview.plan);
         ui.label(format!("Files to write ({})", preview.plan.writes.len()));
         let files = preview.fetched.staged.root.join(FILES_DIR);
         let mut overridden = None;
@@ -850,17 +916,7 @@ impl RestoreTab {
                 describe_context(ctx)
             ));
         }
-        if !preview.plan.skipped.is_empty() {
-            ui.label(format!("Skipped ({})", preview.plan.skipped.len()));
-            for skipped in &preview.plan.skipped {
-                let item = match &skipped.item {
-                    SkippedItem::File(base, tail) => format!("{}/{tail}", base.dir_name()),
-                    SkippedItem::Registry => "registry".to_owned(),
-                    SkippedItem::RegistryKey(key) => key.clone(),
-                };
-                ui.weak(format!("{item}: {}", skipped.reason));
-            }
-        }
+        skipped_ui(ui, &preview.plan);
         // Typed text that is not the write's target would be silently ignored by the restore.
         let unapplied =
             (preview.overrides.iter().zip(&preview.plan.writes)).position(|(text, write)| {
@@ -890,6 +946,7 @@ impl RestoreTab {
         };
         self.error = None;
         self.restored = None;
+        self.batch.clear_result();
         let (storage, plan) = (preview.fetched.storage.clone(), preview.plan.clone());
         let title = preview.fetched.title.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
@@ -902,36 +959,7 @@ impl RestoreTab {
                 &stage_root,
                 wineserver_running(),
             )?;
-            let safety_backup = match report.safety_backup {
-                SafetyBackup::Created(snapshot) => format!(
-                    "Safety backup: snapshot {} created, labelled pre-restore",
-                    snapshot.id.get(..8).unwrap_or(&snapshot.id)
-                ),
-                SafetyBackup::Unchanged => {
-                    "Safety backup: the repository already holds the replaced files".to_owned()
-                }
-                SafetyBackup::NothingExisted => {
-                    "Safety backup: none needed, nothing existed at the targets".to_owned()
-                }
-            };
-            let mut lines: Vec<_> = (plan.writes.iter().zip(report.files))
-                .map(|(write, result)| match result {
-                    Ok(()) => (format!("{}: restored", write.target.display()), false),
-                    Err(err) => (
-                        format!("{}: failed: {:#}", write.target.display(), anyhow!(err)),
-                        true,
-                    ),
-                })
-                .collect();
-            lines.extend(report.registry.map(|result| match result {
-                Ok(()) => ("Registry: restored".to_owned(), false),
-                Err(err) => (format!("Registry: failed: {:#}", anyhow!(err)), true),
-            }));
-            Ok(Restored {
-                title,
-                safety_backup,
-                lines,
-            })
+            Ok(Restored::new(title, &plan, report))
         }));
     }
 
@@ -941,15 +969,40 @@ impl RestoreTab {
         };
         ui.add_space(16.0);
         ui.heading(format!("Restored {}", restored.title));
-        ui.label(&restored.safety_backup);
-        let (accent, error_color) = (theme::palette(ui).accent, ui.visuals().error_fg_color);
-        for (line, failed) in &restored.lines {
-            if *failed {
-                theme::status(ui, icons::X_CIRCLE, error_color, line);
-            } else {
-                theme::icon_label(ui, icons::CHECK_CIRCLE, accent, line);
-            }
-        }
+        restored.lines_ui(ui);
+    }
+}
+
+/// The cross-build warning and the notes of `plan`.
+fn warnings_ui(ui: &mut Ui, plan: &RestorePlan) {
+    let warn = ui.visuals().warn_fg_color;
+    if plan.cross_build {
+        theme::status(
+            ui,
+            icons::WARNING,
+            warn,
+            "Cross-build restore: the other build may use a different save format. The safety \
+             backup lets you undo it.",
+        );
+    }
+    for note in &plan.notes {
+        theme::status(ui, icons::WARNING, warn, format!("Note: {note}"));
+    }
+}
+
+/// The items `plan` does not restore, with why.
+fn skipped_ui(ui: &mut Ui, plan: &RestorePlan) {
+    if plan.skipped.is_empty() {
+        return;
+    }
+    ui.label(format!("Skipped ({})", plan.skipped.len()));
+    for skipped in &plan.skipped {
+        let item = match &skipped.item {
+            SkippedItem::File(base, tail) => format!("{}/{tail}", base.dir_name()),
+            SkippedItem::Registry => "registry".to_owned(),
+            SkippedItem::RegistryKey(key) => key.clone(),
+        };
+        ui.weak(format!("{item}: {}", skipped.reason));
     }
 }
 

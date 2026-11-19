@@ -4,6 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use common::{
     env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
@@ -18,7 +19,7 @@ use salvajocs_core::layout::{Base, Context, LinuxFolders};
 use salvajocs_core::manifest::{
     self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
 };
-use salvajocs_core::scan::{Environment, FoundFile, GameScan};
+use salvajocs_core::scan::{Environment, FoundFile, GameScan, RegistrySource};
 use salvajocs_core::selection::{self, Change};
 use salvajocs_core::storage::{RepoLocation, SnapshotInfo, Storage};
 use salvajocs_gui::tabs::Tab;
@@ -109,6 +110,17 @@ fn open_tab_tagged(
     snapshots: &[GameScan],
     tags: &[&str],
 ) -> (Harness<'static, App>, Env) {
+    open_tab_with(tmp, games, snapshots, tags, |_| {})
+}
+
+/// Like [`open_tab_tagged`], with `adjust` applied to the app's environment.
+fn open_tab_with(
+    tmp: &TempDir,
+    games: Vec<CustomGame>,
+    snapshots: &[GameScan],
+    tags: &[&str],
+    adjust: impl FnOnce(&mut Env),
+) -> (Harness<'static, App>, Env) {
     let mut env = env(tmp);
     env.environment = Some(Environment {
         native: Some(Context::Linux(LinuxFolders {
@@ -121,6 +133,7 @@ fn open_tab_tagged(
         launcher_prefixes: Vec::new(),
         launcher_problems: Vec::new(),
     });
+    adjust(&mut env);
     fs::create_dir_all(&env.cache_dir).unwrap();
     fs::write(
         env.cache_dir
@@ -812,4 +825,278 @@ fn cancelling_a_delete_removes_nothing() {
 
     assert!(!shows(&harness, "It cannot be undone"));
     assert_eq!(snapshots(&tmp, "salvajocs"), before);
+}
+
+/// A custom game with its saves in `<xdgData>/<name>`, and a scan of it with the `tails` below
+/// `<xdgData>`; each file holds its tail.
+fn native(tmp: &TempDir, name: &str, tails: &[&str]) -> (CustomGame, GameScan) {
+    let game = custom(name, &[&format!("<xdgData>/{name}")], None, Vec::new());
+    let files: Vec<_> = tails.iter().map(|tail| (Base::XdgData, *tail)).collect();
+    let snapshot = scan(tmp, name, &files, &[(Base::XdgData, name)]);
+    (game, snapshot)
+}
+
+/// Where the native games' saves go.
+fn xdg_data(tmp: &TempDir) -> PathBuf {
+    under(&home(tmp), ".local/share")
+}
+
+/// Writes `contents` to `path`, creating its parent directories.
+fn put(path: &Path, contents: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
+}
+
+/// Clicks `button` in the sidebar and waits for the confirm of the batch.
+fn plan_batch(harness: &mut Harness<'static, App>, button: &str) {
+    harness.get_by_label(button).click();
+    run_until(harness, "the batch confirm", |h| {
+        h.query_by_label("Cancel").is_some()
+    });
+}
+
+/// Where this process's batches fetch their snapshots.
+fn batch_dir(env: &Env) -> PathBuf {
+    let pid = std::process::id().to_string();
+    env.cache_dir.join("restore-batch").join(pid)
+}
+
+/// Sets the modification time of the dir `dir` to a day and a half ago.
+fn age(dir: &Path) {
+    let mut options = fs::OpenOptions::new();
+    #[cfg(unix)]
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_BACKUP_SEMANTICS, without which Windows opens no directory.
+        options.write(true).custom_flags(0x0200_0000);
+    }
+    let old = SystemTime::now() - Duration::from_secs(36 * 60 * 60);
+    options.open(dir).unwrap().set_modified(old).unwrap();
+}
+
+/// Clicks `button` in the confirm and waits for the run to end and the list to reload.
+fn run_batch(harness: &mut Harness<'static, App>, button: &str, result: &str) {
+    harness.get_by_label(button).click();
+    run_until(harness, "the batch", |h| {
+        shows(h, result) && !disabled(h, "Load backups")
+    });
+}
+
+#[test]
+fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let tails = ["Alpha/save.dat", "Beta/save.dat"];
+    for tail in tails {
+        put(&under(&xdg_data(&tmp), tail), "old");
+    }
+    // What an earlier session left a day and a half ago, and a dir salvajocs did not make.
+    let batches = env.cache_dir.join("restore-batch");
+    put(&batches.join("99999999/0/files/x"), "stale");
+    age(&batches.join("99999999"));
+    put(&batches.join("keep/x"), "not ours");
+    age(&batches.join("keep"));
+
+    click(&mut harness, "Include Alpha");
+    click(&mut harness, "Include Beta");
+    plan_batch(&mut harness, "Restore 2 games");
+    assert!(!batches.join("99999999").exists());
+    assert!(batches.join("keep/x").exists());
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    assert!(
+        !batch_dir(&env).exists(),
+        "the fetched snapshots are removed"
+    );
+    for tail in tails {
+        let restored = fs::read_to_string(under(&xdg_data(&tmp), tail)).unwrap();
+        assert_eq!(restored, tail);
+    }
+    let mut safety: Vec<String> = (snapshots(&tmp, "pre-restore").into_iter())
+        .map(|snapshot| snapshot.label)
+        .collect();
+    safety.sort();
+    assert_eq!(safety, ["Alpha", "Beta"], "one safety backup per game");
+    let include = harness.get_by_label("Include Alpha");
+    let toggled = include.accesskit_node().toggled();
+    assert_eq!(toggled, Some(Toggled::False), "the ticks are cleared");
+}
+
+#[test]
+fn planning_keeps_the_batch_dir_of_another_running_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, snapshot) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[snapshot]);
+    // Another salvajocs plans a batch right now.
+    let other = env.cache_dir.join("restore-batch/99999998/0/files/x");
+    put(&other, "live");
+
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+
+    assert_eq!(fs::read_to_string(&other).unwrap(), "live");
+    assert!(batch_dir(&env).exists());
+}
+
+#[test]
+fn a_single_restore_replaces_the_result_of_a_batch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, snapshot) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha], &[snapshot]);
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+    run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
+
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(!shows(&harness, "Restored 1 of 1 game"));
+}
+
+#[test]
+fn batch_restores_the_other_games_when_wine_blocks_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let source = tmp.path().join("source-pfx");
+    put(
+        &source.join("user.reg"),
+        "WINE REGISTRY Version 2\n\n[Software\\\\Co\\\\Reg] 1\n#time=0\n\"v\"=\"saved\"\n",
+    );
+    let mut reg = custom("Reg", &["<winAppData>/Reg"], Some(&prefix), Vec::new());
+    let key = "HKEY_CURRENT_USER/Software/Co/Reg".to_owned();
+    reg.entry.registry.insert(key, RegistryRule::default());
+    let mut reg_scan = scan(
+        &tmp,
+        "Reg",
+        &[(Base::WinAppData, "Reg/save.dat")],
+        &[(Base::WinAppData, "Reg")],
+    );
+    reg_scan.registry_keys = vec![r"HKEY_CURRENT_USER\Software\Co\Reg".into()];
+    reg_scan.registry_source = Some(RegistrySource::WinePrefix(source));
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) =
+        open_tab_with(&tmp, vec![reg, beta], &[reg_scan, beta_scan], &[], |env| {
+            env.wineserver_running = || true
+        });
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    assert!(shows(&harness, "Registry: 1 keys into the prefix"));
+    run_batch(&mut harness, "Restore 2 games", "Restored 1 of 2 games");
+
+    assert!(shows(&harness, "Close the game and Wine first"));
+    let beta_save = under(&xdg_data(&tmp), "Beta/save.dat");
+    assert_eq!(fs::read_to_string(beta_save).unwrap(), "Beta/save.dat");
+    let reg_save = under(
+        &prefix,
+        "drive_c/users/steamuser/AppData/Roaming/Reg/save.dat",
+    );
+    assert!(
+        !reg_save.exists(),
+        "nothing is written for the refused game"
+    );
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    assert!(!user_reg.contains("saved"), "{user_reg}");
+}
+
+#[test]
+fn a_game_with_only_safety_backups_cannot_be_ticked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, snapshot) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, _env) = open_tab_tagged(&tmp, vec![alpha], &[snapshot], &["pre-restore"]);
+
+    assert!(disabled(&harness, "Include Alpha"));
+    click(&mut harness, "Select all");
+    assert!(disabled(&harness, "Restore 0 games"));
+}
+
+#[test]
+fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tails = ["Alpha/new.dat", "Alpha/changed.dat", "Alpha/same.dat"];
+    let (alpha, snapshot) = native(&tmp, "Alpha", &tails);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[snapshot]);
+    let saves = xdg_data(&tmp).join("Alpha");
+    put(&saves.join("changed.dat"), "other");
+    put(&saves.join("same.dat"), "Alpha/same.dat");
+
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+    assert!(batch_dir(&env).exists());
+
+    assert!(shows(&harness, "1 new, 1 changed, 1 unchanged"));
+    assert!(shows(&harness, "Into native Linux"));
+    assert!(!saves.join("new.dat").exists());
+    let changed = fs::read_to_string(saves.join("changed.dat")).unwrap();
+    assert_eq!(changed, "other");
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+
+    click(&mut harness, "Cancel");
+    assert!(!shows(&harness, "1 new, 1 changed"));
+    assert!(!disabled(&harness, "Restore 1 game"), "the ticks stay");
+    assert!(!saves.join("new.dat").exists());
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+    assert!(!batch_dir(&env).exists(), "the fetched snapshot is removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat", "Alpha/dir.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    // A directory where a file goes fails that write only.
+    let dir = under(&xdg_data(&tmp), "Alpha/dir.dat");
+    fs::create_dir_all(&dir).unwrap();
+    // A target the safety backup cannot read fails the whole game.
+    let locked = under(&xdg_data(&tmp), "Beta/save.dat");
+    put(&locked, "old");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(shows_path(
+        &harness,
+        &format!("{}: will fail", dir.display())
+    ));
+    assert!(shows(&harness, "1 new, 0 changed, 0 unchanged"));
+    assert!(shows(
+        &harness,
+        "Beta: will not be restored: the safety backup cannot read"
+    ));
+    assert!(!disabled(&harness, "Restore 1 game"), "only Alpha runs");
+}
+
+#[test]
+fn a_game_that_lost_its_last_regular_backup_is_unticked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    click(&mut harness, "Include Alpha");
+    assert!(!disabled(&harness, "Restore 1 game"));
+
+    // The preselected snapshot is Alpha's only regular one; its safety backup stays.
+    click(&mut harness, "Delete snapshot");
+    confirm_delete(&mut harness, "Removed 1 backup");
+
+    assert!(disabled(&harness, "Include Alpha"));
+    let toggled = (harness.get_by_label("Include Alpha"))
+        .accesskit_node()
+        .toggled();
+    assert_eq!(toggled, Some(Toggled::False));
+    assert!(disabled(&harness, "Restore 0 games"));
 }

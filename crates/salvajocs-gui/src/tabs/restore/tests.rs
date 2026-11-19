@@ -3,11 +3,14 @@ use std::time::Duration;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::crossbuild::{Confidence, MappingEntry};
 use salvajocs_core::layout::{SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
+use salvajocs_core::manifest::{CustomGame, Integration, parse_yaml};
 use salvajocs_core::registry::{RegData, RegValue, RegistryExport};
+use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
 use super::*;
@@ -36,6 +39,37 @@ fn a_running_wineserver_asks_to_close_wine() {
         "{running}"
     );
     assert!(!other.contains("Close the game"), "{other}");
+}
+
+#[test]
+fn a_restore_report_shows_a_line_per_write_and_for_the_registry() {
+    let write = |target: &str| restore::Write {
+        source: PathBuf::from("/staged/save.dat"),
+        target: PathBuf::from(target),
+        target_file: None,
+        target_root: None,
+    };
+    let plan = RestorePlan {
+        writes: vec![write("/saves/a.dat"), write("/saves/b.dat")],
+        registry: None,
+        skipped: Vec::new(),
+        cross_build: false,
+        notes: Vec::new(),
+    };
+    let report = RestoreReport {
+        safety_backup: SafetyBackup::NothingExisted,
+        files: vec![Ok(()), Err(restore::ApplyError::TargetIsSymlink)],
+        registry: Some(Err(restore::ApplyError::NoRegistry)),
+    };
+
+    let restored = Restored::new("Mix".into(), &plan, report);
+
+    assert!(restored.safety_backup.contains("none needed"));
+    let failed: Vec<bool> = restored.lines.iter().map(|(_, failed)| *failed).collect();
+    assert_eq!(failed, [false, true, true]);
+    let a = Path::new("/saves/a.dat").display().to_string();
+    assert!(restored.lines[0].0.starts_with(&a), "{:?}", restored.lines);
+    assert!(restored.lines[2].0.starts_with("Registry"));
 }
 
 #[test]
@@ -594,4 +628,111 @@ fn a_running_wineserver_blocks_a_registry_restore_into_a_prefix() {
     assert!(tab.error.as_deref().unwrap().contains("Close the game"));
     let user_reg = fs::read_to_string(dir.path().join("pfx/user.reg")).unwrap();
     assert!(!user_reg.contains("Foo"));
+}
+
+/// The tab over the repository of a state in `dir`, on a Linux machine whose home is in `dir`,
+/// with Mix backed up from `base`, declared by `template`, ticked and planned until its confirm
+/// or mapping dialog shows. Its save already exists at the native target, so a run would make a
+/// safety backup.
+fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
+    let home = dir.join("home");
+    let mut state = state(dir);
+    state.env.environment = Some(Environment {
+        native: Some(Context::Linux(LinuxFolders {
+            user: "me".into(),
+            xdg_data: home.join(".local/share"),
+            xdg_config: home.join(".config"),
+            home: home.clone(),
+        })),
+        steam_roots: Vec::new(),
+        launcher_prefixes: Vec::new(),
+        launcher_problems: Vec::new(),
+    });
+    let yaml = format!("Mix:\n  files:\n    {template}: {{tags: [save]}}\n");
+    let entry = parse_yaml(&yaml).unwrap().games.remove("Mix").unwrap();
+    state.config.as_mut().unwrap().custom_games = vec![CustomGame {
+        name: "Mix".into(),
+        files: Vec::new(),
+        entry,
+        integration: Integration::Override,
+        wine_prefix: None,
+        pairs: Vec::new(),
+        skips: Vec::new(),
+    }];
+    let real = dir.join("src/save.dat");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::write(&real, "new").unwrap();
+    let target = home.join(".local/share/Mix/save.dat");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "old").unwrap();
+    let scan = GameScan {
+        title: "Mix".into(),
+        files: vec![FoundFile {
+            base,
+            tail: "Mix/save.dat".into(),
+            real,
+            size: 3,
+        }],
+        roots: vec![(base, "Mix".into())],
+        registry_keys: Vec::new(),
+        registry_source: None,
+        prefixes: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let stage = dir.join("stage");
+    backup_games(&mut storage.lock().unwrap(), &[scan], &stage, &[], |_| {}).unwrap();
+    let games = restore::list(&storage.lock().unwrap()).unwrap();
+    let tab = RestoreTab {
+        repository: Some(storage),
+        checked: games.iter().map(|game| game.slug.clone()).collect(),
+        games,
+        ..RestoreTab::default()
+    };
+    let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+    harness.step();
+    harness.get_by_label("Restore 1 game").click();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !harness.state().0.batch.open() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the batch was never planned"
+        );
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.step();
+    harness
+}
+
+/// Opens another repository, as Settings does, and checks the batch is gone without writing.
+fn switch_repository_and_check_nothing_ran(harness: &mut TabHarness, dir: &Path) {
+    let old = storage(harness);
+    let other = tempfile::tempdir().unwrap();
+    harness.state_mut().1.session = state(other.path()).session;
+    harness.step();
+
+    assert!(!harness.state().0.batch.open());
+    assert!(harness.query_by_label("Cancel").is_none());
+    assert!(
+        old.lock()
+            .unwrap()
+            .snapshots("pre-restore")
+            .unwrap()
+            .is_empty()
+    );
+    let target = dir.join("home/.local/share/Mix/save.dat");
+    assert_eq!(fs::read_to_string(target).unwrap(), "old");
+}
+
+#[test]
+fn a_new_repository_closes_the_batch_confirm() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = planned_batch(dir.path(), Base::XdgData, "<xdgData>/Mix");
+    assert!(
+        harness.query_by_label("Cancel").is_some(),
+        "the confirm shows"
+    );
+
+    switch_repository_and_check_nothing_ran(&mut harness, dir.path());
 }
