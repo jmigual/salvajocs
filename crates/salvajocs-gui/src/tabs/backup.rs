@@ -291,35 +291,149 @@ fn counted(counts: &Counts) -> String {
     parts.join(", ")
 }
 
+/// What the next backup would do to a game, by its preview: the state its header shows.
+#[derive(Debug, PartialEq, Eq)]
+enum Next<'a> {
+    /// The repository has no backup of the game.
+    NoBackupYet,
+    /// The preview failed; holds why.
+    Failed(&'a str),
+    /// The included files are those of the newest backup, `newest`. It is skipped when that
+    /// backup has a hash list, else made all the same.
+    Same {
+        newest: &'a SnapshotInfo,
+        hashed: bool,
+    },
+    /// Unchanged since this PC's last backup, `parent`, so it is skipped, though the newest
+    /// backup differs by `counts`.
+    UnchangedHere {
+        parent: &'a SnapshotInfo,
+        newest: &'a SnapshotInfo,
+        counts: Counts,
+    },
+    /// Made, with `counts` of differences from the newest backup.
+    Changes {
+        newest: &'a SnapshotInfo,
+        counts: Counts,
+    },
+}
+
+impl Next<'_> {
+    /// The one icon its header shows: a check when no backup will be made, an equals sign when
+    /// the same files are backed up again, a plus when there is no backup yet. `None` when the
+    /// header counts the changes, or for a failed preview, which is text.
+    fn glyph(&self) -> Option<&'static str> {
+        match self {
+            Next::NoBackupYet => Some(icons::PLUS_CIRCLE),
+            Next::Same { hashed: false, .. } => Some(icons::EQUALS),
+            Next::Same { hashed: true, .. } | Next::UnchangedHere { .. } => {
+                Some(icons::CHECK_CIRCLE)
+            }
+            Next::Failed(_) | Next::Changes { .. } => None,
+        }
+    }
+}
+
 /// What the next backup would do to `game` compared with its newest backup, by `settings`;
 /// `None` when the game would not be backed up at all.
-fn preview_text(game: &GameScan, preview: &Preview, settings: &GameSettings) -> Option<String> {
+fn next_backup<'a>(
+    game: &GameScan,
+    preview: &'a Preview,
+    settings: &GameSettings,
+) -> Option<Next<'a>> {
     let baseline = match preview {
         Ok(Some(baseline)) => baseline,
-        Ok(None) => return selection::apply(game, settings).map(|_| "No backup yet".to_owned()),
-        Err(err) => return Some(format!("Could not compare: {err}")),
+        Ok(None) => return selection::apply(game, settings).map(|_| Next::NoBackupYet),
+        Err(err) => return Some(Next::Failed(err)),
     };
     let counts = changes::counts(game, &baseline.comparison, settings)?;
-    let (host, date) = (&baseline.newest.host, format_time(baseline.newest.time));
-    let differs = counted(&counts);
-    if differs.is_empty() {
-        let since = format!("No changes since the backup from {host}, {date}");
-        // Without a hash list to compare with, the backup is made all the same.
-        return Some(if baseline.hashed {
-            format!("{since}; no backup will be made")
-        } else {
-            since
+    let newest = &baseline.newest;
+    if counts == Counts::default() {
+        return Some(Next::Same {
+            newest,
+            hashed: baseline.hashed,
         });
     }
-    match &baseline.parent {
+    Some(match &baseline.parent {
         Some((parent, files)) if counts.unknown == 0 && unchanged_since(game, settings, files) => {
-            Some(format!(
-                "Unchanged since this PC's last backup ({}), so no backup will be made. The newest \
-             backup, from {host} on {date}, differs: {differs}",
-                format_time(parent.time)
-            ))
+            Next::UnchangedHere {
+                parent,
+                newest,
+                counts,
+            }
         }
-        _ => Some(format!("{differs} since the backup from {host}, {date}")),
+        _ => Next::Changes { newest, counts },
+    })
+}
+
+/// [`next_backup`] as a sentence; `None` when the game would not be backed up at all.
+fn preview_text(game: &GameScan, preview: &Preview, settings: &GameSettings) -> Option<String> {
+    next_backup(game, preview, settings).map(|next| sentence(&next))
+}
+
+/// `next` as the sentence its header shows on hover.
+fn sentence(next: &Next<'_>) -> String {
+    let since = |newest: &SnapshotInfo| (newest.host.clone(), format_time(newest.time));
+    match *next {
+        Next::NoBackupYet => "No backup yet".to_owned(),
+        Next::Failed(err) => format!("Could not compare: {err}"),
+        Next::Same { newest, hashed } => {
+            let (host, date) = since(newest);
+            let same = format!("No changes since the backup from {host}, {date}");
+            if hashed {
+                format!("{same}; no backup will be made")
+            } else {
+                format!("{same}, but a backup will be made, as it has no list of hashes")
+            }
+        }
+        Next::UnchangedHere {
+            parent,
+            newest,
+            counts,
+        } => {
+            let (host, date) = since(newest);
+            format!(
+                "Unchanged since this PC's last backup ({}), so no backup will be made. The newest \
+                 backup, from {host} on {date}, differs: {}",
+                format_time(parent.time),
+                counted(&counts)
+            )
+        }
+        Next::Changes { newest, counts } => {
+            let (host, date) = since(newest);
+            format!("{} since the backup from {host}, {date}", counted(&counts))
+        }
+    }
+}
+
+/// What the next backup would do to `game` by `preview`, in its header: one icon of
+/// [`Next::glyph`], or how many files are new, changed, removed or could not be compared. Each
+/// shows [`preview_text`] on hover. A failed preview shows nothing here, as [`files_ui`] says
+/// why below.
+fn preview_ui(ui: &mut Ui, game: &GameScan, preview: Option<&Preview>, settings: &GameSettings) {
+    let Some(preview) = preview else {
+        return;
+    };
+    let Some(next) = next_backup(game, preview, settings) else {
+        return;
+    };
+    let text = sentence(&next);
+    if let Next::Changes { counts, .. } = next {
+        let chips = [
+            (Badge::New, counts.new),
+            (Badge::Changed, counts.changed),
+            (Badge::Removed, counts.removed),
+            (Badge::Unknown, counts.unknown),
+        ]
+        .map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
+        theme::chips(ui, &chips, &text);
+    } else if let Some(glyph) = next.glyph() {
+        // The same files backed up again is no news, so it is muted.
+        let color = match next {
+            Next::Same { hashed: false, .. } => ui.visuals().weak_text_color(),
+            _ => theme::palette(ui).accent,
+        };
+        theme::labeled_mark(ui, glyph, color, &text);
     }
 }
 
@@ -755,11 +869,18 @@ impl BackupTab {
                     Err(error) => (Cow::Owned(GameSettings::default()), Some(error)),
                 };
                 let enabled = editable && error.is_none();
-                let mut checked = !settings.skip;
-                let checkbox = Checkbox::new(&mut checked, &game.title);
-                if ui.add_enabled(enabled, checkbox).changed() {
-                    changes.push((index, Change::Skip(!checked)));
-                }
+                let preview = previews.get(index);
+                theme::row(
+                    ui,
+                    |ui| {
+                        let mut checked = !settings.skip;
+                        let checkbox = Checkbox::new(&mut checked, &game.title);
+                        if ui.add_enabled(enabled, checkbox).changed() {
+                            changes.push((index, Change::Skip(!checked)));
+                        }
+                    },
+                    |ui| preview_ui(ui, game, preview, &settings),
+                );
                 // Under the title, without the indent line: the row already groups them.
                 ui.scope(|ui| {
                     ui.visuals_mut().indent_has_left_vline = false;
@@ -776,7 +897,6 @@ impl BackupTab {
                         for prefix in prefixes {
                             ui.weak(prefix);
                         }
-                        let preview = previews.get(index);
                         let change =
                             files_ui(ui, game, tree, preview, &settings, enabled, &mut opened);
                         if let Some(change) = change {
@@ -1240,7 +1360,10 @@ fn files_ui(
     let included = |key: &str| settings.path_included(key);
     let badge = badges(game, preview, settings);
     let summary = summary(game, tree.included(&included, &badge), settings);
-    if let Some(text) = preview.and_then(|preview| preview_text(game, preview, settings)) {
+    // An error stays in sight rather than only on hover; the other previews are in the header.
+    if let Some(preview @ Err(_)) = preview
+        && let Some(text) = preview_text(game, preview, settings)
+    {
         ui.weak(text);
     }
     if game.files.is_empty() && game.registry_source.is_none() {

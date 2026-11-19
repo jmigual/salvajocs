@@ -76,27 +76,30 @@ keys under **Registry**:
 
 After each scan, the tab compares every game with its newest backup from any machine that uses
 the repository, leaving out the safety backups made before a restore. While it runs, the list
-says **Comparing with the last backups**. Each game then gets one more line:
+says **Comparing with the last backups**. Each game's line then ends in icons, each with the
+number of files it counts. Counts of zero are left out. Hover the icons to read the full sentence,
+such as `1 new, 2 changed since the backup from <host>, <date>`.
 
-| Line | Meaning |
+| Icon | Meaning |
 | --- | --- |
-| `3 new, 2 changed, 1 removed since the backup from <host>, <date>` | What the next backup would add, change and remove compared with that backup. `1 could not be compared` counts files that could not be read. |
-| `No changes since the backup from <host>, <date>; no backup will be made` | The files are the same as in that backup. |
-| `No changes since the backup from <host>, <date>` | The files are the same, but that backup has no list of hashes (it was made by salvajocs 0.5.0 or older), so a backup is still made. |
-| `Unchanged since this PC's last backup (<date>), so no backup will be made. The newest backup, from <host> on <date>, differs: …` | Nothing changed since this machine's own last backup, but another machine's newer backup has other files. |
-| `No backup yet` | The repository has no backup of the game. |
-| `Could not compare: <error>` | The backups could not be read. |
+| Plus in a circle | New: files the backup does not have. |
+| Pencil | Changed: files whose content differs from the backup. |
+| Minus in a circle | Removed: files in the backup that the next backup will not hold. |
+| Question mark | Files that could not be read to compare them. |
+| Check mark in a circle, no number | No backup will be made. Either nothing changed since that backup, or nothing changed since this PC's own last backup, though another machine's newer backup differs. |
+| Equals sign, no number | No changes since that backup, but a backup is still made: that backup has no list of hashes (it was made by salvajocs 0.5.0 or older). |
+| Plus in a circle, no number | No backup yet: the repository has no backup of the game. |
 
-A game that is not backed up, because it is unchecked or has nothing checked, gets no line.
+If the backups could not be read, the game says `Could not compare: <error>` under its title.
 
-In the file tree, a file that differs from the backup has an icon after its size: a plus in a
-circle when the backup does not have it, a pencil when its content differs, a minus in a circle
-when it is removed, and a question mark when it could not be read. Hover it to read
-`New: not in the backup`, `Changed since the backup`,
+A game that is not backed up, because it is unchecked or has nothing checked, gets no icons.
+
+In the file tree, a file that differs from the backup has one of these icons after its size.
+Hover it to read `New: not in the backup`, `Changed since the backup`,
 `Removed: the next backup will not hold it` or `Could not be compared` with the reason. A file
 that is in the backup but not found any more, or that you unchecked, is removed: files no longer
-found are greyed rows without a checkbox. A folder's line counts the icons of the files below it.
-A game with unreadable paths removes nothing, since its backup keeps the files it could not
+found are greyed rows without a checkbox. A folder's line counts the icons of the files below
+it. A game with unreadable paths removes nothing, since its backup keeps the files it could not
 check.
 
 A file counts as changed by its content: a different size is a change; the same size and

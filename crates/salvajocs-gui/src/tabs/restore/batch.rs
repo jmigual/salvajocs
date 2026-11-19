@@ -659,9 +659,9 @@ fn remove_stale(parent: &Path) {
     }
 }
 
-/// One planned game of the confirm: its snapshot and targets, how many files are new, changed
-/// or unchanged, the writes that will fail, the tree of its files, the plan's warnings, registry
-/// and skipped items. Returns the folder the user asked to open.
+/// One planned game of the confirm: its snapshot with how many files are new, changed or
+/// unchanged, its targets, the writes that will fail, the tree of its files, the plan's
+/// warnings, registry and skipped items. Returns the folder the user asked to open.
 fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf> {
     let Planned {
         fetched,
@@ -675,19 +675,40 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
     } = planned;
     ui.add_space(8.0);
     theme::group(ui, |ui| {
-        ui.strong(format!("{title}, snapshot {snapshot}"));
-        ui.label(format!("Into {}", describe_targets(&fetched.targets)));
         let of = |wanted| {
             (states.iter())
                 .filter(|state| state.as_ref() == Ok(&wanted))
                 .count()
         };
-        ui.label(format!(
-            "{} new, {} changed, {} unchanged",
+        let (new, changed, unchanged) = (
             of(WriteState::New),
             of(WriteState::Changed),
-            of(WriteState::Unchanged)
-        ));
+            of(WriteState::Unchanged),
+        );
+        theme::row(
+            ui,
+            |ui| {
+                ui.strong(format!("{title}, snapshot {snapshot}"));
+            },
+            |ui| {
+                // When every write will fail there is nothing to count; the failures are below.
+                if new + changed + unchanged == 0 {
+                    return;
+                }
+                let chips = [
+                    (Badge::New.glyph(), Badge::New.color(ui), new),
+                    (Badge::Changed.glyph(), Badge::Changed.color(ui), changed),
+                    (icons::EQUALS, ui.visuals().weak_text_color(), unchanged),
+                ];
+                let text: Vec<_> = [(new, "new"), (changed, "changed"), (unchanged, "unchanged")]
+                    .into_iter()
+                    .filter(|&(count, _)| count > 0)
+                    .map(|(count, kind)| format!("{count} {kind}"))
+                    .collect();
+                theme::chips(ui, &chips, &text.join(", "));
+            },
+        );
+        ui.label(format!("Into {}", describe_targets(&fetched.targets)));
         let error_color = ui.visuals().error_fg_color;
         for (write, state) in plan.writes.iter().zip(states) {
             if let Err(reason) = state {

@@ -253,6 +253,11 @@ fn backup_reports_new_then_unchanged_per_game() {
     assert!(!shows(&harness, ": backed up"));
 }
 
+/// The role of the one node whose label holds `text`.
+fn role_of(harness: &Harness<'static, App>, text: &str) -> Role {
+    harness.get_by_label_contains(text).accesskit_node().role()
+}
+
 /// Runs frames until the comparison with the last backups is done.
 fn run_until_compared(harness: &mut Harness<'static, App>) {
     run_until(harness, "the comparison to finish", |h| {
@@ -272,6 +277,10 @@ fn a_rescan_shows_what_differs_from_the_last_backup() {
     scan(&mut harness, "2 games found");
     run_until_compared(&mut harness);
     assert_eq!(harness.query_all_by_label("No backup yet").count(), 2);
+    assert!(
+        (harness.query_all_by_label("No backup yet"))
+            .all(|node| node.accesskit_node().role() == Role::Image)
+    );
 
     // A skipped game says nothing about the next backup.
     click(&mut harness, "Beta");
@@ -279,17 +288,25 @@ fn a_rescan_shows_what_differs_from_the_last_backup() {
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(&mut harness, "Alpha: backed up");
     run_until_compared(&mut harness);
-    assert!(shows(&harness, "No changes since the backup from "));
+    // One check whose tooltip promises the skip.
+    let check = "No changes since the backup from ";
+    assert!(shows(&harness, check));
+    assert!(
+        (harness
+            .get_by_label_contains(check)
+            .accesskit_node()
+            .label())
+        .is_some_and(|label| label.ends_with("; no backup will be made"))
+    );
+    assert_eq!(role_of(&harness, check), Role::Image);
 
     fs::write(alpha.join("save.dat"), "abcd").unwrap();
     fs::remove_file(alpha.join("sub/old.dat")).unwrap();
     fs::write(alpha.join("new.dat"), "n").unwrap();
     scan(&mut harness, "2 games found");
     run_until_compared(&mut harness);
-    assert!(shows(
-        &harness,
-        "1 new, 1 changed, 1 removed since the backup from "
-    ));
+    let chips = "1 new, 1 changed, 1 removed since the backup from ";
+    assert_eq!(role_of(&harness, chips), Role::Image);
 
     click(&mut harness, "2 files, 5 B, plus registry keys");
     click(&mut harness, "Open WinAppData/Alpha");
@@ -308,8 +325,14 @@ fn a_rescan_shows_what_differs_from_the_last_backup() {
 
     // An unticked file that the backup holds will be removed from the next one.
     click(&mut harness, "save.dat, changed");
-    assert!(shows(&harness, "1 new, 2 removed since the backup from "));
+    assert_eq!(
+        role_of(&harness, "1 new, 2 removed since the backup from "),
+        Role::Image
+    );
     assert_eq!(harness.query_all_by_label("save.dat, removed").count(), 1);
+    // `old.dat`'s and `save.dat`'s, which is still on disk.
+    let removed = "Removed: the next backup will not hold it";
+    assert_eq!(harness.query_all_by_label(removed).count(), 2);
 }
 
 #[test]

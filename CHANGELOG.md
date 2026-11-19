@@ -11,12 +11,15 @@ All notable changes to salvajocs. The format follows
 - On the Restore tab, tick several games and restore them in one go with **Restore N games**.
   Each game uses its default snapshot and targets and gets its own safety backup. Games whose
   folders need mapping get the mapping dialog one after another.
-- Before restoring several games, the plan shows each game's files as a tree, labelled `new`,
-  `changed` (will be overwritten) or `will fail`, compared by content with what is there now.
+- Before restoring several games, the plan shows each game's files as a tree, compared by
+  content with what is there now. Each file that is new, changed (will be overwritten) or will
+  fail has an icon with a tooltip. Each folder counts its files' icons, and each game shows icons
+  counting its new, changed and unchanged files.
 - After a scan, the Backup tab compares each game with its newest backup from any machine, by
-  content. Each game says how many files are new, changed or removed since that backup, or that
-  no backup will be made and why. In the file tree, files carry a `new` or `changed` badge, and
-  files only in the backup are greyed `removed` rows.
+  content. Each game shows icons counting the files that are new, changed or removed since that
+  backup, or a check when no backup will be made; their tooltip says what differs or why no
+  backup will be made. In the file tree, files carry the same icons with a tooltip, and files
+  only in the backup are greyed rows.
 
 ### Changed
 

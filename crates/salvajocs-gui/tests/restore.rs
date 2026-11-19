@@ -1138,7 +1138,8 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     plan_batch(&mut harness, "Restore 1 game");
     assert!(batch_dir(&env).exists());
 
-    assert!(shows(&harness, "1 new, 1 changed, 1 unchanged"));
+    let counts = harness.get_by_label("1 new, 1 changed, 1 unchanged");
+    assert_eq!(counts.accesskit_node().role(), Role::Image);
     assert!(shows(&harness, "Into native Linux"));
     assert!(!saves.join("new.dat").exists());
     let changed = fs::read_to_string(saves.join("changed.dat")).unwrap();
@@ -1241,7 +1242,9 @@ fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
         &harness,
         &format!("{}: will fail", dir.display())
     ));
-    assert!(shows(&harness, "1 new, 0 changed, 0 unchanged"));
+    // Zero counts are left out.
+    let counts = harness.get_by_label("1 new");
+    assert_eq!(counts.accesskit_node().role(), Role::Image);
     click(&mut harness, "Open XdgData/Alpha");
     assert!(harness.query_by_label("dir.dat, will fail").is_some());
     let will_fail = harness

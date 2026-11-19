@@ -184,8 +184,35 @@ fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     }
     assert_eq!(
         preview_text(&game, &preview, &GameSettings::default()).unwrap(),
-        "No changes since the backup from there, 1970-01-01 00:00 UTC"
+        "No changes since the backup from there, 1970-01-01 00:00 UTC, but a backup will be made, \
+         as it has no list of hashes"
     );
+}
+
+/// The header's icon matches what its sentence says the next backup does.
+#[test]
+fn each_header_state_has_its_icon() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let glyph = |preview: &Preview| next_backup(&game, preview, &all).unwrap().glyph();
+
+    assert_eq!(glyph(&Ok(None)), Some(icons::PLUS_CIRCLE));
+    let same = compared(FileState::Same, false);
+    assert_eq!(glyph(&same), Some(icons::CHECK_CIRCLE));
+    let mut unhashed = compared(FileState::Same, false);
+    if let Ok(Some(baseline)) = &mut unhashed {
+        baseline.hashed = false;
+    }
+    assert_eq!(glyph(&unhashed), Some(icons::EQUALS));
+    // Skipped like `same`, though the newest backup differs.
+    let unchanged_here = compared(FileState::Changed, true);
+    assert_eq!(glyph(&unchanged_here), Some(icons::CHECK_CIRCLE));
+    let changed = compared(FileState::Changed, false);
+    assert!(matches!(
+        next_backup(&game, &changed, &all),
+        Some(Next::Changes { .. })
+    ));
+    assert_eq!(glyph(&changed), None);
+    assert_eq!(glyph(&Err("offline".into())), None);
 }
 
 #[test]
