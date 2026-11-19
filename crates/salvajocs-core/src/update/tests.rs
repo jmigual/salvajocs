@@ -162,3 +162,156 @@ fn download_installer_empties_the_dir_first() {
     ));
     assert!(!dir.exists());
 }
+
+#[test]
+fn appimage_name_is_the_release_asset() {
+    let release = parse_release(RELEASE_JSON).unwrap();
+    assert_eq!(release.appimage_name(), "salvajocs-1.2.3-x86_64.AppImage");
+}
+
+/// The names in `dir`.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn replace_swaps_the_file_and_leaves_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    fs::write(&appimage, b"old").unwrap();
+
+    replace(&appimage, b"new").unwrap();
+    assert_eq!(fs::read(&appimage).unwrap(), b"new");
+    assert_eq!(names(dir.path()), ["salvajocs.appimage"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn replace_keeps_the_old_mode_and_makes_it_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    for (old, new) in [(0o640, 0o740), (0o700, 0o700), (0o755, 0o755)] {
+        fs::write(&appimage, b"old").unwrap();
+        fs::set_permissions(&appimage, fs::Permissions::from_mode(old)).unwrap();
+        replace(&appimage, b"new").unwrap();
+        assert_eq!(mode(&appimage), new, "{old:o}");
+    }
+}
+
+#[test]
+fn download_limits_each_read_not_the_whole_body() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = io::BufReader::new(&stream);
+        let mut line = String::new();
+        while io::BufRead::read_line(&mut reader, &mut line).unwrap() > 2 {
+            line.clear();
+        }
+        let mut stream = &stream;
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        for byte in b"hello" {
+            std::thread::sleep(Duration::from_millis(300));
+            stream.write_all(&[*byte]).unwrap();
+        }
+    });
+    // Each byte comes within the timeout, the whole body after it.
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    assert_eq!(download(client.get(url)).unwrap(), b"hello");
+    server.join().unwrap();
+}
+
+#[test]
+fn replace_failure_removes_the_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // A non-empty folder cannot be renamed over.
+    let target = dir.path().join("salvajocs.appimage");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("kept"), b"old").unwrap();
+
+    assert!(replace(&target, b"new").is_err());
+    assert_eq!(names(dir.path()), ["salvajocs.appimage"]);
+    assert_eq!(fs::read(target.join("kept")).unwrap(), b"old");
+}
+
+#[test]
+fn download_appimage_without_the_asset_leaves_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    fs::write(&appimage, b"old").unwrap();
+    let release = Release {
+        assets: Vec::new(),
+        ..parse_release(RELEASE_JSON).unwrap()
+    };
+
+    assert!(matches!(
+        download_appimage(&release, "1.0.0", &appimage),
+        Err(UpdateError::MissingAsset(_))
+    ));
+    assert_eq!(fs::read(&appimage).unwrap(), b"old");
+    assert_eq!(names(dir.path()), ["salvajocs.appimage"]);
+}
+
+#[test]
+fn replaceable_needs_a_file_in_a_writable_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    assert!(!replaceable(&appimage), "a missing file");
+    fs::write(&appimage, b"old").unwrap();
+    assert!(replaceable(&appimage));
+    assert_eq!(
+        names(dir.path()),
+        ["salvajocs.appimage"],
+        "the probe is gone"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn replaceable_refuses_a_read_only_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    fs::write(&appimage, b"old").unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    let replaceable = replaceable(&appimage);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!replaceable);
+}
+
+#[test]
+fn running_appimage_needs_the_exe_in_its_mount() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    fs::write(&appimage, b"").unwrap();
+    let mount = dir.path().join("mount");
+    fs::create_dir(&mount).unwrap();
+    let mount = fs::canonicalize(mount).unwrap();
+    let exe = mount.join("usr/bin/salvajocs");
+
+    assert_eq!(
+        running_appimage(&exe, appimage.clone(), &mount),
+        Some(appimage.clone())
+    );
+    // Started by another AppImage: its `$APPDIR` does not hold this exe.
+    assert_eq!(
+        running_appimage(Path::new("/usr/bin/salvajocs"), appimage.clone(), &mount),
+        None
+    );
+    assert_eq!(
+        running_appimage(&exe, dir.path().join("missing"), &mount),
+        None
+    );
+}

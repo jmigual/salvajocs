@@ -1,11 +1,14 @@
-//! Finds a newer GitHub release and downloads its Windows installer, checked against the
-//! release's `SHA256SUMS` (ADR-0013).
+//! Finds a newer GitHub release and downloads its Windows installer or AppImage, checked against
+//! the release's `SHA256SUMS` (ADR-0013, ADR-0022).
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
-    fs,
-    io::{self, Read},
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{self, Command},
     time::Duration,
 };
 
@@ -28,9 +31,12 @@ const SILENT_ARGS: [&str; 4] = [
     "/NORESTART",
     "/RELAUNCH",
 ];
-// The installer is a few MB; the default 30 s total timeout is too short on a slow link.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-/// The largest response read; the installer is a few MB.
+/// How long connecting to a server may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+// Blocking reqwest applies its timeout to the response headers and to each read, not to the whole
+// body, so it is an idle limit: a 20 MB AppImage on a slow link still finishes.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// The largest response read; the installer and the AppImage are a few tens of MB.
 const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
 /// Failure to check for, download or start an update.
@@ -61,7 +67,7 @@ pub enum UpdateError {
     /// The downloaded file does not match its hash in `SHA256SUMS`.
     #[error("`{0}` does not match its SHA-256 in SHA256SUMS")]
     ChecksumMismatch(String),
-    /// The installer could not be written or started.
+    /// The update could not be written or started.
     #[error("update I/O failed")]
     Io(#[from] io::Error),
 }
@@ -108,6 +114,11 @@ impl Release {
     /// The name of the Windows installer of this release.
     fn installer_name(&self) -> String {
         format!("salvajocs-{}-x86_64-setup.exe", self.version)
+    }
+
+    /// The name of the Linux AppImage of this release.
+    fn appimage_name(&self) -> String {
+        format!("salvajocs-{}-x86_64.AppImage", self.version)
     }
 
     /// The asset called `name`, refused unless its URL is exactly this release's download URL.
@@ -206,13 +217,8 @@ pub fn download_installer(
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
-    let client = client(current)?;
     let name = release.installer_name();
-    let installer = release.asset(&name)?;
-    let sums = release.asset(SUMS_ASSET)?;
-    let sums = download(client.get(&sums.browser_download_url))?;
-    let bytes = download(client.get(&installer.browser_download_url))?;
-    verify(&bytes, &String::from_utf8_lossy(&sums), &name)?;
+    let bytes = download_verified(release, current, &name)?;
     fs::create_dir_all(dir)?;
     let path = dir.join(name);
     fs::write(&path, &bytes)?;
@@ -225,10 +231,97 @@ pub fn run_installer(path: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
+/// The AppImage that `exe` runs from: `appimage` (`$APPIMAGE`) when it is a file and `exe` lies
+/// in `appdir` (`$APPDIR`, its mount). An app started by another AppImage inherits its variables.
+pub fn running_appimage(exe: &Path, appimage: PathBuf, appdir: &Path) -> Option<PathBuf> {
+    let inside = fs::canonicalize(appdir).is_ok_and(|appdir| exe.starts_with(appdir));
+    (inside && appimage.is_file()).then_some(appimage)
+}
+
+/// Whether [`download_appimage`] can replace the file at `path`: it is a file and its folder
+/// takes a new one.
+pub fn replaceable(path: &Path) -> bool {
+    let probe = temp_path(path);
+    path.is_file()
+        && OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .and_then(|_| fs::remove_file(&probe))
+            .is_ok()
+}
+
+/// Downloads the AppImage of `release`, checks it against the release's `SHA256SUMS`, and
+/// replaces the file at `appimage` with it in one rename, keeping its name. A failed download
+/// or check leaves `appimage` untouched and writes nothing.
+pub fn download_appimage(
+    release: &Release,
+    current: &str,
+    appimage: &Path,
+) -> Result<(), UpdateError> {
+    let bytes = download_verified(release, current, &release.appimage_name())?;
+    replace(appimage, &bytes)?;
+    Ok(())
+}
+
+/// Starts the AppImage at `path` with this process's arguments.
+pub fn restart_appimage(path: &Path) -> Result<(), UpdateError> {
+    Command::new(path)
+        .args(std::env::args_os().skip(1))
+        .spawn()?;
+    Ok(())
+}
+
+/// Downloads the asset `name` of `release` and checks it against the release's `SHA256SUMS`.
+fn download_verified(release: &Release, current: &str, name: &str) -> Result<Vec<u8>, UpdateError> {
+    let client = client(current)?;
+    let asset = release.asset(name)?;
+    let sums = release.asset(SUMS_ASSET)?;
+    let sums = download(client.get(&sums.browser_download_url))?;
+    let bytes = download(client.get(&asset.browser_download_url))?;
+    verify(&bytes, &String::from_utf8_lossy(&sums), name)?;
+    Ok(bytes)
+}
+
+/// A hidden file next to `path`; the same folder keeps the rename atomic.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(format!(".update-{}", process::id()));
+    path.with_file_name(name)
+}
+
+/// Writes `bytes` to a new file next to `path`, with the old file's mode plus the owner's execute
+/// bit, and renames it over `path`, so the running AppImage keeps reading the old file. The new
+/// file is removed when a step fails.
+fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    let mode = (fs::metadata(path)?.permissions().mode() & 0o777) | 0o100;
+    let temp = temp_path(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        // Set, not created with: the umask would mask the mode passed to `open`.
+        #[cfg(unix)]
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        file.sync_all()?;
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        // The step's error is the one worth reporting; a leftover hidden file is harmless.
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 fn client(current: &str) -> Result<Client, UpdateError> {
     Ok(Client::builder()
         .user_agent(format!("salvajocs/{current}"))
-        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(READ_TIMEOUT)
         .https_only(true)
         .build()?)
 }
