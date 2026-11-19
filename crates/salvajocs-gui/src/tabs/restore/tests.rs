@@ -212,15 +212,15 @@ fn an_empty_repository_says_it_has_no_backups_yet() {
 fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
     Arc::new(Fetched {
         storage: storage.clone(),
-        snapshot: SnapshotInfo::new(
-            "0".repeat(64),
-            at(0),
-            "pc".into(),
-            "Mix".into(),
-            vec!["salvajocs".into(), "game:mix".into()],
-        ),
         title: "Mix".into(),
         listed: Arc::new(Listed::new(
+            SnapshotInfo::new(
+                "0".repeat(64),
+                at(0),
+                "pc".into(),
+                "Mix".into(),
+                vec!["salvajocs".into(), "game:mix".into()],
+            ),
             StagedGame::new(
                 PathBuf::from("/staged"),
                 SnapshotMeta::new(SNAPSHOT_FORMAT, "Mix".into(), Vec::new()),
@@ -261,7 +261,6 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
     let listed = restore::read(&mut repo, &snapshot, &dir.join("work")).unwrap();
     Arc::new(Fetched {
         storage: storage.clone(),
-        snapshot,
         title: "Mix".into(),
         listed: Arc::new(listed),
         targets: Targets {

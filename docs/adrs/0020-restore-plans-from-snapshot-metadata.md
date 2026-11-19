@@ -31,8 +31,9 @@ small file costs one ranged read of a data pack.
   download fills later, so `plan`, `prepare`, `Write` and `run` are unchanged. `plan` builds each
   `Write.source` lexically (`layout::target_path` without case folding), so the plan is the same
   before and after the download; a test checks this.
-- **Download on Restore.** `restore::download` runs `fetch` into the planned `root` and refuses
-  with `FetchError::NotAsPlanned` unless the result equals the planned `StagedGame`. Then
+- **Download on Restore.** `restore::download(&Listed)` runs `fetch` of the snapshot the listing
+  was read from (`Listed` carries it) into the planned `root`, and refuses with
+  `FetchError::NotAsPlanned` unless the result equals the planned `StagedGame`. Then
   `restore::run` makes the safety backup and writes, as before (ADR-0005). A failed download
   returns before `run`: no safety backup, nothing written.
 - **Labels from the hash list (reverses ADR-0019's "compare by content").**
@@ -93,5 +94,5 @@ small file costs one ranged read of a data pack.
 - For a snapshot made before 0.6.0, a target with the same bytes and another mtime is labelled
   `changed` (ADR-0018's fallback). It is written either way.
 - Comparing hashes a target only when the sizes match and the mtimes differ, on local disk.
-- `download` catches a snapshot whose meta or file list differs from the plan's; snapshot ids
-  are content addresses, so the same id restores the same bytes.
+- `download` takes the snapshot from the listing, so it cannot write another snapshot that has
+  the same paths; snapshot ids are content addresses, so the same id restores the same bytes.

@@ -348,6 +348,8 @@ fn parse_base(name: &str) -> Option<Base> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Listed {
+    /// The snapshot listed, the one [`download`] downloads.
+    pub snapshot: SnapshotInfo,
     /// The staged game; its `root` is the work dir [`download`] fills.
     pub staged: StagedGame,
     /// Every entry of the game's staged directory, below it, sorted by path.
@@ -415,6 +417,7 @@ pub fn read(
     files.sort();
     let hashes = crate::changes::hash_list(storage, &snapshot.id, &dir, &listing)?;
     Ok(Listed {
+        snapshot: snapshot.clone(),
         staged: StagedGame {
             root: work_dir.to_path_buf(),
             meta,
@@ -427,10 +430,17 @@ pub fn read(
 }
 
 impl Listed {
-    /// A listed game from its fields; `listing` is sorted by path.
-    pub fn new(staged: StagedGame, mut listing: Vec<SnapshotFile>, hashes: Option<Hashes>) -> Self {
+    /// A listed game from its fields; `listing` is sorted by path. `snapshot` must be the one
+    /// `staged` and `listing` were read from, as [`download`] downloads it.
+    pub fn new(
+        snapshot: SnapshotInfo,
+        staged: StagedGame,
+        mut listing: Vec<SnapshotFile>,
+        hashes: Option<Hashes>,
+    ) -> Self {
         listing.sort_by(|a, b| a.path.cmp(&b.path));
         Self {
+            snapshot,
             staged,
             listing,
             hashes,
@@ -468,17 +478,15 @@ fn listed_as(
     }
 }
 
-/// Downloads the game of `snapshot` into `planned.root`, which must be absent or empty, by
-/// [`fetch`], so its checks run again on the real files.
+/// Downloads the game of `listed.snapshot` into `listed.staged.root`, which must be absent or
+/// empty, by [`fetch`], so its checks run again on the real files. Taking the snapshot from
+/// `listed` writes the planned snapshot's bytes, even where another one has the same paths.
 ///
 /// # Errors
-/// [`FetchError::NotAsPlanned`] when the downloaded game differs from `planned`, and any error
-/// of [`fetch`].
-pub fn download(
-    storage: &mut Storage,
-    snapshot: &SnapshotInfo,
-    planned: &StagedGame,
-) -> Result<(), FetchError> {
+/// [`FetchError::NotAsPlanned`] when the downloaded game differs from `listed.staged`, and any
+/// error of [`fetch`].
+pub fn download(storage: &mut Storage, listed: &Listed) -> Result<(), FetchError> {
+    let (snapshot, planned) = (&listed.snapshot, &listed.staged);
     if fetch(storage, snapshot, &planned.root)? != *planned {
         return Err(FetchError::NotAsPlanned(snapshot.id.clone()));
     }

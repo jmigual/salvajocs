@@ -184,8 +184,6 @@ impl TargetPick {
 struct Fetched {
     /// The repository the snapshot came from, which the safety backup goes into.
     storage: SharedStorage,
-    /// The snapshot `listed` comes from, which `restore::download` downloads.
-    snapshot: SnapshotInfo,
     title: String,
     listed: Arc<Listed>,
     targets: Targets,
@@ -353,8 +351,8 @@ pub struct RestoreTab {
     preparing: Option<(u64, Job<Prepared>)>,
     /// The generation the last plan job started in, so a failed plan does not start again.
     attempted: Option<u64>,
-    /// The last snapshot listing read, by snapshot id, so a change of targets reads nothing.
-    last_read: Option<(String, Arc<Listed>)>,
+    /// The last snapshot listing read, so a change of targets reads nothing.
+    last_read: Option<Arc<Listed>>,
     mapping: Option<(Arc<Fetched>, Dialog)>,
     /// Whether the mapping dialog waits behind its "Choose folders…" button.
     dialog_hidden: bool,
@@ -570,8 +568,7 @@ impl RestoreTab {
             let current = *generation == self.generation;
             self.preparing = None;
             if let Ok(prepared) = &result {
-                let listed = &prepared.fetched.listed;
-                self.last_read = Some((prepared.fetched.snapshot.id.clone(), listed.clone()));
+                self.last_read = Some(prepared.fetched.listed.clone());
             }
             match result {
                 // A plan for a closed dialog or other targets is neither shown nor saved.
@@ -846,9 +843,7 @@ impl RestoreTab {
         );
         let environment = state.env.environment.clone();
         let work_dir = own_dir(&state.env.cache_dir, "restore-work");
-        let last_read = (self.last_read.clone())
-            .filter(|(id, _)| *id == snapshot.id)
-            .map(|(_, listed)| listed);
+        let last_read = (self.last_read.clone()).filter(|listed| listed.snapshot.id == snapshot.id);
         let job = Job::spawn(ctx, move || {
             let targets = targets()?;
             let listed = match last_read {
@@ -863,7 +858,6 @@ impl RestoreTab {
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
                 storage,
-                snapshot,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 title,
                 listed,
@@ -1171,7 +1165,7 @@ impl RestoreTab {
             remove_dir(&staged.root)
                 .with_context(|| format!("cannot clear {}", staged.root.display()))?;
             let mut storage = lock_storage(&fetched.storage)?;
-            restore::download(&mut storage, &fetched.snapshot, staged)
+            restore::download(&mut storage, &fetched.listed)
                 .context("the backup cannot be fetched")?;
             let title = fetched.title.clone();
             let running = wineserver_running();

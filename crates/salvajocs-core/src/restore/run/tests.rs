@@ -392,7 +392,7 @@ fn download_fills_the_planned_root() {
     let listed = super::read(&mut f.storage, &snapshot, &work).unwrap();
     let plan = plan_into(&listed.staged, &f.ctx());
 
-    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
+    download(&mut f.storage, &listed).unwrap();
     let report = f.run(&plan, false).unwrap();
     assert_applied(&report);
     assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "saved");
@@ -425,11 +425,30 @@ fn download_refuses_another_snapshot() {
     let work = tmp.path().join("work");
     let listed = super::read(&mut storage, older, &work).unwrap();
 
-    let downloaded = download(&mut storage, newer, &listed.staged);
+    // The newer snapshot paired with the older one's plan.
+    let paired = Listed::new(newer.clone(), listed.staged, listed.listing, listed.hashes);
+    let downloaded = download(&mut storage, &paired);
     assert!(
         matches!(downloaded, Err(FetchError::NotAsPlanned(_))),
         "{downloaded:?}"
     );
+}
+
+#[test]
+fn download_writes_the_listed_snapshot_where_a_newer_one_has_the_same_paths() {
+    let mut f = fixture();
+    let game = game_with_save(f.tmp.path(), "Foo", "older");
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let game = game_with_save(f.tmp.path(), "Foo", "newer");
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshots = list(&f.storage).unwrap().remove(0).snapshots;
+    let work = f.tmp.path().join("work");
+    let listed = super::read(&mut f.storage, &snapshots[1], &work).unwrap();
+    let plan = plan_into(&listed.staged, &f.ctx());
+
+    download(&mut f.storage, &listed).unwrap();
+    assert_applied(&f.run(&plan, false).unwrap());
+    assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "older");
 }
 
 #[test]
@@ -443,7 +462,7 @@ fn a_forgotten_snapshot_fails_its_download_and_nothing_is_written() {
     let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
 
     f.storage.forget(&[&snapshot.id]).unwrap();
-    let downloaded = download(&mut f.storage, &snapshot, &listed.staged);
+    let downloaded = download(&mut f.storage, &listed);
     assert!(
         matches!(downloaded, Err(FetchError::Storage(_))),
         "{downloaded:?}"
@@ -1176,7 +1195,7 @@ fn read_and_plan(f: &mut Fixture, snapshot: &SnapshotInfo) -> (Listed, RestorePl
 
 /// Backs up Foo with each `(name, contents)` as the save `Game/<name>`, then reads and plans the
 /// snapshot as [`read_and_plan`] does.
-fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (SnapshotInfo, Listed, RestorePlan) {
+fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (Listed, RestorePlan) {
     let files = (files.iter())
         .map(|(name, contents)| {
             let real = write(&f.tmp.path().join("src").join(name), contents);
@@ -1200,8 +1219,7 @@ fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (SnapshotInfo, Lis
     };
     back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
     let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
-    let (listed, plan) = read_and_plan(f, &snapshot);
-    (snapshot, listed, plan)
+    read_and_plan(f, &snapshot)
 }
 
 /// What [`compare_writes`] says of each write, by its target's file name.
@@ -1237,7 +1255,7 @@ fn compare_writes_labels_new_changed_and_unchanged_from_the_hash_list() {
         ("same.sav", "same"),
         ("same_size.sav", "new"),
     ];
-    let (_, listed, plan) = backed_up_plan(&mut f, &files);
+    let (listed, plan) = backed_up_plan(&mut f, &files);
     assert!(listed.hashes.is_some());
     let game = f.folders.app_data.join("Game");
     write(&game.join("other_size.sav"), "older");
@@ -1291,7 +1309,7 @@ fn compare_writes_finds_a_file_restored_from_the_snapshot_unchanged() {
     let (listed, plan) = read_and_plan(&mut f, &snapshot);
     write(&f.folders.app_data.join("Game/old.sav"), "older");
 
-    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
+    download(&mut f.storage, &listed).unwrap();
     assert_applied(&f.run(&plan, false).unwrap());
     let expected = named(&[
         ("new.sav", WriteState::Unchanged),
@@ -1303,7 +1321,7 @@ fn compare_writes_finds_a_file_restored_from_the_snapshot_unchanged() {
 #[test]
 fn compare_writes_reads_no_snapshot_content() {
     let mut f = fixture();
-    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
+    let (listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
     write(&f.folders.app_data.join("Game/save.sav"), "old");
 
     let states = compare_writes(&plan, &listed).unwrap();
@@ -1339,7 +1357,7 @@ fn compare_writes_says_a_symlinked_source_will_fail() {
 #[test]
 fn compare_writes_refuses_a_directory_at_the_target() {
     let mut f = fixture();
-    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
+    let (listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
     fs::create_dir_all(f.folders.app_data.join("Game/save.sav")).unwrap();
 
     let states = compare_writes(&plan, &listed).unwrap();
@@ -1353,7 +1371,7 @@ fn compare_writes_refuses_a_directory_at_the_target() {
 #[test]
 fn compare_writes_refuses_a_symlinked_target() {
     let mut f = fixture();
-    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
+    let (listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
     let outside = write(&f.tmp.path().join("outside.txt"), "new");
     let target = f.folders.app_data.join("Game/save.sav");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -1373,7 +1391,7 @@ fn compare_writes_finds_an_unreadable_target_that_blocks_the_whole_restore() {
 
     let mut f = fixture();
     let files = [("locked.sav", "new"), ("other.sav", "new")];
-    let (snapshot, listed, plan) = backed_up_plan(&mut f, &files);
+    let (listed, plan) = backed_up_plan(&mut f, &files);
     let locked = write(&f.folders.app_data.join("Game/locked.sav"), "old");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     // Root reads it anyway, so there is nothing to test.
@@ -1382,7 +1400,7 @@ fn compare_writes_finds_an_unreadable_target_that_blocks_the_whole_restore() {
     }
 
     let compared = compare_writes(&plan, &listed);
-    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
+    download(&mut f.storage, &listed).unwrap();
     let result = f.run(&plan, false);
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(

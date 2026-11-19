@@ -471,8 +471,7 @@ impl RestoreTab {
                 .map(|(fetched, plan)| {
                     // A failure to lock fails this game, not the job.
                     let fetch = lock_storage(&fetched.storage).and_then(|mut storage| {
-                        let (snapshot, staged) = (&fetched.snapshot, &fetched.listed.staged);
-                        Ok(restore::download(&mut storage, snapshot, staged)?)
+                        Ok(restore::download(&mut storage, &fetched.listed)?)
                     });
                     downloaded.fetch_add(1, Ordering::Relaxed);
                     waker.request_repaint();
@@ -574,7 +573,6 @@ fn plan_game(
     let info = restore::game_info(&title, manifest, &config.custom_games);
     let fetched = Fetched {
         storage: storage.clone(),
-        snapshot: snapshot.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
         title,
         listed,
