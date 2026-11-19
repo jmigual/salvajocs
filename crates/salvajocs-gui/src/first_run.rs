@@ -45,7 +45,8 @@ enum Step {
     Probing(Job<RepoState>, Attempt),
     /// No repository there: waiting for the user to allow creating one with a compression.
     Confirm(Attempt),
-    Finishing(Job<Connected>),
+    /// Opening or creating the repository; the flag is set when it is created.
+    Finishing(Job<Connected>, bool),
 }
 
 /// The repository form and the state of connecting to what it describes.
@@ -84,14 +85,14 @@ impl Connect {
 
     /// Whether a probe or a repository creation is running.
     pub(crate) fn busy(&self) -> bool {
-        matches!(self.step, Step::Probing(..) | Step::Finishing(_))
+        matches!(self.step, Step::Probing(..) | Step::Finishing(..))
     }
 
     /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
-        // The question to create replaces the form instead of just disabling it: otherwise the
-        // two screens look alike.
-        if !matches!(self.step, Step::Confirm(_)) {
+        // Creating a repository replaces the form instead of just disabling it: otherwise the
+        // question and the form look alike.
+        if !matches!(self.step, Step::Confirm(_) | Step::Finishing(_, true)) {
             let editing = matches!(self.step, Step::Editing(_));
             ui.add_enabled_ui(editing, |ui| {
                 form_grid("connect_form").show(ui, |ui| {
@@ -197,13 +198,17 @@ impl Connect {
                 };
                 None
             }
-            Step::Finishing(mut job) => {
+            Step::Finishing(mut job, creating) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Opening the repository");
+                    ui.label(if creating {
+                        "Creating the repository"
+                    } else {
+                        "Opening the repository"
+                    });
                 });
                 match job.take_result() {
-                    None => self.step = Step::Finishing(job),
+                    None => self.step = Step::Finishing(job, creating),
                     Some(Err(err)) => self.step = Step::Editing(Some(format!("{err:#}"))),
                     Some(Ok(connected)) => return Some(connected),
                 }
@@ -269,7 +274,11 @@ fn finishing(
     create: Option<Compression>,
 ) -> Step {
     let env = env.clone();
-    Step::Finishing(Job::spawn(ctx, move || finish(&env, attempt, create)))
+    let creating = create.is_some();
+    Step::Finishing(
+        Job::spawn(ctx, move || finish(&env, attempt, create)),
+        creating,
+    )
 }
 
 /// Creates the repository when `create` holds its compression, otherwise opens it, then keeps

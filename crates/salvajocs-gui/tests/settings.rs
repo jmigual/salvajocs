@@ -127,9 +127,18 @@ fn missing_repo_asks_before_init() {
     );
 
     harness.get_by_label("Create").click();
+    let creating_seen = std::cell::Cell::new(false);
     run_until(&mut harness, "the dialog to close", |h| {
+        if shows(h, "Creating the repository") {
+            creating_seen.set(true);
+            assert!(
+                !shows(h, "Encryption password"),
+                "the form stays hidden while the repository is created"
+            );
+        }
         !shows(h, "Welcome to salvajocs")
     });
+    assert!(creating_seen.get(), "the creation was observed");
     assert!(Path::new(&repository).join("config").exists());
     run_until_saved(&mut harness, &env, |config| config.repository == repository);
 }
@@ -811,6 +820,23 @@ fn open_settings_after_a_missing_repository_keeps_the_password() {
 }
 
 #[test]
+fn a_server_that_may_refuse_the_login_is_warned_about_before_creating() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    fill(&mut harness, "Location", &refusing_rest_repo());
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Do you want to create one?")
+    });
+
+    assert!(shows(&harness, "refuses your login"));
+}
+
+#[test]
 fn a_missing_repository_points_to_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
@@ -848,23 +874,6 @@ fn other_open_failures_keep_their_message_and_have_no_settings_button() {
 
     assert!(!shows(&harness, "No repository at"));
     assert!(harness.query_by_label("Open Settings").is_none());
-}
-
-#[test]
-fn a_server_that_may_refuse_the_login_is_warned_about_before_creating() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut harness = harness(env(&tmp));
-    run_until(&mut harness, "the first-run dialog", |h| {
-        shows(h, "Welcome to salvajocs")
-    });
-
-    fill(&mut harness, "Location", &refusing_rest_repo());
-    harness.get_by_label("Continue").click();
-    run_until(&mut harness, "the confirmation", |h| {
-        shows(h, "Do you want to create one?")
-    });
-
-    assert!(shows(&harness, "refuses your login"));
 }
 
 const KEEP_LAST: &str = "Keep the last";
