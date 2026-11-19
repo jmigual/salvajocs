@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- When the configured repository no longer exists, the window says so and offers **Open Settings**
+  to create a new one or choose another location.
+
 ## [0.4.0] - 2026-11-18
 
 ### Added

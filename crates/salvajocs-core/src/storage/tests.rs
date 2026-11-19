@@ -57,6 +57,79 @@ fn missing_repo_is_missing_not_error() {
 }
 
 #[test]
+fn opening_a_missing_repo_reports_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let location = local(&tmp.path().join("nothing-here"));
+    assert!(matches!(
+        Storage::open(&location, ""),
+        Err(StorageError::Missing)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn opening_an_unreadable_local_repo_is_a_backend_error_not_missing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_dir = tmp.path().join("repo");
+    let location = local(&repo_dir);
+    Storage::init(&location, "", Compression::Default).unwrap();
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root ignores permission bits, so there is nothing to observe.
+    let enforced = fs::exists(repo_dir.join("config")).is_err();
+    let result = Storage::open(&location, "");
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    if enforced {
+        assert!(matches!(result, Err(StorageError::Backend(_))));
+    }
+}
+
+/// A REST server that answers every request with 401, as one does when the login changed.
+fn refusing_rest_server() -> RepoLocation {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            use std::io::{Read, Write};
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    RepoLocation {
+        repository: format!("rest:http://127.0.0.1:{port}/"),
+        options: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn a_refused_rest_login_is_not_a_missing_repo() {
+    let location = refusing_rest_server();
+    assert!(!location.proves_absence());
+    assert!(matches!(
+        Storage::open(&location, ""),
+        Err(StorageError::Backend(_))
+    ));
+}
+
+#[test]
+fn only_local_and_opendal_locations_prove_absence() {
+    let repository = |repository: &str| RepoLocation {
+        repository: repository.to_string(),
+        options: BTreeMap::new(),
+    };
+    for proves in ["/some/dir", "local:/some/dir", "opendal:s3"] {
+        assert!(repository(proves).proves_absence(), "{proves}");
+    }
+    for does_not in ["rest:http://host/", "rclone:remote:path"] {
+        assert!(!repository(does_not).proves_absence(), "{does_not}");
+    }
+}
+
+#[test]
 fn unreadable_repo_is_error_not_missing() {
     let location = RepoLocation {
         repository: "nosuchbackend:somewhere".to_string(),

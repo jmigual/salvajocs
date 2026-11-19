@@ -30,6 +30,9 @@ pub enum StorageError {
     /// The password does not unlock the repository.
     #[error("wrong encryption password")]
     WrongPassword,
+    /// No repository has been initialized at the location.
+    #[error("no repository at this location")]
+    Missing,
     /// A path cannot be passed to the repository because it is not valid UTF-8.
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
@@ -73,6 +76,17 @@ impl RepoLocation {
             Ok((SupportedBackend::Local, dir)) => Some(PathBuf::from(dir.as_str())),
             _ => None,
         }
+    }
+
+    /// Whether "no config file" from this location proves there is no repository. The local
+    /// filesystem is checked directly and OpenDAL reports only "not found" as absent. REST (and
+    /// rclone, which serves REST) reads every non-2xx answer, a refused login included, as "no
+    /// config", so there it proves nothing.
+    pub fn proves_absence(&self) -> bool {
+        matches!(
+            location_to_type_and_path(&self.repository),
+            Ok((SupportedBackend::Local | SupportedBackend::OpenDAL, _))
+        )
     }
 
     fn backends(&self) -> Result<RepositoryBackends, StorageError> {
@@ -188,6 +202,25 @@ fn snapshot_info(snap: &SnapshotFile) -> SnapshotInfo {
     }
 }
 
+/// Whether the backend lists a repository config at `location`; an unreadable local location is
+/// an error, never "no". A "no" proves absence only where [`RepoLocation::proves_absence`].
+fn has_config(location: &RepoLocation, repo: &Repository<()>) -> Result<bool, StorageError> {
+    match repo.config_id() {
+        // rustic's local backend reports "no config" for any `exists()` failure, such as an
+        // unreadable directory, so ask the filesystem before calling the repository missing.
+        Ok(None) => match location
+            .local_dir()
+            .map(|dir| fs::exists(dir.join("config")))
+        {
+            Some(Ok(false)) | None => Ok(false),
+            Some(Ok(true)) => Ok(true),
+            Some(Err(err)) => Err(StorageError::Backend(err.to_string())),
+        },
+        Ok(Some(_)) => Ok(true),
+        Err(err) => Err(backend(err)),
+    }
+}
+
 /// Inspects `location` with `password` (empty means no password). Never treats an unreadable
 /// location as [`RepoState::Missing`].
 pub fn probe(location: &RepoLocation, password: &str) -> RepoState {
@@ -198,19 +231,10 @@ pub fn probe(location: &RepoLocation, password: &str) -> RepoState {
         Ok(repo) => repo,
         Err(err) => return RepoState::Error(err.to_string()),
     };
-    match repo.config_id() {
-        // rustic's local backend reports "no config" for any `exists()` failure, such as an
-        // unreadable directory, so ask the filesystem before calling the repository missing.
-        Ok(None) => match location
-            .local_dir()
-            .map(|dir| fs::exists(dir.join("config")))
-        {
-            Some(Ok(false)) | None => return RepoState::Missing,
-            Some(Ok(true)) => {}
-            Some(Err(err)) => return RepoState::Error(err.to_string()),
-        },
-        Ok(Some(_)) => {}
-        Err(err) => return RepoState::Error(backend(err).to_string()),
+    match has_config(location, &repo) {
+        Ok(false) => return RepoState::Missing,
+        Ok(true) => {}
+        Err(err) => return RepoState::Error(err.to_string()),
     }
     match repo.open(&Credentials::password(password)) {
         Ok(_) => RepoState::Ready,
@@ -252,10 +276,22 @@ impl Storage {
         Ok(Self::new(backends, password, repo))
     }
 
-    /// Opens the existing repository at `location`. Fails with
-    /// [`StorageError::WrongPassword`] if `password` does not unlock it.
+    /// Opens the existing repository at `location`. Fails with [`StorageError::Missing`] if there
+    /// is none, and with [`StorageError::WrongPassword`] if `password` does not unlock it. Where
+    /// a missing config proves nothing ([`RepoLocation::proves_absence`]) the failure is
+    /// [`StorageError::Backend`] instead, so a refused login is not taken for a missing repository.
     pub fn open(location: &RepoLocation, password: &str) -> Result<Self, StorageError> {
         let backends = location.backends()?;
+        if !has_config(location, &repository(&backends)?)? {
+            return Err(if location.proves_absence() {
+                StorageError::Missing
+            } else {
+                StorageError::Backend(
+                    "no repository config was found; the server may have refused the request"
+                        .to_string(),
+                )
+            });
+        }
         let repo = open_indexed(&backends, password)?;
         Ok(Self::new(backends, password, repo))
     }

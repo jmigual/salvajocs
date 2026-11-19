@@ -24,12 +24,16 @@ unreadable.
 
 ## "The repository could not be opened"
 
-The red message in the window includes the reason: a folder that is missing or unreadable, a
-network error, or bad credentials for a remote backend. Fix the cause and click **Retry**. To point
-salvajocs at another repository, use [Settings](settings.md#repository).
+The red message in the window includes the reason: a folder that is unreadable, a network error,
+or bad credentials for a remote backend. Fix the cause and click **Retry**. To point salvajocs at
+another repository, use [Settings](settings.md#repository).
 
-If you use a drive that is not mounted yet, mount it first. salvajocs does not create a new
-repository unless you confirm it.
+## "No repository at ..."
+
+The repository in the config does not exist any more: it was deleted or moved, or its drive is not
+mounted. If it is on a drive, mount it and click **Retry**. Otherwise click **Open Settings**,
+then in **Repository** keep the location to create a new repository there, or enter another
+location, and click **Apply**. salvajocs does not create a repository unless you confirm it.
 
 ## The keyring does not work
 

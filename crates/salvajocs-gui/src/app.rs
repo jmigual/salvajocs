@@ -22,7 +22,7 @@ use crate::theme::{self, icons};
 use crate::title_bar;
 use crate::update::Updater;
 
-/// Where startup stands. Each stage ends in `Ready` or `OpenFailed`.
+/// Where startup stands. Each stage ends in `Ready`, `RepositoryMissing` or `OpenFailed`.
 enum Stage {
     /// Before the first frame: jobs need the egui context.
     Starting,
@@ -40,6 +40,8 @@ enum Stage {
     Opening(Job<Box<Storage>>, Credentials, bool),
     /// The repository is open.
     Ready,
+    /// The configured repository does not exist; carries its location.
+    RepositoryMissing(String),
     /// The repository could not be opened; carries why.
     OpenFailed(String),
 }
@@ -223,6 +225,18 @@ impl App {
                 {
                     Stage::Prompt(SecretPrompt::wrong_password(credentials))
                 }
+                Some(Err(err))
+                    if matches!(
+                        err.downcast_ref::<StorageError>(),
+                        Some(StorageError::Missing)
+                    ) =>
+                {
+                    // Settings starts from these, so re-creating keeps the password.
+                    self.state.credentials = credentials;
+                    self.settings.reset();
+                    let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
+                    Stage::RepositoryMissing(repository.to_string())
+                }
                 Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
                 Some(Ok(storage)) => {
                     self.state.credentials = credentials;
@@ -237,7 +251,10 @@ impl App {
                     Stage::Ready
                 }
             },
-            stage @ (Stage::ConfigUnreadable(_) | Stage::Ready | Stage::OpenFailed(_)) => stage,
+            stage @ (Stage::ConfigUnreadable(_)
+            | Stage::Ready
+            | Stage::RepositoryMissing(_)
+            | Stage::OpenFailed(_)) => stage,
         };
         // A new stage changes what the other panels show, and they were drawn before it.
         if mem::discriminant(&self.stage) != before {
@@ -259,6 +276,28 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Opening the repository");
+                });
+            }
+            Stage::RepositoryMissing(repository) => {
+                let repository = repository.clone();
+                // The message is long, so the buttons get their own row to stay on screen.
+                theme::status(
+                    ui,
+                    icons::X_CIRCLE,
+                    ui.visuals().error_fg_color,
+                    format!(
+                        "No repository at {repository}. It may have been moved or deleted, or its \
+                         drive is not mounted. Connect it and click Retry, or open Settings to \
+                         create a new one there or choose another location."
+                    ),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Open Settings").clicked() {
+                        self.tab = Tab::Settings;
+                    }
+                    if ui.button("Retry").clicked() {
+                        self.stage = self.resolve(ui.ctx());
+                    }
                 });
             }
             Stage::OpenFailed(error) => {

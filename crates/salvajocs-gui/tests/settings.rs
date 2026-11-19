@@ -692,23 +692,120 @@ fn changing_location_offers_to_delete_stale_keyring_entries() {
     });
 }
 
-#[test]
-fn choosing_a_repository_in_settings_clears_the_open_failure() {
+/// Starts on `repository` with the failure `message` showing, then chooses another repository
+/// in Settings and expects the failure gone.
+fn choosing_a_repository_clears_the_failure(repository: &str, message: &str) {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
-    // Nothing was ever created there, so opening it fails.
-    save_config(&env, &local_config(&repo_dir(&tmp)));
+    save_config(&env, &local_config(repository));
     let mut harness = harness(env.clone());
-    run_until(&mut harness, "the failure", |h| {
-        shows(h, "could not be opened")
-    });
+    run_until(&mut harness, "the failure", |h| shows(h, message));
     harness.state_mut().set_tab(Tab::Settings);
     run_settled(&mut harness);
 
     apply_new_location(&mut harness, &env, &other_repo_dir(&tmp));
 
-    assert!(!shows(&harness, "could not be opened"));
+    assert!(!shows(&harness, message));
     assert!(!shows(&harness, "Retry"));
+}
+
+#[test]
+fn choosing_a_repository_in_settings_clears_the_missing_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Nothing was ever created there.
+    choosing_a_repository_clears_the_failure(&repo_dir(&tmp), "No repository at");
+}
+
+#[test]
+fn choosing_a_repository_in_settings_clears_the_open_failure() {
+    choosing_a_repository_clears_the_failure("nosuchbackend:somewhere", "could not be opened");
+}
+
+#[test]
+fn retry_opens_a_repository_that_was_created_meanwhile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    save_config(&env, &local_config(&repository));
+    let mut harness = harness(env);
+    run_until(&mut harness, "the guidance", |h| {
+        shows(h, "No repository at")
+    });
+    run_settled(&mut harness);
+
+    init_repo(&repository);
+    harness.get_by_label("Retry").click();
+
+    run_until(&mut harness, "the repository to open", |h| {
+        !shows(h, "No repository at") && !shows(h, "Opening the repository")
+    });
+    assert!(!shows(&harness, "Retry"));
+}
+
+#[test]
+fn open_settings_after_a_missing_repository_keeps_the_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let env = env_with(&tmp, secrets.clone());
+    let mut config = local_config(&repo_dir(&tmp));
+    config.password = PasswordMode::Keyring;
+    secrets
+        .set(&config.secret_scope(), &SecretKey::Password, "pw")
+        .unwrap();
+    save_config(&env, &config);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the guidance", |h| {
+        shows(h, "No repository at")
+    });
+    run_settled(&mut harness);
+
+    harness.get_by_label("Open Settings").click();
+    run_settled(&mut harness);
+
+    assert!(
+        !shows(&harness, "No encryption password"),
+        "the form starts with the password, so re-creating keeps the repository encrypted"
+    );
+}
+
+#[test]
+fn a_missing_repository_points_to_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    // Nothing was ever created there, as if the repository had been deleted.
+    let repository = repo_dir(&tmp);
+    save_config(&env, &local_config(&repository));
+    let mut harness = harness(env);
+    run_until(&mut harness, "the guidance", |h| {
+        shows(h, "No repository at")
+    });
+    run_settled(&mut harness);
+
+    assert!(
+        shows(&harness, &repository),
+        "the message names the location"
+    );
+    assert!(!shows(&harness, "Roots"), "Settings is not in front yet");
+    harness.get_by_label("Open Settings").click();
+    run_settled(&mut harness);
+    assert!(
+        shows(&harness, "Roots"),
+        "the button shows the Settings tab"
+    );
+}
+
+#[test]
+fn other_open_failures_keep_their_message_and_have_no_settings_button() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    save_config(&env, &local_config("nosuchbackend:somewhere"));
+    let mut harness = harness(env);
+    run_until(&mut harness, "the failure", |h| {
+        shows(h, "could not be opened")
+    });
+
+    assert!(!shows(&harness, "No repository at"));
+    assert!(harness.query_by_label("Open Settings").is_none());
 }
 
 const KEEP_LAST: &str = "Keep the last";
@@ -762,7 +859,7 @@ fn old_backups_are_disabled_before_the_repository_opens() {
     save_config(&env, &local_config(&repo_dir(&tmp)));
     let mut harness = harness(env);
     run_until(&mut harness, "the failure", |h| {
-        shows(h, "could not be opened")
+        shows(h, "No repository at")
     });
     harness.state_mut().set_tab(Tab::Settings);
     run_settled(&mut harness);
