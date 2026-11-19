@@ -3,8 +3,8 @@
 
 use eframe::egui::{
     self, Align, Area, Button, ColorImage, CursorIcon, Event, Id, Layout, Margin, Order,
-    PointerButton, Pos2, Rect, Response, Sense, Stroke, TextWrapMode, TextureHandle,
-    TextureOptions, Ui, Vec2, ViewportCommand, viewport::ResizeDirection,
+    PointerButton, Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Ui, Vec2,
+    ViewportCommand, viewport::ResizeDirection,
 };
 
 use crate::theme::{self, icons};
@@ -100,34 +100,6 @@ const BUTTONS_WIDTH: f32 = 3.0 * BUTTON.x;
 pub fn reserve_buttons(ui: &mut Ui) -> Rect {
     ui.allocate_exact_size(Vec2::new(BUTTONS_WIDTH, BUTTON.y), Sense::hover())
         .0
-}
-
-/// The width left in the bar's row for [`status_area`], once the window buttons and the gaps
-/// around them are taken. Call it after the tabs, which keep their width.
-pub fn status_room(ui: &Ui) -> f32 {
-    (ui.available_width() - BUTTONS_WIDTH - 2.0 * ui.spacing().item_spacing.x).max(0.0)
-}
-
-/// Whether text in `width` shows more than a bare ellipsis: it has at least a button's width.
-pub fn text_fits(ui: &Ui, width: f32) -> bool {
-    width >= ui.spacing().interact_size.x
-}
-
-/// Draws `text`, a piece of the bar's status, only if [`text_fits`] in what is left of the row.
-pub fn status_text(ui: &mut Ui, text: impl FnOnce(&mut Ui)) {
-    if text_fits(ui, ui.available_width()) {
-        text(ui);
-    }
-}
-
-/// Draws the bar's status with `content` in at most `room`. Text that does not fit is
-/// truncated with an ellipsis and shows in full on hover.
-pub fn status_area(ui: &mut Ui, room: f32, content: impl FnOnce(&mut Ui)) {
-    ui.scope(|ui| {
-        ui.set_max_width(room);
-        ui.style_mut().wrap_mode = Some(TextWrapMode::Truncate);
-        content(ui);
-    });
 }
 
 /// The window buttons in `slot`, the room [`reserve_buttons`] took, the resize edges and the

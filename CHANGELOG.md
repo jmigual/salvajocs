@@ -10,6 +10,8 @@ All notable changes to salvajocs. The format follows
 
 - On the Backup tab, a file shown as changed by modified time only, because its backup has no
   list of hashes (made by 0.5.0 or older), says so in its tooltip.
+- The manifest status and the update notice moved from the top bar to a thinner bar along the
+  bottom of the window.
 
 ## [0.6.0] - 2026-11-19
 

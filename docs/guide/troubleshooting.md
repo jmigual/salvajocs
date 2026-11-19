@@ -49,7 +49,7 @@ the keyring" means the store refused the value. The Windows Credential Manager r
 
 ## The scan finds no games
 
-- Check the top right of the window. "Manifest: loading" means wait. "Manifest: not available"
+- Check the bottom left of the window. "Manifest: loading" means wait. "Manifest: not available"
   means the game list could not be downloaded and there is no cached copy. Only
   [custom games](custom-games.md) are scanned until the download works. The first start needs
   network access.

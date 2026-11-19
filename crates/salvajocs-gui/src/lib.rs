@@ -7,6 +7,7 @@ pub mod job;
 pub mod prompt;
 pub mod startup;
 pub mod state;
+pub mod status_bar;
 pub mod tabs;
 pub mod theme;
 pub mod title_bar;
@@ -119,8 +120,8 @@ fn exec_args(command: &str) -> Vec<String> {
 /// The size, in points, the window opens at. eframe shrinks it to the largest monitor, and does
 /// not leave room for a taskbar, hence the modest height.
 const WINDOW_SIZE: [f32; 2] = [1100.0, 640.0];
-/// The smallest size the window can be resized to. The width keeps the top bar's tabs and
-/// status clear of the window buttons.
+/// The smallest size the window can be resized to. The width keeps the top bar's tabs clear of
+/// the window buttons.
 pub const MIN_WINDOW_SIZE: [f32; 2] = [840.0, 480.0];
 
 /// The window options: the default ones plus `app_id`, the embedded 256 px icon, no OS

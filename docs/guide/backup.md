@@ -11,7 +11,7 @@ to the [guide index](README.md).
 salvajocs uses the [ludusavi manifest](https://github.com/mtkennerly/ludusavi-manifest), a public
 list of about 52,000 games (entries that are not aliases, measured in November 2026) and where
 each one keeps its saves. salvajocs downloads it when it starts and keeps a copy in the cache
-folder. The top right of the window shows the number of games loaded.
+folder. The bar along the bottom of the window shows the number of games loaded.
 
 - The first start needs network access to get any game. Without a cache and without network, only
   your [custom games](custom-games.md) are scanned, and the tab says so.

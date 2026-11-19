@@ -18,9 +18,9 @@ after the app closes.
   pre-release or build metadata never counts as newer). Any failure, offline or GitHub's rate
   limit, is only logged to stderr. Settings has "Check for
   updates at start" (`check_updates` in `config.yaml`, default on, missing in older files = on).
-- **Notice:** a newer release shows "Update available: vX.Y.Z" in the top bar. When `unins000.exe`
-  sits next to the running exe the installer put it there, and the notice offers **Update now**.
-  Otherwise (zip, `cargo install`) it links the release page.
+- **Notice:** a newer release shows "Update available: vX.Y.Z" in the bottom bar. When
+  `unins000.exe` sits next to the running exe the installer put it there, and the notice offers
+  **Update now**. Otherwise (zip, `cargo install`) it links the release page.
 - **Update now:** a job empties `<cache dir>/salvajocs/update`, downloads
   `salvajocs-<version>-x86_64-setup.exe` and `SHA256SUMS` over HTTPS only, from
   `github.com/jmigual/salvajocs/releases/download/v<version>/` only and at most 100 MB each,

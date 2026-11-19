@@ -168,6 +168,20 @@ fn backup_scan_job_lists_games_with_file_counts() {
 }
 
 #[test]
+fn the_window_bottom_bar_is_below_the_save_bar() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    let save_bar = harness.get_by_label("Back up 2 games").rect();
+    let status = harness.get_by_label_contains("Manifest:").rect();
+    assert!(
+        status.top() >= save_bar.bottom(),
+        "{status:?} is below {save_bar:?}"
+    );
+}
+
+#[test]
 fn a_game_found_in_a_wine_prefix_shows_the_prefix() {
     let scratch = tempfile::tempdir().unwrap();
     let (prefix, games) = alpha_beta(&scratch);

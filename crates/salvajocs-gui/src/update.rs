@@ -1,4 +1,4 @@
-//! The "Update available" notice in the top bar and the one-click update (ADR-0013).
+//! The "Update available" notice in the bottom bar and the one-click update (ADR-0013).
 
 use std::path::PathBuf;
 
@@ -7,8 +7,8 @@ use salvajocs_core::update::{self, Release};
 
 use crate::job::Job;
 use crate::state::State;
+use crate::status_bar;
 use crate::theme::{self, icons};
-use crate::title_bar;
 
 /// The running version, which the release is compared with.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -109,7 +109,7 @@ impl Updater {
             }) + ui.spacing().item_spacing.x
         };
         let room = ui.available_width() - reserved;
-        let text = title_bar::text_fits(ui, room);
+        let text = status_bar::text_fits(ui, room);
         if text {
             ui.scope(|ui| {
                 ui.set_max_width(room);
@@ -125,17 +125,17 @@ impl Updater {
             }));
         }
         if downloading {
-            title_bar::status_text(ui, |ui| {
+            status_bar::status_text(ui, |ui| {
                 ui.label("Downloading the update");
             });
         } else if ready {
-            title_bar::status_text(ui, |ui| {
+            status_bar::status_text(ui, |ui| {
                 ui.weak("Update ready, installs when the running task finishes");
             });
         }
     }
 
-    /// Draws the notice on a line of its own, for a dialog that covers the top bar, then the
+    /// Draws the notice on a line of its own, for a dialog that covers the bottom bar, then the
     /// state's notices, such as a failed update, which the top bar would show out of sight.
     pub fn dialog_ui(&mut self, ui: &mut Ui, state: &State) {
         if self.release.is_some() {

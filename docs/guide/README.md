@@ -33,6 +33,6 @@ The window has four tabs. Each page above covers one of them.
 | Custom games | Add games and edit their paths, pairs and skipped folders. |
 | Settings | Change the repository, the compression level and the roots. |
 
-The top right of the window shows how many games the manifest holds. The manifest is the list of
-games and save locations that salvajocs uses. See
+The bar along the bottom of the window shows how many games the manifest holds. The manifest is
+the list of games and save locations that salvajocs uses. See
 [Backup](backup.md#where-the-game-list-comes-from).

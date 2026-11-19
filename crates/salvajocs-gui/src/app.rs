@@ -1,5 +1,5 @@
-//! The window: startup stages, the title bar with the tab strip and the dialogs in front of the
-//! tabs.
+//! The window: startup stages, the title bar with the tab strip, the status bar and the dialogs
+//! in front of the tabs.
 
 use std::mem;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use crate::job::Job;
 use crate::prompt::SecretPrompt;
 use crate::startup::{self, Credentials, ManifestLoad, Resolved};
 use crate::state::{Session, State};
+use crate::status_bar;
 use crate::tabs::{
     Tab, backup::BackupTab, custom_games::CustomGamesTab, restore::RestoreTab,
     settings::SettingsTab,
@@ -460,42 +461,18 @@ impl eframe::App for App {
         egui::Panel::top("tabs").frame(frame).show(ui, |ui| {
             bar = title_bar::drag_area(ui, margin);
             self.updater.poll(&mut self.state);
-            // The dialog of these stages covers the bar, so it shows the notice instead.
-            let dialog_open = matches!(self.stage, Stage::FirstRun(_) | Stage::Prompt(_));
-            let (tab, updater, state, loading) = (
-                &mut self.tab,
-                &mut self.updater,
-                &self.state,
-                self.manifest.is_some(),
-            );
             ui.horizontal(|ui| {
                 title_bar::app_icon(ui);
-                tabs_ui(tab, ui);
-                // The tabs keep their width: the status gives way to them and the buttons.
-                let room = title_bar::status_room(ui);
+                tabs_ui(&mut self.tab, ui);
                 theme::row_end(ui, |ui| {
-                    // Text you cannot select is bar space, so dragging it moves the window.
-                    ui.style_mut().interaction.selectable_labels = false;
-                    title_bar::status_area(ui, room, |ui| {
-                        if !dialog_open {
-                            updater.ui(ui, state);
-                        }
-                        title_bar::status_text(ui, |ui| {
-                            match (&state.manifest, loading) {
-                                (Some(manifest), _) => {
-                                    ui.weak(format!("Manifest: {} games", manifest.games.len()))
-                                }
-                                (None, true) => ui.weak("Manifest: loading"),
-                                (None, false) => ui.weak("Manifest: not available"),
-                            };
-                        });
-                    });
                     // The sizing pass runs first, so the slot of the real pass is kept.
                     buttons = title_bar::reserve_buttons(ui);
                 });
             });
             self.status_ui(ui);
         });
+
+        let status_row = status_bar::reserve(ui);
 
         // No margin: the tabs center their own column, and side and bottom bars reach the edges.
         let adopted = egui::CentralPanel::default()
@@ -523,6 +500,29 @@ impl eframe::App for App {
             self.stage = Stage::Ready;
             ctx.request_repaint();
         }
+        // The dialog of these stages covers the bar, so it shows the notice instead.
+        let dialog_open = matches!(self.stage, Stage::FirstRun(_) | Stage::Prompt(_));
+        let (updater, state, loading) = (&mut self.updater, &self.state, self.manifest.is_some());
+        status_bar::show(
+            ui,
+            status_row,
+            |ui| {
+                status_bar::status_text(ui, |ui| {
+                    match (&state.manifest, loading) {
+                        (Some(manifest), _) => {
+                            ui.weak(format!("Manifest: {} games", manifest.games.len()))
+                        }
+                        (None, true) => ui.weak("Manifest: loading"),
+                        (None, false) => ui.weak("Manifest: not available"),
+                    };
+                });
+            },
+            |ui| {
+                if !dialog_open {
+                    updater.ui(ui, state);
+                }
+            },
+        );
         self.advance(ui);
         // After the tabs, so a job their input just started counts for a close in the same frame.
         self.guard_close(&ctx);

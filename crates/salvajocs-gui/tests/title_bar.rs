@@ -1,4 +1,5 @@
-//! The title bar the app draws in place of the OS one: window buttons, moving and resizing.
+//! The bars the app draws: the title bar in place of the OS one, with the window buttons, moving
+//! and resizing, and the bottom bar with the manifest status and the update notice.
 
 mod common;
 
@@ -13,7 +14,7 @@ use eframe::egui::{
     ViewportCommand, ViewportId, viewport::ResizeDirection,
 };
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::PasswordMode;
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::Compression;
@@ -107,7 +108,7 @@ fn drag(
     sent
 }
 
-/// Empty bar space, between the last tab and the manifest status.
+/// Empty bar space, right of the last tab.
 fn empty_bar(harness: &Harness<'static, App>) -> Pos2 {
     let last_tab = harness
         .get_by_label(Tab::ALL[Tab::ALL.len() - 1].label())
@@ -424,21 +425,6 @@ fn a_press_that_focuses_the_window_moves_it_once_focused() {
 }
 
 #[test]
-fn dragging_the_manifest_status_moves_the_window() {
-    let (_tmp, mut harness) = ready();
-    let status = harness
-        .query_all_by_label_contains("Manifest:")
-        .next()
-        .unwrap()
-        .rect()
-        .center();
-    assert_eq!(
-        drag(&mut harness, status, PointerButton::Primary),
-        [ViewportCommand::StartDrag]
-    );
-}
-
-#[test]
 fn only_the_primary_button_moves_the_window() {
     let (_tmp, mut harness) = ready();
     let empty = empty_bar(&harness);
@@ -546,20 +532,13 @@ fn ready_with_update(size: Vec2, installed: bool) -> (tempfile::TempDir, Harness
     (tmp, harness)
 }
 
-/// The rects of the bar's items, by label.
-fn bar_items(harness: &Harness<'static, App>) -> Vec<(&'static str, Rect)> {
-    Tab::ALL
-        .iter()
-        .map(|tab| tab.label())
-        .chain([
-            "Update available",
-            "Update now",
-            "Release page",
-            "Manifest",
-            "Minimize",
-            "Maximize",
-            "Close",
-        ])
+/// The rects of the items labeled by one of `labels`.
+fn items(
+    harness: &Harness<'static, App>,
+    labels: impl IntoIterator<Item = &'static str>,
+) -> Vec<(&'static str, Rect)> {
+    labels
+        .into_iter()
         .flat_map(|label| {
             harness
                 .query_all_by_label_contains(label)
@@ -569,21 +548,16 @@ fn bar_items(harness: &Harness<'static, App>) -> Vec<(&'static str, Rect)> {
         .collect()
 }
 
-/// Checks that the bar's items of `harness` do not overlap, that its tabs are as wide as in
-/// `wide`, a window wide enough for all of the bar, and that the window buttons keep the bar's
-/// 16 pt margin.
-fn assert_bar_fits(harness: &Harness<'static, App>, wide: &Harness<'static, App>) {
-    let close = harness.get_by_label("Close").rect();
-    assert!(
-        close.right() <= harness.ctx.viewport_rect().right() - 16.0,
-        "the window buttons are in the bar's margin"
-    );
-    let mut items = bar_items(harness);
-    for ((label, rect), (_, natural)) in items.iter().zip(bar_items(wide)) {
-        if Tab::ALL.iter().any(|tab| tab.label() == *label) {
-            assert_eq!(rect.width(), natural.width(), "the {label} tab is squeezed");
-        }
-    }
+/// The labels of the top bar's items.
+fn top_bar_labels() -> impl Iterator<Item = &'static str> {
+    (Tab::ALL.iter().map(|tab| tab.label())).chain(["Minimize", "Maximize", "Close"])
+}
+
+/// The labels of the bottom bar's items.
+const BOTTOM_BAR: [&str; 4] = ["Update available", "Update now", "Release page", "Manifest"];
+
+/// Checks that `items`, on one row, do not overlap.
+fn assert_apart(mut items: Vec<(&'static str, Rect)>) {
     items.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
     // The link that took over the dropped notice is found by both labels.
     items.dedup_by(|a, b| a.1 == b.1);
@@ -597,20 +571,91 @@ fn assert_bar_fits(harness: &Harness<'static, App>, wide: &Harness<'static, App>
     }
 }
 
-#[test]
-fn bar_items_fit_at_the_smallest_window() {
-    let [width, height] = MIN_WINDOW_SIZE;
-    let (_tmp, harness) = ready_sized(Vec2::new(width, height));
-    let (_wide_tmp, wide) = ready_sized(Vec2::new(1100.0, height));
-    assert_bar_fits(&harness, &wide);
+/// Checks that the top bar's items of `harness` do not overlap, that its tabs are as wide as in
+/// `wide`, a window wide enough for all of the bar, and that the window buttons keep the bar's
+/// 16 pt margin.
+fn assert_top_bar_fits(harness: &Harness<'static, App>, wide: &Harness<'static, App>) {
+    let close = harness.get_by_label("Close").rect();
+    assert!(
+        close.right() <= harness.ctx.viewport_rect().right() - 16.0,
+        "the window buttons are in the bar's margin"
+    );
+    let items = items(harness, top_bar_labels());
+    for ((label, rect), (_, natural)) in items.iter().zip(self::items(wide, top_bar_labels())) {
+        if Tab::ALL.iter().any(|tab| tab.label() == *label) {
+            assert_eq!(rect.width(), natural.width(), "the {label} tab is squeezed");
+        }
+    }
+    assert_apart(items);
+}
+
+/// Checks that the bottom bar's items of `harness` do not overlap and keep the bar's 16 pt
+/// margins.
+fn assert_bottom_bar_fits(harness: &Harness<'static, App>) {
+    let window = harness.ctx.viewport_rect();
+    let items = items(harness, BOTTOM_BAR);
+    for (label, rect) in &items {
+        assert!(
+            rect.left() >= window.left() + 16.0 && rect.right() <= window.right() - 16.0,
+            "{label} is in the bar's margin: {rect:?}"
+        );
+    }
+    assert_apart(items);
 }
 
 #[test]
-fn update_notice_gives_way_in_the_smallest_window() {
+fn bar_items_fit_at_the_smallest_window() {
     let [width, height] = MIN_WINDOW_SIZE;
-    let (_tmp, mut harness) = ready_with_update(Vec2::new(width, height), true);
+    let (_tmp, harness) = ready_with_update(Vec2::new(width, height), true);
     let (_wide_tmp, wide) = ready_with_update(Vec2::new(1100.0, height), true);
-    assert_bar_fits(&harness, &wide);
+    assert_top_bar_fits(&harness, &wide);
+    assert_bottom_bar_fits(&harness);
+}
+
+#[test]
+fn manifest_status_and_update_notice_are_in_the_bottom_bar() {
+    let (_tmp, harness) = ready_with_update(Vec2::new(1000.0, 1400.0), false);
+    let window = harness.ctx.viewport_rect();
+    let close = harness.get_by_label("Close").rect();
+    let items = items(&harness, BOTTOM_BAR);
+    assert_eq!(items.len(), 3, "the manifest, the notice and the link");
+    for (label, rect) in &items {
+        // Both bars center their row, so the thinner bar has its row nearer its window edge.
+        assert!(
+            rect.bottom() <= window.bottom()
+                && window.bottom() - rect.center().y < close.center().y - window.top(),
+            "{label} is in a bar along the bottom, thinner than the top bar: {rect:?}"
+        );
+    }
+}
+
+#[test]
+fn dragging_the_bottom_bar_leaves_the_window_be() {
+    let (_tmp, mut harness) = ready();
+    let status = harness.get_by_label_contains("Manifest:").rect().center();
+    assert_eq!(drag(&mut harness, status, PointerButton::Primary), []);
+}
+
+#[test]
+fn screen_readers_reach_the_bottom_bar_after_the_page() {
+    let (_tmp, harness) = ready_with_update(Vec2::new(1000.0, 1400.0), false);
+    let order: Vec<String> = harness
+        .query_all_by(|node| node.label().is_some())
+        .filter_map(|node| node.accesskit_node().label())
+        .collect();
+    let at = |label: &str| order.iter().position(|l| l.contains(label)).unwrap();
+    assert!(
+        at("Scan for games") < at("Release page"),
+        "the page comes first: {order:?}"
+    );
+}
+
+#[test]
+fn update_notice_gives_way_in_a_narrow_window() {
+    // Narrower than the window can be, as a zoomed UI or a large text scale makes it in effect.
+    let (_tmp, mut harness) = ready_with_update(Vec2::new(300.0, 480.0), true);
+    let (_wide_tmp, wide) = ready_with_update(Vec2::new(1100.0, 480.0), true);
+    assert_bottom_bar_fits(&harness);
     let notice = |h: &Harness<'static, App>| h.get_by_label("Update available: v99.0.0").rect();
     assert!(
         notice(&harness).width() < notice(&wide).width(),
@@ -625,16 +670,14 @@ fn update_notice_gives_way_in_the_smallest_window() {
 }
 
 #[test]
-fn release_page_link_fits_in_the_smallest_window() {
-    let [width, height] = MIN_WINDOW_SIZE;
-    let (_tmp, harness) = ready_with_update(Vec2::new(width, height), false);
-    let (_wide_tmp, wide) = ready_with_update(Vec2::new(1100.0, height), false);
-    assert_bar_fits(&harness, &wide);
+fn release_page_link_fits_in_a_narrow_window() {
+    let (_tmp, harness) = ready_with_update(Vec2::new(300.0, 480.0), false);
+    assert_bottom_bar_fits(&harness);
 }
 
 #[test]
 fn dropped_notice_stays_the_label_of_the_release_page_link() {
-    let (_tmp, harness) = ready_with_update(Vec2::new(MIN_WINDOW_SIZE[0] - 200.0, 480.0), false);
+    let (_tmp, harness) = ready_with_update(Vec2::new(160.0, 480.0), false);
     assert!(
         harness
             .query_by_label("Update available: v99.0.0")

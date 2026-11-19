@@ -122,7 +122,7 @@ fn update_notice_is_in_the_first_run_dialog_and_works() {
     assert_eq!(
         harness.query_all_by_label("Update now").count(),
         1,
-        "the top bar does not repeat the dialog's button"
+        "the bottom bar does not repeat the dialog's button"
     );
 
     harness.get_by_label("Update now").click();

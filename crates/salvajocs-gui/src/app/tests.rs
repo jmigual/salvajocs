@@ -145,9 +145,9 @@ fn the_backup_tab_finishes_its_jobs_while_another_tab_is_shown() {
     });
 }
 
-/// Checks the top bar of an app in the smallest window, after `setup` changed its updater: the
-/// window buttons stay where they are without an update, and no text of the bar overlaps
-/// another or the buttons. `setup` may return what keeps its update state alive.
+/// Checks the bars of an app in the smallest window, after `setup` changed its updater: the
+/// window buttons stay where they are without an update, and no text of the bottom bar overlaps
+/// another or leaves the window. `setup` may return what keeps its update state alive.
 fn assert_bar_fits_after(
     setup: impl FnOnce(&mut Updater, &egui::Context) -> Option<std::sync::mpsc::Sender<()>>,
 ) {
@@ -177,29 +177,31 @@ fn assert_bar_fits_after(
         harness.step();
     }
     assert_eq!(buttons(&harness), resting, "the window buttons stay put");
-    let mut items: Vec<_> = Tab::ALL
-        .iter()
-        .map(|tab| tab.label())
-        .chain([
-            "Update available",
-            "Downloading",
-            "Update ready",
-            "Manifest",
-        ])
-        .flat_map(|label| {
-            harness
-                .query_all_by_label_contains(label)
-                .map(|node| (label, node.rect()))
-                .collect::<Vec<_>>()
-        })
-        // Not the page's own text, which the bar's tab labels are also found in.
-        .filter(|(_, rect)| rect.top() < 48.0)
-        .collect();
+    let window = harness.ctx.viewport_rect();
+    let mut items: Vec<_> = [
+        "Update available",
+        "Downloading",
+        "Update ready",
+        "Manifest",
+    ]
+    .into_iter()
+    .flat_map(|label| {
+        harness
+            .query_all_by_label_contains(label)
+            .map(|node| (label, node.rect()))
+            .collect::<Vec<_>>()
+    })
+    .collect();
     assert!(
         items.iter().any(|(label, _)| *label == "Update available"),
         "the notice is shown"
     );
-    items.push(("the window buttons", resting[0]));
+    for (label, rect) in &items {
+        assert!(
+            window.contains_rect(*rect) && rect.top() > window.center().y,
+            "{label} is in the bottom bar: {rect:?}"
+        );
+    }
     items.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
     for pair in items.windows(2) {
         assert!(
