@@ -35,6 +35,7 @@ const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
 /// Failure to check for, download or start an update.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum UpdateError {
     /// The request failed or the server answered with an error status.
     #[error("update request failed")]
@@ -67,6 +68,7 @@ pub enum UpdateError {
 
 /// One downloadable file of a release.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct Asset {
     /// The file name.
     pub name: String,
@@ -76,6 +78,7 @@ pub struct Asset {
 
 /// A published release.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Release {
     /// The version, from the tag without its leading `v`.
     pub version: String,
@@ -93,6 +96,15 @@ struct ReleaseJson {
 }
 
 impl Release {
+    /// A release from its fields.
+    pub fn new(version: String, html_url: String, assets: Vec<Asset>) -> Self {
+        Self {
+            version,
+            html_url,
+            assets,
+        }
+    }
+
     /// The name of the Windows installer of this release.
     fn installer_name(&self) -> String {
         format!("salvajocs-{}-x86_64-setup.exe", self.version)

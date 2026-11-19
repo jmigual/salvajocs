@@ -13,6 +13,7 @@ pub const HKCU: &str = "HKEY_CURRENT_USER";
 
 /// Errors from reading, exporting or replacing registry data.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RegistryError {
     /// The text does not start with Wine's `WINE REGISTRY Version 2` line.
     #[error("not a Wine registry file")]
@@ -37,6 +38,7 @@ pub enum RegistryError {
 /// [`RegData::Other`] with their raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RegData {
     Sz(String),
     ExpandSz(String),
@@ -54,10 +56,18 @@ pub enum RegData {
 
 /// One named value of a key; the empty name is the key's default value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RegValue {
     pub name: String,
     #[serde(flatten)]
     pub data: RegData,
+}
+
+impl RegValue {
+    /// The value `name` holding `data`.
+    pub fn new(name: String, data: RegData) -> Self {
+        Self { name, data }
+    }
 }
 
 /// Values of the exported keys, keyed by full path (`HKEY_CURRENT_USER\Software\Foo`).
@@ -66,6 +76,7 @@ pub struct RegValue {
 /// below it, or nothing when `K` is absent. Restoring replaces the subtree of each key present.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
+#[non_exhaustive]
 pub struct RegistryExport {
     pub keys: BTreeMap<String, Vec<RegValue>>,
 }

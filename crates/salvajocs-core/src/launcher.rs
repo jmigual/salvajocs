@@ -17,6 +17,7 @@ use crate::scan::{ProblemKind, ScanProblem};
 
 /// A launcher that keeps games in Wine prefixes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Launcher {
     /// Heroic Games Launcher (GOG, Epic, Amazon and sideloaded games).
     Heroic,
@@ -28,6 +29,7 @@ pub enum Launcher {
 
 /// What a launcher knows about the game in a prefix, to match it to a manifest entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LauncherGame {
     /// The title the launcher shows.
     pub title: Option<String>,
@@ -41,6 +43,7 @@ pub struct LauncherGame {
 
 /// A valid Wine prefix a launcher uses.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LauncherPrefix {
     /// The launcher that uses the prefix.
     pub launcher: Launcher,
@@ -48,6 +51,17 @@ pub struct LauncherPrefix {
     pub path: PathBuf,
     /// The game run in the prefix; `None` when the launcher does not tie a prefix to one game.
     pub game: Option<LauncherGame>,
+}
+
+impl LauncherPrefix {
+    /// The prefix at `path` that `launcher` uses, for `game` when it ties one to it.
+    pub fn new(launcher: Launcher, path: PathBuf, game: Option<LauncherGame>) -> Self {
+        Self {
+            launcher,
+            path,
+            game,
+        }
+    }
 }
 
 /// Finds the prefixes of the native and Flatpak installs of each launcher under the given

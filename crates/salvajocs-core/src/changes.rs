@@ -16,6 +16,7 @@ use crate::storage::{SnapshotFile, SnapshotInfo, Storage, StorageError};
 
 /// How a local file compares with a snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FileState {
     /// The snapshot has no file at its path.
     New,
@@ -29,6 +30,7 @@ pub enum FileState {
 
 /// What [`compare_game`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Comparison {
     /// The state of each of the scan's files, in its order.
     pub found: Vec<FileState>,
@@ -37,8 +39,16 @@ pub struct Comparison {
     pub gone: Vec<SnapshotFile>,
 }
 
+impl Comparison {
+    /// A comparison from its fields.
+    pub fn new(found: Vec<FileState>, gone: Vec<SnapshotFile>) -> Self {
+        Self { found, gone }
+    }
+}
+
 /// How many files a backup would add, change and remove, by [`counts`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Counts {
     /// Included files the snapshot does not have.
     pub new: usize,

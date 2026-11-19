@@ -23,6 +23,7 @@ pub use run::{
 
 /// A snapshot of one game restored into a work dir (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StagedGame {
     /// The staged game dir, holding `files/`.
     pub root: PathBuf,
@@ -32,6 +33,23 @@ pub struct StagedGame {
     pub files: Vec<(Base, String)>,
     /// Its `registry.json`, if any.
     pub registry: Option<RegistryExport>,
+}
+
+impl StagedGame {
+    /// A staged game from its fields.
+    pub fn new(
+        root: PathBuf,
+        meta: SnapshotMeta,
+        files: Vec<(Base, String)>,
+        registry: Option<RegistryExport>,
+    ) -> Self {
+        Self {
+            root,
+            meta,
+            files,
+            registry,
+        }
+    }
 }
 
 /// Where each base family restores to (ADR-0005). A family without a target is mapped onto the
@@ -46,6 +64,7 @@ pub struct Targets {
 
 /// One file the restore copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Write {
     /// The staged file.
     pub source: PathBuf,
@@ -58,8 +77,26 @@ pub struct Write {
     pub target_root: Option<SnapshotRoot>,
 }
 
+impl Write {
+    /// A write from its fields.
+    pub fn new(
+        source: PathBuf,
+        target: PathBuf,
+        target_file: Option<(Base, String)>,
+        target_root: Option<SnapshotRoot>,
+    ) -> Self {
+        Self {
+            source,
+            target,
+            target_file,
+            target_root,
+        }
+    }
+}
+
 /// Why a staged item is not restored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipReason {
     /// The base has no directory on this machine and no mapping applies.
     NoTarget,
@@ -96,6 +133,7 @@ impl fmt::Display for SkipReason {
 
 /// What a [`Skipped`] refers to.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkippedItem {
     /// A staged file as `(base, tail)`.
     File(Base, String),
@@ -107,6 +145,7 @@ pub enum SkippedItem {
 
 /// A staged item that is not restored.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Skipped {
     /// The skipped item.
     pub item: SkippedItem,
@@ -116,6 +155,7 @@ pub struct Skipped {
 
 /// Everything a restore would do, shown to the user before anything is written (ADR-0005).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RestorePlan {
     /// Files to copy.
     pub writes: Vec<Write>,
@@ -133,6 +173,7 @@ pub struct RestorePlan {
 
 /// Why [`plan`] failed.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum PlanError {
     /// A root of a family without a target has no [`ResolvedMapping`].
     #[error("no mapping for a root whose OS family has no target")]
@@ -144,6 +185,7 @@ pub enum PlanError {
 
 /// Why [`RestorePlan::override_target`] refused a path.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum OverrideError {
     /// The new target is not an absolute path.
     #[error("the override target is not an absolute path")]
@@ -154,6 +196,23 @@ pub enum OverrideError {
 }
 
 impl RestorePlan {
+    /// A plan from its fields.
+    pub fn new(
+        writes: Vec<Write>,
+        registry: Option<(RegistryExport, Context)>,
+        skipped: Vec<Skipped>,
+        cross_build: bool,
+        notes: Vec<String>,
+    ) -> Self {
+        Self {
+            writes,
+            registry,
+            skipped,
+            cross_build,
+            notes,
+        }
+    }
+
     /// Redirects write `index` to `target` for this restore only; it is not saved as a pair
     /// (ADR-0005). The safety backup then stages the file by its full path.
     ///
@@ -557,6 +616,7 @@ pub fn plan(
 
 /// Why [`prepare`] returned no plan.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum PrepareError {
     /// An unknown root has no choice. Holds every mapped root of the game with its file count,
     /// the known ones prefilled, for the mapping dialog (ADR-0011).

@@ -152,17 +152,14 @@ fn capture(harness: &mut Harness<'static, App>, dir: &Path, name: &str) {
 /// A Linux machine of the made-up user `deck`, so no scan or preview looks at the real one.
 fn deck() -> Environment {
     let home = PathBuf::from("/home/deck");
-    Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "deck".into(),
-            xdg_data: home.join(".local/share"),
-            xdg_config: home.join(".config"),
-            home,
-        })),
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    }
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "deck".into(),
+        home.clone(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    environment
 }
 
 /// An environment in `tmp` on the made-up machine, with the manifest cached.
@@ -262,10 +259,7 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
     let env = demo_env(&tmp);
     let prefix = windows_prefix();
     let mut config = local_config(&repository);
-    config.roots = vec![Root {
-        path: prefix.clone(),
-        kind: RootKind::WinePrefix,
-    }];
+    config.roots = vec![Root::new(prefix.clone(), RootKind::WinePrefix)];
     save_config(&env, &config);
     // Forged, so the comparison names a made-up host and time rather than this machine's.
     let manifest = parse_yaml(MANIFEST).unwrap();
@@ -337,27 +331,18 @@ fn scan(
         .map(|&(base, tail, size)| {
             let real = tmp.path().join("src").join(title).join(tail);
             write_file(&real, size);
-            FoundFile {
-                base,
-                tail: tail.into(),
-                size: size as u64,
-                modified: fs::metadata(&real).unwrap().modified().ok(),
-                real,
-            }
+            let modified = fs::metadata(&real).unwrap().modified().ok();
+            FoundFile::new(base, tail.into(), real, size as u64, modified)
         })
         .collect();
-    GameScan {
-        title: title.into(),
-        files,
-        roots: roots
-            .iter()
-            .map(|&(base, rest)| (base, rest.into()))
-            .collect(),
-        registry_keys: Vec::new(),
-        registry_source: None,
-        prefixes: Vec::new(),
-        unreadable: Vec::new(),
-    }
+    let mut scan = GameScan::default();
+    scan.title = title.into();
+    scan.files = files;
+    scan.roots = roots
+        .iter()
+        .map(|&(base, rest)| (base, rest.into()))
+        .collect();
+    scan
 }
 
 /// Writes `snapshots` into the repository at `repository` with the host and time they name.
@@ -600,15 +585,14 @@ fn restore_batch() {
         3_100,
     );
     let mut env = demo_env(&tmp);
-    env.environment = Some(Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "deck".into(),
-            xdg_data: home.join(".local/share"),
-            xdg_config: home.join(".config"),
-            home,
-        })),
-        ..deck()
-    });
+    let mut environment = deck();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "deck".into(),
+        home.clone(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    env.environment = Some(environment);
     let mut harness = restore_app(env, &tmp, &snapshots, "Stardew Valley", 760.0);
 
     // The confirm of a batch: each ticked game's files as a tree, labelled by what the restore
@@ -690,14 +674,13 @@ fn custom_games_tab() {
                 files: Vec<CustomFile>,
                 prefix: Option<&str>,
                 pairs: Vec<Pair>,
-                skips: &[&str]| CustomGame {
-        name: name.into(),
-        files,
-        entry: GameEntry::default(),
-        integration: Integration::Extend,
-        wine_prefix: prefix.map(PathBuf::from),
-        pairs,
-        skips: skips.iter().map(|skip| skip.to_string()).collect(),
+                skips: &[&str]| {
+        let mut game = CustomGame::new(name.into(), GameEntry::default(), Integration::Extend);
+        game.files = files;
+        game.wine_prefix = prefix.map(PathBuf::from);
+        game.pairs = pairs;
+        game.skips = skips.iter().map(|skip| skip.to_string()).collect();
+        game
     };
     let mut config = local_config(&repository);
     config.custom_games = vec![
@@ -754,14 +737,11 @@ fn settings_tab() {
     let env = demo_env(&tmp);
     let mut config = local_config(&repository);
     config.roots = vec![
-        Root {
-            path: "/home/deck/.local/share/Steam".into(),
-            kind: RootKind::Steam,
-        },
-        Root {
-            path: "/home/deck/Games/prefixes/cuphead".into(),
-            kind: RootKind::WinePrefix,
-        },
+        Root::new("/home/deck/.local/share/Steam".into(), RootKind::Steam),
+        Root::new(
+            "/home/deck/Games/prefixes/cuphead".into(),
+            RootKind::WinePrefix,
+        ),
     ];
     save_config(&env, &config);
     let mut harness = shot_harness(env, Theme::Dark, 810.0);

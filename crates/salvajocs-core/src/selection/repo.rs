@@ -61,6 +61,7 @@ pub fn load_all(
 /// The outcome of a [`save`] that succeeded: the game's newest settings hold the changes, so
 /// the caller may drop them from its unsaved changes.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Saved {
     /// The new settings snapshot, `None` when the changes changed nothing.
     pub written: Option<SnapshotInfo>,

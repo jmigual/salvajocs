@@ -31,6 +31,7 @@ const LISTING_SETTLE_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Errors from [`Storage`] and [`probe`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum StorageError {
     /// The compression level is not 0, 1..=22 or -7..=-1.
     #[error("compression level {0} is out of range")]
@@ -77,6 +78,7 @@ fn backend(err: impl AsRef<RusticError>) -> StorageError {
 /// Where a repository lives: a rustic repository string (a plain path, `local:`, `rest:`,
 /// `rclone:`, `opendal:<service>`) and the backend options for it.
 #[derive(Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct RepoLocation {
     /// The repository string.
     pub repository: String,
@@ -95,6 +97,14 @@ impl fmt::Debug for RepoLocation {
 }
 
 impl RepoLocation {
+    /// The location `repository` with backend `options`.
+    pub fn new(repository: String, options: BTreeMap<String, String>) -> Self {
+        Self {
+            repository,
+            options,
+        }
+    }
+
     /// The directory holding the repository when it is on the local filesystem, by rustic's own
     /// parsing of the repository string.
     fn local_dir(&self) -> Option<PathBuf> {
@@ -156,6 +166,7 @@ fn open_indexed(
 
 /// What [`probe`] found at a [`RepoLocation`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RepoState {
     /// A repository exists and the password unlocks it.
     Ready,
@@ -215,6 +226,7 @@ impl Compression {
 
 /// A snapshot as the rest of the app sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SnapshotInfo {
     /// The full hex snapshot id.
     pub id: String,
@@ -226,6 +238,25 @@ pub struct SnapshotInfo {
     pub label: String,
     /// The snapshot tags.
     pub tags: Vec<String>,
+}
+
+impl SnapshotInfo {
+    /// A snapshot's details from its fields.
+    pub fn new(
+        id: String,
+        time: SystemTime,
+        host: String,
+        label: String,
+        tags: Vec<String>,
+    ) -> Self {
+        Self {
+            id,
+            time,
+            host,
+            label,
+            tags,
+        }
+    }
 }
 
 fn snapshot_info(snap: &RusticSnapshot) -> SnapshotInfo {
@@ -240,6 +271,7 @@ fn snapshot_info(snap: &RusticSnapshot) -> SnapshotInfo {
 
 /// A file in a snapshot, as [`Storage::snapshot_files`] lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SnapshotFile {
     /// The path below the listed directory, `/`-separated.
     pub path: String,

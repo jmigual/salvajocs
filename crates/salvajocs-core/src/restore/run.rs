@@ -31,6 +31,7 @@ pub const PRE_RESTORE_TAG: &str = "pre-restore";
 
 /// The snapshots of one game in the restore list.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GameBackups {
     /// The game's slug, from its `game:<slug>` tag.
     pub slug: String,
@@ -41,6 +42,23 @@ pub struct GameBackups {
     /// The index in `snapshots` of the newest one without [`PRE_RESTORE_TAG`]; `None` when
     /// there is none.
     pub default: Option<usize>,
+}
+
+impl GameBackups {
+    /// A game's backups from their fields.
+    pub fn new(
+        slug: String,
+        title: String,
+        snapshots: Vec<SnapshotInfo>,
+        default: Option<usize>,
+    ) -> Self {
+        Self {
+            slug,
+            title,
+            snapshots,
+            default,
+        }
+    }
 }
 
 /// Lists every game in the repository with its snapshots from all hosts, sorted by title
@@ -125,6 +143,7 @@ pub fn default_targets(
 
 /// What the manifest and the custom games say about one game, as a restore needs it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GameInfo {
     /// The manifest entry with the custom game applied (`manifest::merge_custom`); `None` when
     /// neither has the title.
@@ -201,6 +220,7 @@ pub fn game_vars(
 
 /// Why [`fetch`] failed.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FetchError {
     /// The snapshot has no `game:<slug>` tag with a plain slug.
     #[error("snapshot {0} is not a game backup")]
@@ -348,6 +368,7 @@ fn collect_tails(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), 
 
 /// Why [`run`] wrote nothing.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RunError {
     /// The plan replaces registry keys in a Wine prefix while a wineserver runs, which would
     /// overwrite them on its next save (ADR-0006).
@@ -364,6 +385,7 @@ pub enum RunError {
 
 /// Why one write, or the registry, of a plan was not applied.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ApplyError {
     /// The staged source is a symlink or anything else but a regular file.
     #[error("the staged file is not a regular file")]
@@ -403,6 +425,7 @@ fn apply_io(path: &Path) -> impl FnOnce(io::Error) -> ApplyError + '_ {
 
 /// The safety backup [`run`] made before writing.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SafetyBackup {
     /// No target file and none of the replaced registry keys existed, so none was needed.
     NothingExisted,
@@ -414,6 +437,7 @@ pub enum SafetyBackup {
 
 /// What [`run`] did.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RestoreReport {
     /// The safety backup.
     pub safety_backup: SafetyBackup,
@@ -421,6 +445,21 @@ pub struct RestoreReport {
     pub files: Vec<Result<(), ApplyError>>,
     /// The outcome of the registry restore; `None` when the plan has none.
     pub registry: Option<Result<(), ApplyError>>,
+}
+
+impl RestoreReport {
+    /// A report from its fields.
+    pub fn new(
+        safety_backup: SafetyBackup,
+        files: Vec<Result<(), ApplyError>>,
+        registry: Option<Result<(), ApplyError>>,
+    ) -> Self {
+        Self {
+            safety_backup,
+            files,
+            registry,
+        }
+    }
 }
 
 /// Runs `plan` for the game `title`; the only way a restore writes (ADR-0005):
@@ -569,6 +608,7 @@ fn check(write: &Write) -> Result<Option<u64>, ApplyError> {
 
 /// What a write of a plan does to its target, as the confirm before a restore shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WriteState {
     /// Nothing exists at the target.
     New,
@@ -582,6 +622,7 @@ pub enum WriteState {
 /// file cannot be read, so the safety backup of it fails.
 #[derive(Debug, thiserror::Error)]
 #[error("the safety backup cannot read {path}")]
+#[non_exhaustive]
 pub struct UnreadableTarget {
     /// The target file.
     pub path: PathBuf,

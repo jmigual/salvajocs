@@ -43,24 +43,26 @@ fn a_running_wineserver_asks_to_close_wine() {
 
 #[test]
 fn a_restore_report_shows_a_line_per_write_and_for_the_registry() {
-    let write = |target: &str| restore::Write {
-        source: PathBuf::from("/staged/save.dat"),
-        target: PathBuf::from(target),
-        target_file: None,
-        target_root: None,
+    let write = |target: &str| {
+        restore::Write::new(
+            PathBuf::from("/staged/save.dat"),
+            PathBuf::from(target),
+            None,
+            None,
+        )
     };
-    let plan = RestorePlan {
-        writes: vec![write("/saves/a.dat"), write("/saves/b.dat")],
-        registry: None,
-        skipped: Vec::new(),
-        cross_build: false,
-        notes: Vec::new(),
-    };
-    let report = RestoreReport {
-        safety_backup: SafetyBackup::NothingExisted,
-        files: vec![Ok(()), Err(restore::ApplyError::TargetIsSymlink)],
-        registry: Some(Err(restore::ApplyError::NoRegistry)),
-    };
+    let plan = RestorePlan::new(
+        vec![write("/saves/a.dat"), write("/saves/b.dat")],
+        None,
+        Vec::new(),
+        false,
+        Vec::new(),
+    );
+    let report = RestoreReport::new(
+        SafetyBackup::NothingExisted,
+        vec![Ok(()), Err(restore::ApplyError::TargetIsSymlink)],
+        Some(Err(restore::ApplyError::NoRegistry)),
+    );
 
     let restored = Restored::new("Mix".into(), &plan, report);
 
@@ -76,7 +78,7 @@ fn a_restore_report_shows_a_line_per_write_and_for_the_registry() {
 fn a_failed_delete_says_how_many_it_removed() {
     let stopped = |forgotten| {
         let source = salvajocs_core::storage::StorageError::Backend("gone".into());
-        let err = retention::CleanupError { forgotten, source };
+        let err = retention::CleanupError::new(forgotten, source);
         describe_delete_error(&DeleteError::Stopped(err).into())
     };
     let refused = describe_delete_error(&DeleteError::NotAGameBackup("abc".into()).into());
@@ -127,19 +129,11 @@ fn state(dir: &Path) -> State {
         pick_folder: Arc::new(|| None),
         open_folder: Arc::new(|_| Ok(())),
     });
-    state.config = Some(AppConfig {
-        repository: String::new(),
-        repository_options: Vec::new(),
-        password: PasswordMode::None,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    });
-    let location = RepoLocation {
-        repository: dir.join("repo").to_str().unwrap().to_string(),
-        options: Default::default(),
-    };
+    state.config = Some(AppConfig::new(String::new(), PasswordMode::None));
+    let location = RepoLocation::new(
+        dir.join("repo").to_str().unwrap().to_string(),
+        Default::default(),
+    );
     let storage = Storage::init(&location, "", Compression::Default).unwrap();
     state.session = Some(Session {
         compression: storage.compression(),
@@ -218,16 +212,12 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
     Arc::new(Fetched {
         storage: storage.clone(),
         title: "Mix".into(),
-        staged: StagedGame {
-            root: PathBuf::from("/staged"),
-            meta: SnapshotMeta {
-                format: SNAPSHOT_FORMAT,
-                title: "Mix".into(),
-                roots: Vec::new(),
-            },
-            files: Vec::new(),
-            registry: None,
-        },
+        staged: StagedGame::new(
+            PathBuf::from("/staged"),
+            SnapshotMeta::new(SNAPSHOT_FORMAT, "Mix".into(), Vec::new()),
+            Vec::new(),
+            None,
+        ),
         targets: Targets {
             linux: None,
             win: None,
@@ -243,14 +233,14 @@ fn unknown_root() -> SnapshotRoot {
 
 /// The tab with the mapping dialog open over one unknown root of a game from `storage`.
 fn with_dialog(storage: &SharedStorage) -> RestoreTab {
-    let entry = MappingEntry {
-        root: unknown_root(),
-        files: 1,
-        proposed: None,
-        confidence: Confidence::Unknown,
-        candidates: Vec::new(),
-        notes: Vec::new(),
-    };
+    let entry = MappingEntry::new(
+        unknown_root(),
+        1,
+        None,
+        Confidence::Unknown,
+        Vec::new(),
+        Vec::new(),
+    );
     RestoreTab {
         mapping: Some((fetched(storage), Dialog::new(vec![entry]))),
         ..RestoreTab::default()
@@ -262,14 +252,14 @@ fn with_dialog(storage: &SharedStorage) -> RestoreTab {
 fn the_dialog_buttons_take_focus_left_to_right() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), |storage| {
-        let entry = MappingEntry {
-            root: unknown_root(),
-            files: 1,
-            proposed: Some("<xdgData>/Game".into()),
-            confidence: Confidence::Unknown,
-            candidates: Vec::new(),
-            notes: Vec::new(),
-        };
+        let entry = MappingEntry::new(
+            unknown_root(),
+            1,
+            Some("<xdgData>/Game".into()),
+            Confidence::Unknown,
+            Vec::new(),
+            Vec::new(),
+        );
         RestoreTab {
             mapping: Some((fetched(storage), Dialog::new(vec![entry]))),
             ..RestoreTab::default()
@@ -299,13 +289,13 @@ fn confirm_job(
         Ok(Prepared {
             fetched,
             choices: vec![(unknown_root(), Choice::Template("<xdgData>/Mix".into()))],
-            plan: Ok(RestorePlan {
-                writes: Vec::new(),
-                registry: None,
-                skipped: Vec::new(),
-                cross_build: true,
-                notes: Vec::new(),
-            }),
+            plan: Ok(RestorePlan::new(
+                Vec::new(),
+                None,
+                Vec::new(),
+                true,
+                Vec::new(),
+            )),
         })
     })
 }
@@ -394,21 +384,21 @@ fn a_confirm_ending_after_the_dialog_closed_is_dropped() {
 
 /// A tab listing Mix with one snapshot, chosen.
 fn with_mix(storage: &SharedStorage) -> RestoreTab {
-    let snapshot = SnapshotInfo {
-        id: "0".repeat(64),
-        time: at(0),
-        host: "pc".into(),
-        label: "Mix".into(),
-        tags: vec!["salvajocs".into(), "game:mix".into()],
-    };
+    let snapshot = SnapshotInfo::new(
+        "0".repeat(64),
+        at(0),
+        "pc".into(),
+        "Mix".into(),
+        vec!["salvajocs".into(), "game:mix".into()],
+    );
     RestoreTab {
         repository: Some(storage.clone()),
-        games: vec![GameBackups {
-            slug: "mix".into(),
-            title: "Mix".into(),
-            snapshots: vec![snapshot],
-            default: Some(0),
-        }],
+        games: vec![GameBackups::new(
+            "mix".into(),
+            "Mix".into(),
+            vec![snapshot],
+            Some(0),
+        )],
         selected: Some("mix".into()),
         snapshot: Some(0),
         ..RestoreTab::default()
@@ -450,12 +440,12 @@ fn a_new_repository_clears_the_list_and_the_plan() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
         repository: Some(storage.clone()),
-        games: vec![GameBackups {
-            slug: "mix".into(),
-            title: "Mix".into(),
-            snapshots: Vec::new(),
-            default: None,
-        }],
+        games: vec![GameBackups::new(
+            "mix".into(),
+            "Mix".into(),
+            Vec::new(),
+            None,
+        )],
         selected: Some("mix".into()),
         ..with_dialog(storage)
     });
@@ -552,13 +542,7 @@ fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
         preview: Some(Preview {
             fetched: fetched(storage),
-            plan: RestorePlan {
-                writes: Vec::new(),
-                registry: None,
-                skipped: Vec::new(),
-                cross_build: false,
-                notes: Vec::new(),
-            },
+            plan: RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
             overrides: Vec::new(),
             override_error: None,
         }),
@@ -586,23 +570,14 @@ fn registry_restore(dir: &Path, wineserver_running: fn() -> bool) -> TabHarness 
     let mut export = RegistryExport::default();
     export.keys.insert(
         r"HKEY_CURRENT_USER\Software\Foo".into(),
-        vec![RegValue {
-            name: "v".into(),
-            data: RegData::Sz("restored".into()),
-        }],
+        vec![RegValue::new("v".into(), RegData::Sz("restored".into()))],
     );
     let folders = WinFolders::for_prefix(&prefix, "me");
     let registry = Some((export, Context::WinePrefix { prefix, folders }));
     let mut harness = tab_harness(dir, |storage| RestoreTab {
         preview: Some(Preview {
             fetched: fetched(storage),
-            plan: RestorePlan {
-                writes: Vec::new(),
-                registry,
-                skipped: Vec::new(),
-                cross_build: false,
-                notes: Vec::new(),
-            },
+            plan: RestorePlan::new(Vec::new(), registry, Vec::new(), false, Vec::new()),
             overrides: Vec::new(),
             override_error: None,
         }),
@@ -637,49 +612,28 @@ fn a_running_wineserver_blocks_a_registry_restore_into_a_prefix() {
 fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
     let home = dir.join("home");
     let mut state = state(dir);
-    state.env.environment = Some(Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "me".into(),
-            xdg_data: home.join(".local/share"),
-            xdg_config: home.join(".config"),
-            home: home.clone(),
-        })),
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    });
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "me".into(),
+        home.clone(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    state.env.environment = Some(environment);
     let yaml = format!("Mix:\n  files:\n    {template}: {{tags: [save]}}\n");
     let entry = parse_yaml(&yaml).unwrap().games.remove("Mix").unwrap();
-    state.config.as_mut().unwrap().custom_games = vec![CustomGame {
-        name: "Mix".into(),
-        files: Vec::new(),
-        entry,
-        integration: Integration::Override,
-        wine_prefix: None,
-        pairs: Vec::new(),
-        skips: Vec::new(),
-    }];
+    state.config.as_mut().unwrap().custom_games =
+        vec![CustomGame::new("Mix".into(), entry, Integration::Override)];
     let real = dir.join("src/save.dat");
     fs::create_dir_all(real.parent().unwrap()).unwrap();
     fs::write(&real, "new").unwrap();
     let target = home.join(".local/share/Mix/save.dat");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(&target, "old").unwrap();
-    let scan = GameScan {
-        title: "Mix".into(),
-        files: vec![FoundFile {
-            base,
-            tail: "Mix/save.dat".into(),
-            real,
-            size: 3,
-            modified: None,
-        }],
-        roots: vec![(base, "Mix".into())],
-        registry_keys: Vec::new(),
-        registry_source: None,
-        prefixes: Vec::new(),
-        unreadable: Vec::new(),
-    };
+    let mut scan = GameScan::default();
+    scan.title = "Mix".into();
+    scan.files = vec![FoundFile::new(base, "Mix/save.dat".into(), real, 3, None)];
+    scan.roots = vec![(base, "Mix".into())];
     let storage = state.session.as_ref().unwrap().storage.clone();
     let stage = dir.join("stage");
     backup_games(

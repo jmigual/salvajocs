@@ -48,12 +48,11 @@ fn open_tab_with(
     let tmp = tempfile::tempdir().unwrap();
     let mut env = env(&tmp);
     setup(&mut env, tmp.path());
-    let manifest = Manifest {
-        games: manifest_titles
-            .iter()
-            .map(|title| (title.to_string(), GameEntry::default()))
-            .collect(),
-    };
+    let mut manifest = Manifest::default();
+    manifest.games = manifest_titles
+        .iter()
+        .map(|title| (title.to_string(), GameEntry::default()))
+        .collect();
     std::fs::create_dir_all(&env.cache_dir).unwrap();
     std::fs::write(
         env.cache_dir
@@ -99,36 +98,23 @@ fn first<'a>(harness: &'a Harness<'static, App>, label: &'a str) -> egui_kittest
 
 /// A game whose kept lines carry rules the form cannot show: an OS condition and a tag.
 fn kept_rules_game() -> CustomGame {
-    let when = When {
-        os: Some(Os::Linux),
-        store: None,
-    };
-    CustomGame {
-        name: "Game".into(),
-        files: Vec::new(),
-        entry: GameEntry {
-            files: BTreeMap::from([(
-                "<home>/.game/config".to_owned(),
-                FileRule {
-                    tags: vec![Tag::Config],
-                    when: vec![when.clone()],
-                },
-            )]),
-            registry: BTreeMap::from([(
-                "HKEY_CURRENT_USER/Software/Game".to_owned(),
-                RegistryRule {
-                    tags: vec![Tag::Config],
-                    when: vec![when],
-                },
-            )]),
-            steam: Some(Steam { id: Some(42) }),
-            ..GameEntry::default()
-        },
-        integration: Integration::Override,
-        wine_prefix: None,
-        pairs: vec![pair("<xdgData>/game", "<winAppData>/game")],
-        skips: Vec::new(),
-    }
+    let mut when = When::default();
+    when.os = Some(Os::Linux);
+    let mut file = FileRule::default();
+    file.tags = vec![Tag::Config];
+    file.when = vec![when.clone()];
+    let mut key = RegistryRule::default();
+    key.tags = vec![Tag::Config];
+    key.when = vec![when];
+    let mut steam = Steam::default();
+    steam.id = Some(42);
+    let mut entry = GameEntry::default();
+    entry.files = BTreeMap::from([("<home>/.game/config".to_owned(), file)]);
+    entry.registry = BTreeMap::from([("HKEY_CURRENT_USER/Software/Game".to_owned(), key)]);
+    entry.steam = Some(steam);
+    let mut game = CustomGame::new("Game".into(), entry, Integration::Override);
+    game.pairs = vec![pair("<xdgData>/game", "<winAppData>/game")];
+    game
 }
 
 /// What the restore mapping dialog saves for `title`.
@@ -159,17 +145,14 @@ fn skipped_game(title: &str) -> CustomGame {
 /// This machine as a native Linux system whose home is `home`.
 #[cfg(not(windows))]
 fn linux_environment(home: &Path) -> Environment {
-    Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "me".into(),
-            home: home.into(),
-            xdg_data: home.join(".local/share"),
-            xdg_config: home.join(".config"),
-        })),
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    }
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "me".into(),
+        home.into(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    environment
 }
 
 fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
@@ -243,28 +226,19 @@ fn custom_games_add_game_with_a_linux_only_file_saves_the_entry_to_the_config() 
     run_settled(&mut harness);
 
     let saved = run_until_saved(&mut harness, &env, |games| games.len() == 1);
-    assert_eq!(
-        saved,
-        [CustomGame {
-            name: "My Game".into(),
-            files: vec![CustomFile {
-                linux: Some("<xdgData>/mygame/*.sav".into()),
-                windows: None,
-            }],
-            entry: GameEntry {
-                registry: BTreeMap::from([(
-                    "HKEY_CURRENT_USER/Software/My Game".to_owned(),
-                    RegistryRule::default(),
-                )]),
-                install_dir: BTreeMap::from([("My Game Dir".to_owned(), InstallDir {})]),
-                ..GameEntry::default()
-            },
-            integration: Integration::Extend,
-            wine_prefix: Some("/prefixes/mygame".into()),
-            pairs: Vec::new(),
-            skips: Vec::new(),
-        }]
-    );
+    let mut entry = GameEntry::default();
+    entry.registry = BTreeMap::from([(
+        "HKEY_CURRENT_USER/Software/My Game".to_owned(),
+        RegistryRule::default(),
+    )]);
+    entry.install_dir = BTreeMap::from([("My Game Dir".to_owned(), InstallDir::default())]);
+    let mut game = CustomGame::new("My Game".into(), entry, Integration::Extend);
+    game.files = vec![CustomFile {
+        linux: Some("<xdgData>/mygame/*.sav".into()),
+        windows: None,
+    }];
+    game.wine_prefix = Some("/prefixes/mygame".into());
+    assert_eq!(saved, [game]);
     assert!(shows(&harness, "My Game (custom game)"));
     assert!(
         !shows(&harness, "Save game"),
@@ -422,15 +396,7 @@ fn custom_games_mapping_that_does_not_classify_shows_error_and_is_not_saved() {
 
 #[test]
 fn custom_games_empty_and_duplicate_names_are_rejected() {
-    let existing = CustomGame {
-        name: "Taken".into(),
-        files: Vec::new(),
-        entry: GameEntry::default(),
-        integration: Integration::Override,
-        wine_prefix: None,
-        pairs: Vec::new(),
-        skips: Vec::new(),
-    };
+    let existing = CustomGame::new("Taken".into(), GameEntry::default(), Integration::Override);
     let (mut harness, _env, _tmp) = open_tab(vec![existing], &[]);
 
     harness.get_by_label("Add game").click();
@@ -463,13 +429,11 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     let saved = run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.name == "Renamed")
     });
-    let renamed = CustomGame {
-        name: "Renamed".into(),
-        files: Vec::new(),
-        pairs: Vec::new(),
-        skips: Vec::new(),
-        ..game
-    };
+    let mut renamed = game;
+    renamed.name = "Renamed".into();
+    renamed.files = Vec::new();
+    renamed.pairs = Vec::new();
+    renamed.skips = Vec::new();
     assert_eq!(saved, [renamed.clone(), other.clone()]);
 
     // Removing one game leaves the other as it was.
@@ -497,14 +461,10 @@ fn custom_games_removing_an_earlier_game_keeps_the_open_form_on_its_game() {
     let saved = run_until_saved(&mut harness, &env, |games| {
         games.first().is_some_and(|game| game.name == "Moved")
     });
-    assert_eq!(
-        saved,
-        [CustomGame {
-            name: "Moved".into(),
-            files: Vec::new(),
-            ..dialog_game("Other")
-        }]
-    );
+    let mut moved = dialog_game("Other");
+    moved.name = "Moved".into();
+    moved.files = Vec::new();
+    assert_eq!(saved, [moved]);
 }
 
 #[test]

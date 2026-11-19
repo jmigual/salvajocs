@@ -28,26 +28,12 @@ fn env(secrets: Arc<dyn SecretStore>) -> Env {
 }
 
 fn config(password: PasswordMode) -> AppConfig {
-    AppConfig {
-        repository: "opendal:s3".to_string(),
-        repository_options: vec![
-            RepoOption {
-                key: "access_key".to_string(),
-                value: None,
-                secret: true,
-            },
-            RepoOption {
-                key: "secret_key".to_string(),
-                value: None,
-                secret: true,
-            },
-        ],
-        password,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    }
+    let mut config = AppConfig::new("opendal:s3".to_string(), password);
+    config.repository_options = vec![
+        RepoOption::new("access_key".to_string(), None, true),
+        RepoOption::new("secret_key".to_string(), None, true),
+    ];
+    config
 }
 
 #[test]

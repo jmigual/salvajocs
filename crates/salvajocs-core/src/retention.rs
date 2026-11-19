@@ -22,6 +22,7 @@ const DAY_SECS: u64 = 24 * 60 * 60;
 /// A retention policy. A rule left `None` is off; with both off nothing is forgotten.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Retention {
     /// Keep the newest this many snapshots of each game.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +66,7 @@ impl Within {
 /// The unit of a [`Within`] span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Unit {
     /// Days.
     Days,
@@ -133,6 +135,7 @@ pub fn to_forget(
 
 /// What [`apply`] or [`delete`] did.
 #[derive(Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Cleanup {
     /// How many snapshots were forgotten.
     pub forgotten: usize,
@@ -145,6 +148,7 @@ pub struct Cleanup {
 /// Why [`apply`] or [`delete`] stopped, with how many snapshots it had forgotten by then.
 #[derive(Debug, thiserror::Error)]
 #[error("the cleanup stopped after forgetting {forgotten} snapshots")]
+#[non_exhaustive]
 pub struct CleanupError {
     /// How many snapshots were forgotten before the error; their data waits for a later prune.
     /// After a failed forget, those no longer listed, or all it tried when listing fails too.
@@ -152,6 +156,13 @@ pub struct CleanupError {
     /// The repository error.
     #[source]
     pub source: StorageError,
+}
+
+impl CleanupError {
+    /// The cleanup stopped by `source` after forgetting `forgotten` snapshots.
+    pub fn new(forgotten: usize, source: StorageError) -> Self {
+        Self { forgotten, source }
+    }
 }
 
 /// Forgets the snapshots `policy` forgets at `now` ([`to_forget`] over every `salvajocs`
@@ -184,6 +195,7 @@ pub fn apply(
 
 /// Why [`delete`] did not finish.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DeleteError {
     /// The id is not a listed game backup: not tagged `salvajocs` and `game:<slug>`, tagged
     /// `salvajocs-settings`, or gone. Nothing was forgotten.

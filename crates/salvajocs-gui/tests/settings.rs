@@ -198,10 +198,7 @@ fn first_run_creates_the_repository_with_the_chosen_compression() {
         !shows(h, "Welcome to salvajocs")
     });
 
-    let location = RepoLocation {
-        repository,
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repository, Default::default());
     let reopened = Storage::open(&location, "").unwrap();
     assert_eq!(reopened.compression(), Compression::Level(19));
 }
@@ -431,11 +428,7 @@ fn applying_an_untouched_form_keeps_the_free_options() {
     let repository = repo_dir(&tmp);
     init_repo(&repository);
     let mut config = local_config(&repository);
-    config.repository_options = vec![RepoOption {
-        key: "retry".into(),
-        value: Some("3".into()),
-        secret: false,
-    }];
+    config.repository_options = vec![RepoOption::new("retry".into(), Some("3".into()), false)];
     save_config(&env, &config);
     let mut harness = open_settings(env.clone());
 
@@ -456,11 +449,9 @@ fn startup_prompts_for_missing_secret_option() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
     let mut config = local_config(&repo_dir(&tmp));
-    config.repository_options.push(RepoOption {
-        key: "access_key".into(),
-        value: None,
-        secret: true,
-    });
+    config
+        .repository_options
+        .push(RepoOption::new("access_key".into(), None, true));
     save_config(&env, &config);
     let mut harness = harness(env);
 
@@ -481,16 +472,12 @@ fn startup_names_a_missing_backend_secret_by_its_field() {
     let env = env(&tmp);
     let mut config = local_config("opendal:webdav");
     config.repository_options = vec![
-        RepoOption {
-            key: "endpoint".into(),
-            value: Some("https://dav.example.com".into()),
-            secret: false,
-        },
-        RepoOption {
-            key: "password".into(),
-            value: None,
-            secret: true,
-        },
+        RepoOption::new(
+            "endpoint".into(),
+            Some("https://dav.example.com".into()),
+            false,
+        ),
+        RepoOption::new("password".into(), None, true),
     ];
     save_config(&env, &config);
     let mut harness = harness(env);
@@ -647,14 +634,9 @@ fn unticking_a_found_prefix_ignores_it_and_ticking_uses_it_again() {
     // Two Heroic games without their own prefix share the default one.
     let prefix = tmp.path().join("heroic");
     for title in ["Foo™", "Bar"] {
-        let found = LauncherPrefix {
-            launcher: Launcher::Heroic,
-            path: prefix.clone(),
-            game: Some(LauncherGame {
-                title: Some(title.to_owned()),
-                ..LauncherGame::default()
-            }),
-        };
+        let mut game = LauncherGame::default();
+        game.title = Some(title.to_owned());
+        let found = LauncherPrefix::new(Launcher::Heroic, prefix.clone(), Some(game));
         env.environment
             .as_mut()
             .unwrap()
@@ -880,10 +862,7 @@ const KEEP_LAST: &str = "Keep the last";
 const KEEP_WITHIN: &str = "Keep every backup newer than";
 
 fn location(repository: &str) -> RepoLocation {
-    RepoLocation {
-        repository: repository.to_string(),
-        options: Default::default(),
-    }
+    RepoLocation::new(repository.to_string(), Default::default())
 }
 
 /// Waits until the repository holds a policy satisfying `ready`; saving is a background job.
@@ -1013,10 +992,8 @@ fn the_stored_policy_is_shown() {
     let tmp = tempfile::tempdir().unwrap();
     let repository = repo_dir(&tmp);
     init_repo(&repository);
-    let policy = Retention {
-        keep_last: NonZeroU32::new(4),
-        keep_within: None,
-    };
+    let mut policy = Retention::default();
+    policy.keep_last = NonZeroU32::new(4);
     let mut storage = Storage::open(&location(&repository), "").unwrap();
     retention::save(&mut storage, &policy, &tmp.path().join("stage")).unwrap();
     let harness = open_retention(env(&tmp), &repository);

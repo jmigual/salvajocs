@@ -25,6 +25,7 @@ const CONFIG_FILE: &str = "config.yaml";
 
 /// Errors from reading, writing and resolving the config.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// The config file or its directory could not be read or written.
     #[error("config file error: {0}")]
@@ -43,6 +44,7 @@ pub enum ConfigError {
 /// One backend option. A secret option keeps only its key in the saved config; its value is in
 /// the keyring and is never written by [`AppConfig::save`].
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RepoOption {
     /// The option name, such as an opendal service key.
     pub key: String,
@@ -52,6 +54,13 @@ pub struct RepoOption {
     /// Whether the value is kept in the keyring instead of the config.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub secret: bool,
+}
+
+impl RepoOption {
+    /// An option from its fields.
+    pub fn new(key: String, value: Option<String>, secret: bool) -> Self {
+        Self { key, value, secret }
+    }
 }
 
 /// Debug output hides the value of a secret option.
@@ -72,6 +81,7 @@ impl fmt::Debug for RepoOption {
 /// Where the repository password comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PasswordMode {
     /// The repository has no password.
     None,
@@ -179,6 +189,7 @@ fn parse_remotes(output: &str) -> Vec<String> {
 
 /// The persisted app configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AppConfig {
     /// The rustic repository string: a folder, `rest:<url>`, `rclone:<remote>`, `opendal:<service>`.
     pub repository: String,
@@ -211,6 +222,20 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 impl AppConfig {
+    /// A config for `repository` and `password` with every other field as an omitted field
+    /// reads from the file: no options, roots or custom games, and update checks on.
+    pub fn new(repository: String, password: PasswordMode) -> Self {
+        Self {
+            repository,
+            repository_options: Vec::new(),
+            password,
+            roots: Vec::new(),
+            custom_games: Vec::new(),
+            check_updates: default_true(),
+            ignored_prefixes: Vec::new(),
+        }
+    }
+
     /// Reads `dir/config.yaml`; `None` means it does not exist, so this is the first run.
     pub fn load(dir: &Path) -> Result<Option<Self>, ConfigError> {
         match fs::read_to_string(dir.join(CONFIG_FILE)) {

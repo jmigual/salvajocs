@@ -324,16 +324,13 @@ impl Form {
         let kept = original
             .and_then(|game| game.wine_prefix.clone())
             .filter(|path| wine_prefix_text(Some(path)) == self.wine_prefix);
-        Ok(CustomGame {
-            name: name.to_owned(),
-            files,
-            entry,
-            integration: self.integration,
-            wine_prefix: kept
-                .or_else(|| (!wine_prefix.is_empty()).then(|| PathBuf::from(wine_prefix))),
-            pairs,
-            skips,
-        })
+        let mut game = CustomGame::new(name.to_owned(), entry, self.integration);
+        game.files = files;
+        game.wine_prefix =
+            kept.or_else(|| (!wine_prefix.is_empty()).then(|| PathBuf::from(wine_prefix)));
+        game.pairs = pairs;
+        game.skips = skips;
+        Ok(game)
     }
 
     /// Starts a folder pick for `side` of file row `row`; [`Form::ui`] fills the row with its
@@ -365,7 +362,7 @@ impl Form {
     /// The install folders of the form, valid or not.
     fn install_dir(&self) -> BTreeMap<String, InstallDir> {
         filled(&self.install_dirs)
-            .map(|name| (name.to_owned(), InstallDir {}))
+            .map(|name| (name.to_owned(), InstallDir::default()))
             .collect()
     }
 

@@ -62,11 +62,11 @@ fn downloaded_update_waits_for_backup_or_restore_to_end() {
     let ctx = harness.ctx.clone();
     let updater = &mut harness.state_mut().0;
     updater.installed = true;
-    updater.release = Some(Release {
-        version: "99.0.0".to_string(),
-        html_url: "https://example.invalid/releases/tag/v99.0.0".to_string(),
-        assets: Vec::new(),
-    });
+    updater.release = Some(Release::new(
+        "99.0.0".to_string(),
+        "https://example.invalid/releases/tag/v99.0.0".to_string(),
+        Vec::new(),
+    ));
     updater.downloading = Some(Job::spawn(&ctx, || Ok(PathBuf::from("setup.exe"))));
 
     let deadline = Instant::now() + Duration::from_secs(60);

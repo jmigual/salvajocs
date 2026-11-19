@@ -6,22 +6,12 @@ use salvajocs_core::config::RepoOption;
 use super::*;
 
 fn config(repository: &str, password: PasswordMode, secret_option: bool) -> AppConfig {
-    AppConfig {
-        repository: repository.to_string(),
-        repository_options: secret_option
-            .then(|| RepoOption {
-                key: "access_key".to_string(),
-                value: None,
-                secret: true,
-            })
-            .into_iter()
-            .collect(),
-        password,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    }
+    let mut config = AppConfig::new(repository.to_string(), password);
+    config.repository_options = secret_option
+        .then(|| RepoOption::new("access_key".to_string(), None, true))
+        .into_iter()
+        .collect();
+    config
 }
 
 #[test]

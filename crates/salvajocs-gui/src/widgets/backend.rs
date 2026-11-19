@@ -305,10 +305,12 @@ impl BackendForm {
     pub fn options(&self) -> Vec<RepoOption> {
         self.entries()
             .into_iter()
-            .map(|entry| RepoOption {
-                key: entry.key.to_string(),
-                value: (!entry.secret).then(|| entry.value.to_string()),
-                secret: entry.secret,
+            .map(|entry| {
+                RepoOption::new(
+                    entry.key.to_string(),
+                    (!entry.secret).then(|| entry.value.to_string()),
+                    entry.secret,
+                )
             })
             .collect()
     }
@@ -613,23 +615,13 @@ mod tests {
     }
 
     fn config(repository: &str, options: Vec<RepoOption>) -> AppConfig {
-        AppConfig {
-            repository: repository.to_string(),
-            repository_options: options,
-            password: PasswordMode::None,
-            roots: Vec::new(),
-            custom_games: Vec::new(),
-            check_updates: true,
-            ignored_prefixes: Vec::new(),
-        }
+        let mut config = AppConfig::new(repository.to_string(), PasswordMode::None);
+        config.repository_options = options;
+        config
     }
 
     fn option(key: &str, value: Option<&str>, secret: bool) -> RepoOption {
-        RepoOption {
-            key: key.to_string(),
-            value: value.map(str::to_string),
-            secret,
-        }
+        RepoOption::new(key.to_string(), value.map(str::to_string), secret)
     }
 
     fn keys(options: &[OptionRow]) -> Vec<&str> {
@@ -678,11 +670,7 @@ mod tests {
 
     #[test]
     fn from_config_fills_secret_rows_from_the_session_secrets() {
-        let option = RepoOption {
-            key: "access_key".to_string(),
-            value: None,
-            secret: true,
-        };
+        let option = RepoOption::new("access_key".to_string(), None, true);
         let secrets = BTreeMap::from([("access_key".to_string(), "hunter2".to_string())]);
         let form = BackendForm::from_config(&config("opendal:s3", vec![option]), &secrets);
         assert_eq!(form.secrets(), secrets);
@@ -711,10 +699,8 @@ mod tests {
             option_set(original.repository_options.clone())
         );
         assert_eq!(form.secrets(), secrets);
-        let saved = AppConfig {
-            repository_options: form.options(),
-            ..original.clone()
-        };
+        let mut saved = original.clone();
+        saved.repository_options = form.options();
         assert_eq!(saved.secret_scope(), original.secret_scope());
     }
 
@@ -734,10 +720,8 @@ mod tests {
             option_set(form.options()),
             option_set(original.repository_options.clone())
         );
-        let saved = AppConfig {
-            repository_options: form.options(),
-            ..original.clone()
-        };
+        let mut saved = original.clone();
+        saved.repository_options = form.options();
         assert_eq!(saved.secret_scope(), original.secret_scope());
     }
 
@@ -758,10 +742,8 @@ mod tests {
             option_set(form.options()),
             option_set(original.repository_options.clone())
         );
-        let saved = AppConfig {
-            repository_options: form.options(),
-            ..original.clone()
-        };
+        let mut saved = original.clone();
+        saved.repository_options = form.options();
         assert_eq!(saved.secret_scope(), original.secret_scope());
     }
 
@@ -782,10 +764,8 @@ mod tests {
             option_set(form.options()),
             option_set(original.repository_options.clone())
         );
-        let saved = AppConfig {
-            repository_options: form.options(),
-            ..original.clone()
-        };
+        let mut saved = original.clone();
+        saved.repository_options = form.options();
         assert_eq!(saved.secret_scope(), original.secret_scope());
     }
 

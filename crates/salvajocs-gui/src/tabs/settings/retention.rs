@@ -20,6 +20,7 @@ fn unit_label(unit: Unit) -> &'static str {
         Unit::Weeks => "weeks",
         Unit::Months => "months",
         Unit::Years => "years",
+        _ => "units",
     }
 }
 
@@ -48,13 +49,13 @@ impl Form {
 
     fn policy(&self) -> Retention {
         let at_least_one = |n: u32| NonZeroU32::new(n).unwrap_or(NonZeroU32::MIN);
-        Retention {
-            keep_last: self.keep_last.then(|| at_least_one(self.last)),
-            keep_within: self.keep_within.then(|| Within {
-                amount: at_least_one(self.amount),
-                unit: self.unit,
-            }),
-        }
+        let mut policy = Retention::default();
+        policy.keep_last = self.keep_last.then(|| at_least_one(self.last));
+        policy.keep_within = self.keep_within.then(|| Within {
+            amount: at_least_one(self.amount),
+            unit: self.unit,
+        });
+        policy
     }
 }
 

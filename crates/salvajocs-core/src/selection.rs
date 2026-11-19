@@ -24,6 +24,7 @@ pub const FORMAT: u32 = 1;
 
 /// Errors from reading or saving backup selections.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SelectionError {
     /// The settings or the pending file were written by a newer version: they are neither
     /// applied nor rewritten.
@@ -49,6 +50,7 @@ pub enum SelectionError {
 
 /// One game's backup selection. Paths and registry keys are included unless saved otherwise.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GameSettings {
     /// Format version, [`FORMAT`].
     pub format: u32,
@@ -82,6 +84,7 @@ impl Default for GameSettings {
 /// One unsaved edit of a game's selection, replayed onto the freshest saved copy on save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Change {
     /// Sets [`GameSettings::skip`].
     Skip(bool),

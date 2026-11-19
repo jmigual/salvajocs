@@ -7,6 +7,7 @@ const SERVICE: &str = "salvajocs";
 
 /// Errors from the credential store.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SecretError {
     /// The store is missing, locked or failed; callers fall back to asking.
     #[error("credential store error: {0}")]

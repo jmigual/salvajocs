@@ -100,7 +100,7 @@ impl TargetPick {
                 pick.use_prefix = true;
                 pick.found = Some((pick.prefix.clone(), found));
             }
-            Some(Context::Linux(_)) | None => {}
+            _ => {}
         }
         pick
     }
@@ -225,6 +225,7 @@ impl Restored {
             SafetyBackup::NothingExisted => {
                 "Safety backup: none needed, nothing existed at the targets".to_owned()
             }
+            _ => "Safety backup: unknown result".to_owned(),
         };
         let mut lines: Vec<_> = (plan.writes.iter().zip(report.files))
             .map(|(write, result)| match result {
@@ -1023,6 +1024,7 @@ fn skipped_ui(ui: &mut Ui, plan: &RestorePlan) {
             SkippedItem::File(base, tail) => format!("{}/{tail}", base.dir_name()),
             SkippedItem::Registry => "registry".to_owned(),
             SkippedItem::RegistryKey(key) => key.clone(),
+            _ => "an item".to_owned(),
         };
         ui.weak(format!("{item}: {}", skipped.reason));
     }
@@ -1057,6 +1059,7 @@ fn describe_delete_error(err: &anyhow::Error) -> String {
             "The list was out of date, so nothing was removed".to_owned()
         }
         None => format!("Nothing was removed: {err:#}"),
+        Some(_) => format!("The delete failed: {err:#}"),
     }
 }
 
@@ -1065,6 +1068,7 @@ fn describe_context(ctx: &Context) -> String {
         Context::WinePrefix { prefix, .. } => format!("the prefix {}", prefix.display()),
         Context::WindowsNative(_) => "the Windows registry".to_owned(),
         Context::Linux(_) => "Linux".to_owned(),
+        _ => "the target".to_owned(),
     }
 }
 

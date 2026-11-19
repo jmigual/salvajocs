@@ -28,6 +28,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Failure to refresh or read the manifest cache.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FetchError {
     /// The request failed or the server answered with an error status.
     #[error("manifest download failed")]
@@ -42,6 +43,7 @@ pub enum FetchError {
 
 /// Outcome of a successful [`refresh`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Freshness {
     /// The server confirmed the cached copy is current.
     NotModified,

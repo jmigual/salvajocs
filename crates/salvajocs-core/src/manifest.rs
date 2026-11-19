@@ -13,6 +13,7 @@ pub mod fetch;
 
 /// Failure to read or write a manifest.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ManifestError {
     /// The YAML text is malformed or exceeds the parse budget.
     #[error("invalid manifest YAML")]
@@ -25,6 +26,7 @@ pub enum ManifestError {
 /// Operating system a rule applies to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Os {
     /// Windows.
     Windows,
@@ -42,6 +44,7 @@ pub enum Os {
 /// Game store a rule applies to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Store {
     /// Steam.
     Steam,
@@ -73,6 +76,7 @@ pub enum Tag {
 
 /// One `when` constraint; an unset field matches anything.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct When {
     /// Operating system the rule applies to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,7 @@ pub struct When {
 
 /// A path template of a game and when it applies.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileRule {
     /// What the path holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -95,6 +100,7 @@ pub struct FileRule {
 
 /// A registry key of a game and when it applies.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RegistryRule {
     /// What the key holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -106,10 +112,12 @@ pub struct RegistryRule {
 
 /// An `installDir` entry; the manifest gives it no content.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct InstallDir {}
 
 /// Steam identity of a game.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Steam {
     /// Steam app id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +126,7 @@ pub struct Steam {
 
 /// GOG identity of a game.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Gog {
     /// GOG product id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,6 +136,7 @@ pub struct Gog {
 /// Cross-store identifiers of a game, used to match launcher libraries (ADR-0008).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Ids {
     /// Lutris slug.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +152,7 @@ pub struct Ids {
 /// Save locations of one game; fields this version does not use are dropped.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GameEntry {
     /// Path templates, keyed by template.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -166,6 +177,7 @@ pub struct GameEntry {
 /// All known games by title.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
+#[non_exhaustive]
 pub struct Manifest {
     /// Entries keyed by game title.
     pub games: BTreeMap<String, GameEntry>,
@@ -205,6 +217,7 @@ pub struct CustomFile {
 
 /// A game defined or adjusted by the user (ADR-0008).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomGame {
     /// Game title; matches manifest titles exactly.
     pub name: String,
@@ -228,6 +241,20 @@ pub struct CustomGame {
 }
 
 impl CustomGame {
+    /// A custom game `name` with `entry` and `integration`, and no file rows, Wine prefix,
+    /// pairs or skips.
+    pub fn new(name: String, entry: GameEntry, integration: Integration) -> Self {
+        Self {
+            name,
+            files: Vec::new(),
+            entry,
+            integration,
+            wine_prefix: None,
+            pairs: Vec::new(),
+            skips: Vec::new(),
+        }
+    }
+
     /// `entry` plus a save-tagged rule per row side, `when.os` `linux` for the Linux side and
     /// `windows` for the Windows side; a template on both sides or in several rows gets both
     /// OSes. A template already in `entry.files` keeps its rule. A Windows drive path gets `/`

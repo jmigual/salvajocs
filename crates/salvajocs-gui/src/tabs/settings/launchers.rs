@@ -18,6 +18,7 @@ fn launcher_label(launcher: Launcher) -> &'static str {
         Launcher::Heroic => "Heroic",
         Launcher::Lutris => "Lutris",
         Launcher::Bottles => "Bottles",
+        _ => "Other launcher",
     }
 }
 

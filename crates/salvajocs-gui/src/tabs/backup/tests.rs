@@ -21,32 +21,28 @@ use crate::state::Session;
 const KEY: &str = "HKEY_CURRENT_USER/Software/Game";
 
 fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
-    GameScan {
-        title: "Game".into(),
-        files: files
-            .iter()
-            .map(|size| FoundFile {
-                base: Base::Home,
-                tail: "save".into(),
-                real: PathBuf::from("/save"),
-                size: *size,
-                modified: None,
-            })
-            .collect(),
-        roots: Vec::new(),
-        registry_keys: registry.then(|| KEY.to_owned()).into_iter().collect(),
-        registry_source: registry.then_some(RegistrySource::Windows),
-        prefixes: Vec::new(),
-        unreadable: vec![PathBuf::from("/locked"); unreadable],
-    }
+    let mut game = GameScan::default();
+    game.title = "Game".into();
+    game.files = files
+        .iter()
+        .map(|size| {
+            FoundFile::new(
+                Base::Home,
+                "save".into(),
+                PathBuf::from("/save"),
+                *size,
+                None,
+            )
+        })
+        .collect();
+    game.registry_keys = registry.then(|| KEY.to_owned()).into_iter().collect();
+    game.registry_source = registry.then_some(RegistrySource::Windows);
+    game.unreadable = vec![PathBuf::from("/locked"); unreadable];
+    game
 }
 
 fn backup(result: Result<Stored, BackupError>) -> GameBackup {
-    GameBackup {
-        title: "Game".into(),
-        slug: "game".into(),
-        result,
-    }
+    GameBackup::new("Game".into(), "game".into(), result)
 }
 
 #[test]
@@ -104,13 +100,13 @@ fn a_failed_game_carries_its_error_chain() {
 }
 
 fn snapshot_from(host: &str) -> SnapshotInfo {
-    SnapshotInfo {
-        id: format!("{host}-id"),
-        time: SystemTime::UNIX_EPOCH,
-        host: host.into(),
-        label: "Game".into(),
-        tags: Vec::new(),
-    }
+    SnapshotInfo::new(
+        format!("{host}-id"),
+        SystemTime::UNIX_EPOCH,
+        host.into(),
+        "Game".into(),
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -139,10 +135,7 @@ fn compared(state: FileState, unchanged_here: bool) -> Preview {
     Ok(Some(Baseline {
         newest: snapshot_from("there"),
         hashed: true,
-        comparison: Comparison {
-            found: vec![state.clone()],
-            gone: Vec::new(),
-        },
+        comparison: Comparison::new(vec![state.clone()], Vec::new()),
         states: HashMap::from([("Home/save".to_owned(), state)]),
         parent,
     }))
@@ -175,10 +168,8 @@ fn the_preview_says_what_the_next_backup_would_do() {
         "Could not compare: offline"
     );
 
-    let skipped = GameSettings {
-        skip: true,
-        ..GameSettings::default()
-    };
+    let mut skipped = GameSettings::default();
+    skipped.skip = true;
     assert_eq!(preview_text(&game, &Ok(None), &skipped), None);
     let preview = compared(FileState::Changed, false);
     assert_eq!(preview_text(&game, &preview, &skipped), None);
@@ -258,10 +249,7 @@ fn every_problem_names_its_path() {
         ProblemKind::NotAPrefix,
         ProblemKind::Unreadable("denied".into()),
     ] {
-        let text = describe_problem(&ScanProblem {
-            path: path.clone(),
-            kind,
-        });
+        let text = describe_problem(&ScanProblem::new(path.clone(), kind));
         assert!(text.starts_with("/prefix: "), "{text}");
     }
 }
@@ -285,19 +273,11 @@ fn state(dir: &Path) -> State {
         pick_folder: Arc::new(|| None),
         open_folder: Arc::new(|_| Ok(())),
     });
-    state.config = Some(AppConfig {
-        repository: String::new(),
-        repository_options: Vec::new(),
-        password: PasswordMode::None,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    });
-    let location = RepoLocation {
-        repository: dir.join("repo").to_str().unwrap().to_string(),
-        options: Default::default(),
-    };
+    state.config = Some(AppConfig::new(String::new(), PasswordMode::None));
+    let location = RepoLocation::new(
+        dir.join("repo").to_str().unwrap().to_string(),
+        Default::default(),
+    );
     let storage = Storage::init(&location, "", Compression::Default).unwrap();
     state.session = Some(Session {
         compression: storage.compression(),
@@ -313,16 +293,17 @@ fn is_disabled(harness: &Harness<'_, (BackupTab, State)>, label: &str) -> bool {
 /// A tab listing a game of one file for each of `titles`.
 fn listing(titles: &[&str]) -> BackupTab {
     let mut tab = BackupTab::default();
-    tab.adopt(ScanReport {
-        games: titles
+    tab.adopt(ScanReport::new(
+        titles
             .iter()
-            .map(|title| GameScan {
-                title: (*title).into(),
-                ..game(&[1], false, 0)
+            .map(|title| {
+                let mut game = game(&[1], false, 0);
+                game.title = (*title).into();
+                game
             })
             .collect(),
-        problems: Vec::new(),
-    });
+        Vec::new(),
+    ));
     tab
 }
 
@@ -350,10 +331,7 @@ fn scan_and_backup_wait_while_a_backup_runs() {
     assert!(!is_disabled(&harness, "Back up 1 game"));
 
     let (release, hold) = mpsc::channel::<()>();
-    let report = ScanReport {
-        games: Vec::new(),
-        problems: Vec::new(),
-    };
+    let report = ScanReport::new(Vec::new(), Vec::new());
     harness.state_mut().0.running = Some(Job::spawn(&harness.ctx.clone(), move || {
         let _ = hold.recv();
         Ok(Backed {
@@ -393,12 +371,7 @@ fn a_scan_counts_the_games_it_checked() {
     let mut state = state(dir.path());
     let manifest = salvajocs_core::manifest::parse_yaml("Bar: {}\nFoo: {}\n").unwrap();
     state.manifest = Some(Arc::new(manifest));
-    state.env.environment = Some(Environment {
-        native: None,
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    });
+    state.env.environment = Some(Environment::default());
     let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (BackupTab::default(), state),
@@ -491,10 +464,7 @@ fn a_folder_that_cannot_be_opened_is_a_notice() {
 #[test]
 fn a_scan_that_found_nothing_says_where_to_add_games() {
     let tab = BackupTab {
-        report: Some(ScanReport {
-            games: Vec::new(),
-            problems: Vec::new(),
-        }),
+        report: Some(ScanReport::new(Vec::new(), Vec::new())),
         ..BackupTab::default()
     };
     let dir = tempfile::tempdir().unwrap();
@@ -572,10 +542,7 @@ fn the_save_bar_says_whether_the_repository_is_encrypted() {
         (PasswordMode::Ask, "Encrypted", "Not encrypted"),
     ] {
         let tab = BackupTab {
-            report: Some(ScanReport {
-                games: Vec::new(),
-                problems: Vec::new(),
-            }),
+            report: Some(ScanReport::new(Vec::new(), Vec::new())),
             ..BackupTab::default()
         };
         let dir = tempfile::tempdir().unwrap();
@@ -656,10 +623,7 @@ fn each_repository_keeps_its_own_unsaved_choices() {
     let first = {
         let state = &mut harness.state_mut().1;
         let other = dir.path().join("other").to_str().unwrap().to_owned();
-        let location = RepoLocation {
-            repository: other.clone(),
-            options: Default::default(),
-        };
+        let location = RepoLocation::new(other.clone(), Default::default());
         let storage = Storage::init(&location, "", Compression::Default).unwrap();
         let first = state.session.replace(Session {
             compression: storage.compression(),
@@ -711,29 +675,25 @@ fn closing_gives_up_on_a_stuck_pending_write() {
 fn saved_game(dir: &Path, title: &str, content: &str) -> GameScan {
     let real = dir.join(title);
     std::fs::write(&real, content).unwrap();
-    GameScan {
-        title: title.into(),
-        files: vec![FoundFile {
-            base: Base::Home,
-            tail: "save".into(),
-            size: content.len() as u64,
-            modified: std::fs::metadata(&real).unwrap().modified().ok(),
-            real,
-        }],
-        roots: Vec::new(),
-        registry_keys: Vec::new(),
-        registry_source: None,
-        prefixes: Vec::new(),
-        unreadable: Vec::new(),
-    }
+    let modified = std::fs::metadata(&real).unwrap().modified().ok();
+    let mut game = GameScan::default();
+    game.title = title.into();
+    game.files = vec![FoundFile::new(
+        Base::Home,
+        "save".into(),
+        real,
+        content.len() as u64,
+        modified,
+    )];
+    game
 }
 
 /// A new repository in `dir`, shared as a session shares it.
 fn shared_storage(dir: &Path) -> SharedStorage {
-    let location = RepoLocation {
-        repository: dir.join("repo").to_str().unwrap().into(),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(
+        dir.join("repo").to_str().unwrap().into(),
+        Default::default(),
+    );
     let storage = Storage::init(&location, "", Compression::Default).unwrap();
     Arc::new(Mutex::new(storage))
 }
@@ -773,10 +733,8 @@ fn clean_up_never_forgets_the_snapshots_it_is_given() {
         back_up(&storage, &games, &stage, |_| {}).unwrap();
     }
     let ids = snapshot_ids(&storage, "Game");
-    let policy = Retention {
-        keep_last: std::num::NonZeroU32::new(1),
-        keep_within: None,
-    };
+    let mut policy = Retention::default();
+    policy.keep_last = std::num::NonZeroU32::new(1);
     retention::save(&mut lock_storage(&storage).unwrap(), &policy, &stage).unwrap();
 
     let cleaned = clean_up(&storage, std::slice::from_ref(&ids[1]));

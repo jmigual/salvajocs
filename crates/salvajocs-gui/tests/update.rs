@@ -17,11 +17,11 @@ use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
 
 fn newer(_current: &str) -> Result<Option<Release>, UpdateError> {
-    Ok(Some(Release {
-        version: "99.0.0".to_string(),
-        html_url: "https://example.invalid/releases/tag/v99.0.0".to_string(),
-        assets: Vec::new(),
-    }))
+    Ok(Some(Release::new(
+        "99.0.0".to_string(),
+        "https://example.invalid/releases/tag/v99.0.0".to_string(),
+        Vec::new(),
+    )))
 }
 
 /// An environment with an open repository and the fake check.

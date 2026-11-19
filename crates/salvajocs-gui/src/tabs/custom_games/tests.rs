@@ -3,21 +3,16 @@ use salvajocs_core::layout::{LinuxFolders, Root, RootKind};
 use salvajocs_core::manifest::GameEntry;
 
 fn game(name: &str) -> CustomGame {
-    CustomGame {
-        name: name.into(),
-        files: vec![CustomFile {
-            linux: Some("<xdgData>/Foo/*.sav".into()),
-            windows: Some(r"C:\Games\Foo".into()),
-        }],
-        entry: GameEntry::default(),
-        integration: Integration::Extend,
-        wine_prefix: None,
-        pairs: vec![Pair {
-            linux: "<xdgData>/Foo".into(),
-            windows: "<winAppData>/Foo".into(),
-        }],
-        skips: Vec::new(),
-    }
+    let mut game = CustomGame::new(name.into(), GameEntry::default(), Integration::Extend);
+    game.files = vec![CustomFile {
+        linux: Some("<xdgData>/Foo/*.sav".into()),
+        windows: Some(r"C:\Games\Foo".into()),
+    }];
+    game.pairs = vec![Pair {
+        linux: "<xdgData>/Foo".into(),
+        windows: "<winAppData>/Foo".into(),
+    }];
+    game
 }
 
 #[test]
@@ -79,17 +74,14 @@ fn an_invalid_file_row_is_not_built_and_a_blank_one_is_left_out() {
 }
 
 fn linux_env(home: &Path) -> Environment {
-    Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "me".into(),
-            home: home.into(),
-            xdg_data: home.join(".local/share"),
-            xdg_config: home.join(".config"),
-        })),
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    }
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "me".into(),
+        home.into(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    environment
 }
 
 fn no_install_dirs() -> GameVars {
@@ -111,10 +103,7 @@ fn a_linux_pick_becomes_a_linux_template() {
 #[test]
 fn an_install_folder_makes_a_pick_under_it_base_relative() {
     let games = Path::new("/games");
-    let roots = [Root {
-        path: games.into(),
-        kind: RootKind::Other,
-    }];
+    let roots = [Root::new(games.into(), RootKind::Other)];
     let vars = GameVars::new("Game", vec!["Install Dir".into()], &roots, None);
     let env = linux_env(Path::new("/home/me"));
     let picked = picked_template(&games.join("Install Dir/saves"), Family::Linux, &env, &vars);

@@ -22,6 +22,13 @@ A virtual workspace with two crates:
 - `crates/salvajocs-gui` (package `salvajocs`, lib + bin `salvajocs`): egui front-end only (ADR-0002). Uses `anyhow`
   at its edge. Depends on core; core never depends on gui.
 
+Since 0.6.0 the public enums of core, and the structs it returns or reads from a file, are
+`#[non_exhaustive]`, so a release can add a variant or a field without a breaking version bump.
+Callers outside core build such a struct with its `new`, or with `Default` and then set fields.
+Closed sets stay exhaustive: `Family`, `Integration`, `Tag`, `Choice`, `Compression`,
+`RegistrySource`, `BackendKind`, `SecretKey`, `Within` (an amount and a unit) and the
+Linux/Windows pairs `Pair`, `CustomFile` and `Targets`.
+
 Workspace `Cargo.toml`: `resolver = "3"`, `edition = "2024"` in `[workspace.package]`, every
 dependency pinned once in `[workspace.dependencies]`, `[workspace.lints.rust] unsafe_code =
 "forbid"`. Unit tests in `<module>/tests.rs` beside the code; integration tests in `tests/`.

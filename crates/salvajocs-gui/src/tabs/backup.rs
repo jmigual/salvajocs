@@ -77,6 +77,7 @@ fn summarize(backup: &GameBackup) -> GameResult {
             newer_elsewhere: Some(newest),
         }) => Outcome::UnchangedNewerElsewhere(newest.host.clone()),
         Ok(Stored::SameAsNewest(newest)) => Outcome::SameAsNewest(newest.host.clone()),
+        Ok(other) => Outcome::Failed(format!("unexpected backup result: {other:?}")),
         Err(err) => Outcome::Failed(chain(err)),
     };
     GameResult {
@@ -116,6 +117,7 @@ fn describe_problem(problem: &ScanProblem) -> String {
         ProblemKind::NoUser => format!("{path}: the Wine prefix has no user yet"),
         ProblemKind::NotAPrefix => format!("{path}: not a Wine prefix"),
         ProblemKind::Unreadable(error) => format!("{path}: cannot be read ({error})"),
+        _ => format!("{path}: cannot be scanned"),
     }
 }
 
@@ -225,6 +227,7 @@ fn badges<'a>(
         (true, FileState::Changed) => Some(Badge::Changed),
         (true, FileState::Unknown(_)) => Some(Badge::Unknown),
         (true, FileState::Same) | (false, FileState::New) => None,
+        (true, _) => Some(Badge::Unknown),
         (false, _) => removes.then_some(Badge::Removed),
     }
 }
@@ -861,6 +864,7 @@ impl BackupTab {
             let (glyph, encryption) = match config.password {
                 PasswordMode::None => (icons::LOCK_SIMPLE_OPEN, "Not encrypted"),
                 PasswordMode::Keyring | PasswordMode::Ask => (icons::LOCK_SIMPLE, "Encrypted"),
+                _ => (icons::LOCK_SIMPLE_OPEN, "Encryption unknown"),
             };
             theme::mark(ui, glyph, 16.0, muted)
                 .on_hover_text(encryption)
@@ -1126,10 +1130,8 @@ fn clean_up(storage: &SharedStorage, made: &[String]) -> Cleaned {
     let (done, error) = match retention::apply(&mut storage, &policy, &keep, SystemTime::now()) {
         Ok(done) => (done, None),
         Err(err) => {
-            let done = Cleanup {
-                forgotten: err.forgotten,
-                ..Cleanup::default()
-            };
+            let mut done = Cleanup::default();
+            done.forgotten = err.forgotten;
             (done, Some(chain(&err.source)))
         }
     };

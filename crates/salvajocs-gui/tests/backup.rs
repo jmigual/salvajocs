@@ -45,15 +45,10 @@ fn custom_game(name: &str, registry: bool, prefix: &Path) -> CustomGame {
     if registry {
         yaml += &format!("  registry:\n    HKEY_CURRENT_USER/Software/{name}: {{}}\n");
     }
-    CustomGame {
-        name: name.into(),
-        files: Vec::new(),
-        entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
-        integration: Integration::Override,
-        wine_prefix: Some(prefix.to_path_buf()),
-        pairs: Vec::new(),
-        skips: Vec::new(),
-    }
+    let entry = parse_yaml(&yaml).unwrap().games.remove(name).unwrap();
+    let mut game = CustomGame::new(name.into(), entry, Integration::Override);
+    game.wine_prefix = Some(prefix.to_path_buf());
+    game
 }
 
 /// Writes a save file of `content` for `name` in `prefix`.
@@ -187,14 +182,9 @@ fn a_game_found_in_a_launcher_prefix_shows_the_prefix() {
     let prefix = make_prefix(tmp.path());
     write_save(&prefix, "Alpha", "abc");
     let mut env = env(&tmp);
-    let found = LauncherPrefix {
-        launcher: Launcher::Lutris,
-        path: prefix.clone(),
-        game: Some(LauncherGame {
-            title: Some("ALPHA™".to_owned()),
-            ..LauncherGame::default()
-        }),
-    };
+    let mut game = LauncherGame::default();
+    game.title = Some("ALPHA™".to_owned());
+    let found = LauncherPrefix::new(Launcher::Lutris, prefix.clone(), Some(game));
     env.environment
         .as_mut()
         .unwrap()
@@ -230,10 +220,7 @@ fn backup_scan_problems_are_shown() {
     for user in ["alice", "bob"] {
         fs::create_dir(prefix.join("drive_c/users").join(user)).unwrap();
     }
-    let roots = vec![Root {
-        path: prefix,
-        kind: RootKind::WinePrefix,
-    }];
+    let roots = vec![Root::new(prefix, RootKind::WinePrefix)];
     let (mut harness, _env, _tmp) = open_tab(roots, Vec::new());
 
     scan(&mut harness, "0 games found");
@@ -442,10 +429,7 @@ fn write_newer_settings(tmp: &TempDir, title: &str) {
 
 /// The repository of `tmp`, opened apart from the app.
 fn open_repo(tmp: &TempDir) -> Storage {
-    let location = RepoLocation {
-        repository: repo_dir(tmp),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repo_dir(tmp), Default::default());
     Storage::open(&location, "").unwrap()
 }
 
@@ -891,10 +875,8 @@ fn removing_old_backups_drops_the_loaded_restore_list() {
 
 /// Stores a retention policy that keeps each game's last backup in the repository of `tmp`.
 fn keep_last_one(tmp: &TempDir) {
-    let policy = Retention {
-        keep_last: NonZeroU32::new(1),
-        keep_within: None,
-    };
+    let mut policy = Retention::default();
+    policy.keep_last = NonZeroU32::new(1);
     retention::save(&mut open_repo(tmp), &policy, &tmp.path().join("policy")).unwrap();
 }
 

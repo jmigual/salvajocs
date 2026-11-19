@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 /// One named field of an opendal service in the connect form. `key` is the opendal option key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BackendField {
     /// The option key stored in the config.
     pub key: &'static str,

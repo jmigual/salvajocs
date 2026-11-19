@@ -21,6 +21,7 @@ const LISTING_ATTEMPTS: usize = 5;
 
 /// Errors from reading or writing the live registry.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum WindowsRegistryError {
     /// A key path was refused before touching the registry.
     #[error(transparent)]

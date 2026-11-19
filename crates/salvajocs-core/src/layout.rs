@@ -23,6 +23,7 @@ pub const HASHES_FORMAT: u32 = 1;
 
 /// A semantic location a saved file is stored under, independent of the machine it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Base {
     /// The Windows user's home (`users/<user>` in a prefix).
     WinHome,
@@ -82,6 +83,7 @@ impl Base {
 
 /// The folders of a Windows user, native or inside a Wine prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WinFolders {
     /// The user name, for `<osUserName>`: the Wine user in a prefix.
     pub user: String,
@@ -143,6 +145,7 @@ impl WinFolders {
 
 /// The folders of a native Linux user.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LinuxFolders {
     /// The user name, for `<osUserName>`.
     pub user: String,
@@ -155,6 +158,16 @@ pub struct LinuxFolders {
 }
 
 impl LinuxFolders {
+    /// The folders of `user` from their paths.
+    pub fn new(user: String, home: PathBuf, xdg_data: PathBuf, xdg_config: PathBuf) -> Self {
+        Self {
+            user,
+            home,
+            xdg_data,
+            xdg_config,
+        }
+    }
+
     /// The current user's folders, honouring `XDG_*`. `None` if one cannot be determined.
     #[cfg(unix)]
     pub fn native() -> Option<Self> {
@@ -177,6 +190,7 @@ fn os_user() -> String {
 
 /// What a configured root is used for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum RootKind {
     /// A Steam root: games live in `<root>/steamapps/common/<installDir>`.
     Steam,
@@ -188,6 +202,7 @@ pub enum RootKind {
 
 /// A configured or detected root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Root {
     /// Root directory.
     pub path: PathBuf,
@@ -195,8 +210,16 @@ pub struct Root {
     pub kind: RootKind,
 }
 
+impl Root {
+    /// A root at `path` of `kind`.
+    pub fn new(path: PathBuf, kind: RootKind) -> Self {
+        Self { path, kind }
+    }
+}
+
 /// Where a set of bases resolves to. Plain data, so tests can build any of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Context {
     /// A native Windows user.
     WindowsNative(WinFolders),
@@ -618,6 +641,7 @@ pub fn target_path(base_dir: &Path, tail: &str, case_insensitive: bool) -> Optio
 
 /// The `salvajocs.json` of a staged game (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SnapshotMeta {
     /// Format version, [`SNAPSHOT_FORMAT`].
     pub format: u32,
@@ -627,8 +651,20 @@ pub struct SnapshotMeta {
     pub roots: Vec<(Base, String)>,
 }
 
+impl SnapshotMeta {
+    /// The meta of format `format` for `title` with its `roots`.
+    pub fn new(format: u32, title: String, roots: Vec<(Base, String)>) -> Self {
+        Self {
+            format,
+            title,
+            roots,
+        }
+    }
+}
+
 /// The `hashes.json` of a staged game: the SHA-256 of every other file in it (ADR-0018).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Hashes {
     /// Format version, [`HASHES_FORMAT`].
     pub format: u32,
@@ -643,6 +679,7 @@ pub struct Hashes {
 
 /// One file of [`Hashes`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileHash {
     /// The SHA-256 of the file, in hex.
     pub sha256: String,

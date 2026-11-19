@@ -31,6 +31,7 @@ impl Family {
 
 /// How a proposed target was found, best first (ADR-0011).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Confidence {
     /// A pair or skip the user saved; a skip has no `proposed` target.
     Saved,
@@ -45,6 +46,7 @@ pub enum Confidence {
 /// A Linux and a Windows path pattern of one engine. `{name}` matches one path component and
 /// substitutes the same component on the other side.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct EngineRule {
     /// Engine name.
     pub name: &'static str,
@@ -90,6 +92,7 @@ pub const PLAYER_PREFS_NOTE: &str =
 
 /// What to do with one snapshot root on restore.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MappingEntry {
     /// The snapshot root being mapped.
     pub root: SnapshotRoot,
@@ -106,6 +109,27 @@ pub struct MappingEntry {
     pub notes: Vec<String>,
 }
 
+impl MappingEntry {
+    /// A mapping entry from its fields.
+    pub fn new(
+        root: SnapshotRoot,
+        files: usize,
+        proposed: Option<String>,
+        confidence: Confidence,
+        candidates: Vec<String>,
+        notes: Vec<String>,
+    ) -> Self {
+        Self {
+            root,
+            files,
+            proposed,
+            confidence,
+            candidates,
+            notes,
+        }
+    }
+}
+
 /// The user's decision for a root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Choice {
@@ -117,6 +141,7 @@ pub enum Choice {
 
 /// A root with its final target; the target is already classified in the target family.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedMapping {
     /// The snapshot root.
     pub root: SnapshotRoot,
@@ -126,6 +151,7 @@ pub struct ResolvedMapping {
 
 /// Why [`resolve`] failed.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ResolveError {
     /// A template is not a glob-free placeholder template of the target family.
     #[error("not a placeholder template of the target OS: {template}")]
@@ -192,6 +218,7 @@ fn classify_choice(template: &str, family: Family) -> Option<(Base, String)> {
 /// A side of a [`Pair`] that is not a glob-free placeholder template of its OS family.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[error("not a placeholder template of the {side:?} side: {template}")]
+#[non_exhaustive]
 pub struct PairError {
     /// The side that was rejected.
     pub side: Family,
@@ -220,6 +247,7 @@ pub fn validate_pair(pair: &Pair) -> Result<(), PairError> {
 /// A skip that is not a glob-free placeholder template.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[error("not a placeholder template: {template}")]
+#[non_exhaustive]
 pub struct SkipError {
     /// The rejected template.
     pub template: String,
@@ -243,6 +271,7 @@ pub fn validate_skip(skip: &str) -> Result<(), SkipError> {
 
 /// Why a custom game file row is rejected (ADR-0016).
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum FileError {
     /// Neither side is set.
     #[error("enter a Linux path, a Windows path or both")]

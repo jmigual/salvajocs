@@ -20,6 +20,9 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- `salvajocs-core`: public enums and result structs are `#[non_exhaustive]`, so later releases
+  can add error kinds, variants and fields without a breaking version. Build such structs with
+  their new `new` constructors or `Default`, and add a `_` arm when matching such enums.
 - rclone no longer asks for the password of an encrypted rclone config. Set
   `RCLONE_CONFIG_PASS` or add `--password-command` to the `rclone-command` option
   ([advanced options](docs/guide/advanced-options.md#rclone-remote)).

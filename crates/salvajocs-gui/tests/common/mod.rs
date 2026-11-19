@@ -72,12 +72,7 @@ pub fn env_with(tmp: &TempDir, secrets: Arc<dyn SecretStore>) -> Env {
         secrets,
         refresh_manifest: offline,
         // A machine with nothing on it, so no test reads the real one.
-        environment: Some(Environment {
-            native: None,
-            steam_roots: Vec::new(),
-            launcher_prefixes: Vec::new(),
-            launcher_problems: Vec::new(),
-        }),
+        environment: Some(Environment::default()),
         wineserver_running: salvajocs_core::prefix::wineserver_running,
         check_update: None,
         installed_by_installer: || false,
@@ -116,15 +111,7 @@ pub fn save_config(env: &Env, config: &AppConfig) {
 
 /// A config for a local repository without a password.
 pub fn local_config(repository: &str) -> AppConfig {
-    AppConfig {
-        repository: repository.to_string(),
-        repository_options: Vec::new(),
-        password: PasswordMode::None,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    }
+    AppConfig::new(repository.to_string(), PasswordMode::None)
 }
 
 /// Creates an empty repository without a password at `repository`.
@@ -134,10 +121,7 @@ pub fn init_repo(repository: &str) {
 
 /// Creates an empty repository at `repository`.
 pub fn init_repo_with(repository: &str, password: &str, compression: Compression) {
-    let location = RepoLocation {
-        repository: repository.to_string(),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repository.to_string(), Default::default());
     Storage::init(&location, password, compression).unwrap();
 }
 

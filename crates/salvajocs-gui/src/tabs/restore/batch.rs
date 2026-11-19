@@ -614,6 +614,7 @@ fn compare(plan: &RestorePlan) -> Result<Compared, String> {
                 Ok(WriteState::New) => Some(Badge::New),
                 Ok(WriteState::Changed) => Some(Badge::Changed),
                 Ok(WriteState::Unchanged) => None,
+                Ok(_) => Some(Badge::Unknown),
                 Err(_) => Some(Badge::WillFail),
             };
             if let Some(badge) = badge {

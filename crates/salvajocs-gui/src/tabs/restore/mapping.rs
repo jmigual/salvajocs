@@ -40,6 +40,7 @@ fn confidence_label(entry: &MappingEntry) -> &'static str {
         (Confidence::EngineRule, _) => "Engine layout (Unity or Godot)",
         (Confidence::AutoPair, _) => "The manifest's only save paths of each build",
         (Confidence::Unknown, _) => "Unknown: choose a target or skip this folder",
+        _ => "Check the target or skip this folder",
     }
 }
 

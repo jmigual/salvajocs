@@ -13,6 +13,7 @@ const PROTON_USER: &str = "steamuser";
 
 /// Why a path is not usable as a Wine prefix.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PrefixError {
     /// The path lacks `drive_c/users`, or all of `system.reg`, `user.reg` and `dosdevices`.
     #[error("not a Wine prefix: {}", .0.display())]

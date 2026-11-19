@@ -16,10 +16,10 @@ const KEEP_LAST: &str = "Keep the last";
 type SectionHarness = Harness<'static, (RetentionSection, State, bool)>;
 
 fn location(dir: &Path) -> RepoLocation {
-    RepoLocation {
-        repository: dir.join("repo").to_str().unwrap().to_string(),
-        options: Default::default(),
-    }
+    RepoLocation::new(
+        dir.join("repo").to_str().unwrap().to_string(),
+        Default::default(),
+    )
 }
 
 /// The section over a new repository in `dir`.
@@ -235,10 +235,8 @@ fn showing_the_tab_again_reloads_the_policy() {
     assert!(!keeps_last(&harness));
 
     // Another machine changes the policy while the tab is hidden.
-    let policy = Retention {
-        keep_last: NonZeroU32::new(3),
-        keep_within: None,
-    };
+    let mut policy = Retention::default();
+    policy.keep_last = NonZeroU32::new(3);
     let mut other = Storage::open(&location(dir.path()), "").unwrap();
     retention::save(&mut other, &policy, &dir.path().join("stage")).unwrap();
     harness.state_mut().2 = false;

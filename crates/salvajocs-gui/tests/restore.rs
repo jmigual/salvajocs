@@ -52,15 +52,11 @@ fn custom(name: &str, files: &[&str], wine_prefix: Option<&Path>, pairs: Vec<Pai
     for file in files {
         yaml += &format!("    {file}: {{tags: [save]}}\n");
     }
-    CustomGame {
-        name: name.into(),
-        files: Vec::new(),
-        entry: parse_yaml(&yaml).unwrap().games.remove(name).unwrap(),
-        integration: Integration::Override,
-        wine_prefix: wine_prefix.map(Path::to_path_buf),
-        pairs,
-        skips: Vec::new(),
-    }
+    let entry = parse_yaml(&yaml).unwrap().games.remove(name).unwrap();
+    let mut game = CustomGame::new(name.into(), entry, Integration::Override);
+    game.wine_prefix = wine_prefix.map(Path::to_path_buf);
+    game.pairs = pairs;
+    game
 }
 
 /// A scan of `title` with `files` as `(base, tail)` and `roots`; each file holds its tail.
@@ -71,27 +67,18 @@ fn scan(tmp: &TempDir, title: &str, files: &[(Base, &str)], roots: &[(Base, &str
             let real = tmp.path().join("src").join(title).join(tail);
             fs::create_dir_all(real.parent().unwrap()).unwrap();
             fs::write(&real, tail).unwrap();
-            FoundFile {
-                base,
-                tail: tail.into(),
-                size: tail.len() as u64,
-                modified: fs::metadata(&real).unwrap().modified().ok(),
-                real,
-            }
+            let modified = fs::metadata(&real).unwrap().modified().ok();
+            FoundFile::new(base, tail.into(), real, tail.len() as u64, modified)
         })
         .collect();
-    GameScan {
-        title: title.into(),
-        files,
-        roots: roots
-            .iter()
-            .map(|&(base, rest)| (base, rest.into()))
-            .collect(),
-        registry_keys: Vec::new(),
-        registry_source: None,
-        prefixes: Vec::new(),
-        unreadable: Vec::new(),
-    }
+    let mut scan = GameScan::default();
+    scan.title = title.into();
+    scan.files = files;
+    scan.roots = roots
+        .iter()
+        .map(|&(base, rest)| (base, rest.into()))
+        .collect();
+    scan
 }
 
 /// An app on a Linux machine whose home is in `tmp`, with `snapshots` backed up, `games` in
@@ -123,17 +110,14 @@ fn open_tab_with(
     adjust: impl FnOnce(&mut Env),
 ) -> (Harness<'static, App>, Env) {
     let mut env = env(tmp);
-    env.environment = Some(Environment {
-        native: Some(Context::Linux(LinuxFolders {
-            user: "me".into(),
-            home: home(tmp),
-            xdg_data: under(&home(tmp), ".local/share"),
-            xdg_config: home(tmp).join(".config"),
-        })),
-        steam_roots: Vec::new(),
-        launcher_prefixes: Vec::new(),
-        launcher_problems: Vec::new(),
-    });
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "me".into(),
+        home(tmp),
+        under(&home(tmp), ".local/share"),
+        home(tmp).join(".config"),
+    )));
+    env.environment = Some(environment);
     adjust(&mut env);
     fs::create_dir_all(&env.cache_dir).unwrap();
     fs::write(
@@ -144,10 +128,7 @@ fn open_tab_with(
     .unwrap();
     let repository = repo_dir(tmp);
     init_repo(&repository);
-    let location = RepoLocation {
-        repository: repository.clone(),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repository.clone(), Default::default());
     let mut storage = Storage::open(&location, "").unwrap();
     backup_games(
         &mut storage,
@@ -699,10 +680,7 @@ fn restore_typed_template_that_does_not_classify_shows_error() {
 
 /// A new session on the tests' repository.
 fn open_repo(tmp: &TempDir) -> Storage {
-    let location = RepoLocation {
-        repository: repo_dir(tmp),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repo_dir(tmp), Default::default());
     Storage::open(&location, "").unwrap()
 }
 

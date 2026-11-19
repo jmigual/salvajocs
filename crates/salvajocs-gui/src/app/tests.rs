@@ -33,12 +33,7 @@ fn app(dir: &Path) -> App {
         secrets: Arc::new(MemorySecrets::new()),
         refresh_manifest: offline,
         // The Settings tab looks for launcher prefixes; this keeps it off the real machine.
-        environment: Some(Environment {
-            native: None,
-            steam_roots: Vec::new(),
-            launcher_prefixes: Vec::new(),
-            launcher_problems: Vec::new(),
-        }),
+        environment: Some(Environment::default()),
         wineserver_running: salvajocs_core::prefix::wineserver_running,
         check_update: None,
         installed_by_installer: || true,
@@ -48,22 +43,11 @@ fn app(dir: &Path) -> App {
         open_folder: Arc::new(|_| Ok(())),
     };
     let repository = dir.join("repo").to_str().unwrap().to_string();
-    let location = RepoLocation {
-        repository: repository.clone(),
-        options: Default::default(),
-    };
+    let location = RepoLocation::new(repository.clone(), Default::default());
     Storage::init(&location, "", Compression::Default).unwrap();
-    AppConfig {
-        repository,
-        repository_options: Vec::new(),
-        password: PasswordMode::None,
-        roots: Vec::new(),
-        custom_games: Vec::new(),
-        check_updates: true,
-        ignored_prefixes: Vec::new(),
-    }
-    .save(&env.config_dir)
-    .unwrap();
+    AppConfig::new(repository, PasswordMode::None)
+        .save(&env.config_dir)
+        .unwrap();
     App::new(env)
 }
 
@@ -228,11 +212,11 @@ fn assert_bar_fits_after(
 }
 
 fn release() -> Release {
-    Release {
-        version: "99.0.0".to_string(),
-        html_url: "https://example.invalid/releases/tag/v99.0.0".to_string(),
-        assets: Vec::new(),
-    }
+    Release::new(
+        "99.0.0".to_string(),
+        "https://example.invalid/releases/tag/v99.0.0".to_string(),
+        Vec::new(),
+    )
 }
 
 #[test]

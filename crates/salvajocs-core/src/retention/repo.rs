@@ -23,6 +23,7 @@ const LABEL: &str = "Retention policy";
 
 /// Errors from reading or saving the retention policy.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RetentionError {
     /// The policy was written by a newer version: it is neither applied nor rewritten.
     #[error("retention policy format {0} is newer than this version understands")]
@@ -69,6 +70,7 @@ pub fn load(storage: &mut Storage) -> Result<Retention, RetentionError> {
 
 /// The outcome of a [`save`] that succeeded: the newest policy snapshot holds the policy.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Saved {
     /// The new policy snapshot, `None` when the repository already held the policy.
     pub written: Option<SnapshotInfo>,

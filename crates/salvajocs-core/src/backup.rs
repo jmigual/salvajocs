@@ -26,6 +26,7 @@ use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 /// Errors from staging or backing up one game.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BackupError {
     /// A save file could not be read or the staging mirror could not be written.
     #[error("I/O failed on {path}")]
@@ -393,6 +394,7 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
 
 /// What [`backup_games`] stored for one game.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Stored {
     /// A snapshot was written.
     New(SnapshotInfo),
@@ -407,6 +409,7 @@ pub enum Stored {
 
 /// The outcome of one game in [`backup_games`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct GameBackup {
     /// The game's title.
     pub title: String,
@@ -414,6 +417,17 @@ pub struct GameBackup {
     pub slug: String,
     /// What was stored, or why it failed.
     pub result: Result<Stored, BackupError>,
+}
+
+impl GameBackup {
+    /// The `result` of backing up game `title` with `slug`.
+    pub fn new(title: String, slug: String, result: Result<Stored, BackupError>) -> Self {
+        Self {
+            title,
+            slug,
+            result,
+        }
+    }
 }
 
 /// What [`backup_game`] compares a staged game with.

@@ -528,11 +528,11 @@ fn ready_with_update(size: Vec2, installed: bool) -> (tempfile::TempDir, Harness
     let tmp = tempfile::tempdir().unwrap();
     let mut env = env(&tmp);
     env.check_update = Some(|_| {
-        Ok(Some(Release {
-            version: "99.0.0".to_string(),
-            html_url: "https://example.invalid/releases/tag/v99.0.0".to_string(),
-            assets: Vec::new(),
-        }))
+        Ok(Some(Release::new(
+            "99.0.0".to_string(),
+            "https://example.invalid/releases/tag/v99.0.0".to_string(),
+            Vec::new(),
+        )))
     });
     env.installed_by_installer = if installed { || true } else { || false };
     let repository = repo_dir(&tmp);

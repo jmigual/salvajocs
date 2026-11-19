@@ -25,7 +25,8 @@ use crate::registry::HKCU;
 use crate::registry::wine::RegFile;
 
 /// What the scan knows about this machine besides the config. Plain data, so tests can build any.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Environment {
     /// The native context: `WindowsNative` on Windows, `Linux` elsewhere. `None` when its
     /// folders cannot be determined.
@@ -65,6 +66,7 @@ impl Environment {
 
 /// One file a game's save template matched.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FoundFile {
     /// The semantic base the file is staged under.
     pub base: Base,
@@ -78,8 +80,28 @@ pub struct FoundFile {
     pub modified: Option<SystemTime>,
 }
 
+impl FoundFile {
+    /// A found file from its fields.
+    pub fn new(
+        base: Base,
+        tail: String,
+        real: PathBuf,
+        size: u64,
+        modified: Option<SystemTime>,
+    ) -> Self {
+        Self {
+            base,
+            tail,
+            real,
+            size,
+            modified,
+        }
+    }
+}
+
 /// A game with a save file or a registry key on this machine.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GameScan {
     /// The game's title.
     pub title: String,
@@ -112,6 +134,7 @@ pub enum RegistrySource {
 
 /// Why a path could not be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProblemKind {
     /// A prefix has several non-system users and none is `steamuser`.
     AmbiguousPrefix(Vec<String>),
@@ -125,11 +148,19 @@ pub enum ProblemKind {
 
 /// Something the scan could not do, reported instead of dropped.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScanProblem {
     /// The prefix, directory or file concerned.
     pub path: PathBuf,
     /// What went wrong.
     pub kind: ProblemKind,
+}
+
+impl ScanProblem {
+    /// A problem of `kind` at `path`.
+    pub fn new(path: PathBuf, kind: ProblemKind) -> Self {
+        Self { path, kind }
+    }
 }
 
 impl From<PrefixError> for ScanProblem {
@@ -148,11 +179,19 @@ impl From<PrefixError> for ScanProblem {
 
 /// The result of [`scan`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScanReport {
     /// Games with a file or a registry key on this machine, sorted by title.
     pub games: Vec<GameScan>,
     /// Everything that could not be resolved or read, without duplicates.
     pub problems: Vec<ScanProblem>,
+}
+
+impl ScanReport {
+    /// A report of `games` and `problems`.
+    pub fn new(games: Vec<GameScan>, problems: Vec<ScanProblem>) -> Self {
+        Self { games, problems }
+    }
 }
 
 /// What one scan resolves once and reuses for every game: prefixes, their `user.reg` and the

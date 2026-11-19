@@ -30,6 +30,7 @@ fn root_kind_label(kind: RootKind) -> &'static str {
         RootKind::Steam => "Steam library",
         RootKind::Other => "Games folder",
         RootKind::WinePrefix => "Wine prefix",
+        _ => "Other root",
     }
 }
 
@@ -38,6 +39,7 @@ fn password_mode_label(mode: PasswordMode) -> &'static str {
         PasswordMode::None => "None",
         PasswordMode::Keyring => "Stored in the system keyring",
         PasswordMode::Ask => "Asked once per session",
+        _ => "Other",
     }
 }
 
@@ -292,10 +294,9 @@ impl SettingsTab {
             .add_enabled(!path.is_empty(), egui::Button::new("Add root"))
             .clicked()
         {
-            config.roots.push(Root {
-                path: PathBuf::from(path),
-                kind: self.root_kind,
-            });
+            config
+                .roots
+                .push(Root::new(PathBuf::from(path), self.root_kind));
             self.root_path.clear();
             changed = true;
         }

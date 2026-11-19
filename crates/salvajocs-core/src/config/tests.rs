@@ -470,6 +470,24 @@ fn minimal_file_loads_with_empty_lists() {
 }
 
 #[test]
+fn new_configs_and_custom_games_equal_minimal_ones_read_from_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: ask\ncustom_games:\n\
+         - name: Old\n  entry: {}\n  integration: extend\n",
+    )
+    .unwrap();
+    let mut expected = AppConfig::new("/backups".into(), PasswordMode::Ask);
+    expected.custom_games = vec![CustomGame::new(
+        "Old".into(),
+        GameEntry::default(),
+        Integration::Extend,
+    )];
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(expected));
+}
+
+#[test]
 fn custom_game_without_skips_loads_and_skips_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(

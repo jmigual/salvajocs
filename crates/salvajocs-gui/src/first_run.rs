@@ -234,15 +234,8 @@ impl Connect {
             (false, true) => PasswordMode::Keyring,
             (false, false) => PasswordMode::Ask,
         };
-        let config = AppConfig {
-            repository: self.form.repository(),
-            repository_options: self.form.options(),
-            password,
-            roots: Vec::new(),
-            custom_games: Vec::new(),
-            check_updates: true,
-            ignored_prefixes: Vec::new(),
-        };
+        let mut config = AppConfig::new(self.form.repository(), password);
+        config.repository_options = self.form.options();
         let credentials = Credentials {
             password: self.password.clone(),
             options: self.form.secrets(),
@@ -273,6 +266,7 @@ fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env
         RepoState::Missing => Step::Confirm(attempt),
         RepoState::WrongPassword => Step::Editing(Some("Wrong encryption password.".to_string())),
         RepoState::Error(message) => Step::Editing(Some(message)),
+        _ => Step::Editing(Some("The repository cannot be opened.".to_string())),
     }
 }
 
