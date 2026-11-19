@@ -554,12 +554,72 @@ fn listed_files_carry_their_nested_path_size_and_mtime() {
                 path: "a.sav".into(),
                 size: 5,
                 modified: modified("a.sav"),
+                kind: EntryKind::File,
             },
             SnapshotFile {
                 path: "sub/b.sav".into(),
                 size: 4,
                 modified: modified("sub/b.sav"),
+                kind: EntryKind::File,
             },
+        ]
+    );
+}
+
+/// [`save_dir`] with a symlink `link` next to `a.sav`, on Unix.
+fn save_dir_with_link(root: &Path) -> PathBuf {
+    let src = save_dir(root);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.sav", src.join("link")).unwrap();
+    src
+}
+
+#[test]
+fn snapshot_entries_lists_dirs_files_and_symlinks_with_kinds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir_with_link(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut listed: Vec<_> = (storage.snapshot_entries(&info.id, AS_PATH).unwrap())
+        .into_iter()
+        .map(|entry| (entry.path, entry.kind, entry.size))
+        .collect();
+    listed.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut expected = vec![
+        ("a.sav".to_owned(), EntryKind::File, 5),
+        ("sub".to_owned(), EntryKind::Dir, 0),
+        ("sub/b.sav".to_owned(), EntryKind::File, 4),
+    ];
+    #[cfg(unix)]
+    expected.insert(
+        1,
+        ("link".to_owned(), EntryKind::Other, "a.sav".len() as u64),
+    );
+    assert_eq!(listed, expected);
+}
+
+#[test]
+fn snapshot_files_still_lists_regular_files_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir_with_link(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let mut listed: Vec<_> = (storage.snapshot_files(&info.id, AS_PATH).unwrap())
+        .into_iter()
+        .map(|file| (file.path, file.kind))
+        .collect();
+    listed.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        listed,
+        [
+            ("a.sav".to_owned(), EntryKind::File),
+            ("sub/b.sav".to_owned(), EntryKind::File)
         ]
     );
 }

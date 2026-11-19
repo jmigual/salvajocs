@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::layout::{Base, FileHash, HASHES_FILE, HASHES_FORMAT, META_FILE, REGISTRY_FILE};
 use crate::scan::FoundFile;
+use crate::storage::EntryKind;
 
 fn at(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -38,6 +39,7 @@ fn entry(path: &str, size: usize, modified: SystemTime) -> SnapshotFile {
         path: path.to_owned(),
         size: size as u64,
         modified: Some(modified),
+        kind: EntryKind::File,
     }
 }
 

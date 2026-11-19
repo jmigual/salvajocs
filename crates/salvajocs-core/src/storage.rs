@@ -15,7 +15,7 @@ use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
     LsOptions, PathList, PruneOptions, Repository, RepositoryBackends, RepositoryOptions,
     RestoreOptions, RusticError, SnapshotOptions,
-    repofile::{IndexFile, SnapshotFile as RusticSnapshot, SnapshotId},
+    repofile::{IndexFile, Node, SnapshotFile as RusticSnapshot, SnapshotId},
 };
 
 use rclone::Rclone;
@@ -307,7 +307,20 @@ fn snapshot_info(snap: &RusticSnapshot) -> SnapshotInfo {
     }
 }
 
-/// A file in a snapshot, as [`Storage::snapshot_files`] lists it.
+/// What a [`SnapshotFile`] is in its snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EntryKind {
+    /// A regular file.
+    File,
+    /// A directory.
+    Dir,
+    /// A symlink or a special file.
+    Other,
+}
+
+/// An entry of a snapshot, as [`Storage::snapshot_files`] and [`Storage::snapshot_entries`] list
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SnapshotFile {
@@ -317,6 +330,8 @@ pub struct SnapshotFile {
     pub size: u64,
     /// The mtime the snapshot stored, if any.
     pub modified: Option<SystemTime>,
+    /// Whether it is a file, a directory or something else.
+    pub kind: EntryKind,
 }
 
 /// `path` with `/` between its components; a component that is not UTF-8 is an error.
@@ -582,13 +597,13 @@ impl Storage {
         Ok(snapshot.hostname)
     }
 
-    /// Every regular file below the directory `path_in_snapshot` of snapshot `snapshot_id`,
-    /// with its path relative to it.
-    pub fn snapshot_files(
+    /// Every node below the directory `path_in_snapshot` of snapshot `snapshot_id`, with its
+    /// path relative to it.
+    fn snapshot_nodes(
         &mut self,
         snapshot_id: &str,
         path_in_snapshot: &str,
-    ) -> Result<Vec<SnapshotFile>, StorageError> {
+    ) -> Result<Vec<(PathBuf, Node)>, StorageError> {
         if self.stale {
             self.reindex()?;
         }
@@ -599,18 +614,65 @@ impl Storage {
         let node = repo
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;
+        let nodes = repo.ls(&node, &LsOptions::default()).map_err(backend)?;
+        nodes.map(|entry| entry.map_err(backend)).collect()
+    }
+
+    /// Every regular file below the directory `path_in_snapshot` of snapshot `snapshot_id`,
+    /// with its path relative to it.
+    pub fn snapshot_files(
+        &mut self,
+        snapshot_id: &str,
+        path_in_snapshot: &str,
+    ) -> Result<Vec<SnapshotFile>, StorageError> {
         let mut files = Vec::new();
-        for entry in repo.ls(&node, &LsOptions::default()).map_err(backend)? {
-            let (path, node) = entry.map_err(backend)?;
+        for (path, node) in self.snapshot_nodes(snapshot_id, path_in_snapshot)? {
             if node.is_file() {
                 files.push(SnapshotFile {
                     path: slash_path(&path)?,
                     size: node.meta.size,
                     modified: node.meta.mtime.map(SystemTime::from),
+                    kind: EntryKind::File,
                 });
             }
         }
         Ok(files)
+    }
+
+    /// Every entry below the directory `path_in_snapshot` of snapshot `snapshot_id`, with its
+    /// kind and its path relative to it. A name that is not UTF-8 is converted lossily, as a
+    /// restored dir's names are read.
+    ///
+    /// # Errors
+    /// [`StorageError::UnsafeEntryPath`] for a path [`Storage::restore_path`] refuses, and the
+    /// repository error otherwise.
+    pub fn snapshot_entries(
+        &mut self,
+        snapshot_id: &str,
+        path_in_snapshot: &str,
+    ) -> Result<Vec<SnapshotFile>, StorageError> {
+        let nodes = self.snapshot_nodes(snapshot_id, path_in_snapshot)?;
+        (nodes.into_iter())
+            .map(|(path, node)| {
+                check_entry_path(&path)?;
+                let kind = if node.is_file() {
+                    EntryKind::File
+                } else if node.is_dir() {
+                    EntryKind::Dir
+                } else {
+                    EntryKind::Other
+                };
+                let parts: Vec<_> = (path.components())
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect();
+                Ok(SnapshotFile {
+                    path: parts.join("/"),
+                    size: node.meta.size,
+                    modified: node.meta.mtime.map(SystemTime::from),
+                    kind,
+                })
+            })
+            .collect()
     }
 
     /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`, `None` when the
