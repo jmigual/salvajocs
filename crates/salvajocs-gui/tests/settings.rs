@@ -11,10 +11,11 @@ use common::{
     refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled, run_until,
     run_until_ready, save_config, shows,
 };
+use eframe::egui::ThemePreference;
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption};
+use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption, ThemeChoice};
 use salvajocs_core::layout::RootKind;
 use salvajocs_core::retention::{self, Retention, Unit};
 use salvajocs_core::secret::SecretKey;
@@ -1198,4 +1199,69 @@ fn an_unreadable_policy_is_reported_and_not_editable() {
         shows(h, "cleanup rules could not be read; nothing is removed")
     });
     assert!(is_disabled(&harness, Role::CheckBox, KEEP_LAST));
+}
+
+fn theme_preference(harness: &Harness<'static, App>) -> ThemePreference {
+    harness.ctx.options(|options| options.theme_preference)
+}
+
+#[test]
+fn the_theme_switch_applies_at_once_and_is_saved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env.clone());
+
+    // The test window starts dark, so Light is the change that shows.
+    harness.get_by_label("Light").click();
+    run_until_saved(&mut harness, &env, |config| {
+        config.theme == ThemeChoice::Light
+    });
+    assert_eq!(theme_preference(&harness), ThemePreference::Light);
+
+    harness.get_by_label("Dark").click();
+    run_until_saved(&mut harness, &env, |config| {
+        config.theme == ThemeChoice::Dark
+    });
+    assert_eq!(theme_preference(&harness), ThemePreference::Dark);
+    let yaml = std::fs::read_to_string(env.config_dir.join("config.yaml")).unwrap();
+    assert!(yaml.contains("theme: dark"));
+
+    harness.get_by_label("System").click();
+    run_until_saved(&mut harness, &env, |config| {
+        config.theme == ThemeChoice::System
+    });
+    assert_eq!(theme_preference(&harness), ThemePreference::System);
+}
+
+#[test]
+fn a_saved_theme_is_applied_at_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.theme = ThemeChoice::Light;
+    save_config(&env, &config);
+    let harness = open_settings(env);
+    assert_eq!(theme_preference(&harness), ThemePreference::Light);
+}
+
+#[test]
+fn the_theme_survives_a_new_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.theme = ThemeChoice::Light;
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.theme, ThemeChoice::Light);
 }

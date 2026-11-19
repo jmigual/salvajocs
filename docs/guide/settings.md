@@ -1,7 +1,7 @@
 # Settings
 
-The Settings tab changes the repository, the compression level, which old backups to keep and the
-folders salvajocs looks in for games. This page covers each section. Back to the [guide index](README.md).
+The Settings tab changes the repository, the compression level, which old backups to keep, the
+folders salvajocs looks in for games and the theme. This page covers each section. Back to the [guide index](README.md).
 
 ![The Settings tab](../images/settings.png)
 
@@ -107,6 +107,12 @@ and, when salvajocs knows them, the games. Games that share a prefix share its l
 
 Lutris games whose prefix is a relative path are not found. Add their prefix as a **Wine prefix**
 root.
+
+## Appearance
+
+**Theme** is **System**, **Light** or **Dark**. **System** (the default) follows the light or dark
+setting of your system; the other two always use that theme. The choice applies at once and is
+saved in `config.yaml`.
 
 ## Updates
 

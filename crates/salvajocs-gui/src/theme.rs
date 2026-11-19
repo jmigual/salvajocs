@@ -1,5 +1,5 @@
 //! The look of the app: the colors of the dark and light themes, the fonts, the type scale and
-//! the spacing. The app follows the system theme.
+//! the spacing. The app follows the system theme unless the config picks one.
 
 use std::sync::Arc;
 
@@ -8,8 +8,10 @@ use eframe::egui::{
     self, Align, Align2, Atom, Atoms, Button, Color32, ContainerAtom, CornerRadius, FontData,
     FontDefinitions, FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect,
     Response, RichText, Role, ScrollArea, Sense, Separator, Stroke, Style, TextStyle, TextWrapMode,
-    Theme, Ui, UiBuilder, Vec2, Visuals, WidgetAtom, WidgetInfo, WidgetText, style::Widgets,
+    Theme, ThemePreference, Ui, UiBuilder, Vec2, Visuals, WidgetAtom, WidgetInfo, WidgetText,
+    style::Widgets,
 };
+use salvajocs_core::config::ThemeChoice;
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
 const SEMIBOLD: &str = "semibold";
@@ -126,6 +128,15 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(Theme::Dark, visuals(&DARK, Visuals::dark()));
     ctx.set_visuals_of(Theme::Light, visuals(&LIGHT, Visuals::light()));
     ctx.all_styles_mut(style);
+}
+
+/// The egui theme preference for the config's `choice`.
+pub fn preference(choice: ThemeChoice) -> ThemePreference {
+    match choice {
+        ThemeChoice::System => ThemePreference::System,
+        ThemeChoice::Light => ThemePreference::Light,
+        ThemeChoice::Dark => ThemePreference::Dark,
+    }
 }
 
 /// egui's default fonts with Atkinson Hyperlegible Next in front of the proportional family, its

@@ -8,6 +8,8 @@ All notable changes to salvajocs. The format follows
 
 ### Added
 
+- A **Theme** switch in Settings, under **Appearance**: **System** (the default), **Light** or
+  **Dark**. It applies at once and is kept in `config.yaml`.
 - On the Restore tab, tick several games and restore them in one go with **Restore N games**.
   Each game uses its default snapshot and targets and gets its own safety backup. Games whose
   folders need mapping get the mapping dialog one after another.

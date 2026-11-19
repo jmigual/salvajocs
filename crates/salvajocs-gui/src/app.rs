@@ -5,7 +5,7 @@ use std::mem;
 use std::sync::Arc;
 
 use eframe::egui::{self, Margin, Rect, RichText, Ui};
-use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::config::{AppConfig, PasswordMode, ThemeChoice};
 use salvajocs_core::storage::{Storage, StorageError};
 
 use crate::env::Env;
@@ -440,6 +440,12 @@ impl eframe::App for App {
         if !mem::replace(&mut self.started, true) {
             // Here rather than in eframe's creation hook, which the test harnesses do not run.
             theme::apply(&ctx);
+            // System keeps egui's own preference, which a screenshot harness sets to a fixed theme.
+            if let Some(config) = &self.state.config
+                && config.theme != ThemeChoice::System
+            {
+                ctx.set_theme(theme::preference(config.theme));
+            }
             // `ui` was styled before `apply`, and the panels below inherit its style.
             ui.set_style(ctx.global_style());
             self.start(&ctx);

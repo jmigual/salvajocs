@@ -1,11 +1,11 @@
 //! The Settings tab: repository, compression, password, old backups (ADR-0015), roots (ADR-0009,
-//! ADR-0017) and updates (ADR-0013).
+//! ADR-0017), appearance and updates (ADR-0013).
 
 use std::path::PathBuf;
 
 use anyhow::anyhow;
 use eframe::egui::{self, Ui};
-use salvajocs_core::config::PasswordMode;
+use salvajocs_core::config::{PasswordMode, ThemeChoice};
 use salvajocs_core::layout::{Root, RootKind};
 use salvajocs_core::storage::Compression;
 
@@ -42,6 +42,13 @@ fn password_mode_label(mode: PasswordMode) -> &'static str {
         _ => "Other",
     }
 }
+
+/// The theme choices, in the order the switch shows them.
+const THEMES: [(ThemeChoice, &str); 3] = [
+    (ThemeChoice::System, "System"),
+    (ThemeChoice::Light, "Light"),
+    (ThemeChoice::Dark, "Dark"),
+];
 
 /// The state of the Settings tab.
 pub struct SettingsTab {
@@ -150,6 +157,7 @@ impl SettingsTab {
             self.retention.ui(ui, state);
             ui.add_space(16.0);
             self.roots_ui(ui, state);
+            appearance_ui(ui, state);
             updates_ui(ui, state);
             self.cleanup_ui(ui, state);
             adopted
@@ -328,6 +336,29 @@ impl SettingsTab {
                 state.stale = None;
             }
         });
+    }
+}
+
+/// The theme switch. It applies at once and is saved with the config.
+fn appearance_ui(ui: &mut Ui, state: &mut State) {
+    let Some(config) = &mut state.config else {
+        return;
+    };
+    ui.add_space(16.0);
+    ui.heading("Appearance");
+    let changed = theme::group(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Theme");
+            THEMES
+                .into_iter()
+                .map(|(choice, label)| ui.selectable_value(&mut config.theme, choice, label))
+                .fold(false, |changed, response| changed | response.changed())
+        })
+        .inner
+    });
+    if changed {
+        ui.ctx().set_theme(theme::preference(config.theme));
+        state.save_config(ui.ctx());
     }
 }
 
