@@ -15,6 +15,7 @@ use crate::registry::RegistryExport;
 
 mod run;
 
+pub(crate) use run::parse_base;
 pub use run::{
     ApplyError, FetchError, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, RestoreReport,
     RunError, SafetyBackup, UnreadableTarget, WriteState, compare_writes, default_targets,
@@ -344,6 +345,16 @@ fn covering_root<'a>(
             (std::cmp::Reverse(*depth), users)
         })
         .map(|(_, covering)| covering)
+}
+
+/// The root of `roots` that the staged file `(base, tail)` lies under, as [`plan`] finds it.
+pub(crate) fn root_of<'a>(
+    roots: &'a [SnapshotRoot],
+    base: Base,
+    tail: &str,
+    vars: &'a GameVars,
+) -> Option<&'a SnapshotRoot> {
+    covering_root(roots, base, tail, vars).map(|covering| covering.root)
 }
 
 /// The path `tail` restores to below `base` in `ctx`. Every path goes through `target_path` or

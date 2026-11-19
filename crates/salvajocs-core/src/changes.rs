@@ -1,17 +1,25 @@
 //! Which of a game's files differ from a snapshot of it, by content (ADR-0018): for the backup
-//! preview, the skip rule of a backup and the restore's confirm tree.
+//! preview, the skip rule of a backup and the restore's confirm tree. A snapshot of the other
+//! build is compared through the folder pairs a restore would use (ADR-0021).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backup::sha256_file;
-use crate::layout::{FILES_DIR, HASHES_FILE, Hashes, META_FILE, REGISTRY_FILE};
-use crate::restore::PRE_RESTORE_TAG;
-use crate::scan::GameScan;
+use crate::config::AppConfig;
+use crate::crossbuild::{self, Choice, Confidence, Family, SnapshotRoot};
+use crate::layout::{
+    Context, FILES_DIR, HASHES_FILE, Hashes, META_FILE, REGISTRY_FILE, WinFolders,
+};
+use crate::manifest::Manifest;
+use crate::prefix::wine_user;
+use crate::restore::{self, Listed, PRE_RESTORE_TAG, PrepareError, SkippedItem, Targets};
+use crate::scan::{Environment, GameScan};
 use crate::selection::{self, GameSettings};
+use crate::slug::slug;
 use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
 
 /// How a local file compares with a snapshot.
@@ -99,6 +107,353 @@ pub(crate) fn hash_list(
         None
     };
     Ok(hashes.and_then(|hashes| verified(hashes, listing)))
+}
+
+/// Why [`Baseline::skip_blocker`] says a backup equal to the newest one is made all the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NoSkip {
+    /// The newest backup has no hash list that [`verified`] accepts.
+    NoHashList,
+    /// A file of the newest backup, from the other build, has no place on this machine.
+    Unmapped,
+    /// The newest backup is from the other build and one side has registry keys, which the
+    /// preview does not compare.
+    Registry,
+}
+
+/// A newest backup of the other build as mapped onto the scan's build (ADR-0021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Mapped {
+    /// The snapshot's regular files below `files/`, each mapped file at its target's path key.
+    pub listing: Vec<SnapshotFile>,
+    /// The snapshot's hash list with its files keyed as in `listing`.
+    pub hashes: Option<Hashes>,
+    /// The roots of the other build whose files have no place here, as a restore would skip
+    /// them.
+    pub unplaced_roots: Vec<SnapshotRoot>,
+    /// The path keys of the other build's files left at their own key: no place here, or a key
+    /// another file already takes.
+    pub unplaced: BTreeSet<String>,
+}
+
+impl Mapped {
+    /// A mapped backup from its fields.
+    pub fn new(
+        listing: Vec<SnapshotFile>,
+        hashes: Option<Hashes>,
+        unplaced_roots: Vec<SnapshotRoot>,
+        unplaced: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            listing,
+            hashes,
+            unplaced_roots,
+            unplaced,
+        }
+    }
+}
+
+/// What a game's files are compared with: its newest backup, by [`Mapper::baseline`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Baseline {
+    /// The newest backup.
+    pub snapshot: SnapshotInfo,
+    /// The listing of its staged directory (ADR-0004), at the snapshot's own paths.
+    pub listing: Vec<SnapshotFile>,
+    /// Its hash list, when it has one that [`verified`] accepts.
+    pub hashes: Option<Hashes>,
+    /// The backup mapped onto the scan's build; `None` when it is of the same build.
+    pub mapped: Option<Mapped>,
+}
+
+impl Baseline {
+    /// A baseline from its fields.
+    pub fn new(
+        snapshot: SnapshotInfo,
+        listing: Vec<SnapshotFile>,
+        hashes: Option<Hashes>,
+        mapped: Option<Mapped>,
+    ) -> Self {
+        Self {
+            snapshot,
+            listing,
+            hashes,
+            mapped,
+        }
+    }
+
+    /// The listing and hash list to pass [`compare_game`]: the mapped ones when mapped.
+    pub fn compared(&self) -> (&[SnapshotFile], Option<&Hashes>) {
+        match &self.mapped {
+            Some(mapped) => (&mapped.listing, mapped.hashes.as_ref()),
+            None => (&self.listing, self.hashes.as_ref()),
+        }
+    }
+
+    /// Whether the staged hash list `staged` holds the same content as this backup, so no
+    /// backup is made (ADR-0018). Mapped, every file must be placed, the registry hashes equal
+    /// and the files equal by mapped key, size and hash; `salvajocs.json` is not compared, as
+    /// its roots differ across builds (ADR-0021).
+    pub fn same_content(&self, staged: &Hashes) -> bool {
+        let Some(mapped) = &self.mapped else {
+            return (self.hashes.as_ref()).is_some_and(|hashes| staged.same_content(hashes));
+        };
+        let Some(hashes) = &mapped.hashes else {
+            return false;
+        };
+        if !mapped.unplaced.is_empty()
+            || staged.registry != hashes.registry
+            || staged.files.len() != hashes.files.len()
+        {
+            return false;
+        }
+        // As `compare_game` matches: exactly, else the first key equal once case is folded.
+        let mut folded: HashMap<String, &str> = HashMap::new();
+        for key in hashes.files.keys().rev() {
+            if let Some(fold) = fold(key) {
+                folded.insert(fold, key);
+            }
+        }
+        let mut used = HashSet::new();
+        staged.files.iter().all(|(key, file)| {
+            let at = match hashes.files.get_key_value(key) {
+                Some((key, _)) => key.as_str(),
+                None => match fold(key).and_then(|key| folded.get(&key)) {
+                    Some(key) => key,
+                    None => return false,
+                },
+            };
+            let theirs = &hashes.files[at];
+            used.insert(at) && theirs.size == file.size && theirs.sha256 == file.sha256
+        })
+    }
+
+    /// Why a backup of `game`, filtered as the backup stores it ([`selection::apply`]), is made
+    /// even when its files equal this backup's; `None` when it is skipped. Mapped, the registry
+    /// is not previewed, so a skip is promised only when neither side has keys.
+    pub fn skip_blocker(&self, game: &GameScan) -> Option<NoSkip> {
+        let Some(hashes) = self.compared().1 else {
+            return Some(NoSkip::NoHashList);
+        };
+        let mapped = self.mapped.as_ref()?;
+        if !mapped.unplaced.is_empty() {
+            Some(NoSkip::Unmapped)
+        } else if game.registry_source.is_some() || hashes.registry.is_some() {
+            Some(NoSkip::Registry)
+        } else {
+            None
+        }
+    }
+}
+
+/// Maps a game's newest backup of the other build onto the scan's build as a restore would
+/// (ADR-0011, ADR-0021), from the `manifest`, the custom games of `config` and the machine `env`.
+#[derive(Clone, Copy)]
+pub struct Mapper<'a> {
+    manifest: &'a Manifest,
+    config: &'a AppConfig,
+    env: &'a Environment,
+}
+
+impl<'a> Mapper<'a> {
+    /// A mapper over `manifest`, `config` and `env`.
+    pub fn new(manifest: &'a Manifest, config: &'a AppConfig, env: &'a Environment) -> Self {
+        Self {
+            manifest,
+            config,
+            env,
+        }
+    }
+
+    /// The snapshot `newest` of `game` as `game`'s files are compared with it. When the scan's
+    /// roots are of one build and the snapshot holds files of the other, its metadata is read
+    /// ([`restore::read`], nothing downloaded) and mapped; roots a restore would ask about stay
+    /// unplaced and nothing is saved. A snapshot that cannot be mapped is compared by path.
+    ///
+    /// # Errors
+    /// The repository error when the snapshot cannot be listed or its hash list read.
+    pub fn baseline(
+        &self,
+        storage: &mut Storage,
+        newest: &SnapshotInfo,
+        game: &GameScan,
+    ) -> Result<Baseline, StorageError> {
+        let dir = format!("/salvajocs/{}", slug(&game.title));
+        let listing = storage.snapshot_files(&newest.id, &dir)?;
+        let listed = self.targets(game, &listing).and_then(|(family, targets)| {
+            let listed = restore::read(storage, newest, Path::new("baseline")).ok()?;
+            Some((family, targets, listed))
+        });
+        let (hashes, mapped) = match listed {
+            Some((family, targets, listed)) => {
+                let mapped = self.map(&listed, game, family, &targets);
+                (listed.hashes, mapped)
+            }
+            None => (hash_list(storage, &newest.id, &dir, &listing)?, None),
+        };
+        Ok(Baseline {
+            snapshot: newest.clone(),
+            listing,
+            hashes,
+            mapped,
+        })
+    }
+
+    /// The scan's build and where its files are, when `listing` (a snapshot's staged directory)
+    /// holds files of the other build; `None` otherwise, for a scan of both builds or of none,
+    /// or when this machine has no folders for the scan's build.
+    fn targets(&self, game: &GameScan, listing: &[SnapshotFile]) -> Option<(Family, Targets)> {
+        let mut families =
+            (game.roots.iter()).filter_map(|(base, _)| crossbuild::base_family(*base));
+        let family = families.next()?;
+        if !families.all(|other| other == family) {
+            return None;
+        }
+        let prefix = format!("{FILES_DIR}/");
+        let other_build = (listing.iter())
+            .filter_map(|file| key_family(file.path.strip_prefix(&prefix)?))
+            .any(|other| other != family);
+        if !other_build {
+            return None;
+        }
+        // From the scan's build, never `default_targets`, which on Linux may hold both builds.
+        let targets = match (family, &self.env.native) {
+            (Family::Linux, Some(Context::Linux(folders))) => Targets {
+                linux: Some(folders.clone()),
+                win: None,
+            },
+            (Family::Linux, _) => return None,
+            (Family::Windows, Some(native @ Context::WindowsNative(_))) => Targets {
+                linux: None,
+                win: Some(native.clone()),
+            },
+            (Family::Windows, _) => {
+                let prefix = game.prefixes.first()?;
+                let user = wine_user(prefix).ok()?;
+                let folders = WinFolders::for_prefix(prefix, &user);
+                Targets {
+                    linux: None,
+                    win: Some(Context::WinePrefix {
+                        prefix: prefix.clone(),
+                        folders,
+                    }),
+                }
+            }
+        };
+        Some((family, targets))
+    }
+
+    /// `listed` mapped onto `targets` of the build `family` by [`restore::prepare`], with every
+    /// unknown root skipped; `None` when it cannot be planned.
+    fn map(
+        &self,
+        listed: &Listed,
+        game: &GameScan,
+        family: Family,
+        targets: &Targets,
+    ) -> Option<Mapped> {
+        let info = restore::game_info(&game.title, self.manifest, &self.config.custom_games);
+        let vars = restore::game_vars(&game.title, info.entry.as_ref(), self.config, self.env);
+        let prepare =
+            |choices: &[_]| restore::prepare(&listed.staged, targets, &vars, &info, choices);
+        let plan = match prepare(&[]) {
+            Err(PrepareError::NeedsMapping(entries)) => {
+                let skips: Vec<_> = (entries.iter())
+                    .filter(|entry| entry.confidence == Confidence::Unknown)
+                    .map(|entry| (entry.root.clone(), Choice::Skip))
+                    .collect();
+                prepare(&skips)
+            }
+            plan => plan,
+        }
+        .ok()?;
+        let other = family.other();
+        let prefix = format!("{FILES_DIR}/");
+        let mut moved: HashMap<&str, String> = HashMap::new();
+        for write in &plan.writes {
+            let (Some(entry), Some((base, tail))) = (listed.source(write), &write.target_file)
+            else {
+                continue;
+            };
+            if let Some(key) = entry.path.strip_prefix(&prefix)
+                && key_family(key) == Some(other)
+            {
+                moved.insert(key, format!("{}/{tail}", base.dir_name()));
+            }
+        }
+        let files: Vec<(&str, &SnapshotFile)> = (listed.listing.iter())
+            .filter(|entry| entry.kind == EntryKind::File)
+            .filter_map(|entry| Some((entry.path.strip_prefix(&prefix)?, entry)))
+            .collect();
+        // Files left at their key reserve it first, so a mapped file never displaces one.
+        let mut taken: HashSet<String> = HashSet::new();
+        let mut reserve = |key: &str| {
+            let folded = fold(key);
+            let free = !taken.contains(key) && folded.as_ref().is_none_or(|f| !taken.contains(f));
+            taken.insert(key.to_owned());
+            taken.extend(folded);
+            free
+        };
+        for (key, _) in &files {
+            if !moved.contains_key(key) {
+                reserve(key);
+            }
+        }
+        let mut unplaced = BTreeSet::new();
+        let mut keys = Vec::with_capacity(files.len());
+        for &(key, _) in &files {
+            let placed = match moved.get(key) {
+                Some(target) if reserve(target) => Some(target.clone()),
+                Some(_) => None,
+                None if key_family(key) == Some(other) => None,
+                None => Some(key.to_owned()),
+            };
+            if placed.is_none() {
+                unplaced.insert(key.to_owned());
+            }
+            keys.push(placed.unwrap_or_else(|| key.to_owned()));
+        }
+        let listing = (files.iter().zip(&keys))
+            .map(|((_, entry), key)| SnapshotFile {
+                path: format!("{prefix}{key}"),
+                ..(*entry).clone()
+            })
+            .collect();
+        let hashes = listed.hashes.as_ref().map(|hashes| Hashes {
+            format: hashes.format,
+            meta: hashes.meta.clone(),
+            registry: hashes.registry.clone(),
+            files: (files.iter().zip(&keys))
+                .filter_map(|((old, _), key)| Some((key.clone(), hashes.files.get(*old)?.clone())))
+                .collect(),
+        });
+        let mut unplaced_roots: Vec<SnapshotRoot> = Vec::new();
+        for skipped in &plan.skipped {
+            if let SkippedItem::File(base, tail) = &skipped.item
+                && crossbuild::base_family(*base) == Some(other)
+                && let Some(root) = restore::root_of(&listed.staged.meta.roots, *base, tail, &vars)
+                && !unplaced_roots.contains(root)
+            {
+                unplaced_roots.push(root.clone());
+            }
+        }
+        Some(Mapped {
+            listing,
+            hashes,
+            unplaced_roots,
+            unplaced,
+        })
+    }
+}
+
+/// The base family of the path key `key` (`<Base>/<tail>`); `None` for an install-relative or
+/// unknown base.
+fn key_family(key: &str) -> Option<Family> {
+    let (base, _) = key.split_once('/')?;
+    crossbuild::base_family(restore::parse_base(base)?)
 }
 
 /// `hashes` when it describes the snapshot listing `listing` it was read from: the same files

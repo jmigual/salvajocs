@@ -339,7 +339,7 @@ fn game_slug(snapshot: &SnapshotInfo) -> Result<&str, FetchError> {
 }
 
 /// The base a directory of `files/` named `name` holds.
-fn parse_base(name: &str) -> Option<Base> {
+pub(crate) fn parse_base(name: &str) -> Option<Base> {
     let deserializer = IntoDeserializer::<value::Error>::into_deserializer(name);
     Base::deserialize(deserializer).ok()
 }
