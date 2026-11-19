@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::*;
-use crate::config::PasswordMode;
+use crate::config::{PasswordMode, ThemeChoice};
 use crate::layout::{Root, RootKind};
 use crate::manifest::{CustomFile, RegistryRule, When};
 
@@ -64,6 +64,7 @@ fn config() -> AppConfig {
         custom_games: Vec::new(),
         check_updates: true,
         ignored_prefixes: Vec::new(),
+        theme: ThemeChoice::System,
     }
 }
 

@@ -26,7 +26,7 @@ Since 0.6.0 the public enums of core, and the structs it returns or reads from a
 `#[non_exhaustive]`, so a release can add a variant or a field without a breaking version bump.
 Callers outside core build such a struct with its `new`, or with `Default` and then set fields.
 Closed sets stay exhaustive: `Family`, `Integration`, `Tag`, `Choice`, `Compression`,
-`RegistrySource`, `BackendKind`, `SecretKey`, `Within` (an amount and a unit) and the
+`RegistrySource`, `BackendKind`, `SecretKey`, `ThemeChoice`, `Within` (an amount and a unit) and the
 Linux/Windows pairs `Pair`, `CustomFile` and `Targets`.
 
 Workspace `Cargo.toml`: `resolver = "3"`, `edition = "2024"` in `[workspace.package]`, every

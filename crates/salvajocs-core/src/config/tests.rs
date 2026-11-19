@@ -36,6 +36,7 @@ fn sample() -> AppConfig {
         }],
         check_updates: false,
         ignored_prefixes: vec!["/prefixes/foo".into()],
+        theme: ThemeChoice::Dark,
     }
 }
 
@@ -485,6 +486,24 @@ fn new_configs_and_custom_games_equal_minimal_ones_read_from_the_file() {
         Integration::Extend,
     )];
     assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(expected));
+}
+
+#[test]
+fn theme_defaults_to_system_reads_by_name_and_is_not_written_for_system() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    fs::write(&file, "repository: /backups\npassword: none\n").unwrap();
+    let mut config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.theme, ThemeChoice::System);
+
+    config.save(tmp.path()).unwrap();
+    assert!(!fs::read_to_string(&file).unwrap().contains("theme"));
+
+    fs::write(&file, "repository: /backups\npassword: none\ntheme: dark\n").unwrap();
+    config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.theme, ThemeChoice::Dark);
+    config.save(tmp.path()).unwrap();
+    assert!(fs::read_to_string(&file).unwrap().contains("theme: dark"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{PasswordMode, RepoOption};
+use crate::config::{PasswordMode, RepoOption, ThemeChoice};
 
 const GAME: &str = "Game, with comma: ünï";
 
@@ -19,6 +19,7 @@ fn config(repository: &str, options: &[(&str, &str, bool)]) -> AppConfig {
         custom_games: vec![],
         check_updates: false,
         ignored_prefixes: Vec::new(),
+        theme: ThemeChoice::System,
     }
 }
 

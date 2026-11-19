@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::*;
-use crate::config::PasswordMode;
+use crate::config::{PasswordMode, ThemeChoice};
 use crate::launcher::{Launcher, LauncherGame};
 use crate::layout::{LinuxFolders, glob_pattern};
 use crate::manifest::{CustomFile, CustomGame, Integration, parse_yaml};
@@ -32,6 +32,7 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         custom_games,
         check_updates: true,
         ignored_prefixes: Vec::new(),
+        theme: ThemeChoice::System,
     }
 }
 

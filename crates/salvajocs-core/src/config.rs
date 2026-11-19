@@ -91,6 +91,26 @@ pub enum PasswordMode {
     Ask,
 }
 
+/// Which color theme the app uses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    /// Follow the system's light or dark preference.
+    #[default]
+    System,
+    /// Always the light theme.
+    Light,
+    /// Always the dark theme.
+    Dark,
+}
+
+impl ThemeChoice {
+    /// Whether this is the default, which the config file leaves out.
+    fn is_system(&self) -> bool {
+        *self == Self::System
+    }
+}
+
 /// A kind of repository backend the picker offers (ADR-0009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
@@ -210,6 +230,9 @@ pub struct AppConfig {
     /// Launcher prefixes that scans and restores leave out (ADR-0017).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_prefixes: Vec<PathBuf>,
+    /// The color theme: the system's, or always light or dark.
+    #[serde(default, skip_serializing_if = "ThemeChoice::is_system")]
+    pub theme: ThemeChoice,
 }
 
 fn default_true() -> bool {
@@ -223,7 +246,8 @@ pub fn default_dir() -> Option<PathBuf> {
 
 impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
-    /// reads from the file: no options, roots or custom games, and update checks on.
+    /// reads from the file: no options, roots or custom games, update checks on and the system
+    /// theme.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -233,6 +257,7 @@ impl AppConfig {
             custom_games: Vec::new(),
             check_updates: default_true(),
             ignored_prefixes: Vec::new(),
+            theme: ThemeChoice::System,
         }
     }
 

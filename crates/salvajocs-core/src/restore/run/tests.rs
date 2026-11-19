@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::backup::{Stored, backup_games};
-use crate::config::{AppConfig, PasswordMode};
+use crate::config::{AppConfig, PasswordMode, ThemeChoice};
 use crate::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair, Steam};
@@ -1094,6 +1094,7 @@ fn config(roots: Vec<Root>) -> AppConfig {
         custom_games: vec![],
         check_updates: true,
         ignored_prefixes: Vec::new(),
+        theme: ThemeChoice::System,
     }
 }
 
