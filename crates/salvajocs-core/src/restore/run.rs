@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::slice;
 
@@ -555,6 +555,100 @@ fn check(write: &Write) -> Result<Option<u64>, ApplyError> {
         Ok(target) => Ok(target.is_file().then_some(target.len())),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(apply_io(&write.target)(err)),
+    }
+}
+
+/// What a write of a plan does to its target, as the confirm before a restore shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteState {
+    /// Nothing exists at the target.
+    New,
+    /// The target is a file with other contents.
+    Changed,
+    /// The target already holds the same bytes; it is written all the same.
+    Unchanged,
+}
+
+/// Why [`compare_writes`] finds that [`run`] would write nothing for a plan: an existing target
+/// file cannot be read, so the safety backup of it fails.
+#[derive(Debug, thiserror::Error)]
+#[error("the safety backup cannot read {path}")]
+pub struct UnreadableTarget {
+    /// The target file.
+    pub path: PathBuf,
+    #[source]
+    pub source: io::Error,
+}
+
+/// Compares each of `plan.writes` with its target by content, in order. Reads only local files:
+/// the staged source and the target. The states are a snapshot in time; [`run`] does not use
+/// them.
+///
+/// Per write, the error is the [`ApplyError`] the restore would refuse that write with: a staged
+/// source that is not a regular file, a symlinked target, or an I/O error, such as a directory
+/// at the target.
+///
+/// # Errors
+/// [`UnreadableTarget`] when an existing target file cannot be opened, as [`run`] would then
+/// write nothing at all.
+pub fn compare_writes(
+    plan: &RestorePlan,
+) -> Result<Vec<Result<WriteState, ApplyError>>, UnreadableTarget> {
+    plan.writes.iter().map(compare_write).collect()
+}
+
+fn compare_write(write: &Write) -> Result<Result<WriteState, ApplyError>, UnreadableTarget> {
+    let target_len = match check(write) {
+        Err(err) => return Ok(Err(err)),
+        Ok(target_len) => target_len,
+    };
+    if target_len.is_none() {
+        // `check` also passes a target that exists but is no regular file. The rename replaces
+        // anything but a directory.
+        return Ok(match fs::symlink_metadata(&write.target) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
+            Err(err) => Err(apply_io(&write.target)(err)),
+            Ok(meta) if meta.is_dir() => {
+                Err(apply_io(&write.target)(io::ErrorKind::IsADirectory.into()))
+            }
+            Ok(_) => Ok(WriteState::Changed),
+        });
+    }
+    // The safety backup copies an existing target file, and fails the whole run when it cannot.
+    if let Err(source) = File::open(&write.target)
+        && source.kind() != io::ErrorKind::NotFound
+    {
+        let path = write.target.clone();
+        return Err(UnreadableTarget { path, source });
+    }
+    Ok(match same_content(&write.source, &write.target) {
+        Ok(true) => Ok(WriteState::Unchanged),
+        Ok(false) => Ok(WriteState::Changed),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
+        Err(err) => Err(apply_io(&write.target)(err)),
+    })
+}
+
+/// Whether the files `a` and `b` hold the same bytes: sizes first, then the bytes, stopping at
+/// the first difference. Moves to `core::changes` with the backup-diff work.
+fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
+    const CHUNK: u64 = 64 * 1024;
+    let (mut a, mut b) = (File::open(a)?, File::open(b)?);
+    if a.metadata()?.len() != b.metadata()?.len() {
+        return Ok(false);
+    }
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    loop {
+        left.clear();
+        right.clear();
+        (&mut a).take(CHUNK).read_to_end(&mut left)?;
+        (&mut b).take(CHUNK).read_to_end(&mut right)?;
+        if left != right {
+            return Ok(false);
+        }
+        if left.is_empty() {
+            return Ok(true);
+        }
     }
 }
 

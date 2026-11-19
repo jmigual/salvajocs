@@ -868,6 +868,109 @@ fn failed_write_leaves_no_temp_file() {
     assert_eq!(read(&inside), "keep");
 }
 
+#[test]
+fn compare_writes_labels_missing_changed_and_identical_targets() {
+    let f = fixture();
+    let missing = f.planned("Game/missing.sav", "new");
+    let same_size = f.planned("Game/same_size.sav", "new");
+    write(&same_size.target, "old");
+    let other_size = f.planned("Game/other_size.sav", "new");
+    write(&other_size.target, "older");
+    let identical = f.planned("Game/identical.sav", "same");
+    write(&identical.target, "same");
+    let plan = plan_of(vec![missing, same_size, other_size, identical], None);
+
+    let states: Vec<_> = compare_writes(&plan)
+        .unwrap()
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        states,
+        [
+            WriteState::New,
+            WriteState::Changed,
+            WriteState::Changed,
+            WriteState::Unchanged
+        ]
+    );
+}
+
+#[test]
+fn compare_writes_finds_a_difference_past_the_first_chunk() {
+    let f = fixture();
+    let mut contents = "a".repeat(200 * 1024);
+    let write_ = f.planned("Game/big.sav", &contents);
+    contents.replace_range(150 * 1024..150 * 1024 + 1, "b");
+    write(&write_.target, &contents);
+
+    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    assert!(
+        matches!(states[..], [Ok(WriteState::Changed)]),
+        "{states:?}"
+    );
+}
+
+#[test]
+fn compare_writes_refuses_a_directory_at_the_target() {
+    let f = fixture();
+    let write_ = f.planned("Game/save.sav", "new");
+    fs::create_dir_all(&write_.target).unwrap();
+
+    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    assert!(
+        matches!(states[..], [Err(ApplyError::Io { .. })]),
+        "{states:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn compare_writes_refuses_a_symlinked_target() {
+    let f = fixture();
+    let outside = write(&f.tmp.path().join("outside.txt"), "new");
+    let write_ = f.planned("Game/save.sav", "new");
+    fs::create_dir_all(write_.target.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &write_.target).unwrap();
+
+    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    assert!(
+        matches!(states[..], [Err(ApplyError::TargetIsSymlink)]),
+        "{states:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn compare_writes_finds_an_unreadable_target_that_blocks_the_whole_restore() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut f = fixture();
+    let locked = f.planned("Game/locked.sav", "new");
+    write(&locked.target, "old");
+    fs::set_permissions(&locked.target, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked.target).is_ok() {
+        return;
+    }
+    let other = f.planned("Game/other.sav", "new");
+    let plan = plan_of(vec![other.clone(), locked.clone()], None);
+
+    let compared = compare_writes(&plan);
+    let result = f.run(&plan, false);
+    fs::set_permissions(&locked.target, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        matches!(&compared, Err(UnreadableTarget { path, .. }) if *path == locked.target),
+        "{compared:?}"
+    );
+    // What the compare foresees: the safety backup fails, so nothing is written.
+    assert!(
+        matches!(result, Err(RunError::SafetyBackup(_))),
+        "{result:?}"
+    );
+    assert!(!other.target.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn unreadable_user_reg_blocks_the_restore() {
