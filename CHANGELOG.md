@@ -6,6 +6,10 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, the app no longer opens a terminal window.
+
 ## [0.5.0] - 2026-11-19
 
 ### Changed
