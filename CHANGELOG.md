@@ -53,6 +53,8 @@ All notable changes to salvajocs. The format follows
 
 ### Fixed
 
+- The Restore tab reads a backup another machine made after salvajocs opened the repository,
+  instead of failing with "Tree ID … not found in index".
 - On Windows, the app no longer opens a terminal window.
 - On Windows, the app is named "Salvajocs" in Task Manager, the Start menu and Apps & Features.
 - Dialogs wider than the window shrink to fit it, and scroll when their content is still wider,

@@ -105,9 +105,11 @@ throwaway program built against them in the scratchpad:
   not the ids-only index used for backup in the spike. `Repository<OpenStatus>` is not `Clone`,
   so one value cannot serve both states, and restore needs the full index. A snapshot written
   in a session is not in that in-memory index, so `restore_path` reindexes first when the
-  session has written one. `reindex` reopens the repository (the key is derived again) rather
-  than using `drop_index().to_indexed()`: both consume the repository, and a failed `to_indexed`
-  would leave `Storage` without one.
+  session has written one. A snapshot another session wrote after this one loaded the index is
+  not in it either, so every read of a snapshot reindexes once when the index lacks its tree.
+  `reindex` reopens the repository (the key is derived again) rather than using
+  `drop_index().to_indexed()`: both consume the repository, and a failed `to_indexed` would
+  leave `Storage` without one.
 
 ## Alternatives considered
 

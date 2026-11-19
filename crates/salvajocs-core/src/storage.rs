@@ -597,6 +597,23 @@ impl Storage {
         Ok(snapshot.hostname)
     }
 
+    /// The snapshot `snapshot_id`, read after a reindex when the open index lacks its tree:
+    /// another session, such as another machine, added it after this one loaded the index.
+    fn snapshot(&mut self, snapshot_id: &str) -> Result<RusticSnapshot, StorageError> {
+        let reindexed = self.stale;
+        if reindexed {
+            self.reindex()?;
+        }
+        let snap = (self.repo)
+            .get_snapshot_from_str(snapshot_id, |_| true)
+            .map_err(backend)?;
+        // An index loaded just now already holds every tree there is.
+        if !reindexed && self.repo.get_index_entry(&snap.tree).is_err() {
+            self.reindex()?;
+        }
+        Ok(snap)
+    }
+
     /// Every node below the directory `path_in_snapshot` of snapshot `snapshot_id`, with its
     /// path relative to it.
     fn snapshot_nodes(
@@ -604,13 +621,8 @@ impl Storage {
         snapshot_id: &str,
         path_in_snapshot: &str,
     ) -> Result<Vec<(PathBuf, Node)>, StorageError> {
-        if self.stale {
-            self.reindex()?;
-        }
+        let snap = self.snapshot(snapshot_id)?;
         let repo = &self.repo;
-        let snap = repo
-            .get_snapshot_from_str(snapshot_id, |_| true)
-            .map_err(backend)?;
         let node = repo
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;
@@ -682,13 +694,8 @@ impl Storage {
         snapshot_id: &str,
         path_in_snapshot: &str,
     ) -> Result<Option<Vec<u8>>, StorageError> {
-        if self.stale {
-            self.reindex()?;
-        }
+        let snap = self.snapshot(snapshot_id)?;
         let repo = &self.repo;
-        let snap = repo
-            .get_snapshot_from_str(snapshot_id, |_| true)
-            .map_err(backend)?;
         let found = repo
             .find_nodes_from_path([snap.tree], Path::new(path_in_snapshot))
             .map_err(backend)?;
@@ -712,13 +719,8 @@ impl Storage {
         snapshot_id: &str,
         path_in_snapshot: &str,
     ) -> Result<Vec<u8>, StorageError> {
-        if self.stale {
-            self.reindex()?;
-        }
+        let snap = self.snapshot(snapshot_id)?;
         let repo = &self.repo;
-        let snap = repo
-            .get_snapshot_from_str(snapshot_id, |_| true)
-            .map_err(backend)?;
         let node = repo
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;
@@ -738,13 +740,8 @@ impl Storage {
         let dest_dir = dest_dir
             .to_str()
             .ok_or_else(|| StorageError::NonUtf8Path(dest_dir.to_path_buf()))?;
-        if self.stale {
-            self.reindex()?;
-        }
+        let snap = self.snapshot(snapshot_id)?;
         let repo = &self.repo;
-        let snap = repo
-            .get_snapshot_from_str(snapshot_id, |_| true)
-            .map_err(backend)?;
         let node = repo
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;

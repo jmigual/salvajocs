@@ -154,18 +154,6 @@ fn open_tab_with(
     (harness, env)
 }
 
-/// A new app on the tests' repository showing the Restore tab's list with `title`, as after a
-/// restart, so its repository index holds snapshots another session added.
-fn reopen(env: Env, title: &str) -> Harness<'static, App> {
-    let mut harness = harness(env);
-    run_until_ready(&mut harness);
-    harness.state_mut().set_tab(Tab::Restore);
-    run_settled(&mut harness);
-    harness.get_by_label("Load backups").click();
-    run_until(&mut harness, "the list", |h| shows(h, title));
-    harness
-}
-
 /// Selects `title` and waits for its default targets.
 fn select(harness: &mut Harness<'static, App>, title: &str) {
     harness.get_by_label(title).click();
@@ -400,12 +388,12 @@ fn restore_files_says_why_it_is_disabled() {
 fn restore_switching_snapshots_shows_only_the_last_plan() {
     let tmp = tempfile::tempdir().unwrap();
     let (alpha, older) = native(&tmp, "Alpha", &["Alpha/old.dat"]);
-    let (app, env) = open_tab(&tmp, vec![alpha], &[older]);
-    drop(app);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha], &[older]);
+    // Another session backs the game up again after the app loaded the repository's index.
     let (_, newer) = native(&tmp, "Alpha", &["Alpha/new.dat"]);
     let stage = tmp.path().join("fixture-stage");
     backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], false, |_| {}).unwrap();
-    let mut harness = reopen(env, "Alpha");
+    click(&mut harness, "Load backups");
     select(&mut harness, "Alpha");
     preview(&mut harness);
 
@@ -1438,8 +1426,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
     let tmp = tempfile::tempdir().unwrap();
     let (alpha, _) = native(&tmp, "Alpha", &[]);
     let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
-    let (app, env) = open_tab(&tmp, vec![alpha, beta], &[beta_scan]);
-    drop(app);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[beta_scan]);
     // A stage as 0.5.0 made it: no hashes.json.
     let stage = tmp.path().join("old-stage");
     let meta = r#"{"format":1,"title":"Alpha","roots":[["XdgData","Alpha"]]}"#;
@@ -1454,7 +1441,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
         .unwrap();
     // The same bytes with another mtime.
     put(&under(&xdg_data(&tmp), "Alpha/same.dat"), "same");
-    let mut harness = reopen(env, "Alpha");
+    click(&mut harness, "Load backups");
 
     click(&mut harness, "Include Alpha");
     plan_batch(&mut harness, "Restore 1 game");

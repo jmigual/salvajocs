@@ -674,3 +674,26 @@ fn hostname_is_the_host_snapshots_are_stored_with() {
         .unwrap();
     assert_eq!(storage.hostname().unwrap(), info.host);
 }
+
+#[test]
+fn a_snapshot_another_session_added_is_read_after_a_reindex() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    // Another session, such as another machine, backs up after this one loaded the index.
+    let mut other = Storage::open(&local(&tmp.path().join("repo")), "").unwrap();
+    let info = other
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+
+    let listed = storage.snapshot_entries(&info.id, AS_PATH).unwrap();
+    assert_eq!(listed.len(), 3);
+    let read = storage
+        .read_file_if_present(&info.id, &format!("{AS_PATH}/a.sav"))
+        .unwrap();
+    assert_eq!(read, Some(b"alpha".to_vec()));
+    let out = tmp.path().join("out");
+    storage.restore_path(&info.id, AS_PATH, &out).unwrap();
+    assert_eq!(fs::read_to_string(out.join("sub/b.sav")).unwrap(), "beta");
+}
