@@ -62,6 +62,8 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
     verified, never matches: the backup goes on to rustic, so a damaged blob costs a snapshot,
     not the game's backups. Checked before rustic is
     called; never a tree id compare, since tree ids differ across machines.
+    Amended by ADR-0021: a newest snapshot of the other build is compared through the folder
+    pairs, without `salvajocs.json`.
   - The outcome is `Stored::New`, `Stored::Unchanged { newer_elsewhere }` or
     `Stored::SameAsNewest(newest)`. When (B) holds and the newest is this machine's own
     snapshot, the outcome is `Unchanged { newer_elsewhere: None }`: an unchanged rerun reads
@@ -80,6 +82,8 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
   baseline but no longer found (or unticked) are greyed `removed` rows in the tree. Registry
   keys and `salvajocs.json` are not previewed. A comparison with a repository Settings replaced
   is dropped and made again.
+  Amended by ADR-0021: a newest snapshot of the other build is compared through the folder
+  pairs.
 - **Shared tree:** the file tree moves to `tabs/tree.rs` with status badges and a read-only
   mode, for the restore's confirm tree.
 
