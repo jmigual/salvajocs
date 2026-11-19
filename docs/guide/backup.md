@@ -87,7 +87,7 @@ such as `1 new, 2 changed since the backup from <host>, <date>`.
 | Minus in a circle | Removed: files in the backup that the next backup will not hold. |
 | Question mark | Files that could not be read to compare them. |
 | Check mark in a circle, no number | No backup will be made. Either nothing changed since that backup, or nothing changed since this PC's own last backup, though another machine's newer backup differs. |
-| Equals sign, no number | No changes since that backup, but a backup is still made: that backup has no list of hashes (it was made by salvajocs 0.5.0 or older). |
+| Equals sign, no number | No changes since that backup, but a backup is still made: that backup has no list of hashes (it was made by salvajocs 0.5.0 or older), or it is from the other build and one side has registry keys. |
 | Plus in a circle, no number | No backup yet: the repository has no backup of the game. |
 
 If the backups could not be read, the game says `Could not compare: <error>` under its title.
@@ -110,6 +110,23 @@ its backup's files is not used, so there the modification time decides.
 
 The comparison leaves out the registry keys and the list of save folders, so a game shown as
 unchanged is still backed up when only those changed.
+
+The newest backup may come from the other build of the game: the native Linux build on one
+machine and the Windows build (native, or in Wine or Proton) on another. Its folders are then
+matched to this machine's the way a [cross-OS restore](cross-os-restore.md#how-a-folder-is-matched)
+matches them, without asking anything and without saving anything, and the files are compared
+in their matched places. The game's tooltip says that the backup is from the other build. A
+folder a restore would have to ask about, or one you skipped, has no known place here: its files
+show as removed, with the tooltip `Removed: the newest backup is from the other build, and this
+file has no place here`, and the game's tooltip names the folders. The same goes for a file
+whose matched path another file of the backup already takes. Across builds the
+registry keys are not compared either, so a game with registry keys on either side shows the
+equals sign and is backed up.
+
+When no backup is made because the files equal the other build's newest backup, this machine's
+saves live only in that backup. Restoring them here then needs the folder matching to still be
+known (keep the pair or row, or answer the mapping dialog again), and on Linux the native build
+as the target, not a Proton prefix.
 
 The choices are kept in the repository, so every machine that uses it shares them. A click is
 not stored there right away: it waits in `pending-selection.json` in the config folder, which

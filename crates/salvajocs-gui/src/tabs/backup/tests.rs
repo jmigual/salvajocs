@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::BackupError;
+use salvajocs_core::changes::Mapped;
 use salvajocs_core::config::{AppConfig, PasswordMode};
-use salvajocs_core::layout::Base;
+use salvajocs_core::layout::{Base, Hashes};
 use salvajocs_core::manifest::Manifest;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::{FoundFile, RegistrySource};
@@ -133,13 +134,92 @@ fn compared(state: FileState, unchanged_here: bool) -> Preview {
         let files = HashMap::from([("Home/save".to_owned(), (1, None))]);
         (snapshot_from("here"), files)
     });
+    let hashes = Hashes::from_json(br#"{"format": 1, "meta": "", "files": {}}"#);
+    let newest = changes::Baseline::new(snapshot_from("there"), Vec::new(), hashes, None);
     Ok(Some(Baseline {
-        newest: snapshot_from("there"),
-        hashed: true,
+        newest,
         comparison: Comparison::new(vec![state.clone()], Vec::new()),
         states: HashMap::from([("Home/save".to_owned(), state)]),
         parent,
     }))
+}
+
+/// `preview` as if its newest backup were of the other build, with `unplaced` files left in
+/// the folders `unplaced_roots`.
+fn of_the_other_build(
+    mut preview: Preview,
+    unplaced_roots: Vec<(Base, String)>,
+    unplaced: &[&str],
+) -> Preview {
+    if let Ok(Some(baseline)) = &mut preview {
+        let hashes = baseline.newest.hashes.clone();
+        let unplaced = unplaced.iter().map(|&key| key.to_owned()).collect();
+        let mapped = Mapped::new(Vec::new(), hashes, unplaced_roots, unplaced);
+        baseline.newest.mapped = Some(mapped);
+    }
+    preview
+}
+
+#[test]
+fn a_backup_of_the_other_build_says_how_its_folders_were_matched() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let date = "1970-01-01 00:00 UTC";
+
+    let matched = of_the_other_build(compared(FileState::Same, false), Vec::new(), &[]);
+    assert_eq!(
+        preview_text(&game, &matched, &all).unwrap(),
+        format!(
+            "No changes since the backup from there, {date}; no backup will be made. The backup \
+             is from the other build; its folders were matched to this machine's."
+        )
+    );
+    let saves = (Base::WinAppData, "Factorio/saves".to_owned());
+    let unplaced = ["WinAppData/Factorio/saves/a.zip"];
+    let preview = of_the_other_build(compared(FileState::Changed, false), vec![saves], &unplaced);
+    assert_eq!(
+        preview_text(&game, &preview, &all).unwrap(),
+        format!(
+            "1 changed since the backup from there, {date}. The newest backup is from the other \
+             build; these folders have no known place here: <winAppData>/Factorio/saves."
+        )
+    );
+    assert_eq!(
+        hint(Some(&preview), unplaced[0], Badge::Removed),
+        "Removed: the newest backup is from the other build, and this file has no place here \
+         (its folder is unknown, or another file takes its path)"
+    );
+    assert_eq!(
+        hint(Some(&preview), "Home/save", Badge::Removed),
+        "Removed: the next backup will not hold it"
+    );
+    // A file another one pushed aside, in a folder that has a place.
+    let unplaced = ["WinDocuments/G/save"];
+    let preview = of_the_other_build(compared(FileState::Same, false), Vec::new(), &unplaced);
+    assert!(preview_text(&game, &preview, &all).unwrap().ends_with(
+        ". The newest backup is from the other build; some of its files have no place here."
+    ));
+}
+
+#[test]
+fn registry_keys_across_builds_promise_a_backup() {
+    let mut game = game(&[1], true, 0);
+    let all = GameSettings::default();
+    let preview = of_the_other_build(compared(FileState::Same, false), Vec::new(), &[]);
+    let next = next_backup(&game, &preview, &all).unwrap();
+    assert_eq!(next.glyph(), Some(icons::EQUALS));
+    assert!(sentence(&next).starts_with(
+        "No changes to the files since the backup from there, 1970-01-01 00:00 UTC, but a backup \
+         will be made, as that backup is from the other build and the registry keys are not \
+         compared"
+    ));
+    // Every key unticked: the backup stores no registry, so the skip is promised.
+    let mut unticked = GameSettings::default();
+    unticked.registry.insert(KEY.into(), false);
+    let next = next_backup(&game, &preview, &unticked).unwrap();
+    assert_eq!(next.glyph(), Some(icons::CHECK_CIRCLE));
+    game.registry_source = None;
+    let next = next_backup(&game, &preview, &all).unwrap();
+    assert_eq!(next.glyph(), Some(icons::CHECK_CIRCLE));
 }
 
 #[test]
@@ -181,7 +261,7 @@ fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     let game = game(&[1], false, 0);
     let mut preview = compared(FileState::Same, false);
     if let Ok(Some(baseline)) = &mut preview {
-        baseline.hashed = false;
+        baseline.newest.hashes = None;
     }
     assert_eq!(
         preview_text(&game, &preview, &GameSettings::default()).unwrap(),
@@ -205,7 +285,7 @@ fn a_change_judged_by_mtime_says_so() {
     );
 
     if let Ok(Some(baseline)) = &mut preview {
-        baseline.hashed = false;
+        baseline.newest.hashes = None;
     }
     let note = "(by modified time: this backup has no list of hashes)";
     assert_eq!(
@@ -229,7 +309,7 @@ fn each_header_state_has_its_icon() {
     assert_eq!(glyph(&same), Some(icons::CHECK_CIRCLE));
     let mut unhashed = compared(FileState::Same, false);
     if let Ok(Some(baseline)) = &mut unhashed {
-        baseline.hashed = false;
+        baseline.newest.hashes = None;
     }
     assert_eq!(glyph(&unhashed), Some(icons::EQUALS));
     // Skipped like `same`, though the newest backup differs.

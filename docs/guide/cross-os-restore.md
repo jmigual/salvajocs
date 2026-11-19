@@ -73,6 +73,9 @@ first answer:
 Folders matched by 1 to 3 are applied without a dialog. The plan shows where every file goes,
 and you can still override a single file there.
 
+The same matching lets the [Backup tab](backup.md#what-differs-from-the-last-backup) compare
+your saves with a newest backup from the other build.
+
 ### The mapping dialog
 
 ![The mapping dialog](../images/mapping-dialog.png)

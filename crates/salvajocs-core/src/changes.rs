@@ -77,19 +77,6 @@ pub fn newest<'a>(snapshots: &'a [SnapshotInfo], slug: &str) -> Option<&'a Snaps
     })
 }
 
-/// The listing of the game `slug` in snapshot `snapshot_id` (its staged directory, ADR-0004)
-/// and the snapshot's hash list, when it has one that [`verified`] accepts.
-pub fn baseline(
-    storage: &mut Storage,
-    snapshot_id: &str,
-    slug: &str,
-) -> Result<(Vec<SnapshotFile>, Option<Hashes>), StorageError> {
-    let dir = format!("/salvajocs/{slug}");
-    let listing = storage.snapshot_files(snapshot_id, &dir)?;
-    let hashes = hash_list(storage, snapshot_id, &dir, &listing)?;
-    Ok((listing, hashes))
-}
-
 /// The hash list of the game's staged directory `dir` in snapshot `snapshot_id`, whose entries
 /// are `listing`, when it has one that [`verified`] accepts.
 pub(crate) fn hash_list(

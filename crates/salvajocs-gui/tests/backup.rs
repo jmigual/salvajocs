@@ -15,11 +15,13 @@ use common::{
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use salvajocs_core::backup::backup_games;
 use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
-use salvajocs_core::manifest::{self, CustomGame, Integration, Manifest, parse_yaml};
+use salvajocs_core::manifest::{self, CustomFile, CustomGame, Integration, Manifest, parse_yaml};
 use salvajocs_core::retention::{self, Retention};
+use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::selection::{Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{RepoLocation, Storage};
@@ -988,4 +990,154 @@ fn an_unreadable_policy_removes_nothing_and_warns() {
     assert_eq!(left, 2);
     assert!(shows(&harness, "The cleanup rules could not be read"));
     assert!(!shows(&harness, "Cleanup did not finish"));
+}
+
+/// Backs up the game `G` of the Linux build into the repository of `tmp`, with this machine's
+/// host, as a dual boot would: `<home>/G/save.dat` holding `content`.
+fn back_up_linux_build(tmp: &TempDir, content: &str) {
+    let real = tmp.path().join("linux/G/save.dat");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::write(&real, content).unwrap();
+    let mut scan = GameScan::default();
+    scan.title = "G".into();
+    let size = content.len() as u64;
+    scan.files = vec![FoundFile::new(
+        Base::Home,
+        "G/save.dat".into(),
+        real,
+        size,
+        None,
+    )];
+    scan.roots = vec![(Base::Home, "G".into())];
+    let stage = tmp.path().join("linux-stage");
+    backup_games(&mut open_repo(tmp), &[scan], &stage, &[], None, |_| {}).unwrap();
+}
+
+/// The custom game `G` of the Windows build in `prefix`, from the manifest-style `yaml` of its
+/// entry.
+fn windows_build(yaml: &str, prefix: &Path) -> CustomGame {
+    let entry = parse_yaml(yaml).unwrap().games.remove("G").unwrap();
+    let mut game = CustomGame::new("G".into(), entry, Integration::Override);
+    game.wine_prefix = Some(prefix.to_path_buf());
+    game
+}
+
+/// `G` with the row `<home>/G` ↔ `<winAppData>/G`, in `prefix`, plus `entry` (YAML lines below
+/// the title).
+fn paired(entry: &str, prefix: &Path) -> CustomGame {
+    let mut game = windows_build(&format!("G:\n{entry}"), prefix);
+    game.files = vec![CustomFile {
+        linux: Some("<home>/G".into()),
+        windows: Some("<winAppData>/G".into()),
+    }];
+    game
+}
+
+/// The label of the one node whose label contains `text`.
+fn label_of(harness: &Harness<'static, App>, text: &str) -> String {
+    let node = harness.get_by_label_contains(text);
+    node.accesskit_node().label().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn a_backup_from_the_other_build_compares_through_the_folder_pairs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    let game = paired("  files: {}\n", &prefix);
+    let (mut harness, env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+    let config_file = env.config_dir.join("config.yaml");
+    let config = fs::read(&config_file).unwrap();
+
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    let label = label_of(&harness, "No changes since the backup from ");
+    assert!(
+        label.ends_with(
+            "; no backup will be made. The backup is from the other build; its folders were \
+             matched to this machine's."
+        ),
+        "{label}"
+    );
+    assert!(!shows(&harness, "removed"));
+    assert_eq!(fs::read(&config_file).unwrap(), config, "nothing is saved");
+
+    // Skipped by the mapped content: rustic alone stores another tree for this host's parent.
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: up to date");
+}
+
+#[test]
+fn a_folder_of_the_other_build_with_no_known_place_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    // Two Linux save folders, so no auto-pair, and no rows: as Factorio has it.
+    let os = |os: &str| format!("      tags: [save]\n      when:\n        - os: {os}\n");
+    let yaml = format!(
+        "G:\n  files:\n    <home>/G:\n{}    <home>/G2:\n{}    <winAppData>/G:\n{}",
+        os("linux"),
+        os("linux"),
+        os("windows")
+    );
+    let game = windows_build(&yaml, &prefix);
+    let (mut harness, _env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    let label = label_of(&harness, "1 new, 1 removed since the backup from ");
+    assert!(
+        label.ends_with(
+            "The newest backup is from the other build; these folders have no known place here: \
+             <home>/G."
+        ),
+        "{label}"
+    );
+    click(&mut harness, "1 file, 3 B");
+    click(&mut harness, "Open Home/G");
+    click(&mut harness, "Open WinAppData/G");
+    assert!(shows(&harness, "save.dat, removed"));
+    assert!(shows(&harness, "save.dat, new"));
+    let why = "Removed: the newest backup is from the other build, and this file has no place \
+               here (its folder is unknown, or another file takes its path)";
+    assert_eq!(harness.query_all_by_label(why).count(), 1);
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: backed up");
+}
+
+#[test]
+fn a_registry_key_of_one_build_promises_a_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    // `make_prefix`'s key, which the Linux build has no counterpart of.
+    let game = paired(
+        "  registry:\n    HKEY_CURRENT_USER/Software/Alpha: {}\n",
+        &prefix,
+    );
+    let (mut harness, _env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    let sentence = "No changes to the files since the backup from ";
+    assert!(
+        label_of(&harness, sentence).contains("the registry keys are not compared"),
+        "{}",
+        label_of(&harness, sentence)
+    );
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: backed up");
 }

@@ -15,8 +15,9 @@ use eframe::egui::{
     self, Checkbox, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
 };
 use salvajocs_core::backup::{self, GameBackup, Stored};
-use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper};
+use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper, NoSkip};
 use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::crossbuild;
 use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
@@ -121,18 +122,24 @@ fn describe_problem(problem: &ScanProblem) -> String {
     }
 }
 
-/// What a game's files are compared with: its newest backup from any host (ADR-0018).
+/// What a game's files are compared with: its newest backup from any host (ADR-0018), mapped
+/// when it is of the other build (ADR-0021).
 struct Baseline {
-    newest: SnapshotInfo,
-    /// The newest backup has a hash list that matches its files, so a backup equal to it is
-    /// skipped (ADR-0018). Without one, a backup is made even when nothing differs.
-    hashed: bool,
+    newest: changes::Baseline,
     comparison: Comparison,
     /// The state of each found file, by its path key.
     states: HashMap<String, FileState>,
     /// This machine's last backup of the game and its files; `None` when it has none or it has
     /// no hash list, which staging now adds, so rustic finds no backup unchanged.
     parent: Option<(SnapshotInfo, BackedUpFiles)>,
+}
+
+impl Baseline {
+    /// Whether the newest backup has a hash list that matches its files; without one, changes
+    /// are judged by mtime and a backup is made even when nothing differs (ADR-0018).
+    fn hashed(&self) -> bool {
+        self.newest.compared().1.is_some()
+    }
 }
 
 /// The size and mtime of each file below `files/` of a backup, by path key.
@@ -143,15 +150,20 @@ type BackedUpFiles = HashMap<String, (u64, Option<SystemTime>)>;
 type Preview = Result<Option<Baseline>, String>;
 
 /// Lists each of `games`' newest backup and this machine's last one, and compares the found
-/// files with the newest (ADR-0018). Locks the repository for one game at a time.
-fn preview(storage: &SharedStorage, games: &[GameScan]) -> anyhow::Result<Vec<Preview>> {
+/// files with the newest (ADR-0018), through `mapper` when it is of the other build (ADR-0021).
+/// Locks the repository for one game at a time.
+fn preview(
+    storage: &SharedStorage,
+    games: &[GameScan],
+    mapper: &Mapper,
+) -> anyhow::Result<Vec<Preview>> {
     let (snapshots, host) = {
         let mut storage = lock_storage(storage)?;
         storage.reindex()?;
         (storage.snapshots("salvajocs")?, storage.hostname()?)
     };
     let previews = games.iter().map(|game| {
-        preview_game(storage, game, &snapshots, &host).map_err(|err| format!("{err:#}"))
+        preview_game(storage, game, &snapshots, &host, mapper).map_err(|err| format!("{err:#}"))
     });
     Ok(previews.collect())
 }
@@ -161,6 +173,7 @@ fn preview_game(
     game: &GameScan,
     snapshots: &[SnapshotInfo],
     host: &str,
+    mapper: &Mapper,
 ) -> anyhow::Result<Option<Baseline>> {
     let slug = slug(&game.title);
     let Some(newest) = changes::newest(snapshots, &slug) else {
@@ -172,22 +185,24 @@ fn preview_game(
         snapshot.host == host && snapshot.label == game.title && snapshot.tags.contains(&game_tag)
     });
     let as_path = format!("/salvajocs/{slug}");
-    let (listing, hashes, parent_listing) = {
+    let (baseline, parent_listing) = {
         let mut storage = lock_storage(storage)?;
-        let (listing, hashes) = changes::baseline(&mut storage, &newest.id, &slug)?;
+        let baseline = mapper.baseline(&mut storage, newest, game)?;
         let parent_listing = match parent {
             Some(parent) if parent.id != newest.id => {
                 Some(storage.snapshot_files(&parent.id, &as_path)?)
             }
             _ => None,
         };
-        (listing, hashes, parent_listing)
+        (baseline, parent_listing)
     };
-    let comparison = changes::compare_game(game, &listing, hashes.as_ref());
+    let (listing, hashes) = baseline.compared();
+    let comparison = changes::compare_game(game, listing, hashes);
     let states = (game.files.iter().map(selection::path_key))
         .zip(comparison.found.iter().cloned())
         .collect();
-    let parent_listing = parent_listing.as_ref().unwrap_or(&listing);
+    // rustic compares trees by path, so (A) is predicted against the snapshot's own paths.
+    let parent_listing = parent_listing.as_ref().unwrap_or(&baseline.listing);
     let parent = (parent.filter(|_| parent_listing.iter().any(|file| file.path == HASHES_FILE)))
         .map(|parent| {
             let prefix = "files/";
@@ -200,8 +215,7 @@ fn preview_game(
             (parent.clone(), files)
         });
     Ok(Some(Baseline {
-        newest: newest.clone(),
-        hashed: hashes.is_some(),
+        newest: baseline,
         comparison,
         states,
         parent,
@@ -241,12 +255,22 @@ fn hint(preview: Option<&Preview>, key: &str, badge: Badge) -> String {
     match badge {
         Badge::New => "New: not in the backup".to_owned(),
         Badge::Changed => match preview {
-            Some(Ok(Some(baseline))) if !baseline.hashed => {
+            Some(Ok(Some(baseline))) if !baseline.hashed() => {
                 format!("Changed since the backup ({BY_MTIME})")
             }
             _ => "Changed since the backup".to_owned(),
         },
-        Badge::Removed => "Removed: the next backup will not hold it".to_owned(),
+        Badge::Removed => match preview {
+            Some(Ok(Some(baseline)))
+                if (baseline.newest.mapped.as_ref())
+                    .is_some_and(|mapped| mapped.unplaced.contains(key)) =>
+            {
+                "Removed: the newest backup is from the other build, and this file has no place \
+                 here (its folder is unknown, or another file takes its path)"
+                    .to_owned()
+            }
+            _ => "Removed: the next backup will not hold it".to_owned(),
+        },
         Badge::Unknown | Badge::WillFail => {
             if let Some(Ok(Some(baseline))) = preview
                 && let Some(FileState::Unknown(reason)) = baseline.states.get(key)
@@ -306,11 +330,11 @@ enum Next<'a> {
     NoBackupYet,
     /// The preview failed; holds why.
     Failed(&'a str),
-    /// The included files are those of the newest backup, `newest`. It is skipped when that
-    /// backup has a hash list, else made all the same.
+    /// The included files are those of the newest backup, `newest`. It is skipped unless
+    /// `blocker` says why it is made all the same.
     Same {
         newest: &'a SnapshotInfo,
-        hashed: bool,
+        blocker: Option<NoSkip>,
     },
     /// Unchanged since this PC's last backup, `parent`, so it is skipped, though the newest
     /// backup differs by `counts`.
@@ -334,8 +358,10 @@ impl Next<'_> {
     fn glyph(&self) -> Option<&'static str> {
         match self {
             Next::NoBackupYet => Some(icons::PLUS_CIRCLE),
-            Next::Same { hashed: false, .. } => Some(icons::EQUALS),
-            Next::Same { hashed: true, .. } | Next::UnchangedHere { .. } => {
+            Next::Same {
+                blocker: Some(_), ..
+            } => Some(icons::EQUALS),
+            Next::Same { blocker: None, .. } | Next::UnchangedHere { .. } => {
                 Some(icons::CHECK_CIRCLE)
             }
             Next::Failed(_) | Next::Changes { .. } => None,
@@ -356,11 +382,13 @@ fn next_backup<'a>(
         Err(err) => return Some(Next::Failed(err)),
     };
     let counts = changes::counts(game, &baseline.comparison, settings)?;
-    let newest = &baseline.newest;
+    let newest = &baseline.newest.snapshot;
     if counts == Counts::default() {
+        // The scan the backup stores, whose registry keys may all be unticked.
+        let applied = selection::apply(game, settings)?;
         return Some(Next::Same {
             newest,
-            hashed: baseline.hashed,
+            blocker: baseline.newest.skip_blocker(&applied),
         });
     }
     Some(match &baseline.parent {
@@ -374,14 +402,47 @@ fn next_backup<'a>(
         _ => Next::Changes {
             newest,
             counts,
-            hashed: baseline.hashed,
+            hashed: baseline.hashed(),
         },
     })
 }
 
-/// [`next_backup`] as a sentence; `None` when the game would not be backed up at all.
+/// [`next_backup`] as a sentence, with what [`noted`] adds; `None` when the game would not be
+/// backed up at all.
 fn preview_text(game: &GameScan, preview: &Preview, settings: &GameSettings) -> Option<String> {
-    next_backup(game, preview, settings).map(|next| sentence(&next))
+    next_backup(game, preview, settings).map(|next| noted(sentence(&next), preview))
+}
+
+/// `text` followed, when `preview`'s newest backup is of the other build, by whether its
+/// folders were matched to this machine's, which have no known place here, or that some of its
+/// files have no place (ADR-0021).
+fn noted(text: String, preview: &Preview) -> String {
+    let mapped = (preview.as_ref().ok().and_then(Option::as_ref))
+        .and_then(|baseline| baseline.newest.mapped.as_ref());
+    let Some(mapped) = mapped else {
+        return text;
+    };
+    if mapped.unplaced_roots.is_empty() {
+        return if mapped.unplaced.is_empty() {
+            format!(
+                "{text}. The backup is from the other build; its folders were matched to this \
+                 machine's."
+            )
+        } else {
+            format!(
+                "{text}. The newest backup is from the other build; some of its files have no \
+                 place here."
+            )
+        };
+    }
+    let folders: Vec<String> = (mapped.unplaced_roots.iter())
+        .map(crossbuild::root_template)
+        .collect();
+    format!(
+        "{text}. The newest backup is from the other build; these folders have no known place \
+         here: {}.",
+        folders.join(", ")
+    )
 }
 
 /// `next` as the sentence its header shows on hover.
@@ -390,13 +451,23 @@ fn sentence(next: &Next<'_>) -> String {
     match *next {
         Next::NoBackupYet => "No backup yet".to_owned(),
         Next::Failed(err) => format!("Could not compare: {err}"),
-        Next::Same { newest, hashed } => {
+        Next::Same { newest, blocker } => {
             let (host, date) = since(newest);
             let same = format!("No changes since the backup from {host}, {date}");
-            if hashed {
-                format!("{same}; no backup will be made")
-            } else {
-                format!("{same}, but a backup will be made, as it has no list of hashes")
+            match blocker {
+                None => format!("{same}; no backup will be made"),
+                Some(NoSkip::NoHashList) => {
+                    format!("{same}, but a backup will be made, as it has no list of hashes")
+                }
+                Some(NoSkip::Registry) => format!(
+                    "No changes to the files since the backup from {host}, {date}, but a backup \
+                     will be made, as that backup is from the other build and the registry keys \
+                     are not compared"
+                ),
+                Some(NoSkip::Unmapped) => format!(
+                    "{same}, but a backup will be made, as some of its files have no place here"
+                ),
+                Some(_) => format!("{same}, but a backup will be made"),
             }
         }
         Next::UnchangedHere {
@@ -439,7 +510,7 @@ fn preview_ui(ui: &mut Ui, game: &GameScan, preview: Option<&Preview>, settings:
     let Some(next) = next_backup(game, preview, settings) else {
         return;
     };
-    let text = sentence(&next);
+    let text = noted(sentence(&next), preview);
     if let Next::Changes { counts, .. } = next {
         let chips = [
             (Badge::New, counts.new),
@@ -452,7 +523,9 @@ fn preview_ui(ui: &mut Ui, game: &GameScan, preview: Option<&Preview>, settings:
     } else if let Some(glyph) = next.glyph() {
         // The same files backed up again is no news, so it is muted.
         let color = match next {
-            Next::Same { hashed: false, .. } => ui.visuals().weak_text_color(),
+            Next::Same {
+                blocker: Some(_), ..
+            } => ui.visuals().weak_text_color(),
             _ => theme::palette(ui).accent,
         };
         theme::labeled_mark(ui, glyph, color, &text);
@@ -667,15 +740,24 @@ impl BackupTab {
         std::mem::take(&mut self.removed)
     }
 
-    /// Compares the shown report with the last backups when the repository is open. Replacing
-    /// the job drops the comparison of an older report.
+    /// Compares the shown report with the last backups when the repository is open, through
+    /// the config's folder pairs for a backup of the other build. Replacing the job drops the
+    /// comparison of an older report.
     fn start_preview(&mut self, ctx: &egui::Context, state: &State) {
-        let (Some(session), Some(report)) = (&state.session, &self.report) else {
+        let (Some(session), Some(config), Some(report)) =
+            (&state.session, &state.config, &self.report)
+        else {
             return;
         };
         let (storage, games) = (session.storage.clone(), report.games.clone());
+        let (manifest, config) = (state.manifest_or_empty(), config.clone());
+        let environment = state.env.environment.clone();
         self.compared_in = Some(storage.clone());
-        self.previewing = Some(Job::spawn(ctx, move || preview(&storage, &games)));
+        self.previewing = Some(Job::spawn(ctx, move || {
+            let environment = environment.unwrap_or_else(Environment::detect);
+            let mapper = Mapper::new(&manifest, &config, &environment);
+            preview(&storage, &games, &mapper)
+        }));
     }
 
     /// Shows `report`, with a file tree per game and no preview yet.
