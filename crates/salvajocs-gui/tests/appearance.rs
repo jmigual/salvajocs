@@ -330,6 +330,7 @@ fn scan(
                 base,
                 tail: tail.into(),
                 size: size as u64,
+                modified: fs::metadata(&real).unwrap().modified().ok(),
                 real,
             }
         })

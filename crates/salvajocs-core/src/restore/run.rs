@@ -481,6 +481,7 @@ pub fn run(
             tail: file.1,
             real: write.target.clone(),
             size,
+            modified: None,
         });
         if !existing.roots.contains(&root) {
             existing.roots.push(root);

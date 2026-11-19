@@ -20,6 +20,7 @@ fn found(base: Base, tail: &str, real: &Path) -> FoundFile {
         tail: tail.into(),
         real: real.to_path_buf(),
         size: fs::metadata(real).unwrap().len(),
+        modified: fs::metadata(real).unwrap().modified().ok(),
     }
 }
 

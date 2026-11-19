@@ -112,6 +112,10 @@ fn proton_game_files_get_win_bases() {
         .unwrap();
     assert_eq!(save.real, home.join("AppData/Roaming/Foo/save.dat"));
     assert_eq!(save.size, 5);
+    assert_eq!(
+        save.modified,
+        Some(fs::metadata(&save.real).unwrap().modified().unwrap())
+    );
 }
 
 #[test]

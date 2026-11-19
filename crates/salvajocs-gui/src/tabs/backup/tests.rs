@@ -30,6 +30,7 @@ fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
                 tail: "save".into(),
                 real: PathBuf::from("/save"),
                 size: *size,
+                modified: None,
             })
             .collect(),
         roots: Vec::new(),
@@ -572,8 +573,9 @@ fn saved_game(dir: &Path, title: &str, content: &str) -> GameScan {
         files: vec![FoundFile {
             base: Base::Home,
             tail: "save".into(),
-            real,
             size: content.len() as u64,
+            modified: std::fs::metadata(&real).unwrap().modified().ok(),
+            real,
         }],
         roots: Vec::new(),
         registry_keys: Vec::new(),

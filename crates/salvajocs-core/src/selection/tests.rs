@@ -23,6 +23,7 @@ fn file(base: Base, tail: &str) -> FoundFile {
         tail: tail.into(),
         real: PathBuf::from("/real").join(tail),
         size: 1,
+        modified: None,
     }
 }
 

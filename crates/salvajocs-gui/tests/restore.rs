@@ -75,6 +75,7 @@ fn scan(tmp: &TempDir, title: &str, files: &[(Base, &str)], roots: &[(Base, &str
                 base,
                 tail: tail.into(),
                 size: tail.len() as u64,
+                modified: fs::metadata(&real).unwrap().modified().ok(),
                 real,
             }
         })

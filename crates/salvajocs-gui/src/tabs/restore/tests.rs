@@ -672,6 +672,7 @@ fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
             tail: "Mix/save.dat".into(),
             real,
             size: 3,
+            modified: None,
         }],
         roots: vec![(base, "Mix".into())],
         registry_keys: Vec::new(),

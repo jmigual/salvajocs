@@ -34,6 +34,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
             base: Base::WinAppData,
             tail: "Game/save.sav".into(),
             size: contents.len() as u64,
+            modified: fs::metadata(&real).unwrap().modified().ok(),
             real,
         }],
         roots: vec![(Base::WinAppData, "Game".into())],

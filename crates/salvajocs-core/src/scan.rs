@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::config::AppConfig;
 #[cfg(target_os = "linux")]
@@ -73,6 +74,8 @@ pub struct FoundFile {
     pub real: PathBuf,
     /// Size in bytes.
     pub size: u64,
+    /// Last modification time, `None` when it is not known.
+    pub modified: Option<SystemTime>,
 }
 
 /// A game with a save file or a registry key on this machine.
@@ -345,6 +348,9 @@ fn hkcu_key(key: &str) -> Option<String> {
 /// A read failure: the path and the error text.
 type Issue = (PathBuf, String);
 
+/// A file found on disk: its path, size and mtime.
+type Found = (PathBuf, u64, Option<SystemTime>);
+
 /// Records a read failure of `path`. A path that vanished meanwhile is not one.
 fn note(issues: &mut Vec<Issue>, path: &Path, err: &io::Error) {
     if err.kind() != io::ErrorKind::NotFound {
@@ -354,13 +360,13 @@ fn note(issues: &mut Vec<Issue>, path: &Path, err: &io::Error) {
 
 /// Pushes every file at or below `path`. Symlinked directories below `path` are not followed,
 /// since a prefix's `Documents` is often a link into the real home.
-fn collect_files(path: &Path, out: &mut Vec<(PathBuf, u64)>, issues: &mut Vec<Issue>) {
+fn collect_files(path: &Path, out: &mut Vec<Found>, issues: &mut Vec<Issue>) {
     let meta = match fs::metadata(path) {
         Ok(meta) => meta,
         Err(err) => return note(issues, path, &err),
     };
     if meta.is_file() {
-        out.push((path.to_path_buf(), meta.len()));
+        out.push((path.to_path_buf(), meta.len(), meta.modified().ok()));
         return;
     }
     let entries = match fs::read_dir(path) {
@@ -378,7 +384,9 @@ fn collect_files(path: &Path, out: &mut Vec<(PathBuf, u64)>, issues: &mut Vec<Is
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => collect_files(&entry.path(), out, issues),
             Ok(_) => match fs::metadata(entry.path()) {
-                Ok(meta) if meta.is_file() => out.push((entry.path(), meta.len())),
+                Ok(meta) if meta.is_file() => {
+                    out.push((entry.path(), meta.len(), meta.modified().ok()));
+                }
                 Ok(_) => {}
                 Err(err) => note(issues, &entry.path(), &err),
             },
@@ -389,7 +397,7 @@ fn collect_files(path: &Path, out: &mut Vec<(PathBuf, u64)>, issues: &mut Vec<Is
 
 /// The real files one glob pattern matches; a matched directory contributes everything below it
 /// (ADR-0008). A malformed pattern matches nothing.
-fn matches(pattern: &str, issues: &mut Vec<Issue>) -> Vec<(PathBuf, u64)> {
+fn matches(pattern: &str, issues: &mut Vec<Issue>) -> Vec<Found> {
     let mut files = Vec::new();
     if let Ok(paths) = glob::glob(pattern) {
         for path in paths {
@@ -477,7 +485,7 @@ fn scan_game(
                 if !shared.cache.may_match(&base_dir, &pattern) {
                     continue;
                 }
-                for (real, size) in matches(&pattern, &mut issues) {
+                for (real, size, modified) in matches(&pattern, &mut issues) {
                     let Some(tail) = tail_of(&real, &base_dir) else {
                         continue;
                     };
@@ -504,6 +512,7 @@ fn scan_game(
                         tail,
                         real,
                         size,
+                        modified,
                     });
                 }
             }
