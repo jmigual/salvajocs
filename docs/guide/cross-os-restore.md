@@ -99,6 +99,9 @@ switches the restore to a prefix.
 
 Click **Use these folders**. The plan appears in the normal preview.
 
+When you [restore several games](restore.md#restore-several-games) at once, the dialogs come one
+after another, one per game that needs it.
+
 ### Choices are remembered
 
 After you confirm, salvajocs saves every row of the game: a target becomes a **pair**
