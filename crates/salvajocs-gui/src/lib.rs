@@ -116,8 +116,15 @@ fn exec_args(command: &str) -> Vec<String> {
     args
 }
 
-/// The window options: the default ones plus `app_id`, the embedded 256 px icon and no OS
-/// decorations, as [`title_bar`] draws the bar.
+/// The size, in points, the window opens at. eframe shrinks it to the largest monitor, and does
+/// not leave room for a taskbar, hence the modest height.
+const WINDOW_SIZE: [f32; 2] = [1100.0, 640.0];
+/// The smallest size the window can be resized to. The width keeps the top bar's tabs and
+/// status clear of the window buttons.
+pub const MIN_WINDOW_SIZE: [f32; 2] = [840.0, 480.0];
+
+/// The window options: the default ones plus `app_id`, the embedded 256 px icon, no OS
+/// decorations, as [`title_bar`] draws the bar, and a centered window sized for the app.
 fn native_options(app_id: String) -> eframe::Result<eframe::NativeOptions> {
     let icon = eframe::icon_data::from_png_bytes(ICON_PNG)
         .map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
@@ -126,7 +133,10 @@ fn native_options(app_id: String) -> eframe::Result<eframe::NativeOptions> {
         .viewport
         .with_app_id(app_id)
         .with_icon(icon)
-        .with_decorations(false);
+        .with_decorations(false)
+        .with_inner_size(WINDOW_SIZE)
+        .with_min_inner_size(MIN_WINDOW_SIZE);
+    options.centered = true;
     Ok(options)
 }
 
@@ -135,12 +145,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_options_set_the_app_id_icon_and_no_decorations() {
+    fn native_options_set_the_app_id_icon_size_and_no_decorations() {
         let options = native_options(APP_ID.to_owned()).expect("the embedded icon decodes");
         assert_eq!(options.viewport.app_id.as_deref(), Some(APP_ID));
         let icon = options.viewport.icon.expect("an icon is set");
         assert_eq!((icon.width, icon.height), (256, 256));
         assert_eq!(options.viewport.decorations, Some(false));
+        assert_eq!(options.viewport.inner_size, Some(WINDOW_SIZE.into()));
+        assert_eq!(
+            options.viewport.min_inner_size,
+            Some(MIN_WINDOW_SIZE.into())
+        );
+        assert!(options.centered);
     }
 
     const APPIMAGE: &str = "/home/u/AppImages/salvajocs.appimage";

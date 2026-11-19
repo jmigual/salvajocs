@@ -9,7 +9,7 @@ use common::{
     run_until_ready, save_config, shows,
 };
 use eframe::egui::{
-    Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, Shape, Ui, UiBuilder, Vec2,
+    Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, Rect, Shape, Ui, UiBuilder, Vec2,
     ViewportCommand, ViewportId, viewport::ResizeDirection,
 };
 use egui_kittest::Harness;
@@ -19,7 +19,7 @@ use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::Compression;
 use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
-use salvajocs_gui::{App, Env};
+use salvajocs_gui::{App, Env, MIN_WINDOW_SIZE};
 
 /// Drives the app on the whole window, as eframe does, rather than in the margin of kittest's
 /// panel: the window edges are then where the app's are.
@@ -519,4 +519,42 @@ fn pressing_the_right_edge_leaves_the_page_scroll_alone() {
     harness.event(button(edge, false));
     common::run_settled(&mut harness);
     assert_eq!(harness.get_by_label("Roots").rect(), before);
+}
+
+/// The rects of the tabs, the manifest status and the window buttons in a window of `size`,
+/// by label.
+fn bar_items(size: Vec2) -> Vec<(&'static str, Rect)> {
+    let (_tmp, harness) = ready_sized(size);
+    Tab::ALL
+        .iter()
+        .map(|tab| tab.label())
+        .chain(["Manifest", "Minimize", "Maximize", "Close"])
+        .flat_map(|label| {
+            harness
+                .query_all_by_label_contains(label)
+                .map(|node| (label, node.rect()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn bar_items_fit_at_the_smallest_window() {
+    let [width, height] = MIN_WINDOW_SIZE;
+    let mut items = bar_items(Vec2::new(width, height));
+    let wide = bar_items(Vec2::new(1100.0, height));
+    for ((label, rect), (_, natural)) in items.iter().zip(&wide) {
+        if Tab::ALL.iter().any(|tab| tab.label() == *label) {
+            assert_eq!(rect.width(), natural.width(), "the {label} tab is squeezed");
+        }
+    }
+    items.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
+    for pair in items.windows(2) {
+        assert!(
+            pair[0].1.right() <= pair[1].1.left(),
+            "{} and {} overlap",
+            pair[0].0,
+            pair[1].0
+        );
+    }
 }

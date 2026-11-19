@@ -12,6 +12,8 @@ All notable changes to salvajocs. The format follows
 - On Windows, the app is named "Salvajocs" in Task Manager, the Start menu and Apps & Features.
 - Dialogs wider than the window shrink to fit it, and scroll when their content is still wider,
   instead of being cut off on the left.
+- The window opens centered at 1100 by 640 points, not at the small default size, and cannot be
+  made narrower than 840 points.
 
 ## [0.5.0] - 2026-11-19
 
