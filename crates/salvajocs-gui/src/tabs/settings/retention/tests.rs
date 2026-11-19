@@ -140,6 +140,11 @@ fn busy_until_the_last_queued_save_ends_even_with_the_tab_hidden() {
         .click();
     harness.step();
     assert!(harness.state().0.busy());
+    // The job takes the first policy off the queue on its own thread; edit again only once it
+    // has, or the edit would replace the first policy instead of queueing behind it.
+    step_until(&mut harness, "the first save to start", |h| {
+        lock(&h.state().0.saves).next.is_none()
+    });
     harness
         .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
         .set_value_accesskit(7.0);
