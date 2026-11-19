@@ -622,16 +622,7 @@ fn compare(plan: &RestorePlan, listed: &Listed) -> Result<Compared, String> {
             // write without a key has no row: `restore::run` refuses to stage it.
             let ((base, tail), _) = restore::staged_target(write)?;
             let key = format!("{}/{tail}", base.dir_name());
-            let badge = match state {
-                Ok(WriteState::New) => Some((Badge::New, "New: not on this PC yet".to_owned())),
-                Ok(WriteState::Changed) => {
-                    Some((Badge::Changed, "Changed: will be overwritten".to_owned()))
-                }
-                Ok(WriteState::Unchanged) => None,
-                Ok(_) => Some((Badge::Unknown, "Could not be compared".to_owned())),
-                Err(reason) => Some((Badge::WillFail, format!("Will fail: {reason}"))),
-            };
-            if let Some(badge) = badge {
+            if let Some(badge) = write_badge(state.as_ref().map_err(String::as_str).copied()) {
                 badges.insert(key.clone(), badge);
             }
             Some(Row {
@@ -647,6 +638,52 @@ fn compare(plan: &RestorePlan, listed: &Listed) -> Result<Compared, String> {
         tree: FileTree::new(rows).existing_folders_only(),
         badges,
     })
+}
+
+/// The badge of a write in `state`, `Err` with why it will fail, and its tooltip; `None` for an
+/// unchanged one.
+pub(super) fn write_badge(state: Result<WriteState, &str>) -> Option<(Badge, String)> {
+    match state {
+        Ok(WriteState::New) => Some((Badge::New, "New: not on this PC yet".to_owned())),
+        Ok(WriteState::Changed) => {
+            Some((Badge::Changed, "Changed: will be overwritten".to_owned()))
+        }
+        Ok(WriteState::Unchanged) => None,
+        Ok(_) => Some((Badge::Unknown, "Could not be compared".to_owned())),
+        Err(reason) => Some((Badge::WillFail, format!("Will fail: {reason}"))),
+    }
+}
+
+/// The icons counting the new, changed, unchanged and not compared writes among `states`, and
+/// nothing when there are none: when every write will fail, its failures say so.
+pub(super) fn state_chips(ui: &mut Ui, states: &[WriteState]) {
+    let of = |wanted| states.iter().filter(|&&state| state == wanted).count();
+    let (new, changed, unchanged, unknown) = (
+        of(WriteState::New),
+        of(WriteState::Changed),
+        of(WriteState::Unchanged),
+        of(WriteState::Unknown),
+    );
+    if new + changed + unchanged + unknown == 0 {
+        return;
+    }
+    let chips = [
+        (Badge::New.glyph(), Badge::New.color(ui), new),
+        (Badge::Changed.glyph(), Badge::Changed.color(ui), changed),
+        (icons::EQUALS, ui.visuals().weak_text_color(), unchanged),
+        (Badge::Unknown.glyph(), Badge::Unknown.color(ui), unknown),
+    ];
+    let text: Vec<_> = [
+        (new, "new"),
+        (changed, "changed"),
+        (unchanged, "unchanged"),
+        (unknown, "could not be compared"),
+    ]
+    .into_iter()
+    .filter(|&(count, _)| count > 0)
+    .map(|(count, kind)| format!("{count} {kind}"))
+    .collect();
+    theme::chips(ui, &chips, &text.join(", "));
 }
 
 /// Removes the batch dirs under `parent` that earlier sessions left: named by another process id
@@ -686,45 +723,15 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
     } = planned;
     ui.add_space(8.0);
     theme::group(ui, |ui| {
-        let of = |wanted| {
-            (states.iter())
-                .filter(|state| state.as_ref() == Ok(&wanted))
-                .count()
-        };
-        let (new, changed, unchanged, unknown) = (
-            of(WriteState::New),
-            of(WriteState::Changed),
-            of(WriteState::Unchanged),
-            of(WriteState::Unknown),
-        );
+        let compared: Vec<_> = (states.iter())
+            .filter_map(|state| state.as_ref().ok().copied())
+            .collect();
         theme::row(
             ui,
             |ui| {
                 ui.strong(format!("{title}, snapshot {snapshot}"));
             },
-            |ui| {
-                // When every write will fail there is nothing to count; the failures are below.
-                if new + changed + unchanged + unknown == 0 {
-                    return;
-                }
-                let chips = [
-                    (Badge::New.glyph(), Badge::New.color(ui), new),
-                    (Badge::Changed.glyph(), Badge::Changed.color(ui), changed),
-                    (icons::EQUALS, ui.visuals().weak_text_color(), unchanged),
-                    (Badge::Unknown.glyph(), Badge::Unknown.color(ui), unknown),
-                ];
-                let text: Vec<_> = [
-                    (new, "new"),
-                    (changed, "changed"),
-                    (unchanged, "unchanged"),
-                    (unknown, "could not be compared"),
-                ]
-                .into_iter()
-                .filter(|&(count, _)| count > 0)
-                .map(|(count, kind)| format!("{count} {kind}"))
-                .collect();
-                theme::chips(ui, &chips, &text.join(", "));
-            },
+            |ui| state_chips(ui, &compared),
         );
         ui.label(format!("Into {}", describe_targets(&fetched.targets)));
         let error_color = ui.visuals().error_fg_color;

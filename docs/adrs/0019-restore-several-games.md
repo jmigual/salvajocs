@@ -22,13 +22,13 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
   snapshots cannot be ticked. The batch has no snapshot, target or per-file override choices;
   restoring the game on its own stays the way to make them.
 - **One planning job.** It detects the environment once, then per ticked game, in list order,
-  fetches the snapshot, plans it with `restore::prepare` and compares it. Every fetch runs before
-  the first restore, so no fetch waits for a reindex after a safety backup (ADR-0003). The
-  fetched snapshots live in `restore-batch/<pid>/<index>` under the cache dir until the run,
-  removed after it, on Cancel and when Settings replaces the repository. Planning also removes
-  the dirs of other process ids untouched for a day; the live batch of another running salvajocs
-  is kept. Since ADR-0020 planning reads only each snapshot's listing and small files, and the
-  run downloads every game before the first restore.
+  reads the snapshot's listing, plans it with `restore::prepare` and compares it (ADR-0020); it
+  writes nothing to disk. The run downloads every planned game into `restore-batch/<pid>/<index>`
+  under the cache dir before the first restore, so no download waits for a reindex after a
+  safety backup (ADR-0003), and removes them after the last one. Before downloading, the run
+  also removes the dirs of other process ids untouched for a day; the live batch of another
+  running salvajocs is kept. Cancel, or Settings replacing the repository, has nothing on disk
+  to remove.
 - **Mapping dialogs one after another.** A game that needs mapping gets the existing dialog,
   without the prefix option (choosing a prefix needs the single-game view). Confirmed choices are
   saved with the game as in a single restore, and stay saved if the batch is cancelled later.
@@ -79,7 +79,8 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
 
 - Each game's restore reindexes once (ADR-0003 counts each safety backup as a run): N reopens
   for N games.
-- Every ticked game's snapshot is on disk at once until the run ends.
-- Comparing reads both copies of a file only when the sizes match; an unchanged file is read
-  twice. A target changed between the confirm and the run is still saved by its safety backup
-  first, but its label is out of date.
+- During the run, every planned game's snapshot is on disk at once until the run ends.
+- Comparing reads only the targets: by size and mtime, and a target's SHA-256 against the
+  snapshot's hash list only when the size matches and the mtime differs (ADR-0020). A target
+  changed between the confirm and the run is still saved by its safety backup first, but its
+  label is out of date.
