@@ -10,6 +10,9 @@ All notable changes to salvajocs. The format follows
 
 - The AppImage checks for updates at start and updates itself: **Update now** replaces the
   AppImage with the new release, checked against `SHA256SUMS`, and **Restart now** starts it.
+- On the Backup tab, a game whose newest backup is from the other build and has folders without
+  a known place here shows **Choose folders…**. It opens the restore's mapping dialog; the
+  choices are saved with the game as after a restore, and the game is compared again.
 
 ### Changed
 

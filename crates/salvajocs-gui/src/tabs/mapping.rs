@@ -1,5 +1,6 @@
 //! The cross-build mapping dialog: where each snapshot root of the other OS's build goes in this
-//! one, shown only while a root is unknown (ADR-0011).
+//! one, shown only while a root is unknown, for a restore (ADR-0011) or for the Backup tab's
+//! comparison with a backup of the other build (ADR-0021).
 
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::crossbuild::{self, Choice, Confidence, MappingEntry, SnapshotRoot};

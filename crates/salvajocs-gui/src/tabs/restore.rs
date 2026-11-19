@@ -27,13 +27,12 @@ use salvajocs_core::storage::SnapshotInfo;
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
+use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::theme::{self, icons};
 
 mod batch;
-mod mapping;
 
 use batch::Batch;
-use mapping::{Dialog, DialogAction};
 
 /// A UTC time as `YYYY-MM-DD HH:MM UTC`.
 fn format_time(time: SystemTime) -> String {

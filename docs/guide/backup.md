@@ -117,9 +117,12 @@ matched to this machine's the way a [cross-OS restore](cross-os-restore.md#how-a
 matches them, without asking anything and without saving anything, and the files are compared
 in their matched places. The game's tooltip says that the backup is from the other build. A
 folder a restore would have to ask about, or one you skipped, has no known place here: its files
-show as removed, with the tooltip `Removed: the newest backup is from the other build, and this
-file has no place here`, and the game's tooltip names the folders. The same goes for a file
-whose matched path another file of the backup already takes. Across builds the
+show as removed, with a tooltip saying that the newest backup is from the other build and that
+the file has no place here, and the game's tooltip names the folders. The same goes for a file
+whose matched path another file of the backup already takes. When a restore would ask about a
+folder, the game also shows **Choose folders…**: it opens the restore's
+[mapping dialog](cross-os-restore.md#the-mapping-dialog), saves your choices with the game just
+as a restore does, and compares again. Across builds the
 registry keys are not compared either, so a game with registry keys on either side shows the
 equals sign and is backed up.
 

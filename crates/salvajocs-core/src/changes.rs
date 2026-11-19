@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backup::sha256_file;
 use crate::config::AppConfig;
-use crate::crossbuild::{self, Choice, Confidence, Family, SnapshotRoot};
+use crate::crossbuild::{self, Choice, Confidence, Family, MappingEntry, SnapshotRoot};
 use crate::layout::{
     Context, FILES_DIR, HASHES_FILE, Hashes, META_FILE, REGISTRY_FILE, WinFolders,
 };
@@ -123,6 +123,9 @@ pub struct Mapped {
     /// The path keys of the other build's files left at their own key: no place here, or a key
     /// another file already takes.
     pub unplaced: BTreeSet<String>,
+    /// Every root a restore would map, the known ones prefilled, when one of them is unknown
+    /// (`PrepareError::NeedsMapping`), for the mapping dialog; empty otherwise.
+    pub entries: Vec<MappingEntry>,
 }
 
 impl Mapped {
@@ -132,12 +135,14 @@ impl Mapped {
         hashes: Option<Hashes>,
         unplaced_roots: Vec<SnapshotRoot>,
         unplaced: BTreeSet<String>,
+        entries: Vec<MappingEntry>,
     ) -> Self {
         Self {
             listing,
             hashes,
             unplaced_roots,
             unplaced,
+            entries,
         }
     }
 }
@@ -346,12 +351,14 @@ impl<'a> Mapper<'a> {
         let vars = restore::game_vars(&game.title, info.entry.as_ref(), self.config, self.env);
         let prepare =
             |choices: &[_]| restore::prepare(&listed.staged, targets, &vars, &info, choices);
+        let mut entries = Vec::new();
         let plan = match prepare(&[]) {
-            Err(PrepareError::NeedsMapping(entries)) => {
-                let skips: Vec<_> = (entries.iter())
+            Err(PrepareError::NeedsMapping(needed)) => {
+                let skips: Vec<_> = (needed.iter())
                     .filter(|entry| entry.confidence == Confidence::Unknown)
                     .map(|entry| (entry.root.clone(), Choice::Skip))
                     .collect();
+                entries = needed;
                 prepare(&skips)
             }
             plan => plan,
@@ -432,6 +439,7 @@ impl<'a> Mapper<'a> {
             hashes,
             unplaced_roots,
             unplaced,
+            entries,
         })
     }
 }

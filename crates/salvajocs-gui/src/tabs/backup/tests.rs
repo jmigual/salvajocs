@@ -154,7 +154,7 @@ fn of_the_other_build(
     if let Ok(Some(baseline)) = &mut preview {
         let hashes = baseline.newest.hashes.clone();
         let unplaced = unplaced.iter().map(|&key| key.to_owned()).collect();
-        let mapped = Mapped::new(Vec::new(), hashes, unplaced_roots, unplaced);
+        let mapped = Mapped::new(Vec::new(), hashes, unplaced_roots, unplaced, Vec::new());
         baseline.newest.mapped = Some(mapped);
     }
     preview

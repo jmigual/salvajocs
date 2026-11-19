@@ -21,7 +21,6 @@ use salvajocs_core::restore::{
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
-use super::mapping::{Dialog, DialogAction};
 use super::{
     Fetched, RestoreTab, Restored, describe_context, describe_run_error, own_dir, remove_dir,
     skipped_ui, snapshot_label, warnings_ui,
@@ -29,6 +28,7 @@ use super::{
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
+use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
 use crate::theme::{self, icons};
 

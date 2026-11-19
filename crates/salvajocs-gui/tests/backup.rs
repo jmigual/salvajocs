@@ -9,17 +9,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use common::{
-    env, harness, init_repo, local_config, record_opened, repo_dir, run_settled, run_until,
-    run_until_backed_up, run_until_ready, save_config, shows,
+    env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
+    run_until, run_until_backed_up, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
+use salvajocs_core::config::AppConfig;
 use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
-use salvajocs_core::manifest::{self, CustomFile, CustomGame, Integration, Manifest, parse_yaml};
+use salvajocs_core::manifest::{
+    self, CustomFile, CustomGame, Integration, Manifest, Pair, parse_yaml,
+};
 use salvajocs_core::retention::{self, Retention};
 use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::selection::{Change, GameSettings, Pending};
@@ -1033,6 +1036,19 @@ fn paired(entry: &str, prefix: &Path) -> CustomGame {
     game
 }
 
+/// `G` in `prefix` with two Linux save folders, so no auto-pair, and no rows: as Factorio has
+/// it, so `<home>/G` of the Linux build has no known place in the Windows build.
+fn like_factorio(prefix: &Path) -> CustomGame {
+    let os = |os: &str| format!("      tags: [save]\n      when:\n        - os: {os}\n");
+    let yaml = format!(
+        "G:\n  files:\n    <home>/G:\n{}    <home>/G2:\n{}    <winAppData>/G:\n{}",
+        os("linux"),
+        os("linux"),
+        os("windows")
+    );
+    windows_build(&yaml, prefix)
+}
+
 /// The label of the one node whose label contains `text`.
 fn label_of(harness: &Harness<'static, App>, text: &str) -> String {
     let node = harness.get_by_label_contains(text);
@@ -1079,15 +1095,7 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
     back_up_linux_build(&tmp, "abc");
     let prefix = make_prefix(tmp.path());
     write_save(&prefix, "G", "abc");
-    // Two Linux save folders, so no auto-pair, and no rows: as Factorio has it.
-    let os = |os: &str| format!("      tags: [save]\n      when:\n        - os: {os}\n");
-    let yaml = format!(
-        "G:\n  files:\n    <home>/G:\n{}    <home>/G2:\n{}    <winAppData>/G:\n{}",
-        os("linux"),
-        os("linux"),
-        os("windows")
-    );
-    let game = windows_build(&yaml, &prefix);
+    let game = like_factorio(&prefix);
     let (mut harness, _env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
 
     scan(&mut harness, "1 game found");
@@ -1095,7 +1103,7 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
 
     let label = label_of(&harness, "1 new, 1 removed since the backup from ");
     assert!(
-        label.ends_with(
+        label.contains(
             "The newest backup is from the other build; these folders have no known place here: \
              <home>/G."
         ),
@@ -1140,4 +1148,67 @@ fn a_registry_key_of_one_build_promises_a_backup() {
     );
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(&mut harness, "G: backed up");
+}
+
+#[test]
+fn choose_folders_saves_the_choice_and_compares_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    let game = like_factorio(&prefix);
+    let (mut harness, env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    let label = label_of(&harness, "1 new, 1 removed since the backup from ");
+    assert!(label.ends_with("Choose folders… places them."), "{label}");
+
+    click(&mut harness, "Choose folders…");
+    assert!(shows(&harness, "Where should the saves of G go?"));
+    replace_text(&mut harness, "Target 1", "not a template");
+    click(&mut harness, "Use these folders");
+    assert!(shows(&harness, "is not a placeholder template of this OS"));
+    replace_text(&mut harness, "Target 1", "<winAppData>/G");
+    click(&mut harness, "Use these folders");
+    run_until(
+        &mut harness,
+        "the comparison through the chosen folder",
+        |h| shows(h, "No changes since the backup from "),
+    );
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Choose folders…"));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    let pair = Pair {
+        linux: "<home>/G".into(),
+        windows: "<winAppData>/G".into(),
+    };
+    assert_eq!(config.custom_games[0].pairs, [pair]);
+}
+
+#[test]
+fn cancelling_choose_folders_saves_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    let game = like_factorio(&prefix);
+    let (mut harness, env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+    let config_file = env.config_dir.join("config.yaml");
+    let config = fs::read(&config_file).unwrap();
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    click(&mut harness, "Choose folders…");
+    replace_text(&mut harness, "Target 1", "<winAppData>/G");
+    click(&mut harness, "Cancel");
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Where should the saves of G go?"));
+    assert!(shows(&harness, "Choose folders…"));
+    assert_eq!(fs::read(&config_file).unwrap(), config, "nothing is saved");
 }

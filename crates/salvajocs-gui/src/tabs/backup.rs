@@ -17,7 +17,7 @@ use eframe::egui::{
 use salvajocs_core::backup::{self, GameBackup, Stored};
 use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper, NoSkip};
 use salvajocs_core::config::{AppConfig, PasswordMode};
-use salvajocs_core::crossbuild;
+use salvajocs_core::crossbuild::{self, Confidence, MappingEntry, ResolveError};
 use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
@@ -27,6 +27,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
 use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
@@ -438,11 +439,33 @@ fn noted(text: String, preview: &Preview) -> String {
     let folders: Vec<String> = (mapped.unplaced_roots.iter())
         .map(crossbuild::root_template)
         .collect();
-    format!(
+    let text = format!(
         "{text}. The newest backup is from the other build; these folders have no known place \
          here: {}.",
         folders.join(", ")
-    )
+    );
+    if unknown(&mapped.entries) > 0 {
+        format!("{text} Choose folders… places them.")
+    } else {
+        text
+    }
+}
+
+/// The roots of `preview`'s newest backup, of the other build, for the mapping dialog, when a
+/// restore would ask about one of them.
+fn to_choose(preview: Option<&Preview>) -> Option<&[MappingEntry]> {
+    let Some(Ok(Some(baseline))) = preview else {
+        return None;
+    };
+    let entries = &baseline.newest.mapped.as_ref()?.entries;
+    (unknown(entries) > 0).then_some(entries.as_slice())
+}
+
+/// How many of `entries` have no known place.
+fn unknown(entries: &[MappingEntry]) -> usize {
+    (entries.iter())
+        .filter(|entry| entry.confidence == Confidence::Unknown)
+        .count()
 }
 
 /// `next` as the sentence its header shows on hover.
@@ -620,6 +643,8 @@ pub struct BackupTab {
     removed: bool,
     /// Back up was clicked; the backup starts once the pending file is written.
     backup_requested: bool,
+    /// The open mapping dialog: the game's title and the roots it shows.
+    mapping: Option<(String, Vec<MappingEntry>, Dialog)>,
 }
 
 impl BackupTab {
@@ -653,6 +678,7 @@ impl BackupTab {
             }
             self.results_ui(ui);
         });
+        self.mapping_ui(ui.ctx(), state);
     }
 
     /// Collects the tab's finished jobs and starts what waits on them. The app calls it every
@@ -925,6 +951,7 @@ impl BackupTab {
         // By index into `report.games`, applied after drawing, like the folder to open.
         let mut changes = Vec::new();
         let mut opened = None;
+        let mut choose = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
                 if self
@@ -1001,6 +1028,18 @@ impl BackupTab {
                         for prefix in prefixes {
                             ui.weak(prefix);
                         }
+                        if let Some(entries) = to_choose(preview) {
+                            ui.horizontal(|ui| {
+                                ui.weak(format!(
+                                    "The newest backup has {} from the other build without a \
+                                     place here.",
+                                    count(unknown(entries), "folder")
+                                ));
+                                if ui.button("Choose folders…").clicked() {
+                                    choose = Some(index);
+                                }
+                            });
+                        }
                         let change =
                             files_ui(ui, game, tree, preview, &settings, enabled, &mut opened);
                         if let Some(change) = change {
@@ -1020,6 +1059,42 @@ impl BackupTab {
         {
             let path = path.display();
             state.notices.push(format!("Could not open {path}: {err}"));
+        }
+        if let Some(index) = choose
+            && let Some(entries) = to_choose(self.previews.get(index))
+        {
+            let title = report.games[index].title.clone();
+            self.mapping = Some((title, entries.to_vec(), Dialog::new(entries.to_vec())));
+        }
+    }
+
+    /// The mapping dialog of a game whose newest backup is of the other build. Its choices are
+    /// saved as after a restore (ADR-0011), then the comparison runs again (ADR-0021).
+    fn mapping_ui(&mut self, ctx: &egui::Context, state: &mut State) {
+        let Some((title, entries, dialog)) = &mut self.mapping else {
+            return;
+        };
+        let action = theme::modal(ctx, "backup_mapping", 720.0, |ui| {
+            dialog.ui(ui, title, false, false, false, None)
+        });
+        match action {
+            Some(DialogAction::Confirm(choices)) => match crossbuild::resolve(entries, &choices) {
+                Ok(_) => {
+                    if let Some(config) = &mut state.config {
+                        crossbuild::apply_choices(config, title, &choices);
+                        state.save_config(ctx);
+                    }
+                    self.mapping = None;
+                    self.start_preview(ctx, state);
+                }
+                Err(ResolveError::Unclassifiable { root, template }) => {
+                    dialog.reject(&root, &template);
+                }
+                // The dialog confirms only once every root has a choice.
+                Err(_) => {}
+            },
+            Some(DialogAction::Cancel) => self.mapping = None,
+            Some(DialogAction::UsePrefix | DialogAction::SkipGame) | None => {}
         }
     }
 

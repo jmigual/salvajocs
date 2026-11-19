@@ -50,6 +50,7 @@ pub(crate) fn format_time(time: SystemTime) -> String {
 
 pub mod backup;
 pub mod custom_games;
+mod mapping;
 pub mod restore;
 pub mod settings;
 mod tree;

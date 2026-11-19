@@ -496,6 +496,7 @@ fn a_windows_backup_compares_with_a_linux_scan_through_a_saved_pair() {
     let mapped = map(&mapper, &listed, &game).unwrap();
     assert_eq!(paths(&mapped.listing), ["files/Home/.factorio/saves/a.zip"]);
     assert!(mapped.unplaced.is_empty() && mapped.unplaced_roots.is_empty());
+    assert!(mapped.entries.is_empty(), "nothing to ask about");
     let comparison = compare_game(&game, &mapped.listing, mapped.hashes.as_ref());
     assert_eq!(
         comparison,
@@ -586,7 +587,19 @@ fn an_unknown_root_stays_at_its_snapshot_path() {
 
     let mapped = map(&mapper, &listed, &game).unwrap();
     let saves = (Base::WinAppData, "Factorio/saves".to_owned());
-    assert_eq!(mapped.unplaced_roots, [saves]);
+    assert_eq!(mapped.unplaced_roots, std::slice::from_ref(&saves));
+    // What the mapping dialog would show: the saved pair prefilled, the saves to choose.
+    let asked: Vec<_> = (mapped.entries.iter())
+        .map(|entry| (entry.root.clone(), entry.confidence))
+        .collect();
+    let config_root = (Base::WinAppData, "Factorio/config".to_owned());
+    assert_eq!(
+        asked,
+        [
+            (config_root, Confidence::Saved),
+            (saves, Confidence::Unknown)
+        ]
+    );
     let unplaced = "WinAppData/Factorio/saves/a.zip".to_owned();
     assert_eq!(mapped.unplaced, BTreeSet::from([unplaced]));
     let comparison = compare_game(&game, &mapped.listing, mapped.hashes.as_ref());
@@ -746,7 +759,8 @@ fn mapped_baseline(files: &[(&str, &[u8])], unplaced: &[&str], registry: Option<
         .map(|(key, bytes)| entry(&format!("files/{key}"), bytes.len(), at(5)))
         .collect();
     let unplaced = unplaced.iter().map(|&key| key.to_owned()).collect();
-    let mapped = Mapped::new(listing.clone(), Some(hashes.clone()), Vec::new(), unplaced);
+    let hashes_of_mapped = Some(hashes.clone());
+    let mapped = Mapped::new(listing.clone(), hashes_of_mapped, vec![], unplaced, vec![]);
     let snapshot = snapshot("theirs", "there", &["salvajocs", "game:game"]);
     Baseline::new(snapshot, listing, Some(hashes), Some(mapped))
 }
