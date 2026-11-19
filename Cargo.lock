@@ -6137,7 +6137,7 @@ dependencies = [
 
 [[package]]
 name = "salvajocs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs 7.0.0",
@@ -6154,7 +6154,7 @@ dependencies = [
 
 [[package]]
 name = "salvajocs-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dbus-secret-service-keyring-store",
  "dirs 7.0.0",

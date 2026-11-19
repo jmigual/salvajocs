@@ -52,6 +52,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.6.0" date="2026-11-19">
+      <description>
+        <p>Restore several games in one go. The Restore tab shows the plan as soon as a snapshot
+        is chosen, without downloading it first. The Backup tab shows icons for the files that
+        are new, changed or removed since the newest backup, and skips games whose saves equal
+        it. A System, Light or Dark theme switch in Settings. A remembered server password is no
+        longer removed by Settings.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-19">
       <description>
         <p>When the repository is missing, the app says what to do and opens Settings. Creating a

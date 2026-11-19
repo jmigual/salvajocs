@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -23,7 +23,7 @@ reqwest = { version = "0.13.5", default-features = false }
 rfd = { version = "0.18.0", default-features = false }
 rustic_backend = "=0.7.0"
 rustic_core = "=0.13.0"
-salvajocs-core = { path = "crates/salvajocs-core", version = "0.5.0" }
+salvajocs-core = { path = "crates/salvajocs-core", version = "0.6.0" }
 semver = "1.0.28"
 serde = "1.0.229"
 serde-saphyr = "2.2.0"
