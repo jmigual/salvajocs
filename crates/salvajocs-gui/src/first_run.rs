@@ -88,6 +88,16 @@ impl Connect {
         matches!(self.step, Step::Probing(..) | Step::Finishing(..))
     }
 
+    /// Whether the repository is being created or opened, which also stores its secrets in the
+    /// keyring, so closing the app would leave it half done. A finished job does not count, even
+    /// while its result waits for a frame that draws the form.
+    pub(crate) fn finishing(&mut self) -> bool {
+        match &mut self.step {
+            Step::Finishing(job, _) => job.is_running(),
+            _ => false,
+        }
+    }
+
     /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
         // Creating a repository replaces the form instead of just disabling it: otherwise the
@@ -339,6 +349,16 @@ fn persist_secrets(
         }
     }
     warnings
+}
+
+/// Gives the form a repository creation that runs until the returned sender is dropped.
+#[cfg(test)]
+impl Connect {
+    pub(crate) fn hold_finishing(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
+        let (release, job) = crate::job::held(ctx);
+        self.step = Step::Finishing(job, true);
+        release
+    }
 }
 
 #[cfg(test)]

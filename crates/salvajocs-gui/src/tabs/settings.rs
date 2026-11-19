@@ -92,8 +92,54 @@ impl SettingsTab {
             || self.root_picker.is_some()
     }
 
+    /// Whether a repository creation, compression change or retention save runs, which closing
+    /// the app would cut short.
+    pub(crate) fn writing(&mut self) -> bool {
+        self.connect.as_mut().is_some_and(Connect::finishing)
+            || self.compression_job.is_some()
+            || self.retention.busy()
+    }
+
+    /// Collects the finished compression change, folder picker and keyring cleanup. The app
+    /// calls it every frame, whichever tab is in front, so a finished job does not stay running.
+    pub(crate) fn poll(&mut self, state: &mut State) {
+        if let Some(job) = &mut self.compression_job
+            && let Some(session) = &mut state.session
+            && let Some(result) = job.take_result()
+        {
+            self.compression_job = None;
+            match result {
+                Ok(stored) => {
+                    session.compression = stored;
+                    self.compression = None;
+                    self.compression_error = None;
+                }
+                Err(err) => self.compression_error = Some(format!("{err:#}")),
+            }
+        }
+        if let Some(job) = &mut self.root_picker
+            && let Some(result) = job.take_result()
+        {
+            self.root_picker = None;
+            if let Ok(Some(folder)) = result {
+                self.root_path = folder.to_string_lossy().into_owned();
+            }
+        }
+        if let Some(job) = &mut self.cleanup
+            && let Some(result) = job.take_result()
+        {
+            self.cleanup = None;
+            if let Err(err) = result {
+                state
+                    .notices
+                    .push(format!("Could not delete the old keyring entries: {err:#}"));
+            }
+        }
+    }
+
     /// Draws the tab. Returns whether the user connected a different repository.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) -> bool {
+        self.poll(state);
         theme::page(ui, |ui| {
             let adopted = self.repository_ui(ui, state);
             ui.add_space(16.0);
@@ -144,19 +190,6 @@ impl SettingsTab {
             ui.label("The repository is not open.");
             return;
         };
-        if let Some(job) = &mut self.compression_job
-            && let Some(result) = job.take_result()
-        {
-            self.compression_job = None;
-            match result {
-                Ok(stored) => {
-                    session.compression = stored;
-                    self.compression = None;
-                    self.compression_error = None;
-                }
-                Err(err) => self.compression_error = Some(format!("{err:#}")),
-            }
-        }
         let field = self
             .compression
             .get_or_insert_with(|| CompressionField::new(session.compression));
@@ -233,14 +266,6 @@ impl SettingsTab {
             config.roots.remove(index);
             changed = true;
         }
-        if let Some(job) = &mut self.root_picker
-            && let Some(result) = job.take_result()
-        {
-            self.root_picker = None;
-            if let Ok(Some(folder)) = result {
-                self.root_path = folder.to_string_lossy().into_owned();
-            }
-        }
         form_grid("add_root").show(ui, |ui| {
             let label = ui.label("Kind");
             egui::ComboBox::from_id_salt("root_kind")
@@ -281,16 +306,6 @@ impl SettingsTab {
 
     /// Offers to delete the keyring entries of the repository that was just replaced.
     fn cleanup_ui(&mut self, ui: &mut Ui, state: &mut State) {
-        if let Some(job) = &mut self.cleanup
-            && let Some(result) = job.take_result()
-        {
-            self.cleanup = None;
-            if let Err(err) = result {
-                state
-                    .notices
-                    .push(format!("Could not delete the old keyring entries: {err:#}"));
-            }
-        }
         if state.stale.is_none() {
             return;
         }
@@ -333,12 +348,20 @@ fn updates_ui(ui: &mut Ui, state: &mut State) {
     }
 }
 
-/// Gives the tab a compression change that runs until the returned sender is dropped.
+/// Gives the tab jobs that run until the returned sender is dropped.
 #[cfg(test)]
 impl SettingsTab {
     pub(crate) fn hold_compression(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
         let (release, job) = crate::job::held(ctx);
         self.compression_job = Some(job);
+        release
+    }
+
+    /// Gives the tab a repository creation that runs until the returned sender is dropped.
+    pub(crate) fn hold_finishing(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
+        let mut connect = Connect::first_run();
+        let release = connect.hold_finishing(ctx);
+        self.connect = Some(connect);
         release
     }
 }

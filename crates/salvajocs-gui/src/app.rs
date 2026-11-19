@@ -4,7 +4,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use eframe::egui::{self, Margin, Rect, Ui};
+use eframe::egui::{self, Margin, Rect, RichText, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
@@ -59,6 +59,10 @@ pub struct App {
     manifest: Option<Job<ManifestLoad>>,
     manifest_error: Option<String>,
     updater: Updater,
+    /// The close-while-running dialog is open.
+    confirm_close: bool,
+    /// The user chose to close despite a running job, so the next close request goes through.
+    closing: bool,
 }
 
 impl App {
@@ -87,6 +91,8 @@ impl App {
             manifest: None,
             manifest_error: None,
             updater: Updater::default(),
+            confirm_close: false,
+            closing: false,
         }
     }
 
@@ -159,6 +165,67 @@ impl App {
             || self.backup.busy()
             || self.restore.busy()
             || self.settings.busy()
+    }
+
+    /// Whether a job runs that writes to the repository, the config, the keyring or the games'
+    /// files, and that closing would cut short. Reads and waits, such as scans and the manifest load, are
+    /// not in it, and neither are the pending file writes, which `on_exit` flushes.
+    fn writing(&mut self) -> bool {
+        let creating = match &mut self.stage {
+            Stage::FirstRun(connect) => connect.finishing(),
+            _ => false,
+        };
+        creating
+            || self.state.busy()
+            || self.backup.writing()
+            || self.restore.writing()
+            || self.settings.writing()
+    }
+
+    /// Collects the finished jobs of the state and every tab, whichever tab is in front.
+    fn poll_jobs(&mut self, ctx: &egui::Context) {
+        self.state.poll(ctx);
+        self.backup.poll(ctx, &self.state);
+        if self.backup.take_removed() {
+            self.restore.drop_listing();
+        }
+        self.restore.poll(ctx, &mut self.state);
+        self.settings.poll(&mut self.state);
+    }
+
+    /// Cancels a close request while a job writes and opens the dialog asking what to do. The
+    /// title bar's Close and the OS (Alt+F4, taskbar) both arrive here as a request.
+    fn guard_close(&mut self, ctx: &egui::Context) {
+        let requested = ctx.input(|i| i.viewport().close_requested());
+        if requested && !self.closing && self.writing() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            // `ui` draws the dialog and does not run while the window is minimized. This does
+            // nothing on Wayland or for an occluded window; the dialog waits until it is shown.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            self.confirm_close = true;
+        }
+    }
+
+    /// The dialog of a close request during a job: Wait keeps the window, Close anyway ends it.
+    fn close_dialog(&mut self, ctx: &egui::Context) {
+        let (mut wait, mut close) = (false, false);
+        theme::modal(ctx, "confirm_close", 480.0, |ui| {
+            ui.heading("A job is still running");
+            ui.label("Closing now stops it. Wait for it to finish, or close anyway.");
+            let error = ui.visuals().error_fg_color;
+            theme::row_end(ui, |ui| {
+                wait = ui.button("Wait").clicked();
+                close = ui
+                    .button(RichText::new("Close anyway").color(error).strong())
+                    .clicked();
+            });
+        });
+        if close {
+            self.closing = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if wait {
+            self.confirm_close = false;
+        }
     }
 
     /// Moves the startup stage forward and draws its dialog.
@@ -355,6 +422,13 @@ fn tabs_ui(current: &mut Tab, ui: &mut Ui) {
 }
 
 impl eframe::App for App {
+    // Not `ui`: eframe runs `logic` for a minimized window too, where `ui` never runs.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Polled first: a job that ended while the window was minimized must not hold the close.
+        self.poll_jobs(ctx);
+        self.guard_close(ctx);
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if !mem::replace(&mut self.started, true) {
@@ -365,11 +439,7 @@ impl eframe::App for App {
             self.start(&ctx);
         }
         self.poll_manifest();
-        self.state.poll(&ctx);
-        self.backup.poll(&ctx, &self.state);
-        if self.backup.take_removed() {
-            self.restore.drop_listing();
-        }
+        self.poll_jobs(&ctx);
 
         let margin = Margin::symmetric(16, 8);
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(margin);
@@ -441,6 +511,13 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.advance(ui);
+        // After the tabs, so a job their input just started counts for a close in the same frame.
+        self.guard_close(&ctx);
+        // A job that ended while the dialog was open leaves nothing to ask.
+        self.confirm_close &= self.writing();
+        if self.confirm_close {
+            self.close_dialog(&ctx);
+        }
         title_bar::controls(ui, bar, buttons);
         // Last, so a job started in this frame holds the update back.
         let busy = self.busy();

@@ -308,25 +308,7 @@ impl RestoreTab {
     /// Draws the tab. Listing, fetching, planning and restoring run in jobs; the mapping dialog's
     /// choices are saved to the config. `manifest_loading` is whether the manifest job runs.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
-        // The list, plan and dialog of a repository Settings replaced are dropped. A running
-        // preview or restore is kept, so its report still shows and no new fetch reuses its work
-        // dir while it runs; the generation bump drops the preview's result.
-        let current = state.session.as_ref().map(|session| &session.storage);
-        if (self.repository.as_ref())
-            .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
-        {
-            self.forget_plan();
-            self.drop_listing();
-            if self.batch.open() {
-                self.cancel_batch(ui.ctx(), state);
-            }
-            self.detecting = None;
-            self.pick = None;
-            self.removed = None;
-            self.error = None;
-        }
         self.poll(ui.ctx(), state);
-        self.poll_batch(ui.ctx(), state);
         let busy = self.busy();
         // `default_targets` looks the game's Steam id up in the manifest. An open batch keeps the
         // other controls out of reach until it runs or is cancelled.
@@ -392,6 +374,11 @@ impl RestoreTab {
             || self.batch.busy()
     }
 
+    /// Whether a restore, batch restore or delete runs, which closing the app would cut short.
+    pub(crate) fn writing(&self) -> bool {
+        self.restoring.is_some() || self.deleting.is_some() || self.batch.writing()
+    }
+
     /// Whether the tab has nothing to show yet: no list loaded or loading, and no plan or report.
     fn untouched(&self) -> bool {
         self.repository.is_none()
@@ -425,7 +412,32 @@ impl RestoreTab {
         self.generation += 1;
     }
 
-    fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
+    /// Collects the tab's finished jobs, after dropping what belongs to a repository Settings
+    /// replaced. The app calls it every frame, whichever tab is in front, so a finished job does
+    /// not stay running.
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
+        // The list, plan and dialog of a repository Settings replaced are dropped. A running
+        // preview or restore is kept, so its report still shows and no new fetch reuses its work
+        // dir while it runs; the generation bump drops the preview's result.
+        let current = state.session.as_ref().map(|session| &session.storage);
+        if (self.repository.as_ref())
+            .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
+        {
+            self.forget_plan();
+            self.drop_listing();
+            if self.batch.open() {
+                self.cancel_batch(ctx, state);
+            }
+            self.detecting = None;
+            self.pick = None;
+            self.removed = None;
+            self.error = None;
+        }
+        self.poll_jobs(ctx, state);
+        self.poll_batch(ctx, state);
+    }
+
+    fn poll_jobs(&mut self, ctx: &egui::Context, state: &mut State) {
         if let Some(job) = &mut self.listing
             && let Some(result) = job.take_result()
         {

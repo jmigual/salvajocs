@@ -17,6 +17,8 @@ All notable changes to salvajocs. The format follows
 - rclone no longer asks for the password of an encrypted rclone config. Set
   `RCLONE_CONFIG_PASS` or add `--password-command` to the `rclone-command` option
   ([advanced options](docs/guide/advanced-options.md#rclone-remote)).
+- Closing the window while a backup, restore, clean-up or other save is running asks first: wait
+  for it or close anyway.
 
 ### Fixed
 

@@ -114,6 +114,11 @@ impl Batch {
             || self.cleaning.is_some()
     }
 
+    /// Whether the run, which writes the games' files, is running.
+    pub(super) fn writing(&self) -> bool {
+        self.running.is_some()
+    }
+
     /// Whether a mapping dialog or the confirm shows, before anything is written.
     pub(super) fn open(&self) -> bool {
         self.games.is_some()

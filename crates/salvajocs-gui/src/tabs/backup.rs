@@ -303,6 +303,11 @@ impl BackupTab {
             || self.choices.busy()
     }
 
+    /// Whether a backup runs, which closing the app would cut short.
+    pub(crate) fn writing(&self) -> bool {
+        self.running.is_some()
+    }
+
     /// Finishes the pending file writes; for when the app closes.
     pub(crate) fn flush(&mut self, config_dir: &Path) -> anyhow::Result<()> {
         self.choices.flush(config_dir)
@@ -992,6 +997,11 @@ impl BackupTab {
         let (release, job) = crate::job::held(ctx);
         self.running = Some(job);
         release
+    }
+
+    /// Whether the backup's job has ended, without taking its result.
+    pub(crate) fn run_ended(&mut self) -> bool {
+        self.running.as_mut().is_none_or(|job| !job.is_running())
     }
 }
 

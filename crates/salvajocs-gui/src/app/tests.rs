@@ -251,3 +251,226 @@ fn the_bar_fits_while_a_downloaded_update_waits() {
         None
     });
 }
+
+/// An app with its repository open, driven as eframe does: `logic`, then `ui`, every frame.
+fn ready_app(dir: &Path) -> Harness<'static, App> {
+    driven(dir, true)
+}
+
+/// An app with its repository open that runs `logic` before `ui` only if `with_logic`.
+fn driven(dir: &Path, with_logic: bool) -> Harness<'static, App> {
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(1000.0, 900.0))
+        .build_ui_state(
+            move |ui, app| {
+                let mut frame = eframe::Frame::_new_kittest();
+                if with_logic {
+                    eframe::App::logic(app, ui.ctx(), &mut frame);
+                }
+                eframe::App::ui(app, ui, &mut frame);
+            },
+            app(dir),
+        );
+    step_until(&mut harness, "the repository to open", |app| {
+        matches!(app.stage, Stage::Ready) && !app.busy()
+    });
+    harness
+}
+
+/// Steps one frame in which the window is asked to close, as the OS or the title bar's Close
+/// does.
+fn request_close(harness: &mut Harness<'static, App>) {
+    harness
+        .input_mut()
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    harness.step();
+}
+
+/// The commands of a `logic` pass alone, as eframe runs for a minimized window, with a close
+/// request if `close`.
+fn logic_only(harness: &mut Harness<'static, App>, close: bool) -> Vec<egui::ViewportCommand> {
+    let ctx = harness.ctx.clone();
+    let mut input = egui::RawInput::default();
+    if close {
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+    }
+    let app = harness.state_mut();
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut output = ctx.run_logic(&input, |ctx| eframe::App::logic(app, ctx, &mut frame));
+    output
+        .viewport_commands
+        .remove(&egui::ViewportId::ROOT)
+        .unwrap_or_default()
+}
+
+fn sent(harness: &Harness<'static, App>, command: egui::ViewportCommand) -> bool {
+    harness
+        .output()
+        .viewport_output
+        .values()
+        .any(|viewport| viewport.commands.contains(&command))
+}
+
+const RUNNING: &str = "A job is still running";
+
+#[test]
+fn closing_without_a_job_is_not_asked_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    request_close(&mut harness);
+    assert!(!sent(&harness, egui::ViewportCommand::CancelClose));
+    assert!(harness.query_by_label(RUNNING).is_none());
+}
+
+#[test]
+fn closing_during_a_job_asks_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let _end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    assert!(sent(&harness, egui::ViewportCommand::CancelClose));
+    assert!(sent(&harness, egui::ViewportCommand::Minimized(false)));
+    harness.step();
+    harness.get_by_label(RUNNING);
+    assert!(!closed(&harness));
+}
+
+#[test]
+fn closing_a_minimized_window_during_a_job_asks_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let _end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    let commands = logic_only(&mut harness, true);
+    assert!(commands.contains(&egui::ViewportCommand::CancelClose));
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)));
+}
+
+#[test]
+fn closing_a_minimized_window_after_the_job_ended_is_not_asked_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    drop(end_backup);
+    // No frame runs while minimized, so only `logic` can notice that the job is over.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !harness.state_mut().backup.run_ended() {
+        assert!(Instant::now() < deadline, "the backup job never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(logic_only(&mut harness, true).is_empty());
+}
+
+#[test]
+fn closing_while_a_repository_is_created_asks_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let _end_creation = harness.state_mut().settings.hold_finishing(&ctx);
+    request_close(&mut harness);
+    assert!(sent(&harness, egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn a_close_request_in_the_frame_a_job_starts_is_asked_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = driven(dir.path(), false);
+    let ctx = harness.ctx.clone();
+    let _end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    assert!(sent(&harness, egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn reading_jobs_do_not_hold_the_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let (_end_load, load) = crate::job::held(&ctx);
+    harness.state_mut().manifest = Some(load);
+    assert!(harness.state().busy());
+    request_close(&mut harness);
+    assert!(!sent(&harness, egui::ViewportCommand::CancelClose));
+    assert!(harness.query_by_label(RUNNING).is_none());
+}
+
+#[test]
+fn a_job_that_ended_on_another_tab_does_not_hold_the_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_compression = harness.state_mut().settings.hold_compression(&ctx);
+    harness.step();
+    drop(end_compression);
+    step_until(&mut harness, "the compression job to end", |app| {
+        !app.settings.busy()
+    });
+    request_close(&mut harness);
+    assert!(!sent(&harness, egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn close_anyway_closes_despite_the_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let _end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    harness.step();
+    harness.get_by_label("Close anyway").click();
+    harness.step();
+    assert!(closed(&harness));
+    // eframe turns the Close command into a close request, which must not ask again.
+    request_close(&mut harness);
+    assert!(!sent(&harness, egui::ViewportCommand::CancelClose));
+}
+
+#[test]
+fn waiting_keeps_the_window_until_the_job_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    harness.step();
+    harness.get_by_label("Wait").click();
+    // The click ends the dialog in this frame, which still draws it.
+    harness.run_steps(2);
+    assert!(harness.query_by_label(RUNNING).is_none());
+    assert!(!closed(&harness));
+
+    drop(end_backup);
+    step_until(&mut harness, "the backup job to end", |app| {
+        !app.backup.busy()
+    });
+    request_close(&mut harness);
+    assert!(!sent(&harness, egui::ViewportCommand::CancelClose));
+    assert!(harness.query_by_label(RUNNING).is_none());
+}
+
+#[test]
+fn the_dialog_goes_away_when_the_job_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    harness.step();
+    harness.get_by_label(RUNNING);
+
+    drop(end_backup);
+    step_until(&mut harness, "the dialog to go", |app| !app.confirm_close);
+    harness.step();
+    assert!(harness.query_by_label(RUNNING).is_none());
+}
