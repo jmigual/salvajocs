@@ -64,6 +64,8 @@ other way round.
 | ![The restore mapping dialog](docs/images/mapping-dialog.png) | ![The Custom games tab with the game form](docs/images/custom-games.png) |
 | **Settings: repository, compression and roots** | **First run: repository and encryption password** |
 | ![The Settings tab](docs/images/settings.png) | ![The first-run dialog](docs/images/first-run.png) |
+| **Restore several games: each file labelled new or changed** | |
+| ![The plan of two ticked games, with their files as trees](docs/images/restore-batch.png) | |
 
 ## How it works
 

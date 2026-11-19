@@ -95,6 +95,8 @@ Proton game and try again. Nothing is written in that case.
 
 ## Restore several games
 
+![The plan of two games restored together](../images/restore-batch.png)
+
 To restore more than one game in one go:
 
 1. Tick the checkbox before each game in the list, or click **Select all**. A game whose only
