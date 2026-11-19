@@ -27,6 +27,11 @@ pub mod icons {
     pub const WARNING: &str = "\u{E4E0}";
     pub const X_CIRCLE: &str = "\u{E4F8}";
     pub const CHECK_CIRCLE: &str = "\u{E184}";
+    pub const PLUS_CIRCLE: &str = "\u{E3D6}";
+    pub const MINUS_CIRCLE: &str = "\u{E32C}";
+    pub const PENCIL_SIMPLE: &str = "\u{E3B4}";
+    pub const QUESTION: &str = "\u{E3E8}";
+    pub const EQUALS: &str = "\u{E21C}";
     pub const LOCK_SIMPLE: &str = "\u{E308}";
     pub const LOCK_SIMPLE_OPEN: &str = "\u{E30A}";
     pub const ARROW_RIGHT: &str = "\u{E06C}";
