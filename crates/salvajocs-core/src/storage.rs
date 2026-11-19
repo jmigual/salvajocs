@@ -1,5 +1,7 @@
 //! Repository storage over `rustic_core` (ADR-0003). The only module that names rustic types.
 
+mod rclone;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -13,6 +15,12 @@ use rustic_core::{
     RestoreOptions, RusticError, SnapshotOptions,
     repofile::{IndexFile, SnapshotFile, SnapshotId},
 };
+
+use rclone::Rclone;
+
+/// The Windows process creation flag that gives a console program no window.
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// zstd's own default level; rustic cannot unset a compression level once it is stored.
 pub const ZSTD_DEFAULT_LEVEL: i32 = 3;
@@ -39,9 +47,27 @@ pub enum StorageError {
     /// The repository holds an entry whose path would leave the restore destination.
     #[error("unsafe path in snapshot: {0}")]
     UnsafeEntryPath(PathBuf),
+    /// The program of an rclone location (`rclone` or the `rclone-command` one) was not found.
+    #[error("the rclone program was not found; is it installed and on the PATH?")]
+    RcloneMissing,
+    /// rclone is too old, could not be run or exited before serving; its output is attached.
+    #[error("rclone failed: {0}")]
+    RcloneFailed(String),
+    /// rclone did not print the address it serves on in time; what it printed is attached.
+    #[error("rclone did not report its address within {0:?}{suffix}", suffix = output_suffix(.1))]
+    RcloneTimeout(Duration, String),
     /// Any other repository or backend failure, as rustic reports it.
     #[error("repository error: {0}")]
     Backend(String),
+}
+
+/// `: <output>` after an error message, or nothing when the program printed nothing.
+fn output_suffix(output: &str) -> String {
+    if output.is_empty() {
+        String::new()
+    } else {
+        format!(": {output}")
+    }
 }
 
 fn backend(err: impl AsRef<RusticError>) -> StorageError {
@@ -89,12 +115,22 @@ impl RepoLocation {
         )
     }
 
-    fn backends(&self) -> Result<RepositoryBackends, StorageError> {
-        BackendOptions::default()
-            .repository(&self.repository)
+    /// The backends for rustic. An `rclone:` location is served by an rclone started here, which
+    /// is returned too: rustic reaches it as a REST server and it stops when dropped.
+    fn backends(&self) -> Result<(RepositoryBackends, Option<Rclone>), StorageError> {
+        let (repository, rclone) = match location_to_type_and_path(&self.repository) {
+            Ok((SupportedBackend::Rclone, remote)) => {
+                let (rclone, url) = Rclone::start(remote.as_str(), &self.options)?;
+                (format!("rest:{url}"), Some(rclone))
+            }
+            _ => (self.repository.clone(), None),
+        };
+        let backends = BackendOptions::default()
+            .repository(repository)
             .options(self.options.clone())
             .to_backends()
-            .map_err(backend)
+            .map_err(backend)?;
+        Ok((backends, rclone))
     }
 }
 
@@ -224,10 +260,11 @@ fn has_config(location: &RepoLocation, repo: &Repository<()>) -> Result<bool, St
 /// Inspects `location` with `password` (empty means no password). Never treats an unreadable
 /// location as [`RepoState::Missing`].
 pub fn probe(location: &RepoLocation, password: &str) -> RepoState {
-    let repo = match location
-        .backends()
-        .and_then(|backends| repository(&backends))
-    {
+    let (backends, _rclone) = match location.backends() {
+        Ok(backends) => backends,
+        Err(err) => return RepoState::Error(err.to_string()),
+    };
+    let repo = match repository(&backends) {
         Ok(repo) => repo,
         Err(err) => return RepoState::Error(err.to_string()),
     };
@@ -251,6 +288,8 @@ pub struct Storage {
     /// A snapshot was written or a prune ran since the index was loaded, so restoring needs a
     /// reindex.
     stale: bool,
+    /// The rclone serving an `rclone:` location. Last, so it stops after the repository is gone.
+    _rclone: Option<Rclone>,
 }
 
 impl Storage {
@@ -264,7 +303,7 @@ impl Storage {
         if let Some(level) = compression.config_level()? {
             config = config.set_compression(level);
         }
-        let backends = location.backends()?;
+        let (backends, rclone) = location.backends()?;
         let repo = repository(&backends)?
             .init(
                 &Credentials::password(password),
@@ -273,7 +312,7 @@ impl Storage {
             )
             .and_then(Repository::to_indexed)
             .map_err(backend)?;
-        Ok(Self::new(backends, password, repo))
+        Ok(Self::new(backends, password, repo, rclone))
     }
 
     /// Opens the existing repository at `location`. Fails with [`StorageError::Missing`] if there
@@ -281,7 +320,7 @@ impl Storage {
     /// a missing config proves nothing ([`RepoLocation::proves_absence`]) the failure is
     /// [`StorageError::Backend`] instead, so a refused login is not taken for a missing repository.
     pub fn open(location: &RepoLocation, password: &str) -> Result<Self, StorageError> {
-        let backends = location.backends()?;
+        let (backends, rclone) = location.backends()?;
         if !has_config(location, &repository(&backends)?)? {
             return Err(if location.proves_absence() {
                 StorageError::Missing
@@ -293,19 +332,21 @@ impl Storage {
             });
         }
         let repo = open_indexed(&backends, password)?;
-        Ok(Self::new(backends, password, repo))
+        Ok(Self::new(backends, password, repo, rclone))
     }
 
     fn new(
         backends: RepositoryBackends,
         password: &str,
         repo: Repository<IndexedFullStatus>,
+        rclone: Option<Rclone>,
     ) -> Self {
         Self {
             backends,
             password: password.to_string(),
             repo,
             stale: false,
+            _rclone: rclone,
         }
     }
 

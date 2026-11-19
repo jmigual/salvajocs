@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- rclone no longer asks for the password of an encrypted rclone config. Set
+  `RCLONE_CONFIG_PASS` or add `--password-command` to the `rclone-command` option
+  ([advanced options](docs/guide/advanced-options.md#rclone-remote)).
+
 ### Fixed
 
 - On Windows, the app no longer opens a terminal window.
@@ -16,6 +22,7 @@ All notable changes to salvajocs. The format follows
   made narrower than 840 points.
 - In a narrow window, the update notice and manifest status in the top bar are shortened with
   "…" instead of overlapping the window buttons.
+- On Windows, an rclone repository no longer opens a terminal window.
 
 ## [0.5.0] - 2026-11-19
 

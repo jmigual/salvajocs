@@ -137,10 +137,6 @@ pub fn option_key_known(kind: BackendKind, key: &str) -> bool {
         || matches!(kind, BackendKind::OpenDal(service) if opendal_reads_key(service, key))
 }
 
-/// The Windows process creation flag that gives a console program no window.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// The remotes of the user's rclone config, from `rclone listremotes`. A missing `rclone` binary
 /// is an [`io::ErrorKind::NotFound`] error; a failing one carries its stderr.
 pub fn rclone_remotes() -> io::Result<Vec<String>> {
@@ -151,7 +147,10 @@ pub fn rclone_remotes() -> io::Result<Vec<String>> {
         .stdin(Stdio::null());
     // The app has no console on Windows, so a console program would open a window of its own.
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut command, CREATE_NO_WINDOW);
+    std::os::windows::process::CommandExt::creation_flags(
+        &mut command,
+        crate::storage::CREATE_NO_WINDOW,
+    );
     let output = command.output()?;
     if !output.status.success() {
         return Err(failure(&output));

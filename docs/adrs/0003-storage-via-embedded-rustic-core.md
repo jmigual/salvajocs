@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-19: salvajocs starts `rclone serve restic` itself, so it opens no console
+window on Windows.
 
 ## Context
 
@@ -49,7 +51,8 @@ throwaway program built against them in the scratchpad:
   options (`BackendOptions { repository, options, .. }.to_backends()`).
   - Plain path or `local:` → local filesystem.
   - `rest:<url>` → restic REST server (reqwest, rustls).
-  - `rclone:<remote>` → needs the external `rclone` binary on `PATH`.
+  - `rclone:<remote>` → needs the external `rclone` binary on `PATH`. rustic_backend starts
+    `rclone serve restic` without `CREATE_NO_WINDOW`, so on Windows a console window stays open.
   - `opendal:<service>`: the service config goes in the options map. Services built in: b2, ftp,
     swift, azblob, azdls, cos, fs, dropbox, gdrive, gcs, ghac, http, ipmfs, memory, obs,
     onedrive, oss, pcloud, s3, webdav, webhdfs, azfile, yandex-disk. **`sftp` only when not on
@@ -78,7 +81,11 @@ throwaway program built against them in the scratchpad:
   default features (`opendal`, `rest`, `rclone`) stay on.
   - The cross-OS caveat is shown in the backend picker: `opendal:sftp` is unavailable in Windows
     builds, so a repo that must be read from both OSes should not use it.
-  - `rclone:` requires `rclone` on `PATH`.
+  - `rclone:` requires `rclone` on `PATH`. `core::storage::rclone` starts `rclone serve restic`
+    itself, as rustic_backend's rclone backend does (arguments, random login in `RCLONE_USER` and
+    `RCLONE_PASS`, version check, `rclone-command`, `use-password`, `rest-url`), and gives rustic
+    a `rest:` URL. On Windows it starts with `CREATE_NO_WINDOW`. It waits at most 30 s for the
+    address, and the child lives as long as the `Storage` or the probe, killed on drop.
 - **Compression:** the first-run dialog's level goes to `ConfigOptions::set_compression` at init.
   Settings shows `repo.config().compression` and changes it with `apply_config`. The app config
   does not store compression.
@@ -111,6 +118,8 @@ throwaway program built against them in the scratchpad:
   but it is still a child process with a fetch script, checksum checks and a third-party
   license to ship. rustic_core removes all of that.
 - **rustic_backend local only:** a smaller dependency tree, but the user wants remote backends.
+- **rustic_backend's own rclone backend:** no code of ours, but on Windows it leaves a console
+  window open, and we cannot change rustic_backend.
 
 ## Consequences
 
@@ -119,7 +128,7 @@ throwaway program built against them in the scratchpad:
   location is the guard against initializing over a repository that merely failed to answer.
 - One self-contained binary; no external restic.
 - Every rustic_core upgrade is a code change. The exact pin keeps `cargo update` from breaking
-  the build.
+  the build. A rustic_backend upgrade also compares its `src/rclone.rs` with ours.
 - The compression level is per repository: all machines share it.
 - **restic interop is run-tested** (restic 0.19.1, 2026-11-16):
   - **restic reads rustic's repo.** The rustic spike made an empty-password repo (compression

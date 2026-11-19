@@ -95,8 +95,15 @@ The keys are `retry`, `timeout`, `cacert` and `tls-client-cert` from the table
 
 ## rclone remote
 
-The REST keys above apply to the connection to the `rclone` program. These keys are for the
-program:
+The REST keys above apply to the connection to the `rclone` program. salvajocs starts the
+program while the repository is open and waits up to 30 seconds for it to print the address it
+serves on; with `rest-url` set it does not wait.
+
+rclone cannot ask for the password of an encrypted rclone config. Set the `RCLONE_CONFIG_PASS`
+environment variable before starting salvajocs, or add `--password-command "<command>"` to
+`rclone-command`.
+
+These keys are for the program:
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
