@@ -41,34 +41,45 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
      trust. It misses only a file rewritten with its size kept and its mtime put back;
   3. otherwise, when the baseline's list has the file, the local file's SHA-256 is compared
      with it;
-  4. a baseline without `hashes.json` (made by 0.5.0 or older) falls back to size and mtime: a
-     different mtime is changed.
-- **Shared module `core::changes`** (salvajocs types only): `newest`, `compare_file`,
-  `compare_game` (found files against the baseline listing; paths fold ASCII case below
-  Windows-family bases, as ADR-0014 does), `counts` (by the game's selection: an unticked file
-  that is in the baseline counts as removed) and `same_content` (two local files, for the
-  restore's confirm tree).
+  4. a baseline without a usable `hashes.json` (made by 0.5.0 or older, unreadable, or not
+     matching its snapshot) falls back to size and mtime: a different mtime is changed.
+  A local file that cannot be read is `Unknown`: counted and shown, never taken as unchanged.
+- **A baseline list is trusted only when it describes its snapshot** (`changes::verified`): the
+  same files below `files/` with the same sizes and mtimes as the snapshot's nodes, a
+  `registry.json` exactly when the list hashes one, and `hashes.json` no older than
+  `salvajocs.json` and `registry.json`. An older version that restaged the game kept a stale
+  list; without this check another machine could skip a backup it needs.
+- **Shared module `core::changes`**: `newest`, `baseline` (listing plus verified list),
+  `verified`, `compare_file`, `compare_game` (found files against the baseline listing; paths
+  fold ASCII case below Windows-family bases, as ADR-0014 does), `counts` (by the game's
+  selection: an unticked file that is in the baseline counts as removed; unreadable ones count
+  as unknown) and `same_content` (two local files, used by the restore).
 - **Skip rule (amends ADR-0010).** A game gets no snapshot when
   - (A) nothing changed since this machine's last backup: rustic's `skip_if_unchanged`; or
   - (B) its staged hash list equals the hash list of the newest non-`pre-restore` snapshot of
     the game from any host: the same paths, sizes and hashes, and the same `salvajocs.json`
-    and `registry.json`. A baseline without a list never matches. Checked before rustic is
+    and `registry.json`. A baseline without a list, or whose list cannot be read or is not
+    verified, never matches: the backup goes on to rustic, so a damaged blob costs a snapshot,
+    not the game's backups. Checked before rustic is
     called; never a tree id compare, since tree ids differ across machines.
   - The outcome is `Stored::New`, `Stored::Unchanged { newer_elsewhere }` or
     `Stored::SameAsNewest(newest)`. When (B) holds and the newest is this machine's own
     snapshot, the outcome is `Unchanged { newer_elsewhere: None }`: an unchanged rerun reads
     "up to date". `newer_elsewhere` is the newest snapshot when it is from another host.
-  - `backup_games` reads every game's baseline list right after its one reindex, before it
-    writes anything, so no listing waits for another reindex (ADR-0003).
+  - `backup_games` lists every game's baseline and reads its list right after its one reindex,
+    before it writes anything, so no read waits for another reindex (ADR-0003).
   - (B) is off for the pre-restore safety backup (`backup_games(.., same_as_newest: false)`):
     that copy belongs to the `pre-restore` retention sequence (ADR-0015), and must not rely on a
     snapshot of the other sequence that retention may later forget (ADR-0005).
 - **Preview on the Backup tab:** after each scan, a background job (not counted as busy) lists
-  each game's newest snapshot, reads its hash list, lists this machine's parent, compares, and
-  predicts (A) by path set, size and mtime against the parent. The game line says what differs
-  from the newest backup and from which host, or that no backup will be made and why; files
-  carry `new` or `changed` badges; files in the baseline but no longer found (or unticked) are
-  greyed `removed` rows in the tree. Registry keys and `salvajocs.json` are not previewed.
+  each game's newest snapshot, reads and verifies its hash list, lists this machine's parent,
+  compares, and predicts (A) by path set, size and mtime against a parent that has a list. The
+  game line says what differs from the newest backup and from which host, or that no backup
+  will be made and why; it promises no skip without a verified list or with a file that could
+  not be compared. Files carry `new`, `changed` or `could not be compared` badges; files in the
+  baseline but no longer found (or unticked) are greyed `removed` rows in the tree. Registry
+  keys and `salvajocs.json` are not previewed. A comparison with a repository Settings replaced
+  is dropped and made again.
 - **Shared tree:** the file tree moves to `tabs/tree.rs` with status badges and a read-only
   mode, for the restore's confirm tree.
 
@@ -85,8 +96,14 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
 
 ## Consequences
 
-- Reading a list costs one small blob per game. Data packs are not cached (trees and index
-  are), so on a remote backend each game's list is one ranged read per backup and per preview.
+- Reading a list costs one listing (trees are cached) and one small blob per game. Data packs are
+  not cached (trees and index are), so on a remote backend each game's list is one ranged read per
+  backup and per preview.
+- Measured (release build, 2026-11-19, local repository on disk, warm page cache; the ignored
+  tests `time_twenty_game_backup` and `time_hashing_64_mib`): one reindex plus 20 per-game
+  backups of one 100-200 kB file each takes 0.42 s when all are new, 0.24 s when all are
+  unchanged, and 0.24 s when another host's newest holds the same saves with other mtimes, so
+  every list is read and compared. SHA-256 of a 64 MiB file takes 0.03 s, about 2 GB/s.
 - The first 0.6.0 backup of each game on each machine makes a snapshot: the staging directory
   gains `hashes.json`, and older snapshots have no list for (B) to compare with.
 - After a (B) skip, this machine's state lives in another machine's snapshot. Retention keeps

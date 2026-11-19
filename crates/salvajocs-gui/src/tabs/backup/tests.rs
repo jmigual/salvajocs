@@ -10,7 +10,7 @@ use salvajocs_core::layout::Base;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::{FoundFile, RegistrySource};
 use salvajocs_core::selection::{Change, Pending};
-use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
+use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
 use crate::env::{Env, MemorySecrets};
 use crate::theme;
@@ -41,7 +41,7 @@ fn game(files: &[u64], registry: bool, unreadable: usize) -> GameScan {
     }
 }
 
-fn backup(result: Result<Option<SnapshotInfo>, BackupError>) -> GameBackup {
+fn backup(result: Result<Stored, BackupError>) -> GameBackup {
     GameBackup {
         title: "Game".into(),
         slug: "game".into(),
@@ -94,7 +94,13 @@ fn a_failed_game_carries_its_error_chain() {
     let GameResult { title, outcome } = summarize(&failed);
     assert_eq!(title, "Game");
     assert!(matches!(outcome, Outcome::Failed(text) if text.contains("../x")));
-    assert_eq!(summarize(&backup(Ok(None))).outcome, Outcome::Unchanged);
+    let unchanged = Stored::Unchanged {
+        newer_elsewhere: None,
+    };
+    assert_eq!(
+        summarize(&backup(Ok(unchanged))).outcome,
+        Outcome::Unchanged
+    );
 }
 
 #[test]

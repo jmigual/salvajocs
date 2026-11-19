@@ -682,7 +682,15 @@ fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
     };
     let storage = state.session.as_ref().unwrap().storage.clone();
     let stage = dir.join("stage");
-    backup_games(&mut storage.lock().unwrap(), &[scan], &stage, &[], |_| {}).unwrap();
+    backup_games(
+        &mut storage.lock().unwrap(),
+        &[scan],
+        &stage,
+        &[],
+        false,
+        |_| {},
+    )
+    .unwrap();
     let games = restore::list(&storage.lock().unwrap()).unwrap();
     let tab = RestoreTab {
         repository: Some(storage),

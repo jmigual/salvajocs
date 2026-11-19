@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::backup::backup_games;
+use crate::backup::{Stored, backup_games};
 use crate::config::{AppConfig, PasswordMode};
 use crate::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
@@ -46,9 +46,9 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
 }
 
 fn back_up(storage: &mut Storage, root: &Path, games: &[GameScan], tags: &[&str]) {
-    let outcomes = backup_games(storage, games, &root.join("stage"), tags, |_| {}).unwrap();
+    let outcomes = backup_games(storage, games, &root.join("stage"), tags, false, |_| {}).unwrap();
     for outcome in outcomes {
-        assert!(matches!(outcome.result, Ok(Some(_))), "{outcome:?}");
+        assert!(matches!(outcome.result, Ok(Stored::New(_))), "{outcome:?}");
     }
 }
 

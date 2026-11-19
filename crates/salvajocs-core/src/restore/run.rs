@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
 use super::{RestorePlan, StagedGame, Targets, Write};
-use crate::backup::{BackupError, backup_games};
+use crate::backup::{BackupError, Stored, backup_games};
 use crate::config::AppConfig;
 use crate::crossbuild::{self, Family, pair_side};
 use crate::layout::{
@@ -496,11 +496,12 @@ pub fn run(
     } else {
         let tags = [PRE_RESTORE_TAG];
         let games = slice::from_ref(&existing);
-        let mut outcomes = backup_games(storage, games, stage_root, &tags, |_| {})?;
+        let mut outcomes = backup_games(storage, games, stage_root, &tags, false, |_| {})?;
         let outcome = outcomes.pop().expect("one outcome per game");
-        outcome
-            .result?
-            .map_or(SafetyBackup::Unchanged, SafetyBackup::Created)
+        match outcome.result? {
+            Stored::New(snapshot) => SafetyBackup::Created(snapshot),
+            Stored::Unchanged { .. } | Stored::SameAsNewest(_) => SafetyBackup::Unchanged,
+        }
     };
 
     let files = (plan.writes.iter().zip(checks))

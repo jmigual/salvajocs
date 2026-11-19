@@ -154,6 +154,7 @@ fn open_tab_with(
         snapshots,
         &tmp.path().join("fixture-stage"),
         tags,
+        false,
         |_| {},
     )
     .unwrap();
@@ -743,12 +744,13 @@ fn two_games(tmp: &TempDir) -> Harness<'static, App> {
         std::slice::from_ref(&alpha),
         &stage,
         &safety,
+        false,
         |_| {},
     )
     .unwrap();
     // Same length as the first contents, so the scan's size still holds.
     fs::write(&alpha.files[0].real, "ALPHA/SAVE.DAT").unwrap();
-    backup_games(&mut storage, &[alpha], &stage, &[], |_| {}).unwrap();
+    backup_games(&mut storage, &[alpha], &stage, &[], false, |_| {}).unwrap();
     let skip = [Change::Skip(true)];
     selection::save(&mut storage, "Alpha", &skip, &tmp.path().join("settings")).unwrap();
     drop(storage);

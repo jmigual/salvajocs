@@ -10,6 +10,8 @@ use std::time::SystemTime;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::changes;
+
 use crate::layout::{
     Base, FILES_DIR, FileHash, HASHES_FILE, HASHES_FORMAT, Hashes, META_FILE, REGISTRY_FILE,
     SNAPSHOT_FORMAT, SnapshotMeta, target_path,
@@ -389,6 +391,20 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
     }
 }
 
+/// What [`backup_games`] stored for one game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stored {
+    /// A snapshot was written.
+    New(SnapshotInfo),
+    /// Nothing changed since this machine's last backup of the game.
+    Unchanged {
+        /// The newest snapshot of the game, when another host made it.
+        newer_elsewhere: Option<SnapshotInfo>,
+    },
+    /// The staged content equals this snapshot, the game's newest, which another host made.
+    SameAsNewest(SnapshotInfo),
+}
+
 /// The outcome of one game in [`backup_games`].
 #[derive(Debug)]
 pub struct GameBackup {
@@ -396,31 +412,66 @@ pub struct GameBackup {
     pub title: String,
     /// The game's slug (ADR-0010).
     pub slug: String,
-    /// The new snapshot, `None` when nothing changed since the last one, or why it failed.
-    pub result: Result<Option<SnapshotInfo>, BackupError>,
+    /// What was stored, or why it failed.
+    pub result: Result<Stored, BackupError>,
+}
+
+/// What [`backup_game`] compares a staged game with.
+struct Baseline {
+    /// The game's newest snapshot that is not a pre-restore one, from any host.
+    newest: Option<SnapshotInfo>,
+    /// Its hash list; `None` when it has none, it cannot be read or does not match the
+    /// snapshot's files ([`changes::verified`]), or the same-as-newest rule is off.
+    hashes: Option<Hashes>,
 }
 
 /// Backs up each of `games` as its own snapshot (ADR-0010), one after another: the game is
 /// staged in `stage_root/<slug>` with its registry keys read fresh from the scan's
 /// `registry_source`, then stored as `/salvajocs/<slug>` with label = title and tags
-/// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas). An unchanged
-/// game makes no snapshot.
+/// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas).
 ///
-/// The repository is reindexed once first; only that failure is returned as `Err`. A game's
-/// failure is in its [`GameBackup`] and does not stop the others. `progress` gets each outcome
-/// as it is done.
+/// A game makes no snapshot when nothing changed since this machine's last backup of it, or,
+/// with `same_as_newest`, when its staged hash list equals that of the game's newest snapshot
+/// that is not a pre-restore one, from any host (ADR-0018). The pre-restore safety backup
+/// passes false.
+///
+/// The repository is reindexed and its snapshots listed once first; only those failures are
+/// returned as `Err`. A game's failure is in its [`GameBackup`] and does not stop the others.
+/// `progress` gets each outcome as it is done.
 pub fn backup_games(
     storage: &mut Storage,
     games: &[GameScan],
     stage_root: &Path,
     extra_tags: &[&str],
+    same_as_newest: bool,
     mut progress: impl FnMut(&GameBackup),
 ) -> Result<Vec<GameBackup>, BackupError> {
     storage.reindex()?;
+    let snapshots = storage.snapshots("salvajocs")?;
+    let host = storage.hostname()?;
+    // Read before anything is written: a read after a write would reindex first (ADR-0003).
+    let baselines: Vec<Baseline> = (games.iter())
+        .map(|game| {
+            let slug = slug(&game.title);
+            let newest = changes::newest(&snapshots, &slug).cloned();
+            // A list that cannot be read or verified only costs a snapshot rustic may still
+            // skip; failing the game would block its backups for good.
+            let hashes = match &newest {
+                Some(newest) if same_as_newest => changes::baseline(storage, &newest.id, &slug)
+                    .ok()
+                    .and_then(|(_, hashes)| hashes),
+                _ => None,
+            };
+            Baseline { newest, hashes }
+        })
+        .collect();
     let mut outcomes = Vec::with_capacity(games.len());
-    for game in games {
+    for (game, baseline) in games.iter().zip(baselines) {
         let slug = slug(&game.title);
-        let result = backup_game(storage, game, &stage_root.join(&slug), &slug, extra_tags);
+        let stage_dir = stage_root.join(&slug);
+        let result = backup_game(
+            storage, game, &stage_dir, &slug, extra_tags, baseline, &host,
+        );
         let outcome = GameBackup {
             title: game.title.clone(),
             slug,
@@ -432,19 +483,42 @@ pub fn backup_games(
     Ok(outcomes)
 }
 
+/// Stages `game` and stores it unless it equals `baseline`'s hash list or rustic finds it
+/// unchanged; `host` is this machine's.
 fn backup_game(
     storage: &mut Storage,
     game: &GameScan,
     stage_dir: &Path,
     slug: &str,
     extra_tags: &[&str],
-) -> Result<Option<SnapshotInfo>, BackupError> {
-    stage(game, &read_registry(game)?, stage_dir)?;
+    baseline: Baseline,
+    host: &str,
+) -> Result<Stored, BackupError> {
+    let staged = stage(game, &read_registry(game)?, stage_dir)?;
+    let Baseline { newest, hashes } = baseline;
+    if let (Some(newest), Some(hashes)) = (&newest, hashes)
+        && staged.same_content(&hashes)
+    {
+        return Ok(if newest.host == host {
+            Stored::Unchanged {
+                newer_elsewhere: None,
+            }
+        } else {
+            Stored::SameAsNewest(newest.clone())
+        });
+    }
     let game_tag = format!("game:{slug}");
     let mut tags = vec!["salvajocs", game_tag.as_str()];
     tags.extend_from_slice(extra_tags);
     let as_path = format!("/salvajocs/{slug}");
-    Ok(storage.backup_dir(stage_dir, &as_path, &tags, &game.title)?)
+    Ok(
+        match storage.backup_dir(stage_dir, &as_path, &tags, &game.title)? {
+            Some(snapshot) => Stored::New(snapshot),
+            None => Stored::Unchanged {
+                newer_elsewhere: newest.filter(|newest| newest.host != host),
+            },
+        },
+    )
 }
 
 /// Exports `game.registry_keys` from the source the scan recorded. A source that cannot be read

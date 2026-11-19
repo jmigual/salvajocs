@@ -21,6 +21,8 @@ All notable changes to salvajocs. The format follows
   for it or close anyway.
 - Each game backup also holds `hashes.json`, the SHA-256 and size of every saved file. The first
   backup of each game after updating therefore makes a new snapshot, even when nothing changed.
+- A backup skips a game whose saves are the same as its newest backup from any machine, such as
+  saves a launcher's cloud sync copied, instead of storing them again.
 
 ### Fixed
 

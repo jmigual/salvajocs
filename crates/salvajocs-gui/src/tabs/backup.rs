@@ -12,7 +12,7 @@ use eframe::egui::emath::Rot2;
 use eframe::egui::{
     self, Checkbox, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
 };
-use salvajocs_core::backup::{self, GameBackup};
+use salvajocs_core::backup::{self, GameBackup, Stored};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
@@ -58,8 +58,8 @@ fn chain(error: &dyn Error) -> String {
 
 fn summarize(backup: &GameBackup) -> GameResult {
     let outcome = match &backup.result {
-        Ok(Some(_)) => Outcome::Saved,
-        Ok(None) => Outcome::Unchanged,
+        Ok(Stored::New(_)) => Outcome::Saved,
+        Ok(Stored::Unchanged { .. } | Stored::SameAsNewest(_)) => Outcome::Unchanged,
         Err(err) => Outcome::Failed(chain(err)),
     };
     GameResult {
@@ -817,11 +817,14 @@ fn back_up(
     progress: impl FnMut(&GameBackup),
 ) -> anyhow::Result<Vec<String>> {
     let mut storage = lock_storage(storage)?;
-    let backups = backup::backup_games(&mut storage, games, stage_root, &[], progress)?;
+    let backups = backup::backup_games(&mut storage, games, stage_root, &[], true, progress)?;
     let made = backups
         .into_iter()
-        .filter_map(|backup| backup.result.ok().flatten());
-    Ok(made.map(|snapshot| snapshot.id).collect())
+        .filter_map(|backup| match backup.result {
+            Ok(Stored::New(snapshot)) => Some(snapshot.id),
+            _ => None,
+        });
+    Ok(made.collect())
 }
 
 /// Forgets and prunes by the repository's retention policy, never the snapshots `made`

@@ -377,11 +377,14 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
     game(title, vec![found(Base::WinAppData, "Game/save.sav", &real)])
 }
 
-/// The new snapshot of each game, `None` when it was unchanged; panics on a failed game.
+/// The new snapshot of each game, `None` when none was written; panics on a failed game.
 fn written(outcomes: &[GameBackup]) -> Vec<Option<SnapshotInfo>> {
     outcomes
         .iter()
-        .map(|outcome| outcome.result.as_ref().unwrap().clone())
+        .map(|outcome| match outcome.result.as_ref().unwrap() {
+            Stored::New(snapshot) => Some(snapshot.clone()),
+            Stored::Unchanged { .. } | Stored::SameAsNewest(_) => None,
+        })
         .collect()
 }
 
@@ -525,7 +528,7 @@ fn a_backup_stores_the_hash_list() {
     let mut storage = init_repo(tmp.path());
     let games = [game_with_save(tmp.path(), "Foo", "foo")];
     let stage_root = tmp.path().join("stage");
-    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], true, |_| {}).unwrap();
     let info = written(&outcomes)[0].clone().unwrap();
     let slug = slug("Foo");
     let stored = storage
@@ -548,16 +551,23 @@ fn backup_creates_tagged_labelled_snapshot_per_game() {
     ];
     let stage_root = tmp.path().join("stage");
     let mut seen = Vec::new();
-    let outcomes = backup_games(&mut storage, &games, &stage_root, &["extra"], |outcome| {
-        seen.push(outcome.title.clone())
-    })
+    let outcomes = backup_games(
+        &mut storage,
+        &games,
+        &stage_root,
+        &["extra"],
+        true,
+        |outcome| seen.push(outcome.title.clone()),
+    )
     .unwrap();
 
     assert_eq!(seen, ["Foo, Part 1: ünï", "Bar"]);
     for (game, outcome) in games.iter().zip(&outcomes) {
         let slug = slug(&game.title);
         assert_eq!((&outcome.title, &outcome.slug), (&game.title, &slug));
-        let info = outcome.result.as_ref().unwrap().as_ref().unwrap();
+        let Ok(Stored::New(info)) = &outcome.result else {
+            panic!("{outcome:?}");
+        };
         assert_eq!(info.label, game.title);
         let mut tags = info.tags.clone();
         tags.sort();
@@ -585,7 +595,7 @@ fn unchanged_game_makes_no_new_snapshot() {
     ];
     let stage_root = tmp.path().join("stage");
     let run = |storage: &mut Storage| {
-        written(&backup_games(storage, &games, &stage_root, &[], |_| {}).unwrap())
+        written(&backup_games(storage, &games, &stage_root, &[], true, |_| {}).unwrap())
     };
 
     assert!(run(&mut storage).iter().all(Option::is_some));
@@ -612,7 +622,7 @@ fn registry_exported_from_recorded_source() {
     let stage_root = tmp.path().join("stage");
     let games = [scan];
 
-    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], true, |_| {}).unwrap();
     assert!(written(&outcomes)[0].is_some());
     let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
     let staged: RegistryExport =
@@ -621,7 +631,7 @@ fn registry_exported_from_recorded_source() {
 
     // The keys are gone from the source: the export is empty and `registry.json` is dropped.
     write(&second.join("user.reg"), "WINE REGISTRY Version 2\n");
-    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+    let outcomes = backup_games(&mut storage, &games, &stage_root, &[], true, |_| {}).unwrap();
     assert!(written(&outcomes)[0].is_some());
     assert!(!registry_file.exists());
 }
@@ -657,7 +667,7 @@ fn registry_exported_from_recorded_windows_source() {
     let mut storage = init_repo(tmp.path());
     let stage_root = tmp.path().join("stage");
 
-    let outcomes = backup_games(&mut storage, &[scan], &stage_root, &[], |_| {}).unwrap();
+    let outcomes = backup_games(&mut storage, &[scan], &stage_root, &[], true, |_| {}).unwrap();
     assert!(written(&outcomes)[0].is_some());
     let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
     let staged: RegistryExport = serde_json::from_slice(&fs::read(registry_file).unwrap()).unwrap();
@@ -673,10 +683,17 @@ fn failed_game_does_not_stop_the_others() {
     let games = [broken, game_with_save(tmp.path(), "Fine", "fine")];
     let mut storage = init_repo(tmp.path());
 
-    let outcomes =
-        backup_games(&mut storage, &games, &tmp.path().join("stage"), &[], |_| {}).unwrap();
+    let outcomes = backup_games(
+        &mut storage,
+        &games,
+        &tmp.path().join("stage"),
+        &[],
+        true,
+        |_| {},
+    )
+    .unwrap();
     assert!(matches!(outcomes[0].result, Err(BackupError::Io { .. })));
-    assert!(matches!(outcomes[1].result, Ok(Some(_))));
+    assert!(matches!(outcomes[1].result, Ok(Stored::New(_))));
 
     // Off Windows a live-registry source cannot be read, which is an error, not an empty export.
     #[cfg(not(windows))]
@@ -688,6 +705,7 @@ fn failed_game_does_not_stop_the_others() {
             &[windows],
             &tmp.path().join("stage"),
             &[],
+            true,
             |_| {},
         )
         .unwrap();
@@ -698,8 +716,252 @@ fn failed_game_does_not_stop_the_others() {
     }
 }
 
-/// One reindex plus 20 per-game backups on a local repo, first new and then unchanged
-/// (ADR-0010): `cargo test --release -p salvajocs-core time_twenty_game_backup -- --ignored
+/// The same repository as [`init_repo`] at `root`, writing snapshots as `host`.
+fn open_as(root: &Path, host: &str) -> Storage {
+    let location = RepoLocation {
+        repository: root.join("repo").to_str().unwrap().into(),
+        options: BTreeMap::new(),
+    };
+    let mut storage = Storage::open(&location, "").unwrap();
+    storage.set_host(host);
+    storage
+}
+
+/// Gives `path` the mtime `secs` after the epoch, keeping its bytes.
+fn touch(path: &Path, secs: u64) {
+    set_mtime(path, SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
+}
+
+/// What one backup of the single game in `games` stored, staged below `root/<stage>`.
+fn stored(
+    storage: &mut Storage,
+    root: &Path,
+    stage: &str,
+    games: &[GameScan],
+    same_as_newest: bool,
+) -> Stored {
+    let stage_root = root.join(stage);
+    let mut outcomes =
+        backup_games(storage, games, &stage_root, &[], same_as_newest, |_| {}).unwrap();
+    outcomes.remove(0).result.unwrap()
+}
+
+#[test]
+fn a_game_equal_to_another_hosts_newest_makes_no_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    let Stored::New(theirs) = stored(&mut there, tmp.path(), "there", &games, true) else {
+        panic!("the first backup is written");
+    };
+    // Another machine's copy of the same save has another mtime, so its content is compared.
+    touch(&games[0].files[0].real, 1_000_000);
+
+    let outcome = stored(&mut here, tmp.path(), "here", &games, true);
+    assert_eq!(outcome, Stored::SameAsNewest(theirs));
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 1);
+    // The safety backup keeps rustic's rule alone, so it stores this machine's own snapshot.
+    let outcome = stored(&mut here, tmp.path(), "here", &games, false);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn a_snapshot_without_a_hash_list_is_never_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    // As 0.5.0 stored it: the same staged files without `hashes.json`.
+    let old_stage = tmp.path().join("old");
+    stage(&games[0], &RegistryExport::default(), &old_stage).unwrap();
+    fs::remove_file(old_stage.join(HASHES_FILE)).unwrap();
+    let slug = slug("Foo");
+    let tags = ["salvajocs", &format!("game:{slug}")];
+    let as_path = format!("/salvajocs/{slug}");
+    there
+        .backup_dir(&old_stage, &as_path, &tags, "Foo")
+        .unwrap();
+
+    let outcome = stored(&mut here, tmp.path(), "here", &games, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+/// Stores `stage_dir` as it is as the game `title`'s snapshot, as an older version or a damaged
+/// repository leaves it.
+fn store_staged(storage: &mut Storage, stage_dir: &Path, title: &str) {
+    let slug = slug(title);
+    let tags = ["salvajocs", &format!("game:{slug}")];
+    let as_path = format!("/salvajocs/{slug}");
+    storage
+        .backup_dir(stage_dir, &as_path, &tags, title)
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn a_corrupt_hash_list_is_never_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = tmp.path().join("theirs");
+    stage(&games[0], &RegistryExport::default(), &theirs).unwrap();
+    fs::write(theirs.join(HASHES_FILE), "not json").unwrap();
+    store_staged(&mut there, &theirs, "Foo");
+
+    let outcome = stored(&mut here, tmp.path(), "here", &games, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn a_hash_list_that_disagrees_with_its_snapshot_is_never_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = tmp.path().join("theirs");
+    stage(&games[0], &RegistryExport::default(), &theirs).unwrap();
+    // As 0.5.0 restages a changed save of the same size: the list still describes "foo".
+    let staged = theirs.join("files/WinAppData/Game/save.sav");
+    fs::write(&staged, "bar").unwrap();
+    touch(&staged, 2_000_000);
+    store_staged(&mut there, &theirs, "Foo");
+
+    let outcome = stored(&mut here, tmp.path(), "here", &games, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn other_roots_with_the_same_files_are_not_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let mut theirs = mine.clone();
+    theirs[0].roots = vec![(Base::WinAppData, "Game".into())];
+    stored(&mut there, tmp.path(), "there", &theirs, true);
+
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn other_registry_values_with_the_same_files_are_not_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let (first, second) = (tmp.path().join("first"), tmp.path().join("second"));
+    user_reg(&first, "first");
+    user_reg(&second, "second");
+    let mut mine = game_with_save(tmp.path(), "Foo", "foo");
+    mine.registry_keys = vec![format!("{HKCU}\\Software\\Foo")];
+    let mut theirs = mine.clone();
+    mine.registry_source = Some(RegistrySource::WinePrefix(first));
+    theirs.registry_source = Some(RegistrySource::WinePrefix(second));
+    stored(&mut there, tmp.path(), "there", &[theirs], true);
+
+    let outcome = stored(&mut here, tmp.path(), "here", &[mine], true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn unchanged_here_names_a_newer_different_snapshot_from_another_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    assert!(matches!(
+        stored(&mut here, tmp.path(), "here", &mine, true),
+        Stored::New(_)
+    ));
+    let Stored::New(newer) = stored(&mut there, tmp.path(), "there", &theirs, true) else {
+        panic!("another host's first backup is written");
+    };
+
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, true);
+    assert_eq!(
+        outcome,
+        Stored::Unchanged {
+            newer_elsewhere: Some(newer)
+        }
+    );
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 2);
+
+    // Different from both this machine's last backup and the newest.
+    write(&mine[0].files[0].real, "baz");
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn a_newer_pre_restore_snapshot_is_not_compared_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    assert!(matches!(
+        stored(&mut here, tmp.path(), "here", &mine, true),
+        Stored::New(_)
+    ));
+    let stage = tmp.path().join("there");
+    let safety = [crate::restore::PRE_RESTORE_TAG];
+    backup_games(&mut there, &theirs, &stage, &safety, false, |_| {}).unwrap();
+
+    // Equal to the pre-restore snapshot, not to the newest regular one.
+    write(&mine[0].files[0].real, "bar");
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, true);
+    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+#[test]
+fn a_game_equal_to_this_hosts_newest_is_unchanged_whatever_its_mtimes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    assert!(matches!(
+        stored(&mut storage, tmp.path(), "stage", &games, true),
+        Stored::New(_)
+    ));
+    // rustic alone would store the new mtime as a new snapshot.
+    touch(&games[0].files[0].real, 1_000_000);
+
+    let outcome = stored(&mut storage, tmp.path(), "stage", &games, true);
+    assert_eq!(
+        outcome,
+        Stored::Unchanged {
+            newer_elsewhere: None
+        }
+    );
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
+}
+
+/// Hashes a 64 MiB file (ADR-0018):
+/// `cargo test --release -p salvajocs-core time_hashing -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing"]
+fn time_hashing_64_mib() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("big.sav");
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let bytes: Vec<u8> = (0..64 * 1024 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect();
+    fs::write(&path, bytes).unwrap();
+    let started = std::time::Instant::now();
+    sha256_file(&path).unwrap();
+    println!("64 MiB hashed in {:?}", started.elapsed());
+}
+
+/// One reindex plus 20 per-game backups on a local repo, first new, then unchanged, then from
+/// another host with the same saves (ADR-0010, ADR-0018): `cargo test --release -p salvajocs-core time_twenty_game_backup -- --ignored
 /// --nocapture`.
 #[test]
 #[ignore = "timing"]
@@ -718,8 +980,21 @@ fn time_twenty_game_backup() {
     let stage_root = tmp.path().join("stage");
     for run in ["new", "unchanged"] {
         let started = std::time::Instant::now();
-        let outcomes = backup_games(&mut storage, &games, &stage_root, &[], |_| {}).unwrap();
+        let outcomes = backup_games(&mut storage, &games, &stage_root, &[], true, |_| {}).unwrap();
         let count = written(&outcomes).iter().flatten().count();
         println!("{run}: {count} snapshots in {:?}", started.elapsed());
     }
+    // Another host with the same saves but other mtimes: every file is hashed and compared.
+    let mut there = open_as(tmp.path(), "there");
+    for game in &games {
+        touch(&game.files[0].real, 1_000_000);
+    }
+    let started = std::time::Instant::now();
+    let stage_root = tmp.path().join("there");
+    let outcomes = backup_games(&mut there, &games, &stage_root, &[], true, |_| {}).unwrap();
+    let count = written(&outcomes).iter().flatten().count();
+    println!(
+        "same as newest elsewhere: {count} snapshots in {:?}",
+        started.elapsed()
+    );
 }

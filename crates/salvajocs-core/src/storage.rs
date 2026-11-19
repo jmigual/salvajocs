@@ -309,6 +309,8 @@ pub struct Storage {
     /// A snapshot was written or a prune ran since the index was loaded, so restoring needs a
     /// reindex.
     stale: bool,
+    /// The host new snapshots are stored with; `None`, outside tests, is rustic's default.
+    host: Option<String>,
     /// The rclone serving an `rclone:` location. Last, so it stops after the repository is gone.
     _rclone: Option<Rclone>,
 }
@@ -367,6 +369,7 @@ impl Storage {
             password: password.to_string(),
             repo,
             stale: false,
+            host: None,
             _rclone: rclone,
         }
     }
@@ -418,6 +421,7 @@ impl Storage {
         );
         let snapshot = SnapshotOptions::default()
             .label(label.to_string())
+            .host(self.host.clone())
             .add_tags(&tags.join(","))
             .and_then(|opts| opts.to_snapshot())
             .map_err(backend)?;
@@ -492,7 +496,10 @@ impl Storage {
 
     /// The host name new snapshots are stored with, as rustic determines it.
     pub fn hostname(&self) -> Result<String, StorageError> {
-        let snapshot = SnapshotOptions::default().to_snapshot().map_err(backend)?;
+        let snapshot = SnapshotOptions::default()
+            .host(self.host.clone())
+            .to_snapshot()
+            .map_err(backend)?;
         Ok(snapshot.hostname)
     }
 
@@ -550,6 +557,12 @@ impl Storage {
         let mut bytes = Vec::new();
         repo.dump(&found.nodes[at], &mut bytes).map_err(backend)?;
         Ok(Some(bytes))
+    }
+
+    /// Stores new snapshots as made by `host`, as another machine would.
+    #[cfg(test)]
+    pub(crate) fn set_host(&mut self, host: &str) {
+        self.host = Some(host.to_owned());
     }
 
     /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`.
