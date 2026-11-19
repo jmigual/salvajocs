@@ -128,6 +128,28 @@ fn a_primary_button_with_an_icon_is_named_by_its_label() {
     assert_eq!(*harness.state(), 1);
 }
 
+/// The chips are one image named by their label, and a zero count takes no room.
+#[test]
+fn chips_leave_out_zero_counts() {
+    let width = |counts: Vec<usize>| {
+        let mut harness = harness(
+            move |ui, (): &mut ()| {
+                let marks: Vec<_> = (counts.iter())
+                    .map(|&count| (icons::PLUS_CIRCLE, Color32::RED, count))
+                    .collect();
+                chips(ui, &marks, "Chips");
+            },
+            (),
+        );
+        harness.run();
+        let node = harness.get_by_label("Chips");
+        assert_eq!(node.accesskit_node().role(), Role::Image);
+        node.accesskit_node().bounding_box().unwrap().width()
+    };
+    assert_eq!(width(vec![1, 0]), width(vec![1]));
+    assert!(width(vec![1, 1]) > width(vec![1]));
+}
+
 /// When a dialog's buttons change, as from Continue to Back and Create on first run, they are in
 /// place on the frame they appear, so a click on what that frame shows lands on the button. The
 /// dialog keeps its height, so it does not re-center.

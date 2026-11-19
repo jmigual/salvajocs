@@ -1185,6 +1185,18 @@ fn batch_confirm_tree_labels_each_file_and_toggles_nothing() {
         let role = harness.get_by_label(row).accesskit_node().role();
         assert_eq!(role, Role::Label, "{row} is read-only");
     }
+    for (icon, files) in [
+        ("New: not on this PC yet", 2),
+        ("Changed: will be overwritten", 1),
+    ] {
+        let icons: Vec<_> = harness.query_all_by_label(icon).collect();
+        assert_eq!(icons.len(), files, "{icon}");
+        assert!(
+            icons
+                .iter()
+                .all(|node| node.accesskit_node().role() == Role::Image)
+        );
+    }
     let checkboxes: Vec<String> = (harness.query_all(by().role(Role::CheckBox)))
         .filter_map(|node| node.accesskit_node().label())
         .collect();
@@ -1232,6 +1244,10 @@ fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
     assert!(shows(&harness, "1 new, 0 changed, 0 unchanged"));
     click(&mut harness, "Open XdgData/Alpha");
     assert!(harness.query_by_label("dir.dat, will fail").is_some());
+    let will_fail = harness
+        .get_by_label_contains("Will fail: ")
+        .accesskit_node();
+    assert_eq!(will_fail.role(), Role::Image);
     assert!(harness.query_by_label("save.dat, new").is_some());
     assert!(shows(
         &harness,

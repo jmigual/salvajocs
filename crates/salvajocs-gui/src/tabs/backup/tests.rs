@@ -202,6 +202,10 @@ fn a_file_that_could_not_be_compared_is_shown_and_never_skipped() {
         badges(&game, Some(&preview), &all)("Home/save"),
         Some(Badge::Unknown)
     );
+    assert_eq!(
+        hint(Some(&preview), "Home/save", Badge::Unknown),
+        "Could not be compared: denied"
+    );
 }
 
 #[test]

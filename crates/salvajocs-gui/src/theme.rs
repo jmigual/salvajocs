@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use eframe::egui::epaint::text::VariationCoords;
 use eframe::egui::{
-    self, Align, Align2, Atom, Button, Color32, CornerRadius, FontData, FontDefinitions,
-    FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect, Response, RichText,
-    ScrollArea, Sense, Separator, Stroke, Style, TextStyle, TextWrapMode, Theme, Ui, UiBuilder,
-    Vec2, Visuals, WidgetText, style::Widgets,
+    self, Align, Align2, Atom, Atoms, Button, Color32, ContainerAtom, CornerRadius, FontData,
+    FontDefinitions, FontFamily, FontId, FontTweak, Frame, Label, Layout, Margin, Modal, Rect,
+    Response, RichText, Role, ScrollArea, Sense, Separator, Stroke, Style, TextStyle, TextWrapMode,
+    Theme, Ui, UiBuilder, Vec2, Visuals, WidgetAtom, WidgetInfo, WidgetText, style::Widgets,
 };
 
 /// The named font family of the semibold face, for headings, primary buttons and tabs.
@@ -194,6 +194,34 @@ pub fn mark(ui: &mut Ui, glyph: &'static str, size: f32, color: Color32) -> Resp
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     paint_icon(ui, rect, glyph, color);
     response
+}
+
+/// A 16 px icon of [`icons`] in `color` that shows `label` on hover and is named by it for screen
+/// readers.
+pub fn labeled_mark(ui: &mut Ui, glyph: &'static str, color: Color32, label: &str) -> Response {
+    let response = mark(ui, glyph, 16.0, color);
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, label));
+    response.on_hover_text(label)
+}
+
+/// Icons of [`icons`], each in its color and followed by its count, leaving out the zero counts.
+/// It is one widget that shows `label` on hover and is named by it for screen readers. The counts
+/// are in the weak text color, as icon colors only meet the contrast floor of marks.
+pub fn chips(ui: &mut Ui, chips: &[(&'static str, Color32, usize)], label: &str) -> Response {
+    let weak = ui.visuals().weak_text_color();
+    let atoms: Atoms<'_> = (chips.iter())
+        .filter(|&&(.., count)| count > 0)
+        .map(|&(glyph, color, count)| {
+            let icon = Atom::paint(Vec2::splat(16.0), move |ui, args| {
+                paint_icon(ui, args.rect, glyph, color);
+            });
+            let count = RichText::new(count.to_string()).color(weak);
+            Atom::container(ContainerAtom::new((icon, count)).gap(4.0))
+        })
+        .collect();
+    let response = WidgetAtom::new(atoms).gap(12.0).show(ui).response;
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, label));
+    response.on_hover_text(label)
 }
 
 /// Paints `glyph` from the icon font, which [`apply`] installs.

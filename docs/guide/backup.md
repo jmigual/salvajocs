@@ -89,11 +89,15 @@ says **Comparing with the last backups**. Each game then gets one more line:
 
 A game that is not backed up, because it is unchecked or has nothing checked, gets no line.
 
-In the file tree, a file the backup does not have says `new`, one whose content differs says
-`changed`, and one that could not be read says `could not be compared`. A file that is in the
-backup but not found any more, or that you unchecked, says `removed`: files no longer found are
-greyed rows without a checkbox. A game with unreadable paths
-removes nothing, since its backup keeps the files it could not check.
+In the file tree, a file that differs from the backup has an icon after its size: a plus in a
+circle when the backup does not have it, a pencil when its content differs, a minus in a circle
+when it is removed, and a question mark when it could not be read. Hover it to read
+`New: not in the backup`, `Changed since the backup`,
+`Removed: the next backup will not hold it` or `Could not be compared` with the reason. A file
+that is in the backup but not found any more, or that you unchecked, is removed: files no longer
+found are greyed rows without a checkbox. A folder's line counts the icons of the files below it.
+A game with unreadable paths removes nothing, since its backup keeps the files it could not
+check.
 
 A file counts as changed by its content: a different size is a change; the same size and
 modification time is not; otherwise its SHA-256 is compared with the list of hashes the backup

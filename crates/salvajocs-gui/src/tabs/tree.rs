@@ -52,7 +52,19 @@ impl Badge {
         }
     }
 
-    fn color(self, ui: &Ui) -> Color32 {
+    /// Its icon of [`icons`]; each has its own shape, so it reads without its color.
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Badge::New => icons::PLUS_CIRCLE,
+            Badge::Changed => icons::PENCIL_SIMPLE,
+            Badge::Removed => icons::MINUS_CIRCLE,
+            Badge::Unknown => icons::QUESTION,
+            Badge::WillFail => icons::X_CIRCLE,
+        }
+    }
+
+    /// The color of its icon in the theme `ui` is drawn in.
+    pub(crate) fn color(self, ui: &Ui) -> Color32 {
         match self {
             Badge::New => theme::palette(ui).accent,
             Badge::Changed => ui.visuals().warn_fg_color,
@@ -243,13 +255,15 @@ impl FileTree {
     }
 
     /// Draws the tree in `mode` and returns what was clicked this frame. `badge` gives a present
-    /// file's badge by key; removed files always have [`Badge::Removed`]. The caller scopes the
-    /// ids (`ui.push_id`) when it draws several trees.
+    /// file's badge by key; removed files always have [`Badge::Removed`]. `hint` gives the
+    /// tooltip of a file's badge icon by key. The caller scopes the ids (`ui.push_id`) when it
+    /// draws several trees.
     pub(crate) fn ui(
         &mut self,
         ui: &mut Ui,
         mode: Mode<'_>,
         badge: &dyn Fn(&str) -> Option<Badge>,
+        hint: &dyn Fn(&str, Badge) -> String,
     ) -> Option<Clicked> {
         let FileTree {
             files,
@@ -266,6 +280,7 @@ impl FileTree {
             totals: totals(cache, files, included, badge),
             mode,
             badge,
+            hint,
         };
         let mut clicked = None;
         drawing.children(ui, root, &mut clicked);
@@ -331,19 +346,25 @@ fn totals<'a>(
     })
 }
 
-/// `, 2 new, 1 changed, 1 removed`, leaving out the kinds there are none of.
-fn badge_counts(totals: &Included) -> String {
-    [
-        (totals.new, Badge::New),
-        (totals.changed, Badge::Changed),
-        (totals.removed, Badge::Removed),
-        (totals.unknown, Badge::Unknown),
-        (totals.will_fail, Badge::WillFail),
-    ]
-    .into_iter()
-    .filter(|&(count, _)| count > 0)
-    .map(|(count, badge)| format!(", {count} {}", badge.text()))
-    .collect()
+/// How many files of `totals` have each badge, as icons with counts, named `2 new, 1 changed`
+/// for screen readers and on hover; nothing when there are none.
+fn badge_chips(ui: &mut Ui, totals: &Included) {
+    let counts = [
+        (Badge::New, totals.new),
+        (Badge::Changed, totals.changed),
+        (Badge::Removed, totals.removed),
+        (Badge::Unknown, totals.unknown),
+        (Badge::WillFail, totals.will_fail),
+    ];
+    let label: Vec<_> = (counts.iter())
+        .filter(|&&(_, count)| count > 0)
+        .map(|&(badge, count)| format!("{count} {}", badge.text()))
+        .collect();
+    if label.is_empty() {
+        return;
+    }
+    let chips = counts.map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
+    theme::chips(ui, &chips, &label.join(", "));
 }
 
 /// What one call of [`FileTree::ui`] draws with.
@@ -352,6 +373,7 @@ struct Drawing<'a> {
     totals: &'a [Included],
     mode: Mode<'a>,
     badge: &'a dyn Fn(&str) -> Option<Badge>,
+    hint: &'a dyn Fn(&str, Badge) -> String,
 }
 
 impl Drawing<'_> {
@@ -393,7 +415,8 @@ impl Drawing<'_> {
                 }
                 ui.weak(format_size(file.size));
                 if let Some(badge) = badge {
-                    ui.colored_label(badge.color(ui), badge.text());
+                    let hint = (self.hint)(&file.key, badge);
+                    theme::labeled_mark(ui, badge.glyph(), badge.color(ui), &hint);
                 }
             });
         }
@@ -427,7 +450,6 @@ impl Drawing<'_> {
         let verb = if state.is_open() { "Close" } else { "Open" };
         let (arrow, ..) = state
             .show_header(ui, |ui| {
-                let counts = badge_counts(&totals);
                 match &self.mode {
                     Mode::Select { enabled, .. } if totals.present > 0 => {
                         // A mixed folder is drawn as unchecked, so a click on it checks everything.
@@ -438,26 +460,26 @@ impl Drawing<'_> {
                             *clicked = Some(Clicked::Toggle(first.key.clone(), checked));
                         }
                         ui.weak(format!(
-                            "{} of {}, {}{counts}",
+                            "{} of {}, {}",
                             totals.files,
                             count(totals.present, "file"),
                             format_size(totals.size)
                         ));
                     }
+                    // Only removed files: the chips say how many.
                     Mode::Select { .. } => {
                         ui.label(weak_text(ui, &label));
-                        // Only removed files: `, 2 removed` without its comma.
-                        ui.weak(counts.trim_start_matches(", "));
                     }
                     Mode::ReadOnly => {
                         ui.label(&label);
                         ui.weak(format!(
-                            "{}, {}{counts}",
+                            "{}, {}",
                             count(totals.present, "file"),
                             format_size(totals.size)
                         ));
                     }
                 }
+                badge_chips(ui, &totals);
                 if let Some(real) = &folder.real {
                     let name = format!("Show {label} in the file manager");
                     let button = Button::new(theme::icon(icons::ARROW_SQUARE_OUT))

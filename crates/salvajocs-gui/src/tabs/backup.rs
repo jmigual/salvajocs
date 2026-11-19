@@ -232,6 +232,25 @@ fn badges<'a>(
     }
 }
 
+/// The tooltip of a file's `badge` by its key, with why it could not be compared when `preview`
+/// says.
+fn hint(preview: Option<&Preview>, key: &str, badge: Badge) -> String {
+    match badge {
+        Badge::New => "New: not in the backup".to_owned(),
+        Badge::Changed => "Changed since the backup".to_owned(),
+        Badge::Removed => "Removed: the next backup will not hold it".to_owned(),
+        Badge::Unknown | Badge::WillFail => {
+            if let Some(Ok(Some(baseline))) = preview
+                && let Some(FileState::Unknown(reason)) = baseline.states.get(key)
+            {
+                format!("Could not be compared: {reason}")
+            } else {
+                "Could not be compared".to_owned()
+            }
+        }
+    }
+}
+
 /// The tree of `game`'s files, with the files only in its newest backup as removed rows unless
 /// staging keeps every file.
 fn file_tree(game: &GameScan, preview: Option<&Preview>) -> FileTree {
@@ -1236,7 +1255,8 @@ fn files_ui(
                 included: &included,
                 enabled,
             };
-            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &badge));
+            let hint = |key: &str, badge| hint(preview, key, badge);
+            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &badge, &hint));
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {

@@ -65,8 +65,8 @@ struct Compared {
     states: Vec<Result<WriteState, String>>,
     /// The writes by where they land, read-only.
     tree: FileTree,
-    /// The badge of each file key of `tree` that has one.
-    badges: HashMap<String, Badge>,
+    /// The badge of each file key of `tree` that has one, with the tooltip of its icon.
+    badges: HashMap<String, (Badge, String)>,
 }
 
 /// What a batch dialog's confirm job hands back.
@@ -611,11 +611,13 @@ fn compare(plan: &RestorePlan) -> Result<Compared, String> {
             let ((base, tail), _) = restore::staged_target(write)?;
             let key = format!("{}/{tail}", base.dir_name());
             let badge = match state {
-                Ok(WriteState::New) => Some(Badge::New),
-                Ok(WriteState::Changed) => Some(Badge::Changed),
+                Ok(WriteState::New) => Some((Badge::New, "New: not on this PC yet".to_owned())),
+                Ok(WriteState::Changed) => {
+                    Some((Badge::Changed, "Changed: will be overwritten".to_owned()))
+                }
                 Ok(WriteState::Unchanged) => None,
-                Ok(_) => Some(Badge::Unknown),
-                Err(_) => Some(Badge::WillFail),
+                Ok(_) => Some((Badge::Unknown, "Could not be compared".to_owned())),
+                Err(reason) => Some((Badge::WillFail, format!("Will fail: {reason}"))),
             };
             if let Some(badge) = badge {
                 badges.insert(key.clone(), badge);
@@ -693,8 +695,14 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
                 theme::status(ui, icons::X_CIRCLE, error_color, text);
             }
         }
-        let badge = |key: &str| badges.get(key).copied();
-        let clicked = ui.push_id(title, |ui| tree.ui(ui, Mode::ReadOnly, &badge));
+        let badge = |key: &str| badges.get(key).map(|&(badge, _)| badge);
+        let hint = |key: &str, _| {
+            badges
+                .get(key)
+                .map(|(_, hint)| hint.clone())
+                .unwrap_or_default()
+        };
+        let clicked = ui.push_id(title, |ui| tree.ui(ui, Mode::ReadOnly, &badge, &hint));
         warnings_ui(ui, plan);
         if let Some((export, ctx)) = &plan.registry {
             ui.label(format!(

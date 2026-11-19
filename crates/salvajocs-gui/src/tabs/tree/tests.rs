@@ -201,7 +201,9 @@ fn harness_of(
                     .find(|(badged, _)| badged == key)
                     .map(|(_, badge)| *badge)
             };
-            match tree.ui(ui, mode, &badge) {
+            // The key and the badge, so tests see both reach the tooltip.
+            let hint = |key: &str, badge: Badge| format!("{key}: {badge:?}");
+            match tree.ui(ui, mode, &badge, &hint) {
                 Some(Clicked::Toggle(key, on)) => *toggled = Some((key, on)),
                 Some(Clicked::Open(path)) => *opened = Some(path),
                 None => {}
@@ -228,6 +230,10 @@ fn open_all(harness: &mut Harness<'static, Fixture>) {
 
 fn toggled(harness: &Harness<'_, Fixture>, label: &str) -> Option<Toggled> {
     harness.get_by_label(label).accesskit_node().toggled()
+}
+
+fn role(harness: &Harness<'_, Fixture>, label: &str) -> Role {
+    harness.get_by_label(label).accesskit_node().role()
 }
 
 const KEYS: [&str; 2] = ["WinAppData/Foo/a.sav", "WinAppData/Foo/b.sav"];
@@ -468,13 +474,10 @@ fn a_removed_row_has_no_checkbox_and_says_it_is_removed() {
         harness.get_by_label("kept.sav").accesskit_node().role(),
         Role::CheckBox
     );
+    assert_eq!(role(&harness, "Base/gone.sav: Removed"), Role::Image);
     // `N of M` counts present files only; the removed one is in the badge counts.
-    assert_eq!(
-        harness
-            .query_all_by_label("1 of 1 file, 10 B, 1 removed")
-            .count(),
-        1
-    );
+    assert_eq!(harness.query_all_by_label("1 of 1 file, 10 B").count(), 1);
+    assert_eq!(role(&harness, "1 removed"), Role::Image);
     assert_eq!(toggled(&harness, "Base"), Some(Toggled::True));
 }
 
@@ -486,7 +489,8 @@ fn a_folder_of_removed_files_has_no_checkbox_and_no_open_button() {
 
     let old = harness.get_by_label("old");
     assert_ne!(old.accesskit_node().role(), Role::CheckBox);
-    assert_eq!(harness.query_all_by_label("1 removed").count(), 1);
+    // On `old` and on `Base` above it.
+    assert_eq!(harness.query_all_by_label("1 removed").count(), 2);
     assert_eq!(
         harness
             .query_all_by_label("Show old in the file manager")
@@ -535,8 +539,9 @@ fn badges_join_the_row_name_and_count_in_folder_headers() {
         ("Base/locked.sav", Badge::Unknown),
     ];
     let mut harness = harness_of(tree, &keys, true, &badges, true);
-    let header = "4 of 4 files, 40 B, 1 new, 1 changed, 1 removed, 1 could not be compared";
-    assert_eq!(harness.query_all_by_label(header).count(), 1);
+    assert_eq!(harness.query_all_by_label("4 of 4 files, 40 B").count(), 1);
+    let chips = "1 new, 1 changed, 1 removed, 1 could not be compared";
+    assert_eq!(role(&harness, chips), Role::Image);
     open_all(&mut harness);
     for label in [
         "new.sav, new",
@@ -547,6 +552,18 @@ fn badges_join_the_row_name_and_count_in_folder_headers() {
     ] {
         assert_eq!(harness.query_all_by_label(label).count(), 1, "{label}");
     }
+    for icon in [
+        "Base/new.sav: New",
+        "Base/changed.sav: Changed",
+        "Base/gone.sav: Removed",
+        "Base/locked.sav: Unknown",
+    ] {
+        assert_eq!(role(&harness, icon), Role::Image, "{icon}");
+    }
+    assert_eq!(
+        harness.query_all_by_label_contains("Base/same.sav").count(),
+        0
+    );
 }
 
 #[test]
@@ -557,13 +574,12 @@ fn a_read_only_tree_has_no_checkbox_and_toggles_nothing() {
         ("Base/dir/b.sav", Badge::WillFail),
     ];
     let mut harness = harness_of(tree(&keys), &[], true, &badges, false);
-    assert_eq!(
-        (harness.query_all_by_label("2 files, 20 B, 1 new, 1 will fail")).count(),
-        1
-    );
+    assert_eq!(harness.query_all_by_label("2 files, 20 B").count(), 1);
+    assert_eq!(role(&harness, "1 new, 1 will fail"), Role::Image);
     open_all(&mut harness);
     assert_eq!(harness.query_all_by_role(Role::CheckBox).count(), 0);
     assert_eq!(harness.query_all_by_label("b.sav, will fail").count(), 1);
+    assert_eq!(role(&harness, "Base/dir/b.sav: WillFail"), Role::Image);
 
     harness.get_by_label("a.sav, new").click();
     harness.get_by_label("Base/dir").click();

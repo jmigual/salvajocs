@@ -12,7 +12,7 @@ use common::{
     env, harness, init_repo, local_config, record_opened, repo_dir, run_settled, run_until,
     run_until_backed_up, run_until_ready, save_config, shows,
 };
-use eframe::egui::accesskit::Toggled;
+use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
@@ -296,6 +296,14 @@ fn a_rescan_shows_what_differs_from_the_last_backup() {
     click(&mut harness, "Open sub");
     for row in ["new.dat, new", "save.dat, changed", "old.dat, removed"] {
         assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
+    }
+    for icon in [
+        "New: not in the backup",
+        "Changed since the backup",
+        "Removed: the next backup will not hold it",
+    ] {
+        let role = harness.get_by_label(icon).accesskit_node().role();
+        assert_eq!(role, Role::Image, "{icon}");
     }
 
     // An unticked file that the backup holds will be removed from the next one.
