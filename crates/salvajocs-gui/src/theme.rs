@@ -235,8 +235,8 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
 }
 
 /// Shows `content` in a modal dialog `width` wide, in the window frame: 20 px margins and the
-/// dialog corner radius, rather than the smaller popup frame egui gives modals. `content`
-/// scrolls when the window is too short for it.
+/// dialog corner radius, rather than the smaller popup frame egui gives modals. The dialog is
+/// narrower than `width` when the window is, and `content` scrolls when the window is too small.
 pub fn modal<R>(
     ctx: &egui::Context,
     id: &str,
@@ -244,15 +244,26 @@ pub fn modal<R>(
     content: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let frame = Frame::window(&ctx.global_style());
-    let max_height = (ctx.content_rect().height() - frame.total_margin().sum().y).max(0.0);
+    let margins = frame.total_margin().sum();
+    let window = ctx.content_rect();
+    let fit = (window.width() - margins.x).max(0.0);
+    let width = width.min(fit);
+    let max_height = (window.height() - margins.y).max(0.0);
     Modal::new(egui::Id::unique(id))
         .frame(frame)
         .show(ctx, |ui| {
-            ui.set_width(width);
+            ui.set_min_width(width);
+            ui.set_max_width(fit);
             // An area's `max_rect` is its last size: without this the dialog keeps its last
             // height when the window shrinks, and its lower part is clipped without scrolling.
             ui.set_max_height(max_height);
-            ScrollArea::vertical().show(ui, content).inner
+            // Scrolling sideways leaves the content's width unbounded: bound it so text still wraps.
+            ScrollArea::both()
+                .show(ui, |ui| {
+                    ui.set_max_width(width);
+                    content(ui)
+                })
+                .inner
         })
         .inner
 }

@@ -88,3 +88,37 @@ fn modal_in_a_window_shorter_than_its_margins_does_not_panic() {
         harness.step();
     }
 }
+
+#[test]
+fn modal_wider_than_the_window_fits_inside_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness_sized(env(&tmp), Vec2::new(1000.0, 900.0));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+    run_settled(&mut harness);
+
+    harness.set_size(Vec2::new(400.0, 900.0));
+    for _ in 0..5 {
+        harness.step();
+    }
+    run_settled(&mut harness);
+
+    let title = harness.get_by_label("Welcome to salvajocs").rect();
+    assert!(title.min.x >= 0.0, "the dialog starts inside the window");
+
+    // The form is wider than this window, so the dialog scrolls sideways.
+    harness.get_by_label("Continue").scroll_to_me();
+    run_settled(&mut harness);
+    let right = harness.get_by_label("Continue").rect().max.x;
+    assert!(right <= 400.0, "the dialog's last button is on screen");
+}
+
+#[test]
+fn modal_in_a_window_narrower_than_its_margins_does_not_panic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness_sized(env(&tmp), Vec2::new(20.0, 900.0));
+    for _ in 0..20 {
+        harness.step();
+    }
+}
