@@ -45,6 +45,8 @@ All notable changes to salvajocs. The format follows
 - In a narrow window, the update notice and manifest status in the top bar are shortened with
   "…" instead of overlapping the window buttons.
 - On Windows, an rclone repository no longer opens a terminal window.
+- When the storage server refuses the login, the app says "The server refused the login. Check
+  the user name and password." instead of "Path `config` does not exist".
 
 ## [0.5.0] - 2026-11-19
 

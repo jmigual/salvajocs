@@ -28,6 +28,11 @@ The red message in the window includes the reason: a folder that is unreadable, 
 or bad credentials for a remote backend. Fix the cause and click **Retry**. To point salvajocs at
 another repository, use [Settings](settings.md#repository).
 
+"The server refused the login. Check the user name and password." means the storage server
+rejected the login of your server or storage account, not the encryption password. Correct the
+login fields, such as **Server password**, in [Settings](settings.md#repository) and click
+**Apply**.
+
 ## "No repository at ..."
 
 The repository in the config does not exist any more: it was deleted or moved, or its drive is not

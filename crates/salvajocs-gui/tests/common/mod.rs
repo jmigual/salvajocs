@@ -128,6 +128,12 @@ pub fn init_repo_with(repository: &str, password: &str, compression: Compression
 /// A REST repository location on a local server that answers every request with 401, as a
 /// server does when the login changed.
 pub fn refusing_rest_repo() -> String {
+    format!("rest:{}", refusing_server())
+}
+
+/// The URL of a local server that answers every request with 401, as a server does when the
+/// login changed.
+pub fn refusing_server() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -140,7 +146,7 @@ pub fn refusing_rest_repo() -> String {
             );
         }
     });
-    format!("rest:http://127.0.0.1:{port}/")
+    format!("http://127.0.0.1:{port}/")
 }
 
 /// Where the tests keep a second repository.

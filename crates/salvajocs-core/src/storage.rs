@@ -3,8 +3,10 @@
 mod rclone;
 
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::iter;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -42,6 +44,9 @@ pub enum StorageError {
     /// No repository has been initialized at the location.
     #[error("no repository at this location")]
     Missing,
+    /// The storage server refused the login (HTTP 401 or 403).
+    #[error("the server refused the login")]
+    LoginRefused,
     /// A path cannot be passed to the repository because it is not valid UTF-8.
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
@@ -73,6 +78,37 @@ fn output_suffix(output: &str) -> String {
 
 fn backend(err: impl AsRef<RusticError>) -> StorageError {
     StorageError::Backend(err.as_ref().display_log())
+}
+
+/// [`backend`] for a failure to reach the repository while opening it, where a 401 or 403 means
+/// the login. Later operations keep [`backend`]: there a 403 can be a locked file.
+fn open_failure(err: impl AsRef<RusticError>) -> StorageError {
+    let err = err.as_ref();
+    if login_refused(err) {
+        return StorageError::LoginRefused;
+    }
+    StorageError::Backend(err.display_log())
+}
+
+/// Whether an OpenDAL error in the chain of `err` holds a 401 or 403 response.
+fn login_refused(err: &RusticError) -> bool {
+    iter::successors(Some(err as &(dyn Error + 'static)), |&err| err.source())
+        .filter_map(|err| err.downcast_ref::<opendal::Error>())
+        .any(|err| refused_status(&err.to_string()))
+}
+
+/// Whether an OpenDAL error's text holds a 401 or 403 response. OpenDAL keeps the response only
+/// as text in its context, and WebDAV reports a 401 as `Unexpected`. The message (the server's
+/// body) follows ` => ` and the source `, source: `, so neither is read.
+fn refused_status(text: &str) -> bool {
+    let head = text.split(" => ").next().unwrap_or_default();
+    let head = head.split(", source: ").next().unwrap_or_default();
+    [
+        "response: Parts { status: 401,",
+        "response: Parts { status: 403,",
+    ]
+    .iter()
+    .any(|status| head.contains(status))
 }
 
 /// Where a repository lives: a rustic repository string (a plain path, `local:`, `rest:`,
@@ -145,7 +181,7 @@ impl RepoLocation {
 }
 
 fn repository(backends: &RepositoryBackends) -> Result<Repository<()>, StorageError> {
-    Repository::new(&RepositoryOptions::default(), backends).map_err(backend)
+    Repository::new(&RepositoryOptions::default(), backends).map_err(open_failure)
 }
 
 fn open_indexed(
@@ -159,7 +195,7 @@ fn open_indexed(
             if err.is_incorrect_password() {
                 StorageError::WrongPassword
             } else {
-                backend(err)
+                open_failure(err)
             }
         })
 }
@@ -174,6 +210,8 @@ pub enum RepoState {
     Missing,
     /// A repository exists but the password does not unlock it.
     WrongPassword,
+    /// The storage server refused the login (HTTP 401 or 403).
+    LoginRefused,
     /// The location could not be inspected; the rustic message is attached.
     Error(String),
 }
@@ -306,7 +344,7 @@ fn has_config(location: &RepoLocation, repo: &Repository<()>) -> Result<bool, St
             Some(Err(err)) => Err(StorageError::Backend(err.to_string())),
         },
         Ok(Some(_)) => Ok(true),
-        Err(err) => Err(backend(err)),
+        Err(err) => Err(open_failure(err)),
     }
 }
 
@@ -315,21 +353,29 @@ fn has_config(location: &RepoLocation, repo: &Repository<()>) -> Result<bool, St
 pub fn probe(location: &RepoLocation, password: &str) -> RepoState {
     let (backends, _rclone) = match location.backends() {
         Ok(backends) => backends,
-        Err(err) => return RepoState::Error(err.to_string()),
+        Err(err) => return probe_failed(err),
     };
     let repo = match repository(&backends) {
         Ok(repo) => repo,
-        Err(err) => return RepoState::Error(err.to_string()),
+        Err(err) => return probe_failed(err),
     };
     match has_config(location, &repo) {
         Ok(false) => return RepoState::Missing,
         Ok(true) => {}
-        Err(err) => return RepoState::Error(err.to_string()),
+        Err(err) => return probe_failed(err),
     }
     match repo.open(&Credentials::password(password)) {
         Ok(_) => RepoState::Ready,
         Err(err) if err.is_incorrect_password() => RepoState::WrongPassword,
-        Err(err) => RepoState::Error(backend(err).to_string()),
+        Err(err) => probe_failed(open_failure(err)),
+    }
+}
+
+/// What [`probe`] reports for a failure: a refused login keeps its own state.
+fn probe_failed(err: StorageError) -> RepoState {
+    match err {
+        StorageError::LoginRefused => RepoState::LoginRefused,
+        err => RepoState::Error(err.to_string()),
     }
 }
 
@@ -374,6 +420,7 @@ impl Storage {
     /// is none, and with [`StorageError::WrongPassword`] if `password` does not unlock it. Where
     /// a missing config proves nothing ([`RepoLocation::proves_absence`]) the failure is
     /// [`StorageError::Backend`] instead, so a refused login is not taken for a missing repository.
+    /// A login the server refuses with HTTP 401 or 403 is [`StorageError::LoginRefused`].
     pub fn open(location: &RepoLocation, password: &str) -> Result<Self, StorageError> {
         let (backends, rclone) = location.backends()?;
         if !has_config(location, &repository(&backends)?)? {

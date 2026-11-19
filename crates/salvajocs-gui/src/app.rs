@@ -9,7 +9,7 @@ use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::storage::{Storage, StorageError};
 
 use crate::env::Env;
-use crate::first_run::Connect;
+use crate::first_run::{Connect, failure_message};
 use crate::job::Job;
 use crate::prompt::SecretPrompt;
 use crate::startup::{self, Credentials, ManifestLoad, Resolved};
@@ -304,7 +304,7 @@ impl App {
                     let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
                     Stage::RepositoryMissing(repository.to_string())
                 }
-                Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
+                Some(Err(err)) => Stage::OpenFailed(failure_message(&err)),
                 Some(Ok(storage)) => {
                     self.state.credentials = credentials;
                     if remember {

@@ -3,7 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-11-16
 **Amended:** 2026-11-17: named backend fields and rclone remotes replace the bare option
-list; compression is a dropdown.
+list; compression is a dropdown. 2026-11-19: a login the server refuses has its own probe
+result, `LoginRefused`.
 
 ## Context
 
@@ -66,6 +67,8 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `Missing` → ask "Create a new repository at <location>?" and init (with the chosen
     compression) only when the user confirms. A typo must not silently create an empty repo.
   - `WrongPassword` → inline error.
+  - `LoginRefused` (an OpenDAL service answered HTTP 401 or 403) → inline "The server refused
+    the login", also at startup. REST and rclone cannot tell it apart (ADR-0003).
   - `Error` (network, auth, …) → shown as is, never treated as missing.
 - **Secrets:** "remember" stores the password in the OS credential store under service
   `salvajocs`. The account is the scope plus, for a secret option, `#<key>`. The scope

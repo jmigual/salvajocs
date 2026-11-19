@@ -19,6 +19,14 @@ fn credentials() -> Credentials {
 }
 
 #[test]
+fn a_refused_login_says_what_to_check() {
+    let refused = anyhow::Error::from(StorageError::LoginRefused);
+    assert_eq!(failure_message(&refused), LOGIN_REFUSED);
+    let other = anyhow::Error::from(StorageError::Missing);
+    assert_eq!(failure_message(&other), format!("{other:#}"));
+}
+
+#[test]
 fn remembering_stores_the_password_and_secret_options() {
     let store = MemorySecrets::new();
     let mut config = config(PasswordMode::Keyring);

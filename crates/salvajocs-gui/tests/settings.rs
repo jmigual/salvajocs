@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use common::{
     MemorySecrets, env, env_with, harness, init_repo, init_repo_with, local_config, other_repo_dir,
-    refusing_rest_repo, replace_text, repo_dir, run_settled, run_until, run_until_ready,
-    save_config, shows,
+    refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled, run_until,
+    run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -816,6 +816,48 @@ fn a_server_that_may_refuse_the_login_is_warned_about_before_creating() {
     });
 
     assert!(shows(&harness, "refuses your login"));
+}
+
+const LOGIN_REFUSED: &str = "The server refused the login. Check the user name and password.";
+
+#[test]
+fn a_refused_login_is_said_in_the_form() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    choose(&mut harness, "Backend", "WebDAV");
+    fill(&mut harness, "Server URL", &refusing_server());
+    harness.get_by_label("Continue").click();
+
+    run_until(&mut harness, "the refusal", |h| shows(h, LOGIN_REFUSED));
+    assert!(!shows(&harness, "Do you want to create one?"));
+}
+
+#[test]
+fn a_refused_login_at_startup_is_said() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let mut config = local_config("opendal:webdav");
+    config.repository_options = vec![RepoOption::new(
+        "endpoint".into(),
+        Some(refusing_server()),
+        false,
+    )];
+    save_config(&env, &config);
+    let mut harness = harness(env);
+
+    run_until(&mut harness, "the failure", |h| {
+        shows(h, "could not be opened")
+    });
+
+    assert!(shows(
+        &harness,
+        &format!("The repository could not be opened: {LOGIN_REFUSED}")
+    ));
+    assert!(!shows(&harness, "No repository at"));
 }
 
 #[test]

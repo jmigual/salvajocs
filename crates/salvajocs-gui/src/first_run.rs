@@ -8,7 +8,7 @@ use anyhow::Result;
 use eframe::egui::{self, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::secret::SecretKey;
-use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, probe};
+use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, StorageError, probe};
 
 use crate::env::{Env, SecretStore};
 use crate::job::Job;
@@ -17,6 +17,18 @@ use crate::theme::{self, icons};
 use crate::widgets::backend::BackendForm;
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{field_hint, field_status, form_grid, labelled_edit};
+
+/// What the app says when the storage server refuses the login (HTTP 401 or 403).
+const LOGIN_REFUSED: &str = "The server refused the login. Check the user name and password.";
+
+/// What to show for a failure to open or create a repository: its error chain, or for a
+/// refused login, what to check.
+pub(crate) fn failure_message(err: &anyhow::Error) -> String {
+    match err.downcast_ref::<StorageError>() {
+        Some(StorageError::LoginRefused) => LOGIN_REFUSED.to_string(),
+        _ => format!("{err:#}"),
+    }
+}
 
 /// A repository the user chose and that is now open. The config is not saved yet:
 /// `State::adopt` saves it with the current roots and custom games.
@@ -219,7 +231,7 @@ impl Connect {
                 });
                 match job.take_result() {
                     None => self.step = Step::Finishing(job, creating),
-                    Some(Err(err)) => self.step = Step::Editing(Some(format!("{err:#}"))),
+                    Some(Err(err)) => self.step = Step::Editing(Some(failure_message(&err))),
                     Some(Ok(connected)) => return Some(connected),
                 }
                 None
@@ -265,6 +277,7 @@ fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env
         RepoState::Ready => finishing(ctx, env, attempt, None),
         RepoState::Missing => Step::Confirm(attempt),
         RepoState::WrongPassword => Step::Editing(Some("Wrong encryption password.".to_string())),
+        RepoState::LoginRefused => Step::Editing(Some(LOGIN_REFUSED.to_string())),
         RepoState::Error(message) => Step::Editing(Some(message)),
         _ => Step::Editing(Some("The repository cannot be opened.".to_string())),
     }

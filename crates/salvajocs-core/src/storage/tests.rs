@@ -85,8 +85,9 @@ fn opening_an_unreadable_local_repo_is_a_backend_error_not_missing() {
     }
 }
 
-/// A REST server that answers every request with 401, as one does when the login changed.
-fn refusing_rest_server() -> RepoLocation {
+/// The URL of a local server that answers every request with 401, as one does when the login
+/// changed.
+fn refusing_server() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -99,8 +100,12 @@ fn refusing_rest_server() -> RepoLocation {
             );
         }
     });
+    format!("http://127.0.0.1:{port}/")
+}
+
+fn refusing_rest_server() -> RepoLocation {
     RepoLocation {
-        repository: format!("rest:http://127.0.0.1:{port}/"),
+        repository: format!("rest:{}", refusing_server()),
         options: BTreeMap::new(),
     }
 }
@@ -113,6 +118,108 @@ fn a_refused_rest_login_is_not_a_missing_repo() {
         Storage::open(&location, ""),
         Err(StorageError::Backend(_))
     ));
+}
+
+#[test]
+fn a_refused_webdav_login_is_login_refused_not_missing() {
+    let location = RepoLocation {
+        repository: "opendal:webdav".to_string(),
+        options: BTreeMap::from([("endpoint".to_string(), refusing_server())]),
+    };
+    assert_eq!(probe(&location, ""), RepoState::LoginRefused);
+    assert!(matches!(
+        Storage::open(&location, ""),
+        Err(StorageError::LoginRefused)
+    ));
+}
+
+/// An OpenDAL error as rustic reports a failed check for the repository config.
+fn config_check_error(err: opendal::Error) -> Box<RusticError> {
+    RusticError::with_source(
+        rustic_core::ErrorKind::Backend,
+        "Path `config` does not exist.",
+        err,
+    )
+}
+
+/// An OpenDAL error for an HTTP response with `status`, with the context OpenDAL gives it.
+fn http_error(kind: opendal::ErrorKind, status: u16) -> opendal::Error {
+    opendal::Error::new(kind, "Username or password was incorrect").with_context(
+        "response",
+        format!("Parts {{ status: {status}, version: HTTP/1.1, headers: {{}} }}"),
+    )
+}
+
+#[test]
+fn a_refused_login_in_the_error_chain_is_login_refused() {
+    for status in [401, 403] {
+        let err = http_error(opendal::ErrorKind::Unexpected, status);
+        assert!(matches!(
+            open_failure(config_check_error(err)),
+            StorageError::LoginRefused
+        ));
+    }
+}
+
+#[test]
+fn other_backend_errors_stay_backend_errors() {
+    let needle = "response: Parts { status: 401, version: HTTP/1.1, headers: {} }";
+    for err in [
+        http_error(opendal::ErrorKind::Unexpected, 500),
+        // The message is the server's body, and the source any error; both may hold any text.
+        opendal::Error::new(opendal::ErrorKind::Unexpected, needle),
+        opendal::Error::new(opendal::ErrorKind::Unexpected, "")
+            .set_source(std::io::Error::other(needle)),
+    ] {
+        assert!(matches!(
+            open_failure(config_check_error(err)),
+            StorageError::Backend(_)
+        ));
+    }
+}
+
+#[test]
+fn a_body_with_the_needle_stays_backend() {
+    let err = opendal::Error::new(
+        opendal::ErrorKind::Unexpected,
+        "proxy said: response: Parts { status: 401, ...",
+    )
+    .with_context(
+        "response",
+        "Parts { status: 500, version: HTTP/1.1, headers: {} }",
+    );
+    assert!(matches!(
+        open_failure(config_check_error(err)),
+        StorageError::Backend(_)
+    ));
+}
+
+#[test]
+fn a_permission_denied_is_not_a_login() {
+    // Such as an SFTP folder the user cannot read.
+    let err = opendal::Error::new(opendal::ErrorKind::PermissionDenied, "sftp error");
+    assert!(matches!(
+        open_failure(config_check_error(err)),
+        StorageError::Backend(_)
+    ));
+}
+
+#[test]
+fn a_refusal_after_opening_stays_a_backend_error() {
+    // A WebDAV server answers 403 for a locked file too.
+    let err = http_error(opendal::ErrorKind::PermissionDenied, 403);
+    assert!(matches!(
+        backend(config_check_error(err)),
+        StorageError::Backend(_)
+    ));
+}
+
+#[test]
+fn a_refused_login_is_its_own_probe_state() {
+    assert_eq!(
+        probe_failed(StorageError::LoginRefused),
+        RepoState::LoginRefused
+    );
 }
 
 #[test]
