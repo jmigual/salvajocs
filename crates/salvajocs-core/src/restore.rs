@@ -18,7 +18,7 @@ mod run;
 pub use run::{
     ApplyError, FetchError, GameBackups, GameInfo, PRE_RESTORE_TAG, RestoreReport, RunError,
     SafetyBackup, UnreadableTarget, WriteState, compare_writes, default_targets, fetch, game_info,
-    game_vars, list, run,
+    game_vars, list, run, staged_target,
 };
 
 /// A snapshot of one game restored into a work dir (ADR-0004).

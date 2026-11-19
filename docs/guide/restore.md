@@ -112,6 +112,13 @@ To restore more than one game in one go:
    new (nothing there yet), changed (the file there differs) or unchanged, each file that will
    fail, and the same warnings, registry and skipped items as the preview. Games that will not be
    restored are listed with the reason. Nothing is written yet.
+
+   Under the counts, a file tree lists every file the game writes, by the folder it goes into on
+   this machine, as in the [Backup](backup.md) tab but without checkboxes. A file is labelled
+   `new` when nothing is there yet, `changed` when the file there differs and will be
+   overwritten, and `will fail` when salvajocs will not write it. An unchanged file has no label;
+   it is written all the same. Labels compare the contents, as they are when the plan is made.
+   A folder that already exists has a button that opens it in the file manager.
 5. Click **Restore N games**.
 
 Each game is restored as described above, with its own safety backup, and the next game goes on

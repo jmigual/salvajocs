@@ -13,7 +13,7 @@ use serde::de::{DeserializeOwned, IntoDeserializer, value};
 use super::{RestorePlan, StagedGame, Targets, Write};
 use crate::backup::{BackupError, Stored, backup_games};
 use crate::config::AppConfig;
-use crate::crossbuild::{self, Family, pair_side};
+use crate::crossbuild::{self, Family, SnapshotRoot, pair_side};
 use crate::layout::{
     self, Base, Context, FILES_DIR, GameVars, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
 };
@@ -463,19 +463,8 @@ pub fn run(
         let Ok(Some(size)) = *check else {
             continue;
         };
-        let (file, root) = match (&write.target_file, &write.target_root) {
-            (Some(file), Some(root)) => (file.clone(), root.clone()),
-            _ => {
-                let tail = layout::tail_of(&write.target, Path::new(""))
-                    .ok_or_else(|| RunError::UnstageableTarget(write.target.clone()))?;
-                let base = if cfg!(windows) {
-                    Base::WinAbsolute
-                } else {
-                    Base::Absolute
-                };
-                ((base, tail.clone()), (base, tail))
-            }
-        };
+        let (file, root) = staged_target(write)
+            .ok_or_else(|| RunError::UnstageableTarget(write.target.clone()))?;
         existing.files.push(FoundFile {
             base: file.0,
             tail: file.1,
@@ -513,6 +502,24 @@ pub fn run(
         files,
         registry,
     })
+}
+
+/// The `(base, tail)` key and root the safety backup stages `write`'s target under; after an
+/// override, the absolute key, or `None` when the target has none
+/// ([`RunError::UnstageableTarget`]).
+pub fn staged_target(write: &Write) -> Option<((Base, String), SnapshotRoot)> {
+    match (&write.target_file, &write.target_root) {
+        (Some(file), Some(root)) => Some((file.clone(), root.clone())),
+        _ => {
+            let tail = layout::tail_of(&write.target, Path::new(""))?;
+            let base = if cfg!(windows) {
+                Base::WinAbsolute
+            } else {
+                Base::Absolute
+            };
+            Some(((base, tail.clone()), (base, tail)))
+        }
+    }
 }
 
 /// Where the safety backup reads the `keys` a restore into `ctx` replaces; `None` when none of

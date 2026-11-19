@@ -25,7 +25,8 @@ pub(crate) struct Row {
     pub(crate) removed: bool,
 }
 
-/// How a file differs from the backup it is compared with.
+/// How a file differs from the backup it is compared with, or for a restore, how the file it
+/// writes differs from the one at its target (ADR-0019).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Badge {
     /// Not in the backup.
@@ -36,6 +37,8 @@ pub(crate) enum Badge {
     Removed,
     /// Could not be read to compare it.
     Unknown,
+    /// The restore refuses to write it.
+    WillFail,
 }
 
 impl Badge {
@@ -45,6 +48,7 @@ impl Badge {
             Badge::Changed => "changed",
             Badge::Removed => "removed",
             Badge::Unknown => "could not be compared",
+            Badge::WillFail => "will fail",
         }
     }
 
@@ -53,7 +57,7 @@ impl Badge {
             Badge::New => theme::palette(ui).accent,
             Badge::Changed => ui.visuals().warn_fg_color,
             Badge::Removed => ui.visuals().weak_text_color(),
-            Badge::Unknown => ui.visuals().error_fg_color,
+            Badge::Unknown | Badge::WillFail => ui.visuals().error_fg_color,
         }
     }
 }
@@ -67,10 +71,6 @@ pub(crate) enum Mode<'a> {
         enabled: bool,
     },
     /// Names only: nothing can be toggled.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the restore's confirm tree")
-    )]
     ReadOnly,
 }
 
@@ -120,10 +120,6 @@ impl Folder {
     }
 
     /// Drops `real` here and below where it is not a directory.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the restore's confirm tree")
-    )]
     fn keep_existing(&mut self) {
         self.real = self.real.take().filter(|real| real.is_dir());
         self.folders.iter_mut().for_each(Folder::keep_existing);
@@ -141,6 +137,7 @@ struct Included {
     changed: usize,
     removed: usize,
     unknown: usize,
+    will_fail: usize,
 }
 
 /// The files of a game as a tree of Bases and folders. It holds no selection: the caller says
@@ -222,10 +219,6 @@ impl FileTree {
 
     /// The tree without the open button of each folder that is not a directory now. Checks each
     /// folder once, so call it when the tree is built, not per frame.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the restore's confirm tree")
-    )]
     pub(crate) fn existing_folders_only(mut self) -> Self {
         self.root.keep_existing();
         self
@@ -329,6 +322,7 @@ fn totals<'a>(
                 Some(Badge::Changed) => sum.changed += 1,
                 Some(Badge::Removed) => sum.removed += 1,
                 Some(Badge::Unknown) => sum.unknown += 1,
+                Some(Badge::WillFail) => sum.will_fail += 1,
                 None => {}
             }
             totals.push(sum);
@@ -344,6 +338,7 @@ fn badge_counts(totals: &Included) -> String {
         (totals.changed, Badge::Changed),
         (totals.removed, Badge::Removed),
         (totals.unknown, Badge::Unknown),
+        (totals.will_fail, Badge::WillFail),
     ]
     .into_iter()
     .filter(|&(count, _)| count > 0)
@@ -425,6 +420,7 @@ impl Drawing<'_> {
             changed: to.changed - from.changed,
             removed: to.removed - from.removed,
             unknown: to.unknown - from.unknown,
+            will_fail: to.will_fail - from.will_fail,
         };
         let id = ui.make_persistent_id(&folder.key);
         let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);

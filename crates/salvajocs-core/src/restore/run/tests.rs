@@ -804,6 +804,43 @@ fn safety_backup_covers_overridden_target() {
     assert!(!f.folders.app_data.join("Game/save.sav").exists());
 }
 
+#[test]
+fn staged_target_keeps_the_planned_key_or_takes_the_absolute_one() {
+    let planned = Write {
+        source: PathBuf::from("staged"),
+        target: PathBuf::from("/home/me/.local/share/Game/x.sav"),
+        target_file: Some((Base::XdgData, "Game/x.sav".into())),
+        target_root: Some((Base::XdgData, "Game".into())),
+    };
+    let root = (Base::XdgData, "Game".to_owned());
+    let key = (Base::XdgData, "Game/x.sav".to_owned());
+    assert_eq!(staged_target(&planned), Some((key, root)));
+
+    let elsewhere = PathBuf::from("/elsewhere/x.sav");
+    let overridden = Write {
+        target: elsewhere.clone(),
+        target_file: None,
+        target_root: None,
+        ..planned.clone()
+    };
+    let base = if cfg!(windows) {
+        Base::WinAbsolute
+    } else {
+        Base::Absolute
+    };
+    let tail = layout::tail_of(&elsewhere, Path::new("")).unwrap();
+    assert_eq!(
+        staged_target(&overridden),
+        Some(((base, tail.clone()), (base, tail)))
+    );
+
+    let unstageable = Write {
+        target: PathBuf::from("/a/../x.sav"),
+        ..overridden
+    };
+    assert_eq!(staged_target(&unstageable), None);
+}
+
 #[cfg(unix)]
 #[test]
 fn staged_symlink_not_restored() {

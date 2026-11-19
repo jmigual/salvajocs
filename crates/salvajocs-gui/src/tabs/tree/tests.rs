@@ -552,14 +552,18 @@ fn badges_join_the_row_name_and_count_in_folder_headers() {
 #[test]
 fn a_read_only_tree_has_no_checkbox_and_toggles_nothing() {
     let keys = ["Base/dir/a.sav", "Base/dir/b.sav"];
-    let badges = [("Base/dir/a.sav", Badge::New)];
+    let badges = [
+        ("Base/dir/a.sav", Badge::New),
+        ("Base/dir/b.sav", Badge::WillFail),
+    ];
     let mut harness = harness_of(tree(&keys), &[], true, &badges, false);
     assert_eq!(
-        harness.query_all_by_label("2 files, 20 B, 1 new").count(),
+        (harness.query_all_by_label("2 files, 20 B, 1 new, 1 will fail")).count(),
         1
     );
     open_all(&mut harness);
     assert_eq!(harness.query_all_by_role(Role::CheckBox).count(), 0);
+    assert_eq!(harness.query_all_by_label("b.sav, will fail").count(), 1);
 
     harness.get_by_label("a.sav, new").click();
     harness.get_by_label("Base/dir").click();

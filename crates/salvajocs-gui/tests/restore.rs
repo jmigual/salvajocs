@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    env, harness, init_repo, local_config, replace_text, repo_dir, run_settled, run_until,
-    run_until_ready, save_config, shows,
+    env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
+    run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -937,6 +937,18 @@ fn batch_asks_for_each_game_that_needs_mapping_and_skips_one() {
         &harness,
         "Lima: skipped in the folder mapping dialog"
     ));
+    // The confirm tree shows where the files land, not the snapshot's Windows folders.
+    assert!(harness.query_by_label("Open XdgData/Kilo").is_some());
+    let snapshot_side = |node: &AccessKitNode<'_>| {
+        node.label()
+            .is_some_and(|label| label.starts_with("Open WinAppData"))
+    };
+    assert!(
+        harness
+            .query_all(by().predicate(snapshot_side))
+            .next()
+            .is_none()
+    );
     run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
     let kilo_save = under(&xdg_data(&tmp), "Kilo/a.sav");
     assert_eq!(fs::read_to_string(kilo_save).unwrap(), "Kilo/a.sav");
@@ -1163,6 +1175,53 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     assert!(!batch_dir(&env).exists(), "the fetched snapshot is removed");
 }
 
+#[test]
+fn batch_confirm_tree_labels_each_file_and_toggles_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tails = ["Alpha/new.dat", "Alpha/changed.dat", "Alpha/same.dat"];
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &tails);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let mut opened = None;
+    let (mut harness, _env) = open_tab_with(
+        &tmp,
+        vec![alpha, beta],
+        &[alpha_scan, beta_scan],
+        &[],
+        |env| opened = Some(record_opened(env)),
+    );
+    let saves = xdg_data(&tmp).join("Alpha");
+    put(&saves.join("changed.dat"), "other");
+    put(&saves.join("same.dat"), "Alpha/same.dat");
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, "Open XdgData/Alpha");
+    click(&mut harness, "Open XdgData/Beta");
+
+    for row in [
+        "new.dat, new",
+        "changed.dat, changed",
+        "same.dat",
+        "save.dat, new",
+    ] {
+        let role = harness.get_by_label(row).accesskit_node().role();
+        assert_eq!(role, Role::Label, "{row} is read-only");
+    }
+    let checkboxes: Vec<String> = (harness.query_all(by().role(Role::CheckBox)))
+        .filter_map(|node| node.accesskit_node().label())
+        .collect();
+    assert!(
+        checkboxes.iter().all(|label| label.starts_with("Include ")),
+        "only the list's checkboxes: {checkboxes:?}"
+    );
+    assert!(
+        (harness.query_by_label("Show XdgData/Beta in the file manager")).is_none(),
+        "Beta's folder does not exist yet"
+    );
+    click(&mut harness, "Show XdgData/Alpha in the file manager");
+    assert_eq!(*opened.unwrap().lock().unwrap(), [saves]);
+}
+
 #[cfg(unix)]
 #[test]
 fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
@@ -1193,6 +1252,9 @@ fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
         &format!("{}: will fail", dir.display())
     ));
     assert!(shows(&harness, "1 new, 0 changed, 0 unchanged"));
+    click(&mut harness, "Open XdgData/Alpha");
+    assert!(harness.query_by_label("dir.dat, will fail").is_some());
+    assert!(harness.query_by_label("save.dat, new").is_some());
     assert!(shows(
         &harness,
         "Beta: will not be restored: the safety backup cannot read"

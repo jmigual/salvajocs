@@ -2,9 +2,9 @@
 //! targets, a confirm of what each one writes, then `restore::run` per game, each behind its own
 //! safety backup (ADR-0005, ADR-0010). A game that fails does not stop the others.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -27,6 +27,7 @@ use super::{
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
+use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
 use crate::theme::{self, icons};
 
 /// A game of the batch ready to restore.
@@ -35,8 +36,7 @@ struct Planned {
     /// The fetched snapshot, as the picker shows it.
     snapshot: String,
     plan: RestorePlan,
-    /// What each of `plan.writes` does to its target, or why it will fail.
-    states: Vec<Result<WriteState, String>>,
+    compared: Compared,
 }
 
 /// A game of the batch waiting for its turn in the mapping dialog (ADR-0011).
@@ -58,15 +58,24 @@ enum Outcome {
     Failed(String),
 }
 
-/// The state of each write of a plan, or why the game would write nothing; see [`compare`].
-type Compared = Result<Vec<Result<WriteState, String>>, String>;
+/// What each write of a plan does to its target, and the confirm's tree of them; see
+/// [`compare`].
+struct Compared {
+    /// What each of the plan's writes does to its target, or why it will fail.
+    states: Vec<Result<WriteState, String>>,
+    /// The writes by where they land, read-only.
+    tree: FileTree,
+    /// The badge of each file key of `tree` that has one.
+    badges: HashMap<String, Badge>,
+}
 
 /// What a batch dialog's confirm job hands back.
 struct Mapped {
     /// The game's index in the batch.
     index: usize,
     choices: Vec<(SnapshotRoot, Choice)>,
-    plan: Result<(RestorePlan, Compared), PrepareError>,
+    /// The plan, with its [`Compared`] or why the game would write nothing.
+    plan: Result<(RestorePlan, Result<Compared, String>), PrepareError>,
 }
 
 /// One ticked game of a batch.
@@ -330,17 +339,17 @@ impl RestoreTab {
             return;
         };
         match plan {
-            Ok((plan, states)) => {
+            Ok((plan, compared)) => {
                 if let Some(config) = &mut state.config {
                     crossbuild::apply_choices(config, &game.title, &choices);
                     state.save_config(ctx);
                 }
-                game.outcome = match states {
-                    Ok(states) => Outcome::Planned(Box::new(Planned {
+                game.outcome = match compared {
+                    Ok(compared) => Outcome::Planned(Box::new(Planned {
                         fetched: mapping.fetched.clone(),
                         snapshot: mapping.snapshot.clone(),
                         plan,
-                        states,
+                        compared,
                     })),
                     Err(reason) => Outcome::Failed(reason),
                 };
@@ -369,8 +378,8 @@ impl RestoreTab {
                 let fetched = mapping.fetched.clone();
                 let job = Job::spawn(ctx, move || {
                     let plan = fetched.prepare(&choices).map(|plan| {
-                        let states = compare(&plan);
-                        (plan, states)
+                        let compared = compare(&plan);
+                        (plan, compared)
                     });
                     Ok(Mapped {
                         index,
@@ -394,23 +403,24 @@ impl RestoreTab {
 
     /// The confirm: per ticked game what it writes and where, or why it will not be restored.
     /// It waits for the mapping dialogs.
-    pub(super) fn batch_ui(&mut self, ui: &mut Ui, state: &State) {
+    pub(super) fn batch_ui(&mut self, ui: &mut Ui, state: &mut State) {
         if self.batch.waiting().is_some() {
             return;
         }
-        let Some(games) = &self.batch.games else {
+        let Some(games) = &mut self.batch.games else {
             return;
         };
         ui.add_space(16.0);
         ui.heading("Plan");
         let error_color = ui.visuals().error_fg_color;
         let mut planned = 0;
+        let mut opened = None;
         for game in games {
             let title = &game.title;
-            match &game.outcome {
+            match &mut game.outcome {
                 Outcome::Planned(game) => {
                     planned += 1;
-                    planned_ui(ui, title, game);
+                    opened = planned_ui(ui, title, game).or(opened);
                 }
                 Outcome::Skipped => {
                     ui.weak(format!("{title}: skipped in the folder mapping dialog"));
@@ -437,6 +447,12 @@ impl RestoreTab {
             self.start_batch_run(ui.ctx(), state);
         } else if cancel {
             self.cancel_batch(ui.ctx(), state);
+        }
+        if let Some(path) = opened
+            && let Err(err) = (state.env.open_folder)(&path)
+        {
+            let path = path.display();
+            state.notices.push(format!("Could not open {path}: {err}"));
         }
     }
 
@@ -559,8 +575,8 @@ fn plan_game(
     };
     match fetched.prepare(&[]) {
         Ok(plan) => match compare(&plan) {
-            Ok(states) => Outcome::Planned(Box::new(Planned {
-                states,
+            Ok(compared) => Outcome::Planned(Box::new(Planned {
+                compared,
                 snapshot: snapshot_label(snapshot),
                 fetched: Arc::new(fetched),
                 plan,
@@ -579,13 +595,44 @@ fn plan_game(
     }
 }
 
-/// [`restore::compare_writes`] with each error as the text the confirm shows; `Err` when the
-/// restore of the game would write nothing.
-fn compare(plan: &RestorePlan) -> Result<Vec<Result<WriteState, String>>, String> {
+/// [`restore::compare_writes`] with each error as the text the confirm shows, and the tree of
+/// the writes; `Err` when the restore of the game would write nothing. Reads the staged sources'
+/// sizes and which target folders exist, so it runs in a job.
+fn compare(plan: &RestorePlan) -> Result<Compared, String> {
     let states = restore::compare_writes(plan).map_err(|err| format!("{:#}", anyhow!(err)))?;
-    Ok((states.into_iter())
+    let states: Vec<_> = (states.into_iter())
         .map(|state| state.map_err(|err| format!("{:#}", anyhow!(err))))
-        .collect())
+        .collect();
+    let mut badges = HashMap::new();
+    let rows: Vec<Row> = (plan.writes.iter().zip(&states))
+        .filter_map(|(write, state)| {
+            // Keyed where the file lands, so a cross-build restore shows this build's folders. A
+            // write without a key has no row: `restore::run` refuses to stage it.
+            let ((base, tail), _) = restore::staged_target(write)?;
+            let key = format!("{}/{tail}", base.dir_name());
+            let badge = match state {
+                Ok(WriteState::New) => Some(Badge::New),
+                Ok(WriteState::Changed) => Some(Badge::Changed),
+                Ok(WriteState::Unchanged) => None,
+                Err(_) => Some(Badge::WillFail),
+            };
+            if let Some(badge) = badge {
+                badges.insert(key.clone(), badge);
+            }
+            Some(Row {
+                key,
+                // Only shown: a source that cannot be read fails its write, which says so.
+                size: fs::metadata(&write.source).map_or(0, |meta| meta.len()),
+                real: Some(write.target.clone()),
+                removed: false,
+            })
+        })
+        .collect();
+    Ok(Compared {
+        states,
+        tree: FileTree::new(rows).existing_folders_only(),
+        badges,
+    })
 }
 
 /// Removes the batch dirs under `parent` that earlier sessions left: named by another process id
@@ -610,13 +657,18 @@ fn remove_stale(parent: &Path) {
 }
 
 /// One planned game of the confirm: its snapshot and targets, how many files are new, changed
-/// or unchanged, the writes that will fail, the plan's warnings, registry and skipped items.
-fn planned_ui(ui: &mut Ui, title: &str, planned: &Planned) {
+/// or unchanged, the writes that will fail, the tree of its files, the plan's warnings, registry
+/// and skipped items. Returns the folder the user asked to open.
+fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf> {
     let Planned {
         fetched,
         snapshot,
         plan,
-        states,
+        compared: Compared {
+            states,
+            tree,
+            badges,
+        },
     } = planned;
     ui.add_space(8.0);
     theme::group(ui, |ui| {
@@ -640,6 +692,8 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &Planned) {
                 theme::status(ui, icons::X_CIRCLE, error_color, text);
             }
         }
+        let badge = |key: &str| badges.get(key).copied();
+        let clicked = ui.push_id(title, |ui| tree.ui(ui, Mode::ReadOnly, &badge));
         warnings_ui(ui, plan);
         if let Some((export, ctx)) = &plan.registry {
             ui.label(format!(
@@ -649,7 +703,11 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &Planned) {
             ));
         }
         skipped_ui(ui, plan);
-    });
+        match clicked.inner {
+            Some(Clicked::Open(path)) => Some(path),
+            Some(Clicked::Toggle(..)) | None => None,
+        }
+    })
 }
 
 /// Where a game's files go, as the confirm names it.
