@@ -114,18 +114,23 @@ To restore more than one game in one go:
    will fail, and the same warnings, registry and skipped items as the preview. Games that will
    not be restored are listed with the reason. Nothing is written yet. At the end of the
    snapshot's line, icons count the files that are new (a plus in a circle: nothing there yet),
-   changed (a pencil: the file there differs) or unchanged (an equals sign). Counts of zero are
+   changed (a pencil: the file there differs), unchanged (an equals sign) or could not be
+   compared (a question mark). Counts of zero are
    left out; hover the icons to read the counts as text.
 
    Under it, a file tree lists every file the game writes, by the folder it goes into on this
    machine, as in the [Backup](backup.md) tab but without checkboxes. A file has an icon after
    its size: a plus in a circle when nothing is there yet, a pencil when the file there differs
-   and will be overwritten, and a cross in a circle when salvajocs will not write it. Hover the
-   icon to read `New: not on this PC yet`, `Changed: will be overwritten` or `Will fail` with the
-   reason. An unchanged file has no icon; it is written all the same. The icons compare the
-   contents, as they are when the plan is made. A folder's line counts the icons below it. A
-   folder that already exists has a button that opens it in the file manager.
-5. Click **Restore N games**.
+   and will be overwritten, a question mark when salvajocs cannot read the file there to compare
+   it, and a cross in a circle when salvajocs will not write it. Hover the icon to read
+   `New: not on this PC yet`, `Changed: will be overwritten`, `Could not be compared` or
+   `Will fail` with the reason. An unchanged file has no icon; it is written all the same. The
+   icons compare with the backup's hash list (size and modification time for backups made
+   before 0.6.0), as the files are when the plan is made. The plan downloads no backup. A
+   folder's line counts the icons below it. A folder that already exists has a button that
+   opens it in the file manager.
+5. Click **Restore N games**. salvajocs downloads every game's backup first, then restores the
+   games one after another. A game whose backup cannot be downloaded writes nothing.
 
 Each game is restored as described above, with its own safety backup, and the next game goes on
 whatever happens to it. A game whose restore is refused writes nothing: for example, when its

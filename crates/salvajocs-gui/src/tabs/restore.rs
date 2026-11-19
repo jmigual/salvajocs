@@ -172,6 +172,8 @@ impl TargetPick {
 struct Fetched {
     /// The repository the snapshot came from, which the safety backup goes into.
     storage: SharedStorage,
+    /// The snapshot `staged` comes from, which `restore::download` downloads.
+    snapshot: SnapshotInfo,
     title: String,
     staged: StagedGame,
     targets: Targets,
@@ -426,9 +428,7 @@ impl RestoreTab {
         {
             self.forget_plan();
             self.drop_listing();
-            if self.batch.open() {
-                self.cancel_batch(ctx, state);
-            }
+            self.batch.close();
             self.detecting = None;
             self.pick = None;
             self.removed = None;
@@ -768,6 +768,7 @@ impl RestoreTab {
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
                 storage,
+                snapshot,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 title,
                 staged,

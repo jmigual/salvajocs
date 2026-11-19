@@ -2,8 +2,8 @@
 //! preview, the skip rule of a backup and the restore's confirm tree.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{self, Read};
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -252,38 +252,6 @@ pub fn counts(scan: &GameScan, comparison: &Comparison, settings: &GameSettings)
         counts.removed = 0;
     }
     Some(counts)
-}
-
-/// Whether the files `a` and `b` hold the same bytes: sizes first, then their contents.
-pub fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
-    let (mut a, mut b) = (File::open(a)?, File::open(b)?);
-    if a.metadata()?.len() != b.metadata()?.len() {
-        return Ok(false);
-    }
-    let (mut buf_a, mut buf_b) = (vec![0; 64 * 1024], vec![0; 64 * 1024]);
-    loop {
-        let read = fill(&mut a, &mut buf_a)?;
-        if read != fill(&mut b, &mut buf_b)? || buf_a[..read] != buf_b[..read] {
-            return Ok(false);
-        }
-        if read == 0 {
-            return Ok(true);
-        }
-    }
-}
-
-/// Reads into `buf` until it is full or the reader ends; returns how much it read.
-fn fill(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
-    let mut filled = 0;
-    while filled < buf.len() {
-        match reader.read(&mut buf[filled..]) {
-            Ok(0) => break,
-            Ok(read) => filled += read,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
-    Ok(filled)
 }
 
 #[cfg(test)]

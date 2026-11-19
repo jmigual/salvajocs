@@ -945,7 +945,7 @@ fn cancelling_a_batch_dialog_restores_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
     let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
-    let (mut harness, env) = open_tab(&tmp, vec![beta, kilo], &[beta_scan, kilo_scan]);
+    let (mut harness, _env) = open_tab(&tmp, vec![beta, kilo], &[beta_scan, kilo_scan]);
     let beta_save = under(&xdg_data(&tmp), "Beta/save.dat");
     put(&beta_save, "old");
 
@@ -960,10 +960,6 @@ fn cancelling_a_batch_dialog_restores_nothing() {
     assert_eq!(fs::read_to_string(&beta_save).unwrap(), "old");
     assert!(!xdg_data(&tmp).join("Kilo").exists());
     assert!(snapshots(&tmp, "pre-restore").is_empty());
-    assert!(
-        !batch_dir(&env).exists(),
-        "the fetched snapshots are removed"
-    );
 }
 
 #[test]
@@ -1012,13 +1008,17 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     click(&mut harness, "Include Alpha");
     click(&mut harness, "Include Beta");
     plan_batch(&mut harness, "Restore 2 games");
-    assert!(!batches.join("99999999").exists());
-    assert!(batches.join("keep/x").exists());
+    assert!(
+        batches.join("99999999").exists(),
+        "planning removes nothing"
+    );
     run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
 
+    assert!(!batches.join("99999999").exists());
+    assert!(batches.join("keep/x").exists());
     assert!(
         !batch_dir(&env).exists(),
-        "the fetched snapshots are removed"
+        "the downloaded snapshots are removed"
     );
     for tail in tails {
         let restored = fs::read_to_string(under(&xdg_data(&tmp), tail)).unwrap();
@@ -1035,19 +1035,62 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
 }
 
 #[test]
-fn planning_keeps_the_batch_dir_of_another_running_app() {
+fn batch_planning_downloads_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let (alpha, snapshot) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
     let (mut harness, env) = open_tab(&tmp, vec![alpha], &[snapshot]);
-    // Another salvajocs plans a batch right now.
+
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+
+    assert!(harness.query_all_by_label("1 new").next().is_some());
+    assert!(!batch_dir(&env).exists());
+}
+
+#[test]
+fn a_batch_run_keeps_the_batch_dir_of_another_running_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, snapshot) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[snapshot]);
+    // Another salvajocs restores a batch right now.
     let other = env.cache_dir.join("restore-batch/99999998/0/files/x");
     put(&other, "live");
 
     click(&mut harness, "Include Alpha");
     plan_batch(&mut harness, "Restore 1 game");
+    run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
 
     assert_eq!(fs::read_to_string(&other).unwrap(), "live");
-    assert!(batch_dir(&env).exists());
+    assert!(!batch_dir(&env).exists());
+}
+
+#[test]
+fn a_batch_game_whose_backup_is_gone_fails_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let tails = ["Alpha/save.dat", "Beta/save.dat"];
+    for tail in tails {
+        put(&under(&xdg_data(&tmp), tail), "old");
+    }
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    let alpha = backups_of(&tmp, "Alpha");
+    open_repo(&tmp).forget(&[&alpha[0]]).unwrap();
+    run_batch(&mut harness, "Restore 2 games", "Restored 1 of 2 games");
+
+    assert!(shows(&harness, "the backup cannot be fetched"));
+    let alpha_save = fs::read_to_string(under(&xdg_data(&tmp), tails[0])).unwrap();
+    assert_eq!(alpha_save, "old", "nothing is written for the failed game");
+    let beta_save = fs::read_to_string(under(&xdg_data(&tmp), tails[1])).unwrap();
+    assert_eq!(beta_save, tails[1]);
+    let safety: Vec<String> = (snapshots(&tmp, "pre-restore").into_iter())
+        .map(|snapshot| snapshot.label)
+        .collect();
+    assert_eq!(safety, ["Beta"], "no safety backup for the failed game");
+    assert!(!batch_dir(&env).exists(), "the downloads are removed");
 }
 
 #[test]
@@ -1129,14 +1172,13 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let tails = ["Alpha/new.dat", "Alpha/changed.dat", "Alpha/same.dat"];
     let (alpha, snapshot) = native(&tmp, "Alpha", &tails);
-    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[snapshot]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha], &[snapshot]);
     let saves = xdg_data(&tmp).join("Alpha");
     put(&saves.join("changed.dat"), "other");
     put(&saves.join("same.dat"), "Alpha/same.dat");
 
     click(&mut harness, "Include Alpha");
     plan_batch(&mut harness, "Restore 1 game");
-    assert!(batch_dir(&env).exists());
 
     let counts = harness.get_by_label("1 new, 1 changed, 1 unchanged");
     assert_eq!(counts.accesskit_node().role(), Role::Image);
@@ -1151,7 +1193,43 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     assert!(!disabled(&harness, "Restore 1 game"), "the ticks stay");
     assert!(!saves.join("new.dat").exists());
     assert!(snapshots(&tmp, "pre-restore").is_empty());
-    assert!(!batch_dir(&env).exists(), "the fetched snapshot is removed");
+}
+
+#[test]
+fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, _) = native(&tmp, "Alpha", &[]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (app, env) = open_tab(&tmp, vec![alpha, beta], &[beta_scan]);
+    drop(app);
+    // A stage as 0.5.0 made it: no hashes.json.
+    let stage = tmp.path().join("old-stage");
+    let meta = r#"{"format":1,"title":"Alpha","roots":[["XdgData","Alpha"]]}"#;
+    put(&stage.join("salvajocs.json"), meta);
+    put(&stage.join("files/XdgData/Alpha/same.dat"), "same");
+    let slug = salvajocs_core::slug::slug("Alpha");
+    let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
+    let tags = ["salvajocs", game_tag.as_str()];
+    open_repo(&tmp)
+        .backup_dir(&stage, &as_path, &tags, "Alpha")
+        .unwrap()
+        .unwrap();
+    // The same bytes with another mtime.
+    put(&under(&xdg_data(&tmp), "Alpha/same.dat"), "same");
+    // A new app, whose repository index holds the new snapshot.
+    let mut harness = harness(env);
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the list", |h| shows(h, "Alpha"));
+
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+    click(&mut harness, "Open XdgData/Alpha");
+
+    assert!(harness.query_all_by_label("1 changed").next().is_some());
+    assert!(harness.query_by_label("same.dat, changed").is_some());
 }
 
 #[test]

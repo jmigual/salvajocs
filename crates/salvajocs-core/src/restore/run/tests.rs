@@ -1166,56 +1166,183 @@ fn failed_write_leaves_no_temp_file() {
     assert_eq!(read(&inside), "keep");
 }
 
-#[test]
-fn compare_writes_labels_missing_changed_and_identical_targets() {
-    let f = fixture();
-    let missing = f.planned("Game/missing.sav", "new");
-    let same_size = f.planned("Game/same_size.sav", "new");
-    write(&same_size.target, "old");
-    let other_size = f.planned("Game/other_size.sav", "new");
-    write(&other_size.target, "older");
-    let identical = f.planned("Game/identical.sav", "same");
-    write(&identical.target, "same");
-    let plan = plan_of(vec![missing, same_size, other_size, identical], None);
+/// Reads `snapshot` of Foo into the fixture's work dir and plans it into the fixture's prefix.
+fn read_and_plan(f: &mut Fixture, snapshot: &SnapshotInfo) -> (Listed, RestorePlan) {
+    let work = f.tmp.path().join("work");
+    let listed = super::read(&mut f.storage, snapshot, &work).unwrap();
+    let plan = plan_into(&listed.staged, &f.ctx());
+    (listed, plan)
+}
 
-    let states: Vec<_> = compare_writes(&plan)
-        .unwrap()
-        .into_iter()
-        .map(Result::unwrap)
+/// Backs up Foo with each `(name, contents)` as the save `Game/<name>`, then reads and plans the
+/// snapshot as [`read_and_plan`] does.
+fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (SnapshotInfo, Listed, RestorePlan) {
+    let files = (files.iter())
+        .map(|(name, contents)| {
+            let real = write(&f.tmp.path().join("src").join(name), contents);
+            FoundFile {
+                base: Base::WinAppData,
+                tail: format!("Game/{name}"),
+                size: contents.len() as u64,
+                modified: fs::metadata(&real).unwrap().modified().ok(),
+                real,
+            }
+        })
         .collect();
-    assert_eq!(
-        states,
-        [
-            WriteState::New,
-            WriteState::Changed,
-            WriteState::Changed,
-            WriteState::Unchanged
-        ]
-    );
+    let game = GameScan {
+        title: "Foo".into(),
+        files,
+        roots: vec![(Base::WinAppData, "Game".into())],
+        registry_keys: vec![],
+        registry_source: None,
+        prefixes: Vec::new(),
+        unreadable: vec![],
+    };
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
+    let (listed, plan) = read_and_plan(f, &snapshot);
+    (snapshot, listed, plan)
+}
+
+/// What [`compare_writes`] says of each write, by its target's file name.
+fn states(plan: &RestorePlan, listed: &Listed) -> Vec<(String, WriteState)> {
+    let states = compare_writes(plan, listed).unwrap();
+    (plan.writes.iter().zip(states))
+        .map(|(write, state)| {
+            let name = write.target.file_name().unwrap().to_string_lossy();
+            (name.into_owned(), state.unwrap())
+        })
+        .collect()
+}
+
+fn named(states: &[(&str, WriteState)]) -> Vec<(String, WriteState)> {
+    (states.iter())
+        .map(|(name, state)| ((*name).to_owned(), *state))
+        .collect()
+}
+
+/// Sets the mtime of the file `path` to `secs` after the epoch.
+fn set_mtime(path: &Path, secs: u64) {
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+        .unwrap();
 }
 
 #[test]
-fn compare_writes_finds_a_difference_past_the_first_chunk() {
-    let f = fixture();
-    let mut contents = "a".repeat(200 * 1024);
-    let write_ = f.planned("Game/big.sav", &contents);
-    contents.replace_range(150 * 1024..150 * 1024 + 1, "b");
-    write(&write_.target, &contents);
+fn compare_writes_labels_new_changed_and_unchanged_from_the_hash_list() {
+    let mut f = fixture();
+    let files = [
+        ("missing.sav", "new"),
+        ("other_size.sav", "new"),
+        ("same.sav", "same"),
+        ("same_size.sav", "new"),
+    ];
+    let (_, listed, plan) = backed_up_plan(&mut f, &files);
+    assert!(listed.hashes.is_some());
+    let game = f.folders.app_data.join("Game");
+    write(&game.join("other_size.sav"), "older");
+    // The same bytes with another mtime, as another machine's copy has them.
+    set_mtime(&write(&game.join("same.sav"), "same"), 1_000_000);
+    write(&game.join("same_size.sav"), "old");
 
-    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    let expected = named(&[
+        ("missing.sav", WriteState::New),
+        ("other_size.sav", WriteState::Changed),
+        ("same.sav", WriteState::Unchanged),
+        ("same_size.sav", WriteState::Changed),
+    ]);
+    assert_eq!(states(&plan, &listed), expected);
+}
+
+#[test]
+fn compare_writes_without_a_hash_list_compares_size_and_mtime() {
+    let mut f = fixture();
+    let stage = crafted_game_stage(f.tmp.path().join("stage"));
+    set_mtime(
+        &write(&stage.join("files/WinAppData/Game/kept.sav"), "kept"),
+        2_000_000,
+    );
+    set_mtime(
+        &write(&stage.join("files/WinAppData/Game/same.sav"), "same"),
+        2_000_000,
+    );
+    let snapshot = crafted_snapshot(&mut f.storage, &stage);
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+    assert_eq!(listed.hashes, None);
+    let game = f.folders.app_data.join("Game");
+    set_mtime(&write(&game.join("kept.sav"), "kept"), 2_000_000);
+    set_mtime(&write(&game.join("same.sav"), "same"), 1_000_000);
+
+    let expected = named(&[
+        ("kept.sav", WriteState::Unchanged),
+        ("same.sav", WriteState::Changed),
+    ]);
+    assert_eq!(states(&plan, &listed), expected);
+}
+
+#[test]
+fn compare_writes_finds_a_file_restored_from_the_snapshot_unchanged() {
+    let mut f = fixture();
+    // No hash list, so only the mtime the restore sets can make the file unchanged.
+    let stage = crafted_game_stage(f.tmp.path().join("stage"));
+    write(&stage.join("files/WinAppData/Game/new.sav"), "new");
+    write(&stage.join("files/WinAppData/Game/old.sav"), "saved");
+    let snapshot = crafted_snapshot(&mut f.storage, &stage);
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+    write(&f.folders.app_data.join("Game/old.sav"), "older");
+
+    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
+    assert_applied(&f.run(&plan, false).unwrap());
+    let expected = named(&[
+        ("new.sav", WriteState::Unchanged),
+        ("old.sav", WriteState::Unchanged),
+    ]);
+    assert_eq!(states(&plan, &listed), expected);
+}
+
+#[test]
+fn compare_writes_reads_no_snapshot_content() {
+    let mut f = fixture();
+    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
+    write(&f.folders.app_data.join("Game/save.sav"), "old");
+
+    let states = compare_writes(&plan, &listed).unwrap();
     assert!(
         matches!(states[..], [Ok(WriteState::Changed)]),
+        "{states:?}"
+    );
+    assert!(!listed.staged.root.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn compare_writes_says_a_symlinked_source_will_fail() {
+    let mut f = fixture();
+    let stage = crafted_game_stage(f.tmp.path().join("stage"));
+    let secret = write(&f.tmp.path().join("secret.txt"), "host data");
+    write(&stage.join("files/WinAppData/Game/save.sav"), "save");
+    let link = stage.join("files/WinAppData/Game/link.sav");
+    std::os::unix::fs::symlink(&secret, link).unwrap();
+    let snapshot = crafted_snapshot(&mut f.storage, &stage);
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+
+    let states = compare_writes(&plan, &listed).unwrap();
+    assert!(
+        matches!(
+            states[..],
+            [Err(ApplyError::SourceNotAFile), Ok(WriteState::New)]
+        ),
         "{states:?}"
     );
 }
 
 #[test]
 fn compare_writes_refuses_a_directory_at_the_target() {
-    let f = fixture();
-    let write_ = f.planned("Game/save.sav", "new");
-    fs::create_dir_all(&write_.target).unwrap();
+    let mut f = fixture();
+    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
+    fs::create_dir_all(f.folders.app_data.join("Game/save.sav")).unwrap();
 
-    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    let states = compare_writes(&plan, &listed).unwrap();
     assert!(
         matches!(states[..], [Err(ApplyError::Io { .. })]),
         "{states:?}"
@@ -1225,13 +1352,14 @@ fn compare_writes_refuses_a_directory_at_the_target() {
 #[cfg(unix)]
 #[test]
 fn compare_writes_refuses_a_symlinked_target() {
-    let f = fixture();
+    let mut f = fixture();
+    let (_, listed, plan) = backed_up_plan(&mut f, &[("save.sav", "new")]);
     let outside = write(&f.tmp.path().join("outside.txt"), "new");
-    let write_ = f.planned("Game/save.sav", "new");
-    fs::create_dir_all(write_.target.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(&outside, &write_.target).unwrap();
+    let target = f.folders.app_data.join("Game/save.sav");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &target).unwrap();
 
-    let states = compare_writes(&plan_of(vec![write_], None)).unwrap();
+    let states = compare_writes(&plan, &listed).unwrap();
     assert!(
         matches!(states[..], [Err(ApplyError::TargetIsSymlink)]),
         "{states:?}"
@@ -1244,21 +1372,21 @@ fn compare_writes_finds_an_unreadable_target_that_blocks_the_whole_restore() {
     use std::os::unix::fs::PermissionsExt;
 
     let mut f = fixture();
-    let locked = f.planned("Game/locked.sav", "new");
-    write(&locked.target, "old");
-    fs::set_permissions(&locked.target, fs::Permissions::from_mode(0o000)).unwrap();
+    let files = [("locked.sav", "new"), ("other.sav", "new")];
+    let (snapshot, listed, plan) = backed_up_plan(&mut f, &files);
+    let locked = write(&f.folders.app_data.join("Game/locked.sav"), "old");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     // Root reads it anyway, so there is nothing to test.
-    if fs::read(&locked.target).is_ok() {
+    if fs::read(&locked).is_ok() {
         return;
     }
-    let other = f.planned("Game/other.sav", "new");
-    let plan = plan_of(vec![other.clone(), locked.clone()], None);
 
-    let compared = compare_writes(&plan);
+    let compared = compare_writes(&plan, &listed);
+    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
     let result = f.run(&plan, false);
-    fs::set_permissions(&locked.target, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(
-        matches!(&compared, Err(UnreadableTarget { path, .. }) if *path == locked.target),
+        matches!(&compared, Err(UnreadableTarget { path, .. }) if *path == locked),
         "{compared:?}"
     );
     // What the compare foresees: the safety backup fails, so nothing is written.
@@ -1266,7 +1394,7 @@ fn compare_writes_finds_an_unreadable_target_that_blocks_the_whole_restore() {
         matches!(result, Err(RunError::SafetyBackup(_))),
         "{result:?}"
     );
-    assert!(!other.target.exists());
+    assert!(!f.folders.app_data.join("Game/other.sav").exists());
 }
 
 #[cfg(unix)]

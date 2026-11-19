@@ -15,7 +15,9 @@ use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::Context;
 use salvajocs_core::manifest::Manifest;
-use salvajocs_core::restore::{self, GameBackups, PrepareError, RestorePlan, Targets, WriteState};
+use salvajocs_core::restore::{
+    self, GameBackups, Listed, PrepareError, RestorePlan, Targets, WriteState,
+};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
@@ -42,6 +44,8 @@ struct Planned {
 /// A game of the batch waiting for its turn in the mapping dialog (ADR-0011).
 struct Mapping {
     fetched: Arc<Fetched>,
+    /// The snapshot's listing, which the confirm compares with.
+    listed: Arc<Listed>,
     /// The fetched snapshot, as the picker shows it.
     snapshot: String,
     dialog: Dialog,
@@ -106,21 +110,18 @@ pub(super) struct Batch {
     running: Option<Job<Vec<GameRestored>>>,
     /// How many games the running batch restores.
     total: usize,
+    /// How many of them are downloaded, counted by the job.
+    downloaded: Arc<AtomicUsize>,
     /// How many of them are done, counted by the job.
     done: Arc<AtomicUsize>,
     /// How each game of the last batch ended.
     restored: Option<Vec<GameRestored>>,
-    /// The job removing the fetched snapshots of a cancelled batch.
-    cleaning: Option<Job<()>>,
 }
 
 impl Batch {
-    /// Whether the batch's planning, dialog confirm, run or cleanup job is running.
+    /// Whether the batch's planning, dialog confirm or run job is running.
     pub(super) fn busy(&self) -> bool {
-        self.planning.is_some()
-            || self.mapping.is_some()
-            || self.running.is_some()
-            || self.cleaning.is_some()
+        self.planning.is_some() || self.mapping.is_some() || self.running.is_some()
     }
 
     /// Whether the run, which writes the games' files, is running.
@@ -216,9 +217,9 @@ impl RestoreTab {
         }
     }
 
-    /// Plans every ticked game in one job, in list order: its default snapshot is fetched into a
-    /// dir of its own under the cache dir, kept until the run, and planned into its default
-    /// targets without mapping choices.
+    /// Plans every ticked game in one job, in list order: its default snapshot is read from its
+    /// listing, with a dir of its own under the cache dir for the run to download it into, and
+    /// planned into its default targets without mapping choices (ADR-0020).
     fn start_batch(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
@@ -244,10 +245,6 @@ impl RestoreTab {
         let environment = state.env.environment.clone();
         let root = own_dir(&state.env.cache_dir, "restore-batch");
         let job = Job::spawn(ctx, move || {
-            if let Some(parent) = root.parent() {
-                remove_stale(parent);
-            }
-            remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
             let environment = environment.unwrap_or_else(Environment::detect);
             let games = (games.into_iter().enumerate())
                 .map(|(index, (title, snapshot))| {
@@ -309,19 +306,6 @@ impl RestoreTab {
             self.checked.clear();
             self.start_listing(ctx, state);
         }
-        // Best effort: the next batch clears the dir again.
-        if let Some(job) = &mut self.batch.cleaning
-            && job.take_result().is_some()
-        {
-            self.batch.cleaning = None;
-        }
-    }
-
-    /// Closes the batch without writing anything and removes its fetched snapshots in a job.
-    pub(super) fn cancel_batch(&mut self, ctx: &egui::Context, state: &State) {
-        self.batch.close();
-        let root = own_dir(&state.env.cache_dir, "restore-batch");
-        self.batch.cleaning = Some(Job::spawn(ctx, move || Ok(remove_dir(&root)?)));
     }
 
     /// A dialog's plan for the game it was confirmed for: shown on the confirm, with the choices
@@ -375,10 +359,10 @@ impl RestoreTab {
         });
         match action {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
-                let fetched = mapping.fetched.clone();
+                let (fetched, listed) = (mapping.fetched.clone(), mapping.listed.clone());
                 let job = Job::spawn(ctx, move || {
                     let plan = fetched.prepare(&choices).map(|plan| {
-                        let compared = compare(&plan);
+                        let compared = compare(&plan, &listed);
                         (plan, compared)
                     });
                     Ok(Mapped {
@@ -396,7 +380,7 @@ impl RestoreTab {
                     game.outcome = Outcome::Skipped;
                 }
             }
-            Some(DialogAction::Cancel) => self.cancel_batch(ctx, state),
+            Some(DialogAction::Cancel) => self.batch.close(),
             Some(DialogAction::Confirm(_) | DialogAction::UsePrefix) | None => {}
         }
     }
@@ -446,7 +430,7 @@ impl RestoreTab {
         if run {
             self.start_batch_run(ui.ctx(), state);
         } else if cancel {
-            self.cancel_batch(ui.ctx(), state);
+            self.batch.close();
         }
         if let Some(path) = opened
             && let Err(err) = (state.env.open_folder)(&path)
@@ -456,9 +440,10 @@ impl RestoreTab {
         }
     }
 
-    /// Restores the planned games one after another in one job, each with `restore::run` and
-    /// so behind its own safety backup, staged under the cache dir. Then the fetched snapshots
-    /// are removed.
+    /// Restores the planned games in one job: downloads every game's snapshot first, so no
+    /// download waits for the reindex after a safety backup (ADR-0003, ADR-0020), then runs
+    /// `restore::run` for each, behind its own safety backup staged under the cache dir. Then
+    /// the downloads are removed.
     fn start_batch_run(&mut self, ctx: &egui::Context, state: &State) {
         let Some(games) = self.batch.games.take() else {
             return;
@@ -472,18 +457,36 @@ impl RestoreTab {
         self.error = None;
         self.restored = None;
         self.batch.total = planned.len();
+        self.batch.downloaded = Arc::default();
         self.batch.done = Arc::default();
-        let done = self.batch.done.clone();
+        let (downloaded, done) = (self.batch.downloaded.clone(), self.batch.done.clone());
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         let root = own_dir(&state.env.cache_dir, "restore-batch");
         let wineserver_running = state.env.wineserver_running;
         let waker = ctx.clone();
         self.batch.running = Some(Job::spawn(ctx, move || {
-            let restored = (planned.into_iter())
+            if let Some(parent) = root.parent() {
+                remove_stale(parent);
+            }
+            remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
+            let planned: Vec<_> = (planned.into_iter())
                 .map(|(fetched, plan)| {
-                    let title = fetched.title.clone();
                     // A failure to lock fails this game, not the job.
-                    let report = lock_storage(&fetched.storage).and_then(|mut storage| {
+                    let fetch = lock_storage(&fetched.storage).and_then(|mut storage| {
+                        let (snapshot, staged) = (&fetched.snapshot, &fetched.staged);
+                        Ok(restore::download(&mut storage, snapshot, staged)?)
+                    });
+                    downloaded.fetch_add(1, Ordering::Relaxed);
+                    waker.request_repaint();
+                    (fetched, plan, fetch)
+                })
+                .collect();
+            let restored = (planned.into_iter())
+                .map(|(fetched, plan, fetch)| {
+                    let title = fetched.title.clone();
+                    let fetch = fetch.context("the backup cannot be fetched");
+                    let storage = fetch.and_then(|()| lock_storage(&fetched.storage));
+                    let report = storage.and_then(|mut storage| {
                         let running = wineserver_running();
                         Ok(restore::run(
                             &mut storage,
@@ -504,7 +507,7 @@ impl RestoreTab {
                     }
                 })
                 .collect();
-            // Best effort: what is left is cleared when the next batch is planned.
+            // Best effort: what is left is cleared when the next batch runs.
             let _ = remove_dir(&root);
             Ok(restored)
         }));
@@ -514,8 +517,14 @@ impl RestoreTab {
     pub(super) fn batch_restored_ui(&self, ui: &mut Ui) {
         let batch = &self.batch;
         if batch.running.is_some() {
+            let downloaded = batch.downloaded.load(Ordering::Relaxed);
             let done = batch.done.load(Ordering::Relaxed);
-            ui.label(format!("Restored {done} of {}", count(batch.total, "game")));
+            let total = count(batch.total, "game");
+            if downloaded < batch.total {
+                ui.label(format!("Downloading {downloaded} of {total}"));
+            } else {
+                ui.label(format!("Restored {done} of {total}"));
+            }
             return;
         }
         let Some(games) = &batch.restored else {
@@ -546,8 +555,8 @@ impl RestoreTab {
     }
 }
 
-/// Fetches `snapshot` of `title` into `work_dir` and plans its restore into its default targets,
-/// then compares each write with its target.
+/// Reads `snapshot` of `title`, to be downloaded into `work_dir`, and plans its restore into its
+/// default targets, then compares each write with its target.
 fn plan_game(
     title: String,
     snapshot: &SnapshotInfo,
@@ -558,23 +567,24 @@ fn plan_game(
     environment: &Environment,
 ) -> Outcome {
     let targets = restore::default_targets(&title, manifest, config, environment);
-    let staged = lock_storage(storage)
-        .and_then(|mut storage| Ok(restore::fetch(&mut storage, snapshot, work_dir)?));
-    let staged = match staged {
-        Ok(staged) => staged,
-        Err(err) => return Outcome::Failed(format!("the backup cannot be fetched: {err:#}")),
+    let listed = lock_storage(storage)
+        .and_then(|mut storage| Ok(restore::read(&mut storage, snapshot, work_dir)?));
+    let listed = match listed {
+        Ok(listed) => Arc::new(listed),
+        Err(err) => return Outcome::Failed(format!("the backup cannot be read: {err:#}")),
     };
     let info = restore::game_info(&title, manifest, &config.custom_games);
     let fetched = Fetched {
         storage: storage.clone(),
+        snapshot: snapshot.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
         title,
-        staged,
+        staged: listed.staged.clone(),
         targets,
         info,
     };
     match fetched.prepare(&[]) {
-        Ok(plan) => match compare(&plan) {
+        Ok(plan) => match compare(&plan, &listed) {
             Ok(compared) => Outcome::Planned(Box::new(Planned {
                 compared,
                 snapshot: snapshot_label(snapshot),
@@ -585,6 +595,7 @@ fn plan_game(
         },
         Err(PrepareError::NeedsMapping(entries)) => Outcome::NeedsMapping(Box::new(Mapping {
             fetched: Arc::new(fetched),
+            listed,
             snapshot: snapshot_label(snapshot),
             dialog: Dialog::new(entries),
         })),
@@ -595,11 +606,12 @@ fn plan_game(
     }
 }
 
-/// [`restore::compare_writes`] with each error as the text the confirm shows, and the tree of
-/// the writes; `Err` when the restore of the game would write nothing. Reads the staged sources'
-/// sizes and which target folders exist, so it runs in a job.
-fn compare(plan: &RestorePlan) -> Result<Compared, String> {
-    let states = restore::compare_writes(plan).map_err(|err| format!("{:#}", anyhow!(err)))?;
+/// [`restore::compare_writes`] against `listed` with each error as the text the confirm shows,
+/// and the tree of the writes; `Err` when the restore of the game would write nothing. Reads the
+/// targets and which target folders exist, so it runs in a job.
+fn compare(plan: &RestorePlan, listed: &Listed) -> Result<Compared, String> {
+    let states =
+        restore::compare_writes(plan, listed).map_err(|err| format!("{:#}", anyhow!(err)))?;
     let states: Vec<_> = (states.into_iter())
         .map(|state| state.map_err(|err| format!("{:#}", anyhow!(err))))
         .collect();
@@ -624,8 +636,7 @@ fn compare(plan: &RestorePlan) -> Result<Compared, String> {
             }
             Some(Row {
                 key,
-                // Only shown: a source that cannot be read fails its write, which says so.
-                size: fs::metadata(&write.source).map_or(0, |meta| meta.len()),
+                size: listed.source(write).map_or(0, |entry| entry.size),
                 real: Some(write.target.clone()),
                 removed: false,
             })
@@ -680,10 +691,11 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
                 .filter(|state| state.as_ref() == Ok(&wanted))
                 .count()
         };
-        let (new, changed, unchanged) = (
+        let (new, changed, unchanged, unknown) = (
             of(WriteState::New),
             of(WriteState::Changed),
             of(WriteState::Unchanged),
+            of(WriteState::Unknown),
         );
         theme::row(
             ui,
@@ -692,19 +704,25 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
             },
             |ui| {
                 // When every write will fail there is nothing to count; the failures are below.
-                if new + changed + unchanged == 0 {
+                if new + changed + unchanged + unknown == 0 {
                     return;
                 }
                 let chips = [
                     (Badge::New.glyph(), Badge::New.color(ui), new),
                     (Badge::Changed.glyph(), Badge::Changed.color(ui), changed),
                     (icons::EQUALS, ui.visuals().weak_text_color(), unchanged),
+                    (Badge::Unknown.glyph(), Badge::Unknown.color(ui), unknown),
                 ];
-                let text: Vec<_> = [(new, "new"), (changed, "changed"), (unchanged, "unchanged")]
-                    .into_iter()
-                    .filter(|&(count, _)| count > 0)
-                    .map(|(count, kind)| format!("{count} {kind}"))
-                    .collect();
+                let text: Vec<_> = [
+                    (new, "new"),
+                    (changed, "changed"),
+                    (unchanged, "unchanged"),
+                    (unknown, "could not be compared"),
+                ]
+                .into_iter()
+                .filter(|&(count, _)| count > 0)
+                .map(|(count, kind)| format!("{count} {kind}"))
+                .collect();
                 theme::chips(ui, &chips, &text.join(", "));
             },
         );

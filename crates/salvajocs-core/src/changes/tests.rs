@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -298,28 +299,6 @@ fn newest_skips_pre_restore_and_other_games_from_any_host() {
     ];
     assert_eq!(newest(&snapshots, "game").unwrap().id, "elsewhere");
     assert_eq!(newest(&snapshots, "none"), None);
-}
-
-#[test]
-fn same_content_compares_sizes_then_bytes() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = |name: &str| tmp.path().join(name);
-    let a = write(&path("a"), b"abc", at(1));
-    let equal = write(&path("equal"), b"abc", at(2));
-    let longer = write(&path("longer"), b"abcd", at(1));
-    let last = write(&path("last"), b"abd", at(1));
-    assert!(same_content(&a, &equal).unwrap());
-    assert!(!same_content(&a, &longer).unwrap());
-    assert!(!same_content(&a, &last).unwrap());
-    let large = vec![7; 200 * 1024];
-    let mut large_last = large.clone();
-    *large_last.last_mut().unwrap() = 8;
-    let large = write(&path("large"), &large, at(1));
-    let large_last = write(&path("large-last"), &large_last, at(1));
-    assert!(same_content(&large, &large).unwrap());
-    assert!(!same_content(&large, &large_last).unwrap());
-    let missing = same_content(&a, &path("missing")).unwrap_err();
-    assert_eq!(missing.kind(), io::ErrorKind::NotFound);
 }
 
 #[test]

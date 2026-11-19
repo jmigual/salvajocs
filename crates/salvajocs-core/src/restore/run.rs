@@ -12,6 +12,7 @@ use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
 use super::{RestorePlan, StagedGame, Targets, Write};
 use crate::backup::{BackupError, Stored, backup_games};
+use crate::changes::FileState;
 use crate::config::AppConfig;
 use crate::crossbuild::{self, Family, SnapshotRoot, pair_side};
 use crate::layout::{
@@ -349,7 +350,7 @@ fn parse_base(name: &str) -> Option<Base> {
 pub struct Listed {
     /// The staged game; its `root` is the work dir [`download`] fills.
     pub staged: StagedGame,
-    /// Every entry of the game's staged directory, below it.
+    /// Every entry of the game's staged directory, below it, sorted by path.
     pub listing: Vec<SnapshotFile>,
     /// Its hash list, when it has one that [`crate::changes::verified`] accepts.
     pub hashes: Option<Hashes>,
@@ -372,7 +373,9 @@ pub fn read(
 ) -> Result<Listed, FetchError> {
     let slug = game_slug(snapshot)?;
     let dir = format!("/salvajocs/{slug}");
-    let listing = storage.snapshot_entries(&snapshot.id, &dir)?;
+    let mut listing = storage.snapshot_entries(&snapshot.id, &dir)?;
+    // Sorted, so `Listed::source` finds a write's entry in a game of thousands of files.
+    listing.sort_by(|a, b| a.path.cmp(&b.path));
     let mut read_listed = |name: &str| {
         let local = work_dir.join(name);
         let bytes = (storage.read_file_if_present(&snapshot.id, &format!("{dir}/{name}"))?)
@@ -421,6 +424,22 @@ pub fn read(
         listing,
         hashes,
     })
+}
+
+impl Listed {
+    /// The entry of the listing that `write` copies, by `write.source` below `staged.root`;
+    /// `None` when the listing has none.
+    pub fn source(&self, write: &Write) -> Option<&SnapshotFile> {
+        let below = write.source.strip_prefix(&self.staged.root).ok()?;
+        let parts: Vec<_> = (below.components())
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect();
+        let path = parts.join("/");
+        let at = (self.listing)
+            .binary_search_by(|entry| entry.path.as_str().cmp(&path))
+            .ok()?;
+        Some(&self.listing[at])
+    }
 }
 
 /// Whether `listing` has `name`, as a directory with `dir` or a regular file without; the
@@ -728,10 +747,21 @@ fn holds_keys<E>(export: Result<RegistryExport, E>) -> bool {
 /// Whether `write` may be applied: its source is a regular file and its target is not a
 /// symlink. Gives the target's size when it is an existing regular file, to back up.
 fn check(write: &Write) -> Result<Option<u64>, ApplyError> {
+    check_source(write)?;
+    check_target(write)
+}
+
+/// Whether `write`'s staged source is a regular file.
+fn check_source(write: &Write) -> Result<(), ApplyError> {
     let source = fs::symlink_metadata(&write.source).map_err(apply_io(&write.source))?;
     if !source.is_file() {
         return Err(ApplyError::SourceNotAFile);
     }
+    Ok(())
+}
+
+/// Whether `write`'s target is not a symlink; its size when it is an existing regular file.
+fn check_target(write: &Write) -> Result<Option<u64>, ApplyError> {
     match fs::symlink_metadata(&write.target) {
         Ok(target) if target.is_symlink() => Err(ApplyError::TargetIsSymlink),
         Ok(target) => Ok(target.is_file().then_some(target.len())),
@@ -750,6 +780,8 @@ pub enum WriteState {
     Changed,
     /// The target already holds the same bytes; it is written all the same.
     Unchanged,
+    /// The target could not be read to compare it; it is written all the same.
+    Unknown,
 }
 
 /// Why [`compare_writes`] finds that [`run`] would write nothing for a plan: an existing target
@@ -764,9 +796,11 @@ pub struct UnreadableTarget {
     pub source: io::Error,
 }
 
-/// Compares each of `plan.writes` with its target by content, in order. Reads only local files:
-/// the staged source and the target. The states are a snapshot in time; [`run`] does not use
-/// them.
+/// Compares each of `plan.writes` with its target, in order, against `listed`, the snapshot
+/// `plan` was made from, by [`crate::changes::compare_file`]: the size, then the mtime, then
+/// the target's SHA-256 against `listed.hashes`, or without them the mtime alone (ADR-0018,
+/// ADR-0020). Reads only the targets, never the snapshot's content. The states are a snapshot
+/// in time; [`run`] does not use them.
 ///
 /// Per write, the error is the [`ApplyError`] the restore would refuse that write with: a staged
 /// source that is not a regular file, a symlinked target, or an I/O error, such as a directory
@@ -777,18 +811,29 @@ pub struct UnreadableTarget {
 /// write nothing at all.
 pub fn compare_writes(
     plan: &RestorePlan,
+    listed: &Listed,
 ) -> Result<Vec<Result<WriteState, ApplyError>>, UnreadableTarget> {
-    plan.writes.iter().map(compare_write).collect()
+    (plan.writes.iter())
+        .map(|write| compare_write(write, listed))
+        .collect()
 }
 
-fn compare_write(write: &Write) -> Result<Result<WriteState, ApplyError>, UnreadableTarget> {
-    let target_len = match check(write) {
+fn compare_write(
+    write: &Write,
+    listed: &Listed,
+) -> Result<Result<WriteState, ApplyError>, UnreadableTarget> {
+    let entry = match listed.source(write) {
+        None => return Ok(Err(apply_io(&write.source)(io::ErrorKind::NotFound.into()))),
+        Some(entry) if entry.kind != EntryKind::File => return Ok(Err(ApplyError::SourceNotAFile)),
+        Some(entry) => entry,
+    };
+    let target_len = match check_target(write) {
         Err(err) => return Ok(Err(err)),
         Ok(target_len) => target_len,
     };
     if target_len.is_none() {
-        // `check` also passes a target that exists but is no regular file. The rename replaces
-        // anything but a directory.
+        // `check_target` also passes a target that exists but is no regular file. The rename
+        // replaces anything but a directory.
         return Ok(match fs::symlink_metadata(&write.target) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
             Err(err) => Err(apply_io(&write.target)(err)),
@@ -805,14 +850,20 @@ fn compare_write(write: &Write) -> Result<Result<WriteState, ApplyError>, Unread
         let path = write.target.clone();
         return Err(UnreadableTarget { path, source });
     }
-    Ok(
-        match crate::changes::same_content(&write.source, &write.target) {
-            Ok(true) => Ok(WriteState::Unchanged),
-            Ok(false) => Ok(WriteState::Changed),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
-            Err(err) => Err(apply_io(&write.target)(err)),
+    // By the snapshot-side key, so a cross-build write finds its hash.
+    let sha256 = (entry.path.strip_prefix(&format!("{FILES_DIR}/")))
+        .zip(listed.hashes.as_ref())
+        .and_then(|(key, hashes)| hashes.files.get(key))
+        .map(|file| file.sha256.as_str());
+    let modified = (fs::metadata(&write.target).and_then(|meta| meta.modified())).ok();
+    Ok(Ok(
+        match crate::changes::compare_file(&write.target, modified, entry, sha256) {
+            FileState::Same => WriteState::Unchanged,
+            FileState::Changed => WriteState::Changed,
+            // `compare_file` gives no `New`; a target gone since the check is not compared.
+            FileState::New | FileState::Unknown(_) => WriteState::Unknown,
         },
-    )
+    ))
 }
 
 fn apply_file(write: &Write) -> Result<(), ApplyError> {
