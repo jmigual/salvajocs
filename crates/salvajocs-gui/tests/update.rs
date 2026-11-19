@@ -101,7 +101,7 @@ fn unticked_checkbox_is_saved_and_survives_a_new_repository() {
     replace_text(&mut harness, "Location", &other);
     harness.get_by_label("Apply").click();
     run_until(&mut harness, "the confirmation", |h| {
-        shows(h, "Create a new repository at")
+        shows(h, "Do you want to create one?")
     });
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the new repository to be saved", |_| {

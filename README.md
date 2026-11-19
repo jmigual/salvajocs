@@ -111,8 +111,8 @@ supported.
 
 ## Quick start
 
-1. Start `salvajocs`. On first run, choose where backups go (a folder is the default), an optional
-   compression level and an optional encryption password. salvajocs asks before it creates a new repository.
+1. Start `salvajocs`. On first run, choose where backups go (a folder is the default) and an optional
+   encryption password. salvajocs asks, with a compression level, before it creates a new repository.
 2. Open the **Backup** tab and click **Scan for games**. Tick the games and click
    **Back up N games**.
 3. On the machine you want to restore to, start salvajocs and connect to the same repository.

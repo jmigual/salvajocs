@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use common::{
     MemorySecrets, env, env_with, harness, init_repo, init_repo_with, local_config, other_repo_dir,
-    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
+    refusing_rest_repo, replace_text, repo_dir, run_settled, run_until, run_until_ready,
+    save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -80,7 +81,7 @@ fn apply_new_location(harness: &mut Harness<'static, App>, env: &Env, repository
     replace_text(harness, "Location", repository);
     harness.get_by_label("Apply").click();
     run_until(harness, "the confirmation", |h| {
-        shows(h, "Create a new repository at")
+        shows(h, "Do you want to create one?")
     });
     harness.get_by_label("Create").click();
     run_until_saved(harness, env, |config| config.repository == repository);
@@ -101,12 +102,20 @@ fn missing_repo_asks_before_init() {
     fill(&mut harness, "Location", &repository);
     harness.get_by_label("Continue").click();
     run_until(&mut harness, "the confirmation", |h| {
-        shows(h, "Create a new repository at")
+        shows(h, "Do you want to create one?")
     });
 
     assert!(
         shows(&harness, &repository),
         "the question names the location"
+    );
+    assert!(
+        !shows(&harness, "Encryption password"),
+        "the form is gone while the question is asked"
+    );
+    assert!(
+        !shows(&harness, "refuses your login"),
+        "a local folder needs no warning about the login"
     );
     assert!(
         !Path::new(&repository).join("config").exists(),
@@ -126,6 +135,36 @@ fn missing_repo_asks_before_init() {
 }
 
 #[test]
+fn back_from_the_question_shows_the_form_with_its_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    fill(&mut harness, "Location", &repository);
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Do you want to create one?")
+    });
+    assert!(shows(&harness, "Compression (new repository)"));
+    harness.get_by_label("Back").click();
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "Encryption password"), "the form is back");
+    assert!(!shows(&harness, "Do you want to create one?"));
+    assert!(
+        harness
+            .get_by_label("Location")
+            .value()
+            .is_some_and(|value| value == repository),
+        "the typed location is kept"
+    );
+    assert!(!Path::new(&repository).join("config").exists());
+}
+
+#[test]
 fn first_run_creates_the_repository_with_the_chosen_compression() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
@@ -136,15 +175,15 @@ fn first_run_creates_the_repository_with_the_chosen_compression() {
     });
 
     fill(&mut harness, "Location", &repository);
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Do you want to create one?")
+    });
     choose(
         &mut harness,
         "Compression (new repository)",
         "Smallest (level 19)",
     );
-    harness.get_by_label("Continue").click();
-    run_until(&mut harness, "the confirmation", |h| {
-        shows(h, "Create a new repository at")
-    });
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the dialog to close", |h| {
         !shows(h, "Welcome to salvajocs")
@@ -159,7 +198,7 @@ fn first_run_creates_the_repository_with_the_chosen_compression() {
 }
 
 #[test]
-fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_continue() {
+fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_create() {
     let tmp = tempfile::tempdir().unwrap();
     let mut harness = harness(env(&tmp));
     run_until(&mut harness, "the first-run dialog", |h| {
@@ -167,6 +206,10 @@ fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_continue() 
     });
 
     fill(&mut harness, "Location", &repo_dir(&tmp));
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Do you want to create one?")
+    });
     assert!(!shows(&harness, "out of range"));
 
     choose(&mut harness, "Compression (new repository)", "Custom level");
@@ -177,15 +220,14 @@ fn a_custom_compression_level_out_of_range_shows_an_error_and_blocks_continue() 
     );
     assert!(shows(&harness, "1 to 22"), "the message says what is valid");
     assert!(
-        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
-            .is_disabled(),
+        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Create")).is_disabled(),
         "an invalid level cannot be submitted"
     );
 
     replace_text(&mut harness, "Level number", "-7");
     assert!(!shows(&harness, "out of range"));
     assert!(
-        !egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Continue"))
+        !egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Create"))
             .is_disabled(),
         "-7 is a level zstd accepts"
     );
@@ -214,7 +256,7 @@ fn backend_option_marked_secret_not_written_to_config() {
     run_settled(&mut harness);
     harness.get_by_label("Continue").click();
     run_until(&mut harness, "the confirmation", |h| {
-        shows(h, "Create a new repository at")
+        shows(h, "Do you want to create one?")
     });
     harness.get_by_label("Create").click();
     run_until(&mut harness, "the dialog to close", |h| {
@@ -806,6 +848,23 @@ fn other_open_failures_keep_their_message_and_have_no_settings_button() {
 
     assert!(!shows(&harness, "No repository at"));
     assert!(harness.query_by_label("Open Settings").is_none());
+}
+
+#[test]
+fn a_server_that_may_refuse_the_login_is_warned_about_before_creating() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    fill(&mut harness, "Location", &refusing_rest_repo());
+    harness.get_by_label("Continue").click();
+    run_until(&mut harness, "the confirmation", |h| {
+        shows(h, "Do you want to create one?")
+    });
+
+    assert!(shows(&harness, "refuses your login"));
 }
 
 const KEEP_LAST: &str = "Keep the last";

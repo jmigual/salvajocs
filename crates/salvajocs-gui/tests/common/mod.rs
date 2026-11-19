@@ -141,6 +141,24 @@ pub fn init_repo_with(repository: &str, password: &str, compression: Compression
     Storage::init(&location, password, compression).unwrap();
 }
 
+/// A REST repository location on a local server that answers every request with 401, as a
+/// server does when the login changed.
+pub fn refusing_rest_repo() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            use std::io::{Read, Write};
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    format!("rest:http://127.0.0.1:{port}/")
+}
+
 /// Where the tests keep a second repository.
 pub fn other_repo_dir(tmp: &TempDir) -> String {
     tmp.path().join("other").to_str().unwrap().to_string()

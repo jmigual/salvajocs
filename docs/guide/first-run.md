@@ -1,7 +1,8 @@
 # First run
 
-The first time salvajocs starts it asks where to store backups, how much to compress them and
-whether to protect them with an encryption password. This page explains each choice. Back to the
+The first time salvajocs starts it asks where to store backups and whether to protect them with an
+encryption password. If no repository exists there yet, it also asks how much to compress the
+backups. This page explains each choice. Back to the
 [guide index](README.md).
 
 ![The first-run dialog](../images/first-run.png)
@@ -44,7 +45,8 @@ folder).
 
 ## Compression
 
-Compression is a dropdown.
+Compression is a dropdown. It appears only when salvajocs finds no repository at the location and
+asks whether to create one (see [Creating or opening](#creating-or-opening)).
 
 | Entry | Meaning |
 | --- | --- |
@@ -57,8 +59,8 @@ Compression is a dropdown.
 
 A number outside those ranges is rejected. The level is stored in the repository, so every
 machine that writes to it uses the same one. You set it when the repository is created. To change
-it later, use [Settings](settings.md#compression). If the repository already exists, the dropdown
-in this dialog is ignored and the repository's own level is kept.
+it later, use [Settings](settings.md#compression). If the repository already exists, you are not
+asked and the repository's own level is kept.
 
 ## Encryption password and keyring
 
@@ -85,8 +87,11 @@ Keep the encryption password safe. Without it nobody can read the backups, inclu
 Click **Continue**. salvajocs checks the location:
 
 - **A repository exists and the password fits.** It opens it.
-- **No repository exists.** It asks "Create a new repository at ...?". Nothing is created until you
-  click **Create**, so a typo in the path does not make an empty repository.
+- **No repository exists.** The form is replaced by "There is no repository at ..." and "Do you
+  want to create one?", with a note on whether it will be encrypted and the compression dropdown.
+  **Back** returns to the form with your values. Nothing is created until you click **Create**, so
+  a typo in the path does not make an empty repository. For a REST server or an rclone remote the
+  dialog also warns that the server gives this answer when it refuses your login.
 - **The password is wrong.** The dialog shows an error.
 - **Anything else** (network, permissions, bad credentials) is shown as it is, and nothing is
   created.

@@ -36,7 +36,6 @@ struct Attempt {
     config: AppConfig,
     credentials: Credentials,
     remember: bool,
-    compression: Compression,
     location: RepoLocation,
 }
 
@@ -44,7 +43,7 @@ enum Step {
     /// Waiting for input; carries the last failure to show.
     Editing(Option<String>),
     Probing(Job<RepoState>, Attempt),
-    /// No repository there: waiting for the user to allow creating one.
+    /// No repository there: waiting for the user to allow creating one with a compression.
     Confirm(Attempt),
     Finishing(Job<Connected>),
 }
@@ -90,40 +89,38 @@ impl Connect {
 
     /// Draws the form and the current step. Returns the repository once it is open.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) -> Option<Connected> {
-        let editing = matches!(self.step, Step::Editing(_));
-        ui.add_enabled_ui(editing, |ui| {
-            form_grid("connect_form").show(ui, |ui| {
-                self.form.ui(ui, env);
-                labelled_edit(ui, "Encryption password", &mut self.password, true);
-                ui.end_row();
-                ui.label("");
-                field_hint(
-                    ui,
-                    "Encrypts the backups. Not the login of your server or storage account.",
-                );
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut self.remember, "Remember in the system keyring");
-                ui.end_row();
-                if self.password.is_empty() {
+        // The question to create replaces the form instead of just disabling it: otherwise the
+        // two screens look alike.
+        if !matches!(self.step, Step::Confirm(_)) {
+            let editing = matches!(self.step, Step::Editing(_));
+            ui.add_enabled_ui(editing, |ui| {
+                form_grid("connect_form").show(ui, |ui| {
+                    self.form.ui(ui, env);
+                    labelled_edit(ui, "Encryption password", &mut self.password, true);
+                    ui.end_row();
                     ui.label("");
-                    let warn = ui.visuals().warn_fg_color;
-                    field_status(
+                    field_hint(
                         ui,
-                        icons::WARNING,
-                        warn,
-                        "No encryption password: the repository will not be encrypted.",
+                        "Encrypts the backups. Not the login of your server or storage account.",
                     );
                     ui.end_row();
-                }
-                self.compression.ui(
-                    ui,
-                    "Compression (new repository)",
-                    "Used only when a new repository is created.",
-                );
+                    ui.label("");
+                    ui.checkbox(&mut self.remember, "Remember in the system keyring");
+                    ui.end_row();
+                    if self.password.is_empty() {
+                        ui.label("");
+                        let warn = ui.visuals().warn_fg_color;
+                        field_status(
+                            ui,
+                            icons::WARNING,
+                            warn,
+                            "No encryption password: the repository will not be encrypted.",
+                        );
+                        ui.end_row();
+                    }
+                });
             });
-        });
-        let compression = self.compression.value().ok();
+        }
 
         match mem::replace(&mut self.step, Step::Editing(None)) {
             Step::Editing(error) => {
@@ -131,12 +128,13 @@ impl Connect {
                     let color = ui.visuals().error_fg_color;
                     theme::status(ui, icons::X_CIRCLE, color, error);
                 }
-                let ready = self.form.is_complete() && compression.is_some();
+                let ready = self.form.is_complete();
                 let go =
                     theme::row_end(ui, |ui| theme::primary(ui, ready, None, self.submit)).clicked();
-                self.step = match compression {
-                    Some(compression) if go => self.begin(ui.ctx(), compression),
-                    _ => Step::Editing(error),
+                self.step = if go {
+                    self.begin(ui.ctx())
+                } else {
+                    Step::Editing(error)
                 };
                 None
             }
@@ -154,22 +152,48 @@ impl Connect {
             }
             Step::Confirm(attempt) => {
                 ui.label(format!(
-                    "Create a new repository at {}?",
+                    "There is no repository at {}.",
                     attempt.location.repository
                 ));
+                ui.label("Do you want to create one?");
+                ui.weak(if attempt.credentials.password.is_empty() {
+                    "It will not be encrypted."
+                } else {
+                    "It will be encrypted with the encryption password you typed."
+                });
+                if !attempt.location.proves_absence() {
+                    let warn = ui.visuals().warn_fg_color;
+                    theme::status(
+                        ui,
+                        icons::WARNING,
+                        warn,
+                        "A server also answers \"no repository\" when it refuses your login. \
+                         Check the credentials before you create one.",
+                    );
+                }
+                form_grid("create_form").show(ui, |ui| {
+                    self.compression.ui(
+                        ui,
+                        "Compression (new repository)",
+                        "Stored in the repository; every machine that uses it shares it.",
+                    );
+                });
+                let compression = self.compression.value().ok();
                 let mut choice = None;
                 theme::row_end(ui, |ui| {
                     if ui.button("Back").clicked() {
                         choice = Some(false);
                     }
-                    if theme::primary(ui, true, None, "Create").clicked() {
+                    if theme::primary(ui, compression.is_some(), None, "Create").clicked() {
                         choice = Some(true);
                     }
                 });
-                self.step = match choice {
-                    Some(true) => finishing(ui.ctx(), env, attempt, true),
-                    Some(false) => Step::Editing(None),
-                    None => Step::Confirm(attempt),
+                self.step = match (choice, compression) {
+                    (Some(true), Some(compression)) => {
+                        finishing(ui.ctx(), env, attempt, Some(compression))
+                    }
+                    (Some(false), _) => Step::Editing(None),
+                    _ => Step::Confirm(attempt),
                 };
                 None
             }
@@ -189,7 +213,7 @@ impl Connect {
     }
 
     /// Reads the form and starts probing its location.
-    fn begin(&self, ctx: &egui::Context, compression: Compression) -> Step {
+    fn begin(&self, ctx: &egui::Context) -> Step {
         let password = match (self.password.is_empty(), self.remember) {
             (true, _) => PasswordMode::None,
             (false, true) => PasswordMode::Keyring,
@@ -220,7 +244,6 @@ impl Connect {
                 config,
                 credentials,
                 remember: self.remember,
-                compression,
                 location,
             },
         )
@@ -231,32 +254,37 @@ impl Connect {
 /// show why not.
 fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env: &Env) -> Step {
     match state {
-        RepoState::Ready => finishing(ctx, env, attempt, false),
+        RepoState::Ready => finishing(ctx, env, attempt, None),
         RepoState::Missing => Step::Confirm(attempt),
         RepoState::WrongPassword => Step::Editing(Some("Wrong encryption password.".to_string())),
         RepoState::Error(message) => Step::Editing(Some(message)),
     }
 }
 
-fn finishing(ctx: &egui::Context, env: &Env, attempt: Attempt, create: bool) -> Step {
+/// Starts opening the repository, or creating it with `create`'s compression when that is set.
+fn finishing(
+    ctx: &egui::Context,
+    env: &Env,
+    attempt: Attempt,
+    create: Option<Compression>,
+) -> Step {
     let env = env.clone();
     Step::Finishing(Job::spawn(ctx, move || finish(&env, attempt, create)))
 }
 
-/// Creates or opens the repository, then keeps its secrets. Nothing is written to the config
-/// before the repository opened, so a failure leaves nothing that points at it.
-fn finish(env: &Env, attempt: Attempt, create: bool) -> Result<Connected> {
+/// Creates the repository when `create` holds its compression, otherwise opens it, then keeps
+/// its secrets. Nothing is written to the config before the repository opened, so a failure
+/// leaves nothing that points at it.
+fn finish(env: &Env, attempt: Attempt, create: Option<Compression>) -> Result<Connected> {
     let Attempt {
         mut config,
         credentials,
         remember,
-        compression,
         location,
     } = attempt;
-    let storage = Box::new(if create {
-        Storage::init(&location, &credentials.password, compression)?
-    } else {
-        Storage::open(&location, &credentials.password)?
+    let storage = Box::new(match create {
+        Some(compression) => Storage::init(&location, &credentials.password, compression)?,
+        None => Storage::open(&location, &credentials.password)?,
     });
     let warnings = persist_secrets(env.secrets.as_ref(), &mut config, &credentials, remember);
     Ok(Connected {
