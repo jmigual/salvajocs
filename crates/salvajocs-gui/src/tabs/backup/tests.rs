@@ -189,6 +189,34 @@ fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     );
 }
 
+#[test]
+fn a_change_judged_by_mtime_says_so() {
+    let game = game(&[1], false, 0);
+    let all = GameSettings::default();
+    let mut preview = compared(FileState::Changed, false);
+    assert_eq!(
+        hint(Some(&preview), "Home/save", Badge::Changed),
+        "Changed since the backup"
+    );
+    assert_eq!(
+        preview_text(&game, &preview, &all).unwrap(),
+        "1 changed since the backup from there, 1970-01-01 00:00 UTC"
+    );
+
+    if let Ok(Some(baseline)) = &mut preview {
+        baseline.hashed = false;
+    }
+    let note = "(by modified time: this backup has no list of hashes)";
+    assert_eq!(
+        hint(Some(&preview), "Home/save", Badge::Changed),
+        format!("Changed since the backup {note}")
+    );
+    assert_eq!(
+        preview_text(&game, &preview, &all).unwrap(),
+        format!("1 changed since the backup from there, 1970-01-01 00:00 UTC {note}")
+    );
+}
+
 /// The header's icon matches what its sentence says the next backup does.
 #[test]
 fn each_header_state_has_its_icon() {

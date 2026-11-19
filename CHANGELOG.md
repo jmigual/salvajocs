@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On the Backup tab, a file shown as changed by modified time only, because its backup has no
+  list of hashes (made by 0.5.0 or older), says so in its tooltip.
+
 ## [0.6.0] - 2026-11-19
 
 ### Added

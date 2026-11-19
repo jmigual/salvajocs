@@ -96,7 +96,8 @@ A game that is not backed up, because it is unchecked or has nothing checked, ge
 
 In the file tree, a file that differs from the backup has one of these icons after its size.
 Hover it to read `New: not in the backup`, `Changed since the backup`,
-`Removed: the next backup will not hold it` or `Could not be compared` with the reason. A file
+`Removed: the next backup will not hold it` or `Could not be compared` with the reason. When the
+backup has no list of hashes, the changed tooltip adds `by modified time`. A file
 that is in the backup but not found any more, or that you unchecked, is removed: files no longer
 found are greyed rows without a checkbox. A folder's line counts the icons of the files below
 it. A game with unreadable paths removes nothing, since its backup keeps the files it could not

@@ -232,12 +232,20 @@ fn badges<'a>(
     }
 }
 
+/// Why a change was judged by size and modification time: the backup has no hash list.
+const BY_MTIME: &str = "by modified time: this backup has no list of hashes";
+
 /// The tooltip of a file's `badge` by its key, with why it could not be compared when `preview`
 /// says.
 fn hint(preview: Option<&Preview>, key: &str, badge: Badge) -> String {
     match badge {
         Badge::New => "New: not in the backup".to_owned(),
-        Badge::Changed => "Changed since the backup".to_owned(),
+        Badge::Changed => match preview {
+            Some(Ok(Some(baseline))) if !baseline.hashed => {
+                format!("Changed since the backup ({BY_MTIME})")
+            }
+            _ => "Changed since the backup".to_owned(),
+        },
         Badge::Removed => "Removed: the next backup will not hold it".to_owned(),
         Badge::Unknown | Badge::WillFail => {
             if let Some(Ok(Some(baseline))) = preview
@@ -315,6 +323,7 @@ enum Next<'a> {
     Changes {
         newest: &'a SnapshotInfo,
         counts: Counts,
+        hashed: bool,
     },
 }
 
@@ -362,7 +371,11 @@ fn next_backup<'a>(
                 counts,
             }
         }
-        _ => Next::Changes { newest, counts },
+        _ => Next::Changes {
+            newest,
+            counts,
+            hashed: baseline.hashed,
+        },
     })
 }
 
@@ -399,9 +412,18 @@ fn sentence(next: &Next<'_>) -> String {
                 counted(&counts)
             )
         }
-        Next::Changes { newest, counts } => {
+        Next::Changes {
+            newest,
+            counts,
+            hashed,
+        } => {
             let (host, date) = since(newest);
-            format!("{} since the backup from {host}, {date}", counted(&counts))
+            let text = format!("{} since the backup from {host}, {date}", counted(&counts));
+            if hashed || counts.changed == 0 {
+                text
+            } else {
+                format!("{text} ({BY_MTIME})")
+            }
         }
     }
 }
