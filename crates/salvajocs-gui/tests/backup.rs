@@ -140,7 +140,10 @@ fn alpha_beta(scratch: &TempDir) -> (PathBuf, Vec<CustomGame>) {
 
 fn scan(harness: &mut Harness<'static, App>, found: &str) {
     harness.get_by_label("Scan for games").click();
-    run_until(harness, "the scan to finish", |h| shows(h, found));
+    // A rescan shows the old report until it ends, and its progress bar asks for no frames.
+    run_until(harness, "the scan to finish", |h| {
+        shows(h, found) && !shows(h, "Scanning") && !shows(h, "Checked")
+    });
     // What to back up may still be loading; its spinner keeps the frames coming until it is done.
     run_settled(harness);
 }
