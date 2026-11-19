@@ -1,4 +1,4 @@
-; Per-user installer for salvajocs. Build with:
+; Per-user installer for Salvajocs. Build with:
 ;   iscc /DAppVersion=0.1.0 /DSourceExe=C:\path\to\salvajocs.exe /O<output dir> salvajocs.iss
 ; The in-app updater depends on the output name, the install folder and the /RELAUNCH switch.
 
@@ -12,9 +12,9 @@
 [Setup]
 ; Fixed GUID: a new installer with the same AppId upgrades the existing install.
 AppId={{01BA2E00-9B15-4204-932E-0C09672F0E5A}
-AppName=salvajocs
+AppName=Salvajocs
 AppVersion={#AppVersion}
-AppPublisher=salvajocs
+AppPublisher=Salvajocs
 AppPublisherURL=https://github.com/jmigual/salvajocs
 DefaultDirName={localappdata}\Programs\salvajocs
 DisableProgramGroupPage=yes
@@ -44,14 +44,18 @@ Source: "..\..\crates\salvajocs-gui\assets\fonts\Ubuntu-font-LICENSE.txt"; DestD
 Source: "..\..\crates\salvajocs-gui\assets\fonts\Hack-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\crates\salvajocs-gui\assets\fonts\emoji-icon-font-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+; Windows file names ignore case, so an upgrade would keep the old lowercase shortcut name.
+Type: files; Name: "{userprograms}\salvajocs.lnk"
+
 [Icons]
-Name: "{userprograms}\salvajocs"; Filename: "{app}\salvajocs.exe"; IconFilename: "{app}\salvajocs.ico"
+Name: "{userprograms}\Salvajocs"; Filename: "{app}\salvajocs.exe"; IconFilename: "{app}\salvajocs.ico"
 
 ; Only program files are installed here, so only they are removed on uninstall. The
 ; configuration, cache and backups live elsewhere and are left alone.
 [Run]
 ; Interactive install: the usual checkbox on the last page.
-Filename: "{app}\salvajocs.exe"; Description: "Launch salvajocs"; Flags: nowait postinstall skipifsilent; Check: not Relaunch
+Filename: "{app}\salvajocs.exe"; Description: "Launch Salvajocs"; Flags: nowait postinstall skipifsilent; Check: not Relaunch
 ; Silent update from the app: start it again, also with /VERYSILENT.
 Filename: "{app}\salvajocs.exe"; Flags: nowait; Check: Relaunch
 

@@ -9,6 +9,7 @@ All notable changes to salvajocs. The format follows
 ### Fixed
 
 - On Windows, the app no longer opens a terminal window.
+- On Windows, the app is named "Salvajocs" in Task Manager, the Start menu and Apps & Features.
 
 ## [0.5.0] - 2026-11-19
 
