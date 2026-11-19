@@ -16,16 +16,16 @@ use crate::registry::RegistryExport;
 mod run;
 
 pub use run::{
-    ApplyError, FetchError, GameBackups, GameInfo, PRE_RESTORE_TAG, RestoreReport, RunError,
-    SafetyBackup, UnreadableTarget, WriteState, compare_writes, default_targets, fetch, game_info,
-    game_vars, list, run, staged_target,
+    ApplyError, FetchError, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, RestoreReport,
+    RunError, SafetyBackup, UnreadableTarget, WriteState, compare_writes, default_targets,
+    download, fetch, game_info, game_vars, list, read, run, staged_target,
 };
 
 /// A snapshot of one game restored into a work dir (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StagedGame {
-    /// The staged game dir, holding `files/`.
+    /// The work dir holding `files/`, or the one [`download`] fills.
     pub root: PathBuf,
     /// Its `salvajocs.json`.
     pub meta: SnapshotMeta,

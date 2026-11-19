@@ -12,7 +12,7 @@ use crate::layout::{FILES_DIR, HASHES_FILE, Hashes, META_FILE, REGISTRY_FILE};
 use crate::restore::PRE_RESTORE_TAG;
 use crate::scan::GameScan;
 use crate::selection::{self, GameSettings};
-use crate::storage::{SnapshotFile, SnapshotInfo, Storage, StorageError};
+use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
 
 /// How a local file compares with a snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,23 +78,38 @@ pub fn baseline(
 ) -> Result<(Vec<SnapshotFile>, Option<Hashes>), StorageError> {
     let dir = format!("/salvajocs/{slug}");
     let listing = storage.snapshot_files(snapshot_id, &dir)?;
-    let hashes = if listing.iter().any(|file| file.path == HASHES_FILE) {
+    let hashes = hash_list(storage, snapshot_id, &dir, &listing)?;
+    Ok((listing, hashes))
+}
+
+/// The hash list of the game's staged directory `dir` in snapshot `snapshot_id`, whose entries
+/// are `listing`, when it has one that [`verified`] accepts.
+pub(crate) fn hash_list(
+    storage: &mut Storage,
+    snapshot_id: &str,
+    dir: &str,
+    listing: &[SnapshotFile],
+) -> Result<Option<Hashes>, StorageError> {
+    let listed =
+        (listing.iter()).any(|file| file.path == HASHES_FILE && file.kind == EntryKind::File);
+    let hashes = if listed {
         let bytes = storage.read_file_if_present(snapshot_id, &format!("{dir}/{HASHES_FILE}"))?;
         bytes.and_then(|bytes| Hashes::from_json(&bytes))
     } else {
         None
     };
-    let hashes = hashes.and_then(|hashes| verified(hashes, &listing));
-    Ok((listing, hashes))
+    Ok(hashes.and_then(|hashes| verified(hashes, listing)))
 }
 
 /// `hashes` when it describes the snapshot listing `listing` it was read from: the same files
 /// below `files/` with the same sizes and mtimes, a `registry.json` exactly when it hashes one,
 /// and `hashes.json` no older than `salvajocs.json` and `registry.json`. `None` otherwise, such
-/// as for a list an older version left in the stage while it changed the files.
+/// as for a list an older version left in the stage while it changed the files. Only the
+/// regular files of `listing` count.
 pub fn verified(hashes: Hashes, listing: &[SnapshotFile]) -> Option<Hashes> {
+    let listing = || listing.iter().filter(|file| file.kind == EntryKind::File);
     let modified = |path: &str| {
-        (listing.iter())
+        listing()
             .find(|file| file.path == path)
             .map(|file| file.modified)
     };
@@ -109,7 +124,7 @@ pub fn verified(hashes: Hashes, listing: &[SnapshotFile]) -> Option<Hashes> {
     }
     let prefix = format!("{FILES_DIR}/");
     let mut files = 0;
-    let all_match = listing.iter().all(|file| {
+    let all_match = listing().all(|file| {
         let Some(key) = file.path.strip_prefix(&prefix) else {
             return true;
         };

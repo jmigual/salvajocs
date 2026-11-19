@@ -192,6 +192,266 @@ fn fetch_refuses_symlinked_files_dir_and_meta() {
     }
 }
 
+/// A staged game at `stage` whose `salvajocs.json` records the root `<winAppData>/Game`.
+fn crafted_game_stage(stage: PathBuf) -> PathBuf {
+    let meta = SnapshotMeta {
+        format: crate::layout::SNAPSHOT_FORMAT,
+        title: "Foo".into(),
+        roots: vec![(Base::WinAppData, "Game".into())],
+    };
+    write(
+        &stage.join(META_FILE),
+        &serde_json::to_string(&meta).unwrap(),
+    );
+    stage
+}
+
+/// The restore plan of `staged` into the prefix `ctx`, declaring `<winAppData>/Game` and `FOO`.
+fn plan_into(staged: &StagedGame, ctx: &Context) -> RestorePlan {
+    let manifest = crate::manifest::parse_yaml(
+        "Foo:\n  files:\n    <winAppData>/Game: {}\n  registry:\n    \
+         HKEY_CURRENT_USER/Software/Foo: {}\n",
+    )
+    .unwrap();
+    let targets = Targets {
+        linux: None,
+        win: Some(ctx.clone()),
+    };
+    let vars = GameVars::new("Foo", vec![], &[], None);
+    super::super::plan(staged, &targets, &vars, manifest.games.get("Foo"), &[], &[]).unwrap()
+}
+
+#[test]
+fn read_matches_fetch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let prefix = make_prefix(&tmp.path().join("picked"), "me");
+    let ctx = in_prefix(&prefix, "me");
+
+    let source = make_prefix(&tmp.path().join("source"), "me");
+    user_reg(&source, "a");
+    let mut game = game_with_save(tmp.path(), "Foo", "foo");
+    game.registry_keys = vec![FOO.into()];
+    game.registry_source = Some(RegistrySource::WinePrefix(source));
+    back_up(&mut storage, tmp.path(), &[game], &[]);
+    let backed_up = list(&storage).unwrap()[0].snapshots[0].clone();
+
+    let nested = crafted_game_stage(tmp.path().join("nested"));
+    write(&nested.join("files/WinAppData/Game/a.sav"), "a");
+    write(&nested.join("files/WinAppData/Game/deep/er/b.sav"), "b");
+    write(&nested.join("files/XdgData/Other/c.sav"), "c");
+    let mut snapshots = vec![backed_up, crafted_snapshot(&mut storage, &nested)];
+    #[cfg(unix)]
+    {
+        let linked = crafted_game_stage(tmp.path().join("linked"));
+        let secret = write(&tmp.path().join("secret.txt"), "host data");
+        write(&linked.join("files/WinAppData/Game/save.sav"), "save");
+        let link = linked.join("files/WinAppData/Game/link.sav");
+        std::os::unix::fs::symlink(&secret, link).unwrap();
+        snapshots.push(crafted_snapshot(&mut storage, &linked));
+        // A name that is not UTF-8 reads lossily on both sides.
+        let named = crafted_game_stage(tmp.path().join("named"));
+        let odd = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"\xff.sav");
+        write(&named.join("files/WinAppData/Game").join(odd), "odd");
+        snapshots.push(crafted_snapshot(&mut storage, &named));
+    }
+    // A game with no files at all: nothing to write.
+    let empty = crafted_game_stage(tmp.path().join("empty"));
+    let empty = crafted_snapshot(&mut storage, &empty);
+
+    let with_writes = snapshots.iter().map(|snapshot| (snapshot, true));
+    for (n, (snapshot, writes)) in with_writes.chain([(&empty, false)]).enumerate() {
+        let work = tmp.path().join(format!("work{n}"));
+        let listed = super::read(&mut storage, snapshot, &work).unwrap();
+        let planned = plan_into(&listed.staged, &ctx);
+        assert_eq!(!planned.writes.is_empty(), writes, "{n}: {planned:?}");
+        let fetched = fetch(&mut storage, snapshot, &work).unwrap();
+        assert_eq!(listed.staged, fetched, "{n}");
+        assert_eq!(planned, plan_into(&fetched, &ctx), "{n}");
+    }
+}
+
+#[test]
+fn read_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let game = game_with_save(tmp.path(), "Foo", "foo");
+    back_up(&mut storage, tmp.path(), &[game], &[]);
+    let snapshot = &list(&storage).unwrap()[0].snapshots[0];
+    let work = tmp.path().join("work");
+
+    let listed = super::read(&mut storage, snapshot, &work).unwrap();
+    assert_eq!(listed.staged.root, work);
+    let files = [(Base::WinAppData, "Game/save.sav".into())];
+    assert_eq!(listed.staged.files, files);
+    assert!(!work.exists());
+}
+
+#[test]
+fn read_refuses_an_entry_of_files_that_is_no_base_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let bogus = crafted_stage(tmp.path().join("bogus"));
+    write(&bogus.join("files/Bogus/x.sav"), "x");
+    let empty = crafted_stage(tmp.path().join("empty"));
+    fs::create_dir_all(empty.join("files/Bogus")).unwrap();
+    let base_as_file = crafted_stage(tmp.path().join("file"));
+    write(&base_as_file.join("files/WinHome"), "x");
+
+    for (n, stage) in [&bogus, &empty, &base_as_file].into_iter().enumerate() {
+        let snapshot = crafted_snapshot(&mut storage, stage);
+        let work = tmp.path().join(format!("work{n}"));
+        assert!(
+            matches!(
+                super::read(&mut storage, &snapshot, &work),
+                Err(FetchError::UnknownBase(_))
+            ),
+            "{stage:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn read_refuses_symlinked_files_dir_and_meta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let outside = tmp.path().join("outside");
+    write(&outside.join("WinHome/secret.sav"), "host data");
+    let meta = write(
+        &outside.join("meta.json"),
+        r#"{"format":1,"title":"Foo","roots":[]}"#,
+    );
+    let linked_files = crafted_stage(tmp.path().join("files-link"));
+    std::os::unix::fs::symlink(&outside, linked_files.join(FILES_DIR)).unwrap();
+    let linked_meta = tmp.path().join("meta-link");
+    fs::create_dir_all(&linked_meta).unwrap();
+    std::os::unix::fs::symlink(&meta, linked_meta.join(META_FILE)).unwrap();
+
+    for (n, stage) in [&linked_files, &linked_meta].into_iter().enumerate() {
+        let snapshot = crafted_snapshot(&mut storage, stage);
+        let work = tmp.path().join(format!("work{n}"));
+        assert!(
+            matches!(
+                super::read(&mut storage, &snapshot, &work),
+                Err(FetchError::WrongKind(_))
+            ),
+            "{stage:?}"
+        );
+    }
+}
+
+#[test]
+fn read_without_meta_is_no_meta() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let stage = tmp.path().join("stage");
+    write(&stage.join("files/WinAppData/Game/save.sav"), "save");
+    let snapshot = crafted_snapshot(&mut storage, &stage);
+
+    let read = super::read(&mut storage, &snapshot, &tmp.path().join("work"));
+    assert!(matches!(read, Err(FetchError::NoMeta(_))), "{read:?}");
+}
+
+#[test]
+fn read_keeps_a_verified_hash_list_and_drops_a_stale_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let game = game_with_save(tmp.path(), "Foo", "foo");
+    back_up(&mut storage, tmp.path(), &[game], &[]);
+    let backed_up = list(&storage).unwrap()[0].snapshots[0].clone();
+    let without = crafted_game_stage(tmp.path().join("without"));
+    write(&without.join("files/WinAppData/Game/save.sav"), "save");
+    let without = crafted_snapshot(&mut storage, &without);
+    // A list that misses the staged file, as an older version could leave it.
+    let stale = crafted_game_stage(tmp.path().join("stale"));
+    write(&stale.join("files/WinAppData/Game/save.sav"), "save");
+    write(
+        &stale.join(crate::layout::HASHES_FILE),
+        r#"{"format":1,"meta":"00","files":{}}"#,
+    );
+    let stale = crafted_snapshot(&mut storage, &stale);
+
+    let mut hashes = |snapshot: &SnapshotInfo, work: &str| {
+        let work = tmp.path().join(work);
+        super::read(&mut storage, snapshot, &work).unwrap().hashes
+    };
+    let kept = hashes(&backed_up, "work0").unwrap();
+    assert!(kept.files.contains_key("WinAppData/Game/save.sav"));
+    assert_eq!(hashes(&without, "work1"), None);
+    assert_eq!(hashes(&stale, "work2"), None);
+}
+
+#[test]
+fn download_fills_the_planned_root() {
+    let mut f = fixture();
+    let game = game_with_save(f.tmp.path(), "Foo", "saved");
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
+    let work = f.tmp.path().join("work");
+    let listed = super::read(&mut f.storage, &snapshot, &work).unwrap();
+    let plan = plan_into(&listed.staged, &f.ctx());
+
+    download(&mut f.storage, &snapshot, &listed.staged).unwrap();
+    let report = f.run(&plan, false).unwrap();
+    assert_applied(&report);
+    assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "saved");
+}
+
+#[test]
+fn download_refuses_another_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let planned = game_with_save(tmp.path(), "Foo", "planned");
+    back_up(
+        &mut storage,
+        tmp.path(),
+        std::slice::from_ref(&planned),
+        &[],
+    );
+    // Another backup of the game with one more file, so its listing differs.
+    let mut other = planned;
+    let extra = write(&tmp.path().join("src/extra.sav"), "extra");
+    other.files.push(FoundFile {
+        base: Base::WinAppData,
+        tail: "Game/extra.sav".into(),
+        size: 5,
+        modified: fs::metadata(&extra).unwrap().modified().ok(),
+        real: extra,
+    });
+    back_up(&mut storage, tmp.path(), &[other], &[]);
+    let snapshots = list(&storage).unwrap().remove(0).snapshots;
+    let (newer, older) = (&snapshots[0], &snapshots[1]);
+    let work = tmp.path().join("work");
+    let listed = super::read(&mut storage, older, &work).unwrap();
+
+    let downloaded = download(&mut storage, newer, &listed.staged);
+    assert!(
+        matches!(downloaded, Err(FetchError::NotAsPlanned(_))),
+        "{downloaded:?}"
+    );
+}
+
+#[test]
+fn a_forgotten_snapshot_fails_its_download_and_nothing_is_written() {
+    let mut f = fixture();
+    let game = game_with_save(f.tmp.path(), "Foo", "saved");
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
+    let work = f.tmp.path().join("work");
+    let listed = super::read(&mut f.storage, &snapshot, &work).unwrap();
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+
+    f.storage.forget(&[&snapshot.id]).unwrap();
+    let downloaded = download(&mut f.storage, &snapshot, &listed.staged);
+    assert!(
+        matches!(downloaded, Err(FetchError::Storage(_))),
+        "{downloaded:?}"
+    );
+    assert_eq!(read(&target), "old");
+    assert!(f.storage.snapshots(PRE_RESTORE_TAG).unwrap().is_empty());
+}
+
 /// Creates a Wine prefix at `path` with one user and returns its path.
 fn make_prefix(path: &Path, user: &str) -> PathBuf {
     fs::create_dir_all(path.join("drive_c/users").join(user)).unwrap();

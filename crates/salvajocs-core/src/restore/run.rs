@@ -15,7 +15,8 @@ use crate::backup::{BackupError, Stored, backup_games};
 use crate::config::AppConfig;
 use crate::crossbuild::{self, Family, SnapshotRoot, pair_side};
 use crate::layout::{
-    self, Base, Context, FILES_DIR, GameVars, META_FILE, REGISTRY_FILE, RootKind, WinFolders,
+    self, Base, Context, FILES_DIR, GameVars, Hashes, META_FILE, REGISTRY_FILE, RootKind,
+    WinFolders,
 };
 use crate::manifest::{CustomGame, GameEntry, Manifest, Pair, merge_custom};
 use crate::prefix::{proton_prefix, wine_user};
@@ -24,7 +25,7 @@ use crate::registry::windows::WindowsRegistryError;
 use crate::registry::wine::RegFile;
 use crate::registry::{RegistryError, RegistryExport};
 use crate::scan::{Environment, FoundFile, GameScan, RegistrySource, launcher_prefixes};
-use crate::storage::{SnapshotInfo, Storage, StorageError};
+use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
 
 /// The extra tag of a safety backup made before a restore (ADR-0010).
 pub const PRE_RESTORE_TAG: &str = "pre-restore";
@@ -218,13 +219,19 @@ pub fn game_vars(
     )
 }
 
-/// Why [`fetch`] failed.
+/// Why [`fetch`], [`read`] or [`download`] failed.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FetchError {
     /// The snapshot has no `game:<slug>` tag with a plain slug.
     #[error("snapshot {0} is not a game backup")]
     NotAGame(String),
+    /// The snapshot's game has no `salvajocs.json`.
+    #[error("snapshot {0} has no salvajocs.json")]
+    NoMeta(String),
+    /// The downloaded game differs from the one planned.
+    #[error("snapshot {0} does not hold the planned files")]
+    NotAsPlanned(String),
     /// The work dir holds files, which would be taken for staged files.
     #[error("the work dir is not empty: {0}")]
     WorkDirNotEmpty(PathBuf),
@@ -275,10 +282,7 @@ pub fn fetch(
     snapshot: &SnapshotInfo,
     work_dir: &Path,
 ) -> Result<StagedGame, FetchError> {
-    let slug = (snapshot.tags.iter())
-        .find_map(|tag| tag.strip_prefix("game:"))
-        .filter(|slug| layout::is_plain_component(slug))
-        .ok_or_else(|| FetchError::NotAGame(snapshot.id.clone()))?;
+    let slug = game_slug(snapshot)?;
     match fs::read_dir(work_dir) {
         Ok(mut entries) => {
             if entries.next().is_some() {
@@ -308,9 +312,7 @@ pub fn fetch(
             let is_dir = (entry.file_type())
                 .map_err(fetch_io(&entry.path()))?
                 .is_dir();
-            let deserializer = IntoDeserializer::<value::Error>::into_deserializer(name.as_str());
-            let base = Base::deserialize(deserializer)
-                .ok()
+            let base = parse_base(&name)
                 .filter(|_| is_dir)
                 .ok_or(FetchError::UnknownBase(name))?;
             let mut tails = Vec::new();
@@ -327,6 +329,133 @@ pub fn fetch(
     })
 }
 
+/// The plain slug of the game `snapshot` holds, from its `game:<slug>` tag.
+fn game_slug(snapshot: &SnapshotInfo) -> Result<&str, FetchError> {
+    (snapshot.tags.iter())
+        .find_map(|tag| tag.strip_prefix("game:"))
+        .filter(|slug| layout::is_plain_component(slug))
+        .ok_or_else(|| FetchError::NotAGame(snapshot.id.clone()))
+}
+
+/// The base a directory of `files/` named `name` holds.
+fn parse_base(name: &str) -> Option<Base> {
+    let deserializer = IntoDeserializer::<value::Error>::into_deserializer(name);
+    Base::deserialize(deserializer).ok()
+}
+
+/// A game's snapshot as [`read`] lists it, before anything is downloaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Listed {
+    /// The staged game; its `root` is the work dir [`download`] fills.
+    pub staged: StagedGame,
+    /// Every entry of the game's staged directory, below it.
+    pub listing: Vec<SnapshotFile>,
+    /// Its hash list, when it has one that [`crate::changes::verified`] accepts.
+    pub hashes: Option<Hashes>,
+}
+
+/// Reads the staged game `/salvajocs/<slug>` of `snapshot` from its listing and its
+/// `salvajocs.json`, `registry.json` and `hashes.json` alone, without downloading its files
+/// (ADR-0020). Gives what [`fetch`] into `work_dir` would, with `work_dir` as the root, and
+/// refuses what it refuses. Writes nothing.
+///
+/// # Errors
+/// [`FetchError::NotAGame`] without a `game:` tag, [`FetchError::NoMeta`] without a
+/// `salvajocs.json`, [`FetchError::UnknownBase`] for an entry of `files/` that is no base
+/// directory, [`FetchError::WrongKind`] for a `files/` that is no directory or a JSON file that
+/// is no regular file, and the repository or JSON error otherwise.
+pub fn read(
+    storage: &mut Storage,
+    snapshot: &SnapshotInfo,
+    work_dir: &Path,
+) -> Result<Listed, FetchError> {
+    let slug = game_slug(snapshot)?;
+    let dir = format!("/salvajocs/{slug}");
+    let listing = storage.snapshot_entries(&snapshot.id, &dir)?;
+    let mut read_listed = |name: &str| {
+        let local = work_dir.join(name);
+        let bytes = (storage.read_file_if_present(&snapshot.id, &format!("{dir}/{name}"))?)
+            .ok_or_else(|| fetch_io(&local)(io::ErrorKind::NotFound.into()))?;
+        Ok::<_, FetchError>((bytes, local))
+    };
+    if !listed_as(&listing, META_FILE, false, work_dir)? {
+        return Err(FetchError::NoMeta(snapshot.id.clone()));
+    }
+    let (bytes, path) = read_listed(META_FILE)?;
+    let meta = parse_json(&bytes, &path)?;
+    let registry = if listed_as(&listing, REGISTRY_FILE, false, work_dir)? {
+        let (bytes, path) = read_listed(REGISTRY_FILE)?;
+        Some(parse_json(&bytes, &path)?)
+    } else {
+        None
+    };
+    let mut files = Vec::new();
+    if listed_as(&listing, FILES_DIR, true, work_dir)? {
+        let prefix = format!("{FILES_DIR}/");
+        for entry in &listing {
+            let Some(below) = entry.path.strip_prefix(&prefix) else {
+                continue;
+            };
+            let (name, tail) = below.split_once('/').unzip();
+            let name = name.unwrap_or(below);
+            let is_dir = entry.kind == EntryKind::Dir;
+            let base = parse_base(name)
+                .filter(|_| tail.is_some() || is_dir)
+                .ok_or_else(|| FetchError::UnknownBase(name.to_owned()))?;
+            // As `fetch` lists them: every entry below a base dir but a directory.
+            if let Some(tail) = tail.filter(|_| !is_dir) {
+                files.push((base, tail.to_owned()));
+            }
+        }
+    }
+    files.sort();
+    let hashes = crate::changes::hash_list(storage, &snapshot.id, &dir, &listing)?;
+    Ok(Listed {
+        staged: StagedGame {
+            root: work_dir.to_path_buf(),
+            meta,
+            files,
+            registry,
+        },
+        listing,
+        hashes,
+    })
+}
+
+/// Whether `listing` has `name`, as a directory with `dir` or a regular file without; the
+/// listing's [`exists_as`], with the error naming `name` in `work_dir`.
+fn listed_as(
+    listing: &[SnapshotFile],
+    name: &str,
+    dir: bool,
+    work_dir: &Path,
+) -> Result<bool, FetchError> {
+    let wanted = if dir { EntryKind::Dir } else { EntryKind::File };
+    match listing.iter().find(|entry| entry.path == name) {
+        None => Ok(false),
+        Some(entry) if entry.kind == wanted => Ok(true),
+        Some(_) => Err(FetchError::WrongKind(work_dir.join(name))),
+    }
+}
+
+/// Downloads the game of `snapshot` into `planned.root`, which must be absent or empty, by
+/// [`fetch`], so its checks run again on the real files.
+///
+/// # Errors
+/// [`FetchError::NotAsPlanned`] when the downloaded game differs from `planned`, and any error
+/// of [`fetch`].
+pub fn download(
+    storage: &mut Storage,
+    snapshot: &SnapshotInfo,
+    planned: &StagedGame,
+) -> Result<(), FetchError> {
+    if fetch(storage, snapshot, &planned.root)? != *planned {
+        return Err(FetchError::NotAsPlanned(snapshot.id.clone()));
+    }
+    Ok(())
+}
+
 /// Whether `path` exists, as a real directory with `dir` or a regular file without. A snapshot
 /// is untrusted, so a symlink here would read host data as staged.
 fn exists_as(path: &Path, dir: bool) -> Result<bool, FetchError> {
@@ -340,7 +469,12 @@ fn exists_as(path: &Path, dir: bool) -> Result<bool, FetchError> {
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, FetchError> {
     let bytes = fs::read(path).map_err(fetch_io(path))?;
-    serde_json::from_slice(&bytes).map_err(|source| FetchError::Json {
+    parse_json(&bytes, path)
+}
+
+/// `bytes`, read from `path`, parsed as JSON.
+fn parse_json<T: DeserializeOwned>(bytes: &[u8], path: &Path) -> Result<T, FetchError> {
+    serde_json::from_slice(bytes).map_err(|source| FetchError::Json {
         path: path.to_path_buf(),
         source,
     })
