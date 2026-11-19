@@ -62,7 +62,7 @@ other way round.
 | ![The Backup tab with a scan result](docs/images/backup.png) | ![The Restore tab with the plan for a snapshot](docs/images/restore.png) |
 | **Mapping dialog: where each folder goes on the other build** | **Custom games: a game's paths, pairs and skipped folders** |
 | ![The restore mapping dialog](docs/images/mapping-dialog.png) | ![The Custom games tab with the game form](docs/images/custom-games.png) |
-| **Settings: repository, compression and roots** | **First run: repository, compression and encryption password** |
+| **Settings: repository, compression and roots** | **First run: repository and encryption password** |
 | ![The Settings tab](docs/images/settings.png) | ![The first-run dialog](docs/images/first-run.png) |
 
 ## How it works
