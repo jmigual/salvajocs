@@ -52,6 +52,14 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.5.0" date="2026-11-19">
+      <description>
+        <p>When the repository is missing, the app says what to do and opens Settings. Creating a
+        repository asks on its own screen, with the compression level. Folders that hold only
+        one folder show on one line in the Backup tab. The AppImage process is named
+        salvajocs.</p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-11-18">
       <description>
         <p>Choose which files, folders and registry keys of each game are backed up, and which
