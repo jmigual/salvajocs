@@ -1,5 +1,7 @@
 //! One module per screen.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::theme::icons;
 
 /// `count` and `noun`, with an `s` unless `count` is one: `1 file`, `2 files`.
@@ -21,6 +23,29 @@ pub(crate) fn format_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// A UTC time as `YYYY-MM-DD HH:MM UTC`.
+pub(crate) fn format_time(time: SystemTime) -> String {
+    let secs = time
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Howard Hinnant's `civil_from_days`, for days since 1970-01-01.
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rest / 3600,
+        rest % 3600 / 60
+    )
 }
 
 pub mod backup;

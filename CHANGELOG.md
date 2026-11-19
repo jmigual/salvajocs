@@ -11,6 +11,10 @@ All notable changes to salvajocs. The format follows
 - On the Restore tab, tick several games and restore them in one go with **Restore N games**.
   Each game uses its default snapshot and targets and gets its own safety backup. Games whose
   folders need mapping get the mapping dialog one after another.
+- After a scan, the Backup tab compares each game with its newest backup from any machine, by
+  content. Each game says how many files are new, changed or removed since that backup, or that
+  no backup will be made and why. In the file tree, files carry a `new` or `changed` badge, and
+  files only in the backup are greyed `removed` rows.
 
 ### Changed
 
@@ -22,7 +26,8 @@ All notable changes to salvajocs. The format follows
 - Each game backup also holds `hashes.json`, the SHA-256 and size of every saved file. The first
   backup of each game after updating therefore makes a new snapshot, even when nothing changed.
 - A backup skips a game whose saves are the same as its newest backup from any machine, such as
-  saves a launcher's cloud sync copied, instead of storing them again.
+  saves a launcher's cloud sync copied, instead of storing them again. The backup results say
+  `same as the newest backup, from <host>`.
 
 ### Fixed
 

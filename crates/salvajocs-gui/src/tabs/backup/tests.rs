@@ -10,7 +10,7 @@ use salvajocs_core::layout::Base;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::{FoundFile, RegistrySource};
 use salvajocs_core::selection::{Change, Pending};
-use salvajocs_core::storage::{Compression, RepoLocation, Storage};
+use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
 
 use crate::env::{Env, MemorySecrets};
 use crate::theme;
@@ -100,6 +100,152 @@ fn a_failed_game_carries_its_error_chain() {
     assert_eq!(
         summarize(&backup(Ok(unchanged))).outcome,
         Outcome::Unchanged
+    );
+}
+
+fn snapshot_from(host: &str) -> SnapshotInfo {
+    SnapshotInfo {
+        id: format!("{host}-id"),
+        time: SystemTime::UNIX_EPOCH,
+        host: host.into(),
+        label: "Game".into(),
+        tags: Vec::new(),
+    }
+}
+
+#[test]
+fn the_results_name_the_host_of_the_newest_backup() {
+    let unchanged = Stored::Unchanged {
+        newer_elsewhere: Some(snapshot_from("there")),
+    };
+    assert_eq!(
+        summarize(&backup(Ok(unchanged))).outcome,
+        Outcome::UnchangedNewerElsewhere("there".into())
+    );
+    let same = Stored::SameAsNewest(snapshot_from("there"));
+    assert_eq!(
+        summarize(&backup(Ok(same))).outcome,
+        Outcome::SameAsNewest("there".into())
+    );
+}
+
+/// A preview of `game(&[1], ..)` against a backup from `there` in which its one file is `state`,
+/// with this machine's last backup holding that file unchanged when `unchanged_here`.
+fn compared(state: FileState, unchanged_here: bool) -> Preview {
+    let parent = unchanged_here.then(|| {
+        let files = HashMap::from([("Home/save".to_owned(), (1, None))]);
+        (snapshot_from("here"), files)
+    });
+    Ok(Some(Baseline {
+        newest: snapshot_from("there"),
+        hashed: true,
+        comparison: Comparison {
+            found: vec![state.clone()],
+            gone: Vec::new(),
+        },
+        states: HashMap::from([("Home/save".to_owned(), state)]),
+        parent,
+    }))
+}
+
+#[test]
+fn the_preview_says_what_the_next_backup_would_do() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let text = |preview: &Preview| preview_text(&game, preview, &all);
+    let date = "1970-01-01 00:00 UTC";
+
+    assert_eq!(
+        text(&compared(FileState::Changed, false)).unwrap(),
+        format!("1 changed since the backup from there, {date}")
+    );
+    assert_eq!(
+        text(&compared(FileState::Same, false)).unwrap(),
+        format!("No changes since the backup from there, {date}; no backup will be made")
+    );
+    assert_eq!(
+        text(&compared(FileState::Changed, true)).unwrap(),
+        format!(
+            "Unchanged since this PC's last backup ({date}), so no backup will be made. The \
+             newest backup, from there on {date}, differs: 1 changed"
+        )
+    );
+    assert_eq!(text(&Ok(None)).unwrap(), "No backup yet");
+    assert_eq!(
+        text(&Err("offline".into())).unwrap(),
+        "Could not compare: offline"
+    );
+
+    let skipped = GameSettings {
+        skip: true,
+        ..GameSettings::default()
+    };
+    assert_eq!(preview_text(&game, &Ok(None), &skipped), None);
+    let preview = compared(FileState::Changed, false);
+    assert_eq!(preview_text(&game, &preview, &skipped), None);
+}
+
+#[test]
+fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
+    let game = game(&[1], false, 0);
+    let mut preview = compared(FileState::Same, false);
+    if let Ok(Some(baseline)) = &mut preview {
+        baseline.hashed = false;
+    }
+    assert_eq!(
+        preview_text(&game, &preview, &GameSettings::default()).unwrap(),
+        "No changes since the backup from there, 1970-01-01 00:00 UTC"
+    );
+}
+
+#[test]
+fn a_file_that_could_not_be_compared_is_shown_and_never_skipped() {
+    let game = game(&[1], false, 0);
+    let all = GameSettings::default();
+    // This machine's last backup has the same sizes and mtimes, yet nothing promises a skip.
+    let preview = compared(FileState::Unknown("denied".into()), true);
+    assert_eq!(
+        preview_text(&game, &preview, &all).unwrap(),
+        "1 could not be compared since the backup from there, 1970-01-01 00:00 UTC"
+    );
+    assert_eq!(
+        badges(&game, Some(&preview), &all)("Home/save"),
+        Some(Badge::Unknown)
+    );
+}
+
+#[test]
+fn a_replaced_repository_is_compared_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(&dir.path().join("first"));
+    let ctx = egui::Context::default();
+    let mut tab = listing(&["Game"]);
+    tab.start_preview(&ctx, &state);
+    tab.previews = vec![compared(FileState::Same, false)];
+
+    let replaced = self::state(&dir.path().join("second")).session;
+    state.session = replaced;
+    tab.poll(&ctx, &state);
+
+    let current = &state.session.as_ref().unwrap().storage;
+    assert!(Arc::ptr_eq(tab.compared_in.as_ref().unwrap(), current));
+    assert!(tab.previews.is_empty());
+    assert!(tab.previewing.is_some());
+}
+
+#[test]
+fn an_unticked_file_in_the_backup_is_badged_removed_unless_staging_keeps_it() {
+    let preview = compared(FileState::Same, false);
+    let mut settings = GameSettings::default();
+    settings.set_path("Home/save", false);
+    let game = game(&[1], false, 0);
+    assert_eq!(
+        badges(&game, Some(&preview), &settings)("Home/save"),
+        Some(Badge::Removed)
+    );
+    let unreadable = self::game(&[1], false, 1);
+    assert_eq!(
+        badges(&unreadable, Some(&preview), &settings)("Home/save"),
+        None
     );
 }
 

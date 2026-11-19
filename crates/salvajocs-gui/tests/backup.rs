@@ -263,6 +263,57 @@ fn backup_reports_new_then_unchanged_per_game() {
     assert!(!shows(&harness, ": backed up"));
 }
 
+/// Runs frames until the comparison with the last backups is done.
+fn run_until_compared(harness: &mut Harness<'static, App>) {
+    run_until(harness, "the comparison to finish", |h| {
+        !shows(h, "Comparing with the last backups")
+    });
+    run_settled(harness);
+}
+
+#[test]
+fn a_rescan_shows_what_differs_from_the_last_backup() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = alpha_beta(&scratch);
+    let alpha = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
+    fs::create_dir_all(alpha.join("sub")).unwrap();
+    fs::write(alpha.join("sub/old.dat"), "xy").unwrap();
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    run_until_compared(&mut harness);
+    assert_eq!(harness.query_all_by_label("No backup yet").count(), 2);
+
+    // A skipped game says nothing about the next backup.
+    click(&mut harness, "Beta");
+    assert_eq!(harness.query_all_by_label("No backup yet").count(), 1);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    run_until_compared(&mut harness);
+    assert!(shows(&harness, "No changes since the backup from "));
+
+    fs::write(alpha.join("save.dat"), "abcd").unwrap();
+    fs::remove_file(alpha.join("sub/old.dat")).unwrap();
+    fs::write(alpha.join("new.dat"), "n").unwrap();
+    scan(&mut harness, "2 games found");
+    run_until_compared(&mut harness);
+    assert!(shows(
+        &harness,
+        "1 new, 1 changed, 1 removed since the backup from "
+    ));
+
+    click(&mut harness, "2 files, 5 B, plus registry keys");
+    click(&mut harness, "Open WinAppData/Alpha");
+    click(&mut harness, "Open sub");
+    for row in ["new.dat, new", "save.dat, changed", "old.dat, removed"] {
+        assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
+    }
+
+    // An unticked file that the backup holds will be removed from the next one.
+    click(&mut harness, "save.dat, changed");
+    assert!(shows(&harness, "1 new, 2 removed since the backup from "));
+    assert_eq!(harness.query_all_by_label("save.dat, removed").count(), 1);
+}
+
 #[test]
 fn backup_failing_game_does_not_stop_the_others() {
     let scratch = tempfile::tempdir().unwrap();

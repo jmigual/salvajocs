@@ -1,7 +1,9 @@
-//! The Backup tab: scan this machine for games, choose which to back up and see what each
-//! backup and the cleanup after it did (ADR-0004, ADR-0010, ADR-0015).
+//! The Backup tab: scan this machine for games, choose which to back up, see what differs from
+//! the last backups, and what each backup and the cleanup after it did (ADR-0004, ADR-0010,
+//! ADR-0015, ADR-0018).
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
@@ -13,15 +15,19 @@ use eframe::egui::{
     self, Checkbox, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
 };
 use salvajocs_core::backup::{self, GameBackup, Stored};
+use salvajocs_core::changes::{self, Comparison, Counts, FileState};
 use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 use salvajocs_core::selection::{self, Change, GameSettings, Pending};
+use salvajocs_core::slug::slug;
+use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
-use crate::tabs::tree::{Clicked, FileTree, Mode, Row};
-use crate::tabs::{count, format_size};
+use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
+use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
 
@@ -32,8 +38,13 @@ mod choices;
 enum Outcome {
     /// A new snapshot was stored.
     Saved,
-    /// Nothing changed since the last snapshot.
+    /// Nothing changed since this machine's last snapshot.
     Unchanged,
+    /// Nothing changed since this machine's last snapshot, but the newest one, from the host it
+    /// names, differs.
+    UnchangedNewerElsewhere(String),
+    /// The saves equal the newest snapshot, from the host it names.
+    SameAsNewest(String),
     /// The game could not be backed up; holds why.
     Failed(String),
 }
@@ -59,7 +70,13 @@ fn chain(error: &dyn Error) -> String {
 fn summarize(backup: &GameBackup) -> GameResult {
     let outcome = match &backup.result {
         Ok(Stored::New(_)) => Outcome::Saved,
-        Ok(Stored::Unchanged { .. } | Stored::SameAsNewest(_)) => Outcome::Unchanged,
+        Ok(Stored::Unchanged {
+            newer_elsewhere: None,
+        }) => Outcome::Unchanged,
+        Ok(Stored::Unchanged {
+            newer_elsewhere: Some(newest),
+        }) => Outcome::UnchangedNewerElsewhere(newest.host.clone()),
+        Ok(Stored::SameAsNewest(newest)) => Outcome::SameAsNewest(newest.host.clone()),
         Err(err) => Outcome::Failed(chain(err)),
     };
     GameResult {
@@ -100,6 +117,202 @@ fn describe_problem(problem: &ScanProblem) -> String {
         ProblemKind::NotAPrefix => format!("{path}: not a Wine prefix"),
         ProblemKind::Unreadable(error) => format!("{path}: cannot be read ({error})"),
     }
+}
+
+/// What a game's files are compared with: its newest backup from any host (ADR-0018).
+struct Baseline {
+    newest: SnapshotInfo,
+    /// The newest backup has a hash list that matches its files, so a backup equal to it is
+    /// skipped (ADR-0018). Without one, a backup is made even when nothing differs.
+    hashed: bool,
+    comparison: Comparison,
+    /// The state of each found file, by its path key.
+    states: HashMap<String, FileState>,
+    /// This machine's last backup of the game and its files; `None` when it has none or it has
+    /// no hash list, which staging now adds, so rustic finds no backup unchanged.
+    parent: Option<(SnapshotInfo, BackedUpFiles)>,
+}
+
+/// The size and mtime of each file below `files/` of a backup, by path key.
+type BackedUpFiles = HashMap<String, (u64, Option<SystemTime>)>;
+
+/// One game's preview: `None` when the repository has no backup of it, `Err` when it could not
+/// be compared.
+type Preview = Result<Option<Baseline>, String>;
+
+/// Lists each of `games`' newest backup and this machine's last one, and compares the found
+/// files with the newest (ADR-0018). Locks the repository for one game at a time.
+fn preview(storage: &SharedStorage, games: &[GameScan]) -> anyhow::Result<Vec<Preview>> {
+    let (snapshots, host) = {
+        let mut storage = lock_storage(storage)?;
+        storage.reindex()?;
+        (storage.snapshots("salvajocs")?, storage.hostname()?)
+    };
+    let previews = games.iter().map(|game| {
+        preview_game(storage, game, &snapshots, &host).map_err(|err| format!("{err:#}"))
+    });
+    Ok(previews.collect())
+}
+
+fn preview_game(
+    storage: &SharedStorage,
+    game: &GameScan,
+    snapshots: &[SnapshotInfo],
+    host: &str,
+) -> anyhow::Result<Option<Baseline>> {
+    let slug = slug(&game.title);
+    let Some(newest) = changes::newest(snapshots, &slug) else {
+        return Ok(None);
+    };
+    let game_tag = format!("game:{slug}");
+    // rustic's parent: the latest of this host, label and path, `pre-restore` included.
+    let parent = snapshots.iter().find(|snapshot| {
+        snapshot.host == host && snapshot.label == game.title && snapshot.tags.contains(&game_tag)
+    });
+    let as_path = format!("/salvajocs/{slug}");
+    let (listing, hashes, parent_listing) = {
+        let mut storage = lock_storage(storage)?;
+        let (listing, hashes) = changes::baseline(&mut storage, &newest.id, &slug)?;
+        let parent_listing = match parent {
+            Some(parent) if parent.id != newest.id => {
+                Some(storage.snapshot_files(&parent.id, &as_path)?)
+            }
+            _ => None,
+        };
+        (listing, hashes, parent_listing)
+    };
+    let comparison = changes::compare_game(game, &listing, hashes.as_ref());
+    let states = (game.files.iter().map(selection::path_key))
+        .zip(comparison.found.iter().cloned())
+        .collect();
+    let parent_listing = parent_listing.as_ref().unwrap_or(&listing);
+    let parent = (parent.filter(|_| parent_listing.iter().any(|file| file.path == HASHES_FILE)))
+        .map(|parent| {
+            let prefix = "files/";
+            let files = (parent_listing.iter())
+                .filter_map(|file| {
+                    let key = file.path.strip_prefix(prefix)?;
+                    Some((key.to_owned(), (file.size, file.modified)))
+                })
+                .collect();
+            (parent.clone(), files)
+        });
+    Ok(Some(Baseline {
+        newest: newest.clone(),
+        hashed: hashes.is_some(),
+        comparison,
+        states,
+        parent,
+    }))
+}
+
+/// The badge of each file key of `game` by `preview` and the game's `settings`: `new`,
+/// `changed` and `could not be compared` for included files, `removed` for unticked ones the
+/// newest backup has, unless the game has unreadable paths (staging then keeps every file) or
+/// is skipped.
+fn badges<'a>(
+    game: &'a GameScan,
+    preview: Option<&'a Preview>,
+    settings: &'a GameSettings,
+) -> impl Fn(&str) -> Option<Badge> + 'a {
+    let states = match preview {
+        Some(Ok(Some(baseline))) if !settings.skip => Some(&baseline.states),
+        _ => None,
+    };
+    let removes = game.unreadable.is_empty();
+    move |key| match (settings.path_included(key), states?.get(key)?) {
+        (true, FileState::New) => Some(Badge::New),
+        (true, FileState::Changed) => Some(Badge::Changed),
+        (true, FileState::Unknown(_)) => Some(Badge::Unknown),
+        (true, FileState::Same) | (false, FileState::New) => None,
+        (false, _) => removes.then_some(Badge::Removed),
+    }
+}
+
+/// The tree of `game`'s files, with the files only in its newest backup as removed rows unless
+/// staging keeps every file.
+fn file_tree(game: &GameScan, preview: Option<&Preview>) -> FileTree {
+    let found = game.files.iter().map(|file| Row {
+        key: selection::path_key(file),
+        size: file.size,
+        real: Some(file.real.clone()),
+        removed: false,
+    });
+    let gone = match preview {
+        Some(Ok(Some(baseline))) if game.unreadable.is_empty() => {
+            baseline.comparison.gone.as_slice()
+        }
+        _ => &[],
+    };
+    let removed = gone.iter().map(|file| Row {
+        key: file.path.clone(),
+        size: file.size,
+        real: None,
+        removed: true,
+    });
+    FileTree::new(found.chain(removed))
+}
+
+/// `2 new, 1 changed, 1 removed, 1 could not be compared`, leaving out the kinds there are none
+/// of; empty when there is none of any.
+fn counted(counts: &Counts) -> String {
+    let parts = [
+        (counts.new, "new"),
+        (counts.changed, "changed"),
+        (counts.removed, "removed"),
+        (counts.unknown, "could not be compared"),
+    ];
+    let parts: Vec<_> = (parts.into_iter())
+        .filter(|&(count, _)| count > 0)
+        .map(|(count, kind)| format!("{count} {kind}"))
+        .collect();
+    parts.join(", ")
+}
+
+/// What the next backup would do to `game` compared with its newest backup, by `settings`;
+/// `None` when the game would not be backed up at all.
+fn preview_text(game: &GameScan, preview: &Preview, settings: &GameSettings) -> Option<String> {
+    let baseline = match preview {
+        Ok(Some(baseline)) => baseline,
+        Ok(None) => return selection::apply(game, settings).map(|_| "No backup yet".to_owned()),
+        Err(err) => return Some(format!("Could not compare: {err}")),
+    };
+    let counts = changes::counts(game, &baseline.comparison, settings)?;
+    let (host, date) = (&baseline.newest.host, format_time(baseline.newest.time));
+    let differs = counted(&counts);
+    if differs.is_empty() {
+        let since = format!("No changes since the backup from {host}, {date}");
+        // Without a hash list to compare with, the backup is made all the same.
+        return Some(if baseline.hashed {
+            format!("{since}; no backup will be made")
+        } else {
+            since
+        });
+    }
+    match &baseline.parent {
+        Some((parent, files)) if counts.unknown == 0 && unchanged_since(game, settings, files) => {
+            Some(format!(
+                "Unchanged since this PC's last backup ({}), so no backup will be made. The newest \
+             backup, from {host} on {date}, differs: {differs}",
+                format_time(parent.time)
+            ))
+        }
+        _ => Some(format!("{differs} since the backup from {host}, {date}")),
+    }
+}
+
+/// Whether the files of `game` that `settings` include are exactly `files` (a backup's, by path
+/// key) by size and mtime, so rustic would find the game unchanged (ADR-0010).
+fn unchanged_since(game: &GameScan, settings: &GameSettings, files: &BackedUpFiles) -> bool {
+    let mut included = 0;
+    game.files.iter().all(|file| {
+        let key = selection::path_key(file);
+        if !settings.path_included(&key) {
+            return true;
+        }
+        included += 1;
+        files.get(&key) == Some(&(file.size, file.modified))
+    }) && included == files.len()
 }
 
 /// How far the running backup is, shared with its job.
@@ -154,6 +367,13 @@ pub struct BackupTab {
     scan_error: Option<String>,
     /// One tree per game of `report`, in its order.
     trees: Vec<FileTree>,
+    /// Compares each game of `report` with its last backups; not counted as busy, since it only
+    /// reads.
+    previewing: Option<Job<Vec<Preview>>>,
+    /// The preview of each game of `report`, in its order; empty until it is known.
+    previews: Vec<Preview>,
+    /// The repository `previewing` and `previews` compare with.
+    compared_in: Option<SharedStorage>,
     /// The `Wine prefix: …` lines of each game of `report`, in its order.
     prefixes: Vec<Vec<String>>,
     /// What to back up of each game.
@@ -214,6 +434,7 @@ impl BackupTab {
             match result {
                 Ok(report) => {
                     self.adopt(report);
+                    self.start_preview(ctx, state);
                     self.scan_error = None;
                 }
                 Err(err) => self.scan_error = Some(format!("{err:#}")),
@@ -232,6 +453,7 @@ impl BackupTab {
                     cleanup,
                 }) => {
                     self.adopt(report);
+                    self.start_preview(ctx, state);
                     self.run_error = error;
                     self.saving = saving;
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
@@ -241,6 +463,37 @@ impl BackupTab {
                     }
                 }
                 Err(err) => self.run_error = Some(format!("{err:#}")),
+            }
+        }
+        // A comparison with a repository Settings replaced is dropped and made again.
+        let current = state.session.as_ref().map(|session| &session.storage);
+        if (self.compared_in.as_ref())
+            .is_some_and(|compared| !current.is_some_and(|current| Arc::ptr_eq(compared, current)))
+        {
+            self.compared_in = None;
+            self.previewing = None;
+            self.previews = Vec::new();
+            if let Some(report) = &self.report {
+                self.trees = (report.games.iter())
+                    .map(|game| file_tree(game, None))
+                    .collect();
+            }
+            self.start_preview(ctx, state);
+        }
+        if let Some(job) = &mut self.previewing
+            && let Some(result) = job.take_result()
+        {
+            self.previewing = None;
+            let games = self.report.as_ref().map_or(0, |report| report.games.len());
+            self.previews = match result {
+                Ok(previews) => previews,
+                Err(err) => (0..games).map(|_| Err(format!("{err:#}"))).collect(),
+            };
+            if let Some(report) = &self.report {
+                let games = report.games.iter().zip(&self.previews);
+                self.trees = games
+                    .map(|(game, preview)| file_tree(game, Some(preview)))
+                    .collect();
             }
         }
         if self.choices.poll(ctx, state) {
@@ -256,21 +509,24 @@ impl BackupTab {
         std::mem::take(&mut self.removed)
     }
 
-    /// Shows `report`, with a file tree per game.
+    /// Compares the shown report with the last backups when the repository is open. Replacing
+    /// the job drops the comparison of an older report.
+    fn start_preview(&mut self, ctx: &egui::Context, state: &State) {
+        let (Some(session), Some(report)) = (&state.session, &self.report) else {
+            return;
+        };
+        let (storage, games) = (session.storage.clone(), report.games.clone());
+        self.compared_in = Some(storage.clone());
+        self.previewing = Some(Job::spawn(ctx, move || preview(&storage, &games)));
+    }
+
+    /// Shows `report`, with a file tree per game and no preview yet.
     fn adopt(&mut self, report: ScanReport) {
-        self.trees = report
-            .games
-            .iter()
-            .map(|game| {
-                let keys = game.files.iter();
-                FileTree::new(keys.map(|file| Row {
-                    key: selection::path_key(file),
-                    size: file.size,
-                    real: Some(file.real.clone()),
-                    removed: false,
-                }))
-            })
+        self.trees = (report.games.iter())
+            .map(|game| file_tree(game, None))
             .collect();
+        self.previews = Vec::new();
+        self.previewing = None;
         self.prefixes = report
             .games
             .iter()
@@ -309,10 +565,13 @@ impl BackupTab {
         };
         let choices = &self.choices;
         let games = report.games.iter().zip(&mut self.trees);
+        let previews = &self.previews;
         games
-            .map(|(game, tree)| match choices.game(&game.title) {
+            .enumerate()
+            .map(|(index, (game, tree))| match choices.game(&game.title) {
                 Ok(settings) => {
-                    let (files, _) = tree.included(&|key| settings.path_included(key), &|_| None);
+                    let badge = badges(game, previews.get(index), &settings);
+                    let (files, _) = tree.included(&|key| settings.path_included(key), &badge);
                     let keys = &game.registry_keys;
                     !settings.skip
                         && (files > 0
@@ -413,6 +672,12 @@ impl BackupTab {
             },
         );
         self.scan_notes_ui(ui, state, manifest_loading);
+        if self.previewing.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Comparing with the last backups");
+            });
+        }
         self.choices.status_ui(ui, state);
         let Some(report) = &self.report else {
             return;
@@ -453,6 +718,7 @@ impl BackupTab {
             return;
         }
         let (choices, trees, prefixes) = (&self.choices, &mut self.trees, &self.prefixes);
+        let previews = &self.previews;
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -488,7 +754,9 @@ impl BackupTab {
                         for prefix in prefixes {
                             ui.weak(prefix);
                         }
-                        let change = files_ui(ui, game, tree, &settings, enabled, &mut opened);
+                        let preview = previews.get(index);
+                        let change =
+                            files_ui(ui, game, tree, preview, &settings, enabled, &mut opened);
                         if let Some(change) = change {
                             changes.push((index, change));
                         }
@@ -750,6 +1018,13 @@ impl BackupTab {
             let text = match outcome {
                 Outcome::Saved => format!("{title}: backed up"),
                 Outcome::Unchanged => format!("{title}: up to date"),
+                Outcome::UnchangedNewerElsewhere(host) => format!(
+                    "{title}: up to date with this PC's last backup; the newest backup, from \
+                     {host}, differs"
+                ),
+                Outcome::SameAsNewest(host) => {
+                    format!("{title}: same as the newest backup, from {host}")
+                }
                 Outcome::Failed(error) => {
                     theme::status(
                         ui,
@@ -936,12 +1211,17 @@ fn files_ui(
     ui: &mut Ui,
     game: &GameScan,
     tree: &mut FileTree,
+    preview: Option<&Preview>,
     settings: &GameSettings,
     enabled: bool,
     opened: &mut Option<PathBuf>,
 ) -> Option<Change> {
     let included = |key: &str| settings.path_included(key);
-    let summary = summary(game, tree.included(&included, &|_| None), settings);
+    let badge = badges(game, preview, settings);
+    let summary = summary(game, tree.included(&included, &badge), settings);
+    if let Some(text) = preview.and_then(|preview| preview_text(game, preview, settings)) {
+        ui.weak(text);
+    }
     if game.files.is_empty() && game.registry_source.is_none() {
         ui.weak(summary);
         return None;
@@ -954,7 +1234,7 @@ fn files_ui(
                 included: &included,
                 enabled,
             };
-            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &|_| None));
+            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &badge));
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {
