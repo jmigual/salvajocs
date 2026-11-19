@@ -884,6 +884,121 @@ fn run_batch(harness: &mut Harness<'static, App>, button: &str, result: &str) {
     });
 }
 
+/// A custom game backed up from its Windows build, with one root no rule knows, and a scan of
+/// it. Two Linux saves leave no auto-pair, so the batch asks where it goes.
+fn unmapped(tmp: &TempDir, name: &str) -> (CustomGame, GameScan) {
+    let files = [
+        format!("<winAppData>/{name}"),
+        format!("<xdgData>/{name}"),
+        format!("<xdgConfig>/{name}Cfg"),
+    ];
+    let files: Vec<&str> = files.iter().map(String::as_str).collect();
+    let game = custom(name, &files, None, Vec::new());
+    let tail = format!("{name}/a.sav");
+    let snapshot = scan(
+        tmp,
+        name,
+        &[(Base::WinAppData, &tail)],
+        &[(Base::WinAppData, name)],
+    );
+    (game, snapshot)
+}
+
+/// Waits for the mapping dialog of `title`.
+fn run_until_dialog(harness: &mut Harness<'static, App>, title: &str) {
+    let heading = format!("Where should the saves of {title} go?");
+    run_until(harness, "the mapping dialog", move |h| shows(h, &heading));
+}
+
+#[test]
+fn batch_asks_for_each_game_that_needs_mapping_and_skips_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
+    let (lima, lima_scan) = unmapped(&tmp, "Lima");
+    let (mut harness, env) = open_tab(&tmp, vec![kilo, lima], &[kilo_scan, lima_scan]);
+
+    click(&mut harness, "Select all");
+    harness.get_by_label("Restore 2 games").click();
+    run_until_dialog(&mut harness, "Kilo");
+    assert!(
+        harness
+            .query_by_label("Restore into a Wine prefix instead")
+            .is_none()
+    );
+    replace_text(&mut harness, "Target 1", "<xdgData>/Kilo");
+    harness.get_by_label("Use these folders").click();
+    run_until_dialog(&mut harness, "Lima");
+    click(&mut harness, "Skip this game");
+
+    assert!(shows(
+        &harness,
+        "Lima: skipped in the folder mapping dialog"
+    ));
+    run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
+    let kilo_save = under(&xdg_data(&tmp), "Kilo/a.sav");
+    assert_eq!(fs::read_to_string(kilo_save).unwrap(), "Kilo/a.sav");
+    assert!(!xdg_data(&tmp).join("Lima").exists());
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.pairs.is_empty())
+    });
+    let kilo = games.iter().find(|game| game.name == "Kilo").unwrap();
+    assert_eq!(kilo.pairs, [pair("<xdgData>/Kilo", "<winAppData>/Kilo")]);
+    let lima = games.iter().find(|game| game.name == "Lima").unwrap();
+    assert!(lima.pairs.is_empty() && lima.skips.is_empty(), "{lima:?}");
+}
+
+#[test]
+fn cancelling_a_batch_dialog_restores_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
+    let (mut harness, env) = open_tab(&tmp, vec![beta, kilo], &[beta_scan, kilo_scan]);
+    let beta_save = under(&xdg_data(&tmp), "Beta/save.dat");
+    put(&beta_save, "old");
+
+    click(&mut harness, "Select all");
+    harness.get_by_label("Restore 2 games").click();
+    run_until_dialog(&mut harness, "Kilo");
+    click(&mut harness, "Cancel");
+
+    assert!(!shows(&harness, "Where should the saves"));
+    assert!(!shows(&harness, "Plan"));
+    assert!(!disabled(&harness, "Restore 2 games"));
+    assert_eq!(fs::read_to_string(&beta_save).unwrap(), "old");
+    assert!(!xdg_data(&tmp).join("Kilo").exists());
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+    assert!(
+        !batch_dir(&env).exists(),
+        "the fetched snapshots are removed"
+    );
+}
+
+#[test]
+fn cancelling_a_later_dialog_keeps_the_folders_confirmed_before() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
+    let (lima, lima_scan) = unmapped(&tmp, "Lima");
+    let (mut harness, env) = open_tab(&tmp, vec![kilo, lima], &[kilo_scan, lima_scan]);
+
+    click(&mut harness, "Select all");
+    harness.get_by_label("Restore 2 games").click();
+    run_until_dialog(&mut harness, "Kilo");
+    replace_text(&mut harness, "Target 1", "<xdgData>/Kilo");
+    harness.get_by_label("Use these folders").click();
+    run_until_dialog(&mut harness, "Lima");
+    click(&mut harness, "Cancel");
+
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.pairs.is_empty())
+    });
+    let kilo = games.iter().find(|game| game.name == "Kilo").unwrap();
+    assert_eq!(kilo.pairs, [pair("<xdgData>/Kilo", "<winAppData>/Kilo")]);
+    assert!(!shows(&harness, "Where should the saves"));
+    assert!(!xdg_data(&tmp).join("Kilo").exists(), "nothing is written");
+    assert!(!xdg_data(&tmp).join("Lima").exists());
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+}
+
 #[test]
 fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     let tmp = tempfile::tempdir().unwrap();

@@ -12,12 +12,14 @@ use std::time::Duration;
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Role, Ui, WidgetInfo};
 use salvajocs_core::config::AppConfig;
+use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::Context;
 use salvajocs_core::manifest::Manifest;
 use salvajocs_core::restore::{self, GameBackups, PrepareError, RestorePlan, Targets, WriteState};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
+use super::mapping::{Dialog, DialogAction};
 use super::{
     Fetched, RestoreTab, Restored, describe_context, describe_run_error, own_dir, remove_dir,
     skipped_ui, snapshot_label, warnings_ui,
@@ -37,13 +39,34 @@ struct Planned {
     states: Vec<Result<WriteState, String>>,
 }
 
+/// A game of the batch waiting for its turn in the mapping dialog (ADR-0011).
+struct Mapping {
+    fetched: Arc<Fetched>,
+    /// The fetched snapshot, as the picker shows it.
+    snapshot: String,
+    dialog: Dialog,
+}
+
 /// What planning made of one ticked game.
 enum Outcome {
     Planned(Box<Planned>),
-    /// A folder of the other OS's build has no target yet (ADR-0011).
-    NeedsMapping,
+    /// A folder of the other OS's build has no target yet.
+    NeedsMapping(Box<Mapping>),
+    /// The user left the game out in the mapping dialog.
+    Skipped,
     /// Why nothing will be restored.
     Failed(String),
+}
+
+/// The state of each write of a plan, or why the game would write nothing; see [`compare`].
+type Compared = Result<Vec<Result<WriteState, String>>, String>;
+
+/// What a batch dialog's confirm job hands back.
+struct Mapped {
+    /// The game's index in the batch.
+    index: usize,
+    choices: Vec<(SnapshotRoot, Choice)>,
+    plan: Result<(RestorePlan, Compared), PrepareError>,
 }
 
 /// One ticked game of a batch.
@@ -67,8 +90,10 @@ enum GameRestored {
 pub(super) struct Batch {
     /// The planning job, with the [`RestoreTab::generation`] it started in.
     planning: Option<(u64, Job<Vec<BatchGame>>)>,
-    /// The ticked games in list order, while the confirm shows.
+    /// The ticked games in list order, while the dialogs and the confirm show.
     games: Option<Vec<BatchGame>>,
+    /// A dialog's confirm job, with the generation it started in.
+    mapping: Option<(u64, Job<Mapped>)>,
     running: Option<Job<Vec<GameRestored>>>,
     /// How many games the running batch restores.
     total: usize,
@@ -81,14 +106,30 @@ pub(super) struct Batch {
 }
 
 impl Batch {
-    /// Whether the batch's planning, run or cleanup job is running.
+    /// Whether the batch's planning, dialog confirm, run or cleanup job is running.
     pub(super) fn busy(&self) -> bool {
-        self.planning.is_some() || self.running.is_some() || self.cleaning.is_some()
+        self.planning.is_some()
+            || self.mapping.is_some()
+            || self.running.is_some()
+            || self.cleaning.is_some()
     }
 
-    /// Whether the confirm shows, before anything is written.
+    /// Whether a mapping dialog or the confirm shows, before anything is written.
     pub(super) fn open(&self) -> bool {
         self.games.is_some()
+    }
+
+    /// The first game still waiting for the mapping dialog, with its index.
+    fn waiting(&mut self) -> Option<(usize, &str, &mut Mapping)> {
+        let games = self.games.as_mut()?.iter_mut().enumerate();
+        games
+            .filter_map(|(index, game)| match &mut game.outcome {
+                Outcome::NeedsMapping(mapping) => {
+                    Some((index, game.title.as_str(), &mut **mapping))
+                }
+                _ => None,
+            })
+            .next()
     }
 
     /// Whether there is neither a confirm nor a result to show.
@@ -219,7 +260,7 @@ impl RestoreTab {
 
     /// Takes the results of the batch's jobs. A finished run lists the backups again, which gain
     /// the safety backups.
-    pub(super) fn poll_batch(&mut self, ctx: &egui::Context, state: &State) {
+    pub(super) fn poll_batch(&mut self, ctx: &egui::Context, state: &mut State) {
         if let Some((generation, job)) = &mut self.batch.planning
             && let Some(result) = job.take_result()
         {
@@ -229,6 +270,17 @@ impl RestoreTab {
                 // A batch planned in a repository Settings replaced is not shown.
                 _ if !current => {}
                 Ok(games) => self.batch.games = Some(games),
+                Err(err) => self.error = Some(format!("The restore cannot be planned: {err:#}")),
+            }
+        }
+        if let Some((generation, job)) = &mut self.batch.mapping
+            && let Some(result) = job.take_result()
+        {
+            let current = *generation == self.generation;
+            self.batch.mapping = None;
+            match result {
+                _ if !current => {}
+                Ok(mapped) => self.mapped(mapped, ctx, state),
                 Err(err) => self.error = Some(format!("The restore cannot be planned: {err:#}")),
             }
         }
@@ -258,14 +310,95 @@ impl RestoreTab {
         self.batch.cleaning = Some(Job::spawn(ctx, move || Ok(remove_dir(&root)?)));
     }
 
+    /// A dialog's plan for the game it was confirmed for: shown on the confirm, with the choices
+    /// saved on the game's custom entry as in the single-game view (ADR-0011).
+    fn mapped(&mut self, mapped: Mapped, ctx: &egui::Context, state: &mut State) {
+        let Mapped {
+            index,
+            choices,
+            plan,
+        } = mapped;
+        let Some(game) = (self.batch.games.as_mut()).and_then(|games| games.get_mut(index)) else {
+            return;
+        };
+        let Outcome::NeedsMapping(mapping) = &mut game.outcome else {
+            return;
+        };
+        match plan {
+            Ok((plan, states)) => {
+                if let Some(config) = &mut state.config {
+                    crossbuild::apply_choices(config, &game.title, &choices);
+                    state.save_config(ctx);
+                }
+                game.outcome = match states {
+                    Ok(states) => Outcome::Planned(Box::new(Planned {
+                        fetched: mapping.fetched.clone(),
+                        snapshot: mapping.snapshot.clone(),
+                        plan,
+                        states,
+                    })),
+                    Err(reason) => Outcome::Failed(reason),
+                };
+            }
+            Err(PrepareError::Unclassifiable { root, template }) => {
+                mapping.dialog.reject(&root, &template);
+            }
+            Err(err) => {
+                game.outcome = Outcome::Failed(format!("the restore cannot be planned: {err}"));
+            }
+        }
+    }
+
+    /// The mapping dialog of the first game that needs one, one game after another. Cancel drops
+    /// the whole batch.
+    pub(super) fn batch_mapping_ui(&mut self, ctx: &egui::Context, state: &State) {
+        let (busy, error, generation) = (self.busy(), self.error.clone(), self.generation);
+        let Some((index, title, mapping)) = self.batch.waiting() else {
+            return;
+        };
+        let action = theme::modal(ctx, "restore_batch_mapping", 720.0, |ui| {
+            (mapping.dialog).ui(ui, title, busy, false, true, error.as_deref())
+        });
+        match action {
+            Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
+                let fetched = mapping.fetched.clone();
+                let job = Job::spawn(ctx, move || {
+                    let plan = fetched.prepare(&choices).map(|plan| {
+                        let states = compare(&plan);
+                        (plan, states)
+                    });
+                    Ok(Mapped {
+                        index,
+                        choices,
+                        plan,
+                    })
+                });
+                self.batch.mapping = Some((generation, job));
+            }
+            Some(DialogAction::SkipGame) => {
+                if let Some(game) =
+                    (self.batch.games.as_mut()).and_then(|games| games.get_mut(index))
+                {
+                    game.outcome = Outcome::Skipped;
+                }
+            }
+            Some(DialogAction::Cancel) => self.cancel_batch(ctx, state),
+            Some(DialogAction::Confirm(_) | DialogAction::UsePrefix) | None => {}
+        }
+    }
+
     /// The confirm: per ticked game what it writes and where, or why it will not be restored.
+    /// It waits for the mapping dialogs.
     pub(super) fn batch_ui(&mut self, ui: &mut Ui, state: &State) {
+        if self.batch.waiting().is_some() {
+            return;
+        }
         let Some(games) = &self.batch.games else {
             return;
         };
         ui.add_space(16.0);
         ui.heading("Plan");
-        let (warn, error_color) = (ui.visuals().warn_fg_color, ui.visuals().error_fg_color);
+        let error_color = ui.visuals().error_fg_color;
         let mut planned = 0;
         for game in games {
             let title = &game.title;
@@ -274,12 +407,11 @@ impl RestoreTab {
                     planned += 1;
                     planned_ui(ui, title, game);
                 }
-                Outcome::NeedsMapping => theme::status(
-                    ui,
-                    icons::WARNING,
-                    warn,
-                    format!("{title}: needs folder mapping: restore it on its own"),
-                ),
+                Outcome::Skipped => {
+                    ui.weak(format!("{title}: skipped in the folder mapping dialog"));
+                }
+                // The dialogs come first, so none is left here.
+                Outcome::NeedsMapping(_) => {}
                 Outcome::Failed(reason) => theme::status(
                     ui,
                     icons::X_CIRCLE,
@@ -313,7 +445,7 @@ impl RestoreTab {
         let planned: Vec<(Arc<Fetched>, RestorePlan)> = (games.into_iter())
             .filter_map(|game| match game.outcome {
                 Outcome::Planned(planned) => Some((planned.fetched, planned.plan)),
-                Outcome::NeedsMapping | Outcome::Failed(_) => None,
+                Outcome::NeedsMapping(_) | Outcome::Skipped | Outcome::Failed(_) => None,
             })
             .collect();
         self.error = None;
@@ -430,7 +562,11 @@ fn plan_game(
             })),
             Err(reason) => Outcome::Failed(reason),
         },
-        Err(PrepareError::NeedsMapping(_)) => Outcome::NeedsMapping,
+        Err(PrepareError::NeedsMapping(entries)) => Outcome::NeedsMapping(Box::new(Mapping {
+            fetched: Arc::new(fetched),
+            snapshot: snapshot_label(snapshot),
+            dialog: Dialog::new(entries),
+        })),
         Err(PrepareError::Unclassifiable { template, .. }) => Outcome::Failed(format!(
             "the saved target {template} is not a placeholder template of this OS"
         )),

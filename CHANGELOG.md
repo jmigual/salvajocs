@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- On the Restore tab, tick several games and restore them in one go with **Restore N games**.
+  Each game uses its default snapshot and targets and gets its own safety backup. Games whose
+  folders need mapping get the mapping dialog one after another.
+
 ### Changed
 
 - rclone no longer asks for the password of an encrypted rclone config. Set

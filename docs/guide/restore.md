@@ -93,6 +93,35 @@ One thing blocks a restore: a restore that includes registry keys for a Wine pre
 while any `wineserver` is running, because Wine would overwrite the change. Close every Wine and
 Proton game and try again. Nothing is written in that case.
 
+## Restore several games
+
+To restore more than one game in one go:
+
+1. Tick the checkbox before each game in the list, or click **Select all**. A game whose only
+   backups are `pre-restore` ones cannot be ticked.
+2. Click **Restore N games**. Each ticked game uses its newest backup that is not a `pre-restore`
+   one, and the targets salvajocs fills in for it (see "Targets"). To choose another snapshot or
+   target, or to override a file, restore that game on its own.
+3. If a game's backup holds folders of the other OS's build that salvajocs cannot place, the
+   mapping dialog opens for it, one game after another. See
+   [Cross-OS restore](cross-os-restore.md). The choices you confirm are saved with the game, as in
+   a single restore. The prefix option is not offered here. **Skip this game** leaves the game
+   out and saves nothing. **Cancel** stops the whole batch, and nothing is restored; folder
+   choices you already confirmed for earlier games stay saved.
+4. Read the **Plan**. For each game it shows the snapshot, where the files go, how many files are
+   new (nothing there yet), changed (the file there differs) or unchanged, each file that will
+   fail, and the same warnings, registry and skipped items as the preview. Games that will not be
+   restored are listed with the reason. Nothing is written yet.
+5. Click **Restore N games**.
+
+Each game is restored as described above, with its own safety backup, and the next game goes on
+whatever happens to it. A game whose restore is refused writes nothing: for example, when its
+restore includes registry keys for a Wine prefix while a `wineserver` runs, or when its safety
+backup fails. The **Plan** already lists a game whose safety backup cannot read a file at the
+targets as one that will not be restored. The result shows `Restored N of M games`, then each
+game's lines. A game that was not refused counts as restored even if some of its files failed;
+those files are listed under it as failed.
+
 ## Undo
 
 The safety backup is the undo. In the **Snapshot** list, choose the newest entry marked

@@ -23,6 +23,8 @@ pub(super) enum DialogAction {
     Confirm(Vec<(SnapshotRoot, Choice)>),
     /// Restore into the game's Windows build in a prefix instead of mapping (ADR-0005).
     UsePrefix,
+    /// Leave the game out of the batch; unlike a skipped folder, nothing is saved.
+    SkipGame,
     Cancel,
 }
 
@@ -82,13 +84,15 @@ impl Dialog {
 
     /// Draws the dialog for the game `title`; its buttons wait for `busy` to end. `offer_prefix`
     /// offers restoring into a Wine prefix instead, for Windows saves mapped onto native Linux.
-    /// `error` is the tab's error, which the modal would otherwise hide.
+    /// `offer_skip_game` offers leaving the game out of a batch. `error` is the tab's error,
+    /// which the modal would otherwise hide.
     pub(super) fn ui(
         &mut self,
         ui: &mut Ui,
         title: &str,
         busy: bool,
         offer_prefix: bool,
+        offer_skip_game: bool,
         error: Option<&str>,
     ) -> Option<DialogAction> {
         ui.heading(format!("Where should the saves of {title} go?"));
@@ -120,6 +124,9 @@ impl Dialog {
             theme::row_end(ui, |ui| {
                 if offer_prefix && ui.button("Restore into a Wine prefix instead").clicked() {
                     action = Some(DialogAction::UsePrefix);
+                }
+                if offer_skip_game && ui.button("Skip this game").clicked() {
+                    action = Some(DialogAction::SkipGame);
                 }
                 if ui.button("Cancel").clicked() {
                     action = Some(DialogAction::Cancel);

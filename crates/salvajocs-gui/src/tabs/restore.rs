@@ -362,6 +362,7 @@ impl RestoreTab {
             });
         }
         self.mapping_ui(ui.ctx(), state);
+        self.batch_mapping_ui(ui.ctx(), state);
         self.delete_ui(ui.ctx());
     }
 
@@ -774,7 +775,14 @@ impl RestoreTab {
         };
         let action = theme::modal(ctx, "restore_mapping", 720.0, |ui| {
             let offer_prefix = fetched.targets.win.is_none();
-            dialog.ui(ui, &fetched.title, busy, offer_prefix, error.as_deref())
+            dialog.ui(
+                ui,
+                &fetched.title,
+                busy,
+                offer_prefix,
+                false,
+                error.as_deref(),
+            )
         });
         match action {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
@@ -796,7 +804,7 @@ impl RestoreTab {
                 }
             }
             Some(DialogAction::Cancel) => self.forget_plan(),
-            Some(DialogAction::Confirm(_)) | None => {}
+            Some(DialogAction::Confirm(_) | DialogAction::SkipGame) | None => {}
         }
     }
 

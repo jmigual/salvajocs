@@ -736,3 +736,17 @@ fn a_new_repository_closes_the_batch_confirm() {
 
     switch_repository_and_check_nothing_ran(&mut harness, dir.path());
 }
+
+#[test]
+fn a_new_repository_closes_a_batch_mapping_dialog() {
+    let dir = tempfile::tempdir().unwrap();
+    // A Windows save with no Windows target and no rule needs the dialog.
+    let mut harness = planned_batch(dir.path(), Base::WinAppData, "<winAppData>/Mix");
+    assert!(
+        harness.query_by_label("Skip this game").is_some(),
+        "the dialog shows"
+    );
+
+    switch_repository_and_check_nothing_ran(&mut harness, dir.path());
+    assert!(harness.query_by_label("Skip this game").is_none());
+}
