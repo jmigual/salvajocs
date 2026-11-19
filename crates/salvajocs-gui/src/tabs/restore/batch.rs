@@ -304,7 +304,7 @@ impl RestoreTab {
     }
 
     /// Closes the batch without writing anything and removes its fetched snapshots in a job.
-    fn cancel_batch(&mut self, ctx: &egui::Context, state: &State) {
+    pub(super) fn cancel_batch(&mut self, ctx: &egui::Context, state: &State) {
         self.batch.close();
         let root = own_dir(&state.env.cache_dir, "restore-batch");
         self.batch.cleaning = Some(Job::spawn(ctx, move || Ok(remove_dir(&root)?)));

@@ -708,9 +708,21 @@ fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
 /// Opens another repository, as Settings does, and checks the batch is gone without writing.
 fn switch_repository_and_check_nothing_ran(harness: &mut TabHarness, dir: &Path) {
     let old = storage(harness);
+    let fetched = own_dir(&harness.state().1.env.cache_dir, "restore-batch");
+    assert!(fetched.exists(), "planning fetched the snapshots");
     let other = tempfile::tempdir().unwrap();
     harness.state_mut().1.session = state(other.path()).session;
     harness.step();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.state().0.batch.busy() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the cleanup never ended"
+        );
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!fetched.exists(), "the fetched snapshots are removed");
 
     assert!(!harness.state().0.batch.open());
     assert!(harness.query_by_label("Cancel").is_none());

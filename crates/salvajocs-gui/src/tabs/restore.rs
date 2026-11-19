@@ -317,7 +317,9 @@ impl RestoreTab {
         {
             self.forget_plan();
             self.drop_listing();
-            self.batch.close();
+            if self.batch.open() {
+                self.cancel_batch(ui.ctx(), state);
+            }
             self.detecting = None;
             self.pick = None;
             self.removed = None;
