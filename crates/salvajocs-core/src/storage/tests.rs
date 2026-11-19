@@ -588,6 +588,8 @@ fn snapshot_entries_lists_dirs_files_and_symlinks_with_kinds() {
         .map(|entry| (entry.path, entry.kind, entry.size))
         .collect();
     listed.sort_by(|a, b| a.0.cmp(&b.0));
+    // Only the unix-only cases below add to it.
+    #[cfg_attr(not(unix), allow(unused_mut, clippy::useless_vec))]
     let mut expected = vec![
         ("a.sav".to_owned(), EntryKind::File, 5),
         ("sub".to_owned(), EntryKind::Dir, 0),

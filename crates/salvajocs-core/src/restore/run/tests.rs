@@ -240,6 +240,8 @@ fn read_matches_fetch() {
     write(&nested.join("files/WinAppData/Game/a.sav"), "a");
     write(&nested.join("files/WinAppData/Game/deep/er/b.sav"), "b");
     write(&nested.join("files/XdgData/Other/c.sav"), "c");
+    // Only the unix-only cases below add to it.
+    #[cfg_attr(not(unix), allow(unused_mut, clippy::useless_vec))]
     let mut snapshots = vec![backed_up, crafted_snapshot(&mut storage, &nested)];
     #[cfg(unix)]
     {
