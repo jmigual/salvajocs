@@ -2,22 +2,24 @@
 
 **Status:** Accepted
 **Date:** 2026-11-17
+**Amended:** 2026-11-19: the AppImage checks for updates and replaces itself too (ADR-0022).
 
 ## Context
 
 On Windows salvajocs ships as a per-user Inno Setup installer (`{localappdata}\Programs\salvajocs`)
-and as a zip. Linux users update through their package manager, the AppImage or
-`cargo install`. A running Windows exe cannot overwrite itself, but the installer can replace it
-after the app closes.
+and as a zip. Linux users update through their package manager or `cargo install`; the AppImage
+updates itself (ADR-0022). A running Windows exe cannot overwrite itself, but the installer can
+replace it after the app closes.
 
 ## Decision
 
-- **Check:** on Windows builds only (`Env::check_update` is `None` elsewhere), once per start and in
-  a background job, the app asks `api.github.com/repos/jmigual/salvajocs/releases/latest` (User-Agent
-  `salvajocs/<version>`) and compares the tag `v<version>` with its own version (`semver`; a
-  pre-release or build metadata never counts as newer). Any failure, offline or GitHub's rate
-  limit, is only logged to stderr. Settings has "Check for
-  updates at start" (`check_updates` in `config.yaml`, default on, missing in older files = on).
+- **Check:** on Windows builds and in an AppImage (ADR-0022; `Env::check_update` is `None`
+  elsewhere), once per start and in a background job, the app asks
+  `api.github.com/repos/jmigual/salvajocs/releases/latest` (User-Agent `salvajocs/<version>`) and
+  compares the tag `v<version>` with its own version (`semver`; a pre-release or build metadata
+  never counts as newer). Any failure, offline or GitHub's rate limit, is only logged to stderr.
+  Settings has "Check for updates at start" (`check_updates` in `config.yaml`, default on, missing
+  in older files = on).
 - **Notice:** a newer release shows "Update available: vX.Y.Z" in the bottom bar. When
   `unins000.exe` sits next to the running exe the installer put it there, and the notice offers
   **Update now**. Otherwise (zip, `cargo install`) it links the release page.
