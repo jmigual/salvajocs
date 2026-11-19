@@ -72,6 +72,37 @@ keys under **Registry**:
   folder whose files come from two places, such as two prefixes or install folders, opens the
   first.
 
+### What differs from the last backup
+
+After each scan, the tab compares every game with its newest backup from any machine that uses
+the repository, leaving out the safety backups made before a restore. While it runs, the list
+says **Comparing with the last backups**. Each game then gets one more line:
+
+| Line | Meaning |
+| --- | --- |
+| `3 new, 2 changed, 1 removed since the backup from <host>, <date>` | What the next backup would add, change and remove compared with that backup. `1 could not be compared` counts files that could not be read. |
+| `No changes since the backup from <host>, <date>; no backup will be made` | The files are the same as in that backup. |
+| `No changes since the backup from <host>, <date>` | The files are the same, but that backup has no list of hashes (it was made by salvajocs 0.5.0 or older), so a backup is still made. |
+| `Unchanged since this PC's last backup (<date>), so no backup will be made. The newest backup, from <host> on <date>, differs: …` | Nothing changed since this machine's own last backup, but another machine's newer backup has other files. |
+| `No backup yet` | The repository has no backup of the game. |
+| `Could not compare: <error>` | The backups could not be read. |
+
+A game that is not backed up, because it is unchecked or has nothing checked, gets no line.
+
+In the file tree, a file the backup does not have says `new`, one whose content differs says
+`changed`, and one that could not be read says `could not be compared`. A file that is in the
+backup but not found any more, or that you unchecked, says `removed`: files no longer found are
+greyed rows without a checkbox. A game with unreadable paths
+removes nothing, since its backup keeps the files it could not check.
+
+A file counts as changed by its content: a different size is a change; the same size and
+modification time is not; otherwise its SHA-256 is compared with the list of hashes the backup
+holds. A backup made by salvajocs 0.5.0 or older has no such list, and a list that does not match
+its backup's files is not used, so there the modification time decides.
+
+The comparison leaves out the registry keys and the list of save folders, so a game shown as
+unchanged is still backed up when only those changed.
+
 The choices are kept in the repository, so every machine that uses it shares them. A click is
 not stored there right away: it waits in `pending-selection.json` in the config folder, which
 keeps it if the app closes, and **Back up** saves it to the repository first. Other machines see
@@ -88,7 +119,9 @@ backups (see [What is stored](#what-is-stored)). It shows the result per game un
 | Result | Meaning |
 | --- | --- |
 | backed up | The save changed and a snapshot was stored. |
-| up to date | The save is the same as in the last snapshot, so nothing was stored. |
+| up to date | The save is the same as in this machine's last snapshot, so nothing was stored. |
+| up to date with this PC's last backup; the newest backup, from `<host>`, differs | Nothing changed since this machine's last snapshot, so nothing was stored, but another machine's newer snapshot has other files. |
+| same as the newest backup, from `<host>` | Another machine's newest snapshot holds the same files, for example after a launcher's cloud sync, so nothing was stored. |
 | failed | The game could not be backed up. The reason follows. |
 
 The repository removes duplicate data, so repeated backups of a large save that changed little
@@ -97,9 +130,12 @@ cost little space.
 ## What is stored
 
 Each game gets its own snapshot, tagged `salvajocs` and `game:<slug>`, with the game's title as its
-label. Files are stored relative to named folders (for example `WinDocuments` or `XdgConfig`), not
-as absolute paths of this machine. That is why a save can be restored on another machine or
-operating system. See [Cross-OS restore](cross-os-restore.md).
+label. Since 0.6.0 it also holds `hashes.json`, the SHA-256 and size of every saved file, which
+the comparison above and the "same as the newest backup" check read. The first backup of each
+game after updating to 0.6.0 therefore makes a new snapshot. Files are stored relative to named
+folders (for example `WinDocuments` or `XdgConfig`), not as absolute paths of this machine. That
+is why a save can be restored on another machine or operating system. See
+[Cross-OS restore](cross-os-restore.md).
 
 After each backup, even one where a game failed, salvajocs removes the old backups that the
 [Old backups](settings.md#old-backups) rules let go, never the ones this backup just made, and
