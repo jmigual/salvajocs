@@ -24,6 +24,9 @@ machine and OS.
   salvajocs.json                  # SnapshotMeta { format: 1, title, roots: [(Base, rest)] }
   files/<Base>/<tail...>          # one dir per semantic base
   registry.json                   # optional, ADR-0006
+  hashes.json                     # since 0.6.0, ADR-0018: SHA-256, size and mtime of each
+                                  # file under files/, plus hashes of salvajocs.json and
+                                  # registry.json
 ```
 
 - `Base` is taken from the template's **leading placeholder** together with the **evaluation

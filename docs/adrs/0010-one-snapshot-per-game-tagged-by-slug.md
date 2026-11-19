@@ -32,6 +32,9 @@ and paths by default.
   cross-machine restore is the point.
 - `skip_if_unchanged` is set, so unchanged games don't add snapshots. The repository is reindexed
   once per backup run (ADR-0003, index freshness).
+  - Amended by ADR-0018: a game is also skipped when its staged hash list equals that of the
+    newest non-`pre-restore` snapshot of the game from any host. The pre-restore safety backup
+    keeps only `skip_if_unchanged`.
 
 ## Alternatives considered
 
