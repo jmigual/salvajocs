@@ -15,7 +15,7 @@ use eframe::egui::{
     self, Checkbox, Label, Rect, RichText, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo,
 };
 use salvajocs_core::backup::{self, GameBackup, Stored};
-use salvajocs_core::changes::{self, Comparison, Counts, FileState};
+use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
@@ -1096,7 +1096,8 @@ impl BackupTab {
             let report = scan::scan(&manifest, &config, &environment, scanned);
             let games = chosen_files(&report, filter);
             lock(&progress).total = games.len();
-            let backed_up = back_up(&storage, &games, &stage_root, |backup| {
+            let mapper = Mapper::new(&manifest, &config, &environment);
+            let backed_up = back_up(&storage, &games, &stage_root, &mapper, |backup| {
                 lock(&progress).done.push(summarize(backup));
                 waker.request_repaint();
             });
@@ -1251,16 +1252,25 @@ fn scan_progress(
     }
 }
 
-/// Backs up `games` into `storage`, calling `progress` as each game is done. Returns the ids of
-/// the new snapshots.
+/// Backs up `games` into `storage`, comparing each with its newest backup through `mapper`, and
+/// calling `progress` as each game is done. Returns the ids of the new snapshots.
 fn back_up(
     storage: &SharedStorage,
     games: &[GameScan],
     stage_root: &Path,
+    mapper: &Mapper,
     progress: impl FnMut(&GameBackup),
 ) -> anyhow::Result<Vec<String>> {
     let mut storage = lock_storage(storage)?;
-    let backups = backup::backup_games(&mut storage, games, stage_root, &[], true, progress)?;
+    let same_as_newest = Some(mapper);
+    let backups = backup::backup_games(
+        &mut storage,
+        games,
+        stage_root,
+        &[],
+        same_as_newest,
+        progress,
+    )?;
     let made = backups
         .into_iter()
         .filter_map(|backup| match backup.result {

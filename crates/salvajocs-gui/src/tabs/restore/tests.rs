@@ -258,7 +258,7 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
     )];
     scan.roots = vec![(Base::XdgData, "Mix".into())];
     let mut repo = storage.lock().unwrap();
-    backup_games(&mut repo, &[scan], &dir.join("stage"), &[], false, |_| {}).unwrap();
+    backup_games(&mut repo, &[scan], &dir.join("stage"), &[], None, |_| {}).unwrap();
     let snapshot = restore::list(&repo).unwrap().remove(0).snapshots.remove(0);
     let listed = restore::read(&mut repo, &snapshot, &dir.join("work")).unwrap();
     Arc::new(Fetched {
@@ -715,7 +715,7 @@ fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
         &[scan],
         &stage,
         &[],
-        false,
+        None,
         |_| {},
     )
     .unwrap();

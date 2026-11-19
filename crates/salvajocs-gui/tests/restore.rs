@@ -136,7 +136,7 @@ fn open_tab_with(
         snapshots,
         &tmp.path().join("fixture-stage"),
         tags,
-        false,
+        None,
         |_| {},
     )
     .unwrap();
@@ -392,7 +392,7 @@ fn restore_switching_snapshots_shows_only_the_last_plan() {
     // Another session backs the game up again after the app loaded the repository's index.
     let (_, newer) = native(&tmp, "Alpha", &["Alpha/new.dat"]);
     let stage = tmp.path().join("fixture-stage");
-    backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], false, |_| {}).unwrap();
+    backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], None, |_| {}).unwrap();
     click(&mut harness, "Load backups");
     select(&mut harness, "Alpha");
     preview(&mut harness);
@@ -948,13 +948,13 @@ fn two_games(tmp: &TempDir) -> Harness<'static, App> {
         std::slice::from_ref(&alpha),
         &stage,
         &safety,
-        false,
+        None,
         |_| {},
     )
     .unwrap();
     // Same length as the first contents, so the scan's size still holds.
     fs::write(&alpha.files[0].real, "ALPHA/SAVE.DAT").unwrap();
-    backup_games(&mut storage, &[alpha], &stage, &[], false, |_| {}).unwrap();
+    backup_games(&mut storage, &[alpha], &stage, &[], None, |_| {}).unwrap();
     let skip = [Change::Skip(true)];
     selection::save(&mut storage, "Alpha", &skip, &tmp.path().join("settings")).unwrap();
     drop(storage);

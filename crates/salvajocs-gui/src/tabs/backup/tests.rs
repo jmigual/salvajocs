@@ -7,6 +7,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::BackupError;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::layout::Base;
+use salvajocs_core::manifest::Manifest;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::{FoundFile, RegistrySource};
 use salvajocs_core::selection::{Change, Pending};
@@ -759,6 +760,12 @@ fn shared_storage(dir: &Path) -> SharedStorage {
     Arc::new(Mutex::new(storage))
 }
 
+/// What a [`Mapper`] that maps nothing is made of: no manifest, custom games or folders.
+fn no_mapping() -> (Manifest, AppConfig, Environment) {
+    let config = AppConfig::new("/repo".into(), PasswordMode::None);
+    (Manifest::default(), config, Environment::default())
+}
+
 /// The ids of the snapshots of `title`, newest first.
 fn snapshot_ids(storage: &SharedStorage, title: &str) -> Vec<String> {
     let tag = format!("game:{}", salvajocs_core::slug::slug(title));
@@ -771,15 +778,17 @@ fn back_up_returns_only_the_new_snapshots() {
     let dir = tempfile::tempdir().unwrap();
     let storage = shared_storage(dir.path());
     let stage = dir.path().join("stage");
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
     let same = saved_game(dir.path(), "Same", "a");
     let games = [same.clone(), saved_game(dir.path(), "Changed", "b")];
-    back_up(&storage, &games, &stage, |_| {}).unwrap();
+    back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
     let failing = saved_game(dir.path(), "Failing", "c");
     // A file where its staging dir belongs makes staging it fail.
     std::fs::write(stage.join(salvajocs_core::slug::slug("Failing")), "").unwrap();
 
     let games = [same, saved_game(dir.path(), "Changed", "b2"), failing];
-    let made = back_up(&storage, &games, &stage, |_| {}).unwrap();
+    let made = back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
 
     assert_eq!(made, snapshot_ids(&storage, "Changed")[..1]);
 }
@@ -789,9 +798,11 @@ fn clean_up_never_forgets_the_snapshots_it_is_given() {
     let dir = tempfile::tempdir().unwrap();
     let storage = shared_storage(dir.path());
     let stage = dir.path().join("stage");
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
     for content in ["old", "new"] {
         let games = [saved_game(dir.path(), "Game", content)];
-        back_up(&storage, &games, &stage, |_| {}).unwrap();
+        back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
     }
     let ids = snapshot_ids(&storage, "Game");
     let mut policy = Retention::default();

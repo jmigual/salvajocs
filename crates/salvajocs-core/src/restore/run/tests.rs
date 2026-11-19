@@ -46,7 +46,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
 }
 
 fn back_up(storage: &mut Storage, root: &Path, games: &[GameScan], tags: &[&str]) {
-    let outcomes = backup_games(storage, games, &root.join("stage"), tags, false, |_| {}).unwrap();
+    let outcomes = backup_games(storage, games, &root.join("stage"), tags, None, |_| {}).unwrap();
     for outcome in outcomes {
         assert!(matches!(outcome.result, Ok(Stored::New(_))), "{outcome:?}");
     }

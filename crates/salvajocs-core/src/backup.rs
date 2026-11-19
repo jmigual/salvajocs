@@ -434,9 +434,9 @@ impl GameBackup {
 struct Baseline {
     /// The game's newest snapshot that is not a pre-restore one, from any host.
     newest: Option<SnapshotInfo>,
-    /// Its hash list; `None` when it has none, it cannot be read or does not match the
-    /// snapshot's files ([`changes::verified`]), or the same-as-newest rule is off.
-    hashes: Option<Hashes>,
+    /// It as the staged game is compared with it; `None` when it cannot be read or the
+    /// same-as-newest rule is off.
+    compared: Option<changes::Baseline>,
 }
 
 /// Backs up each of `games` as its own snapshot (ADR-0010), one after another: the game is
@@ -445,9 +445,10 @@ struct Baseline {
 /// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas).
 ///
 /// A game makes no snapshot when nothing changed since this machine's last backup of it, or,
-/// with `same_as_newest`, when its staged hash list equals that of the game's newest snapshot
-/// that is not a pre-restore one, from any host (ADR-0018). The pre-restore safety backup
-/// passes false.
+/// with a `same_as_newest` mapper, when its staged content equals that of the game's newest
+/// snapshot that is not a pre-restore one, from any host (ADR-0018), mapped through the folder
+/// pairs when that snapshot is of the other build ([`changes::Baseline::same_content`],
+/// ADR-0021). The pre-restore safety backup passes `None`.
 ///
 /// The repository is reindexed and its snapshots listed once first; only those failures are
 /// returned as `Err`. A game's failure is in its [`GameBackup`] and does not stop the others.
@@ -457,7 +458,7 @@ pub fn backup_games(
     games: &[GameScan],
     stage_root: &Path,
     extra_tags: &[&str],
-    same_as_newest: bool,
+    same_as_newest: Option<&changes::Mapper<'_>>,
     mut progress: impl FnMut(&GameBackup),
 ) -> Result<Vec<GameBackup>, BackupError> {
     storage.reindex()?;
@@ -470,13 +471,11 @@ pub fn backup_games(
             let newest = changes::newest(&snapshots, &slug).cloned();
             // A list that cannot be read or verified only costs a snapshot rustic may still
             // skip; failing the game would block its backups for good.
-            let hashes = match &newest {
-                Some(newest) if same_as_newest => changes::baseline(storage, &newest.id, &slug)
-                    .ok()
-                    .and_then(|(_, hashes)| hashes),
+            let compared = match (&newest, same_as_newest) {
+                (Some(newest), Some(mapper)) => mapper.baseline(storage, newest, game).ok(),
                 _ => None,
             };
-            Baseline { newest, hashes }
+            Baseline { newest, compared }
         })
         .collect();
     let mut outcomes = Vec::with_capacity(games.len());
@@ -497,7 +496,7 @@ pub fn backup_games(
     Ok(outcomes)
 }
 
-/// Stages `game` and stores it unless it equals `baseline`'s hash list or rustic finds it
+/// Stages `game` and stores it unless it equals `baseline`'s content or rustic finds it
 /// unchanged; `host` is this machine's.
 fn backup_game(
     storage: &mut Storage,
@@ -509,9 +508,9 @@ fn backup_game(
     host: &str,
 ) -> Result<Stored, BackupError> {
     let staged = stage(game, &read_registry(game)?, stage_dir)?;
-    let Baseline { newest, hashes } = baseline;
-    if let (Some(newest), Some(hashes)) = (&newest, hashes)
-        && staged.same_content(&hashes)
+    let Baseline { newest, compared } = baseline;
+    if let (Some(newest), Some(compared)) = (&newest, compared)
+        && compared.same_content(&staged)
     {
         return Ok(if newest.host == host {
             Stored::Unchanged {

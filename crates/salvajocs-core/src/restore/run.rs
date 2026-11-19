@@ -695,7 +695,7 @@ pub fn run(
     } else {
         let tags = [PRE_RESTORE_TAG];
         let games = slice::from_ref(&existing);
-        let mut outcomes = backup_games(storage, games, stage_root, &tags, false, |_| {})?;
+        let mut outcomes = backup_games(storage, games, stage_root, &tags, None, |_| {})?;
         let outcome = outcomes.pop().expect("one outcome per game");
         match outcome.result? {
             Stored::New(snapshot) => SafetyBackup::Created(snapshot),

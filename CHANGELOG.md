@@ -17,6 +17,11 @@ All notable changes to salvajocs. The format follows
   list of hashes (made by 0.5.0 or older), says so in its tooltip.
 - The manifest status and the update notice moved from the top bar to a thinner bar along the
   bottom of the window.
+- A backup is skipped when the game's newest backup is from the other build (native Linux or
+  Windows) and holds the same files once its folders are matched to this machine's through the
+  pairs a restore uses, and the same registry keys.
+- `salvajocs-core`: `backup::backup_games` takes an `Option<&changes::Mapper>` instead of
+  `same_as_newest: bool`; `None` turns the skip against the newest backup off, as `false` did.
 
 ## [0.6.0] - 2026-11-19
 
