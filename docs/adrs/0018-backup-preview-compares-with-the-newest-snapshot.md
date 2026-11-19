@@ -53,7 +53,7 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
   `verified`, `compare_file`, `compare_game` (found files against the baseline listing; paths
   fold ASCII case below Windows-family bases, as ADR-0014 does), `counts` (by the game's
   selection: an unticked file that is in the baseline counts as removed; unreadable ones count
-  as unknown) and `same_content` (two local files, used by the restore).
+  as unknown).
 - **Skip rule (amends ADR-0010).** A game gets no snapshot when
   - (A) nothing changed since this machine's last backup: rustic's `skip_if_unchanged`; or
   - (B) its staged hash list equals the hash list of the newest non-`pre-restore` snapshot of

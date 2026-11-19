@@ -27,7 +27,8 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
   fetched snapshots live in `restore-batch/<pid>/<index>` under the cache dir until the run,
   removed after it, on Cancel and when Settings replaces the repository. Planning also removes
   the dirs of other process ids untouched for a day; the live batch of another running salvajocs
-  is kept.
+  is kept. Since ADR-0020 planning reads only each snapshot's listing and small files, and the
+  run downloads every game before the first restore.
 - **Mapping dialogs one after another.** A game that needs mapping gets the existing dialog,
   without the prefix option (choosing a prefix needs the single-game view). Confirmed choices are
   saved with the game as in a single restore, and stay saved if the batch is cancelled later.
@@ -40,6 +41,7 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
   that error. An existing target file that cannot be opened returns `UnreadableTarget`: the
   safety backup could not copy it, so `restore::run` would write nothing for that game. The
   labels are a snapshot in time; `run` does not use them, and unchanged files are still written.
+  ADR-0020 replaces the byte compare with the hash list, since the source is no longer on disk.
 - **The confirm.** Per game: title and snapshot, targets, `N new, M changed, K unchanged`, each
   write that will fail with its reason, the cross-build warning and notes, the registry line and
   the skipped items, as the single preview has them. Below the counts and the writes that will
@@ -68,6 +70,8 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
 - **Stepping through each game's full preview:** the one-game-at-a-time flow again.
 - **Hashing both sides, or comparing with the snapshot's chunk ids or hash list:** reads more than
   a size check plus one byte compare of two local files, and the staged source is already on disk.
+  ADR-0020 reverses this: the staged source is no longer downloaded before the confirm, so the
+  hash list is what is compared.
 - **Labels from the snapshot side (`Base/tail` of the backup):** a cross-build restore would show
   the other build's folders, not where the files go.
 

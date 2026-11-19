@@ -74,10 +74,8 @@ machine and OS.
   An unchanged game therefore keeps identical file metadata, and `skip_if_unchanged`
   (ADR-0010) sees an identical tree. In the ADR-0003 spike, the same untouched source gave the
   same tree id twice and the second snapshot was skipped.
-- **Restore** opens the node at `/salvajocs/<slug>` (`node_from_snapshot_and_path`) and restores
-  that subtree into `<cache>/salvajocs/restore/<slug>`. Then it reads `salvajocs.json` and
-  `files/`. If the Windows CI check in ADR-0003 shows Windows stores the path differently, the
-  fallback is to find `salvajocs.json` with `ls`.
+- **Restore** lists `/salvajocs/<slug>` and reads `salvajocs.json`, `registry.json` and
+  `hashes.json` to plan; it restores the subtree only when the user restores (ADR-0020).
 
 ## Alternatives considered
 
