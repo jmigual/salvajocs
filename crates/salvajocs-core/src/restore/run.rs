@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::slice;
 
@@ -622,35 +622,14 @@ fn compare_write(write: &Write) -> Result<Result<WriteState, ApplyError>, Unread
         let path = write.target.clone();
         return Err(UnreadableTarget { path, source });
     }
-    Ok(match same_content(&write.source, &write.target) {
-        Ok(true) => Ok(WriteState::Unchanged),
-        Ok(false) => Ok(WriteState::Changed),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
-        Err(err) => Err(apply_io(&write.target)(err)),
-    })
-}
-
-/// Whether the files `a` and `b` hold the same bytes: sizes first, then the bytes, stopping at
-/// the first difference. Moves to `core::changes` with the backup-diff work.
-fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
-    const CHUNK: u64 = 64 * 1024;
-    let (mut a, mut b) = (File::open(a)?, File::open(b)?);
-    if a.metadata()?.len() != b.metadata()?.len() {
-        return Ok(false);
-    }
-    let (mut left, mut right) = (Vec::new(), Vec::new());
-    loop {
-        left.clear();
-        right.clear();
-        (&mut a).take(CHUNK).read_to_end(&mut left)?;
-        (&mut b).take(CHUNK).read_to_end(&mut right)?;
-        if left != right {
-            return Ok(false);
-        }
-        if left.is_empty() {
-            return Ok(true);
-        }
-    }
+    Ok(
+        match crate::changes::same_content(&write.source, &write.target) {
+            Ok(true) => Ok(WriteState::Unchanged),
+            Ok(false) => Ok(WriteState::Changed),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WriteState::New),
+            Err(err) => Err(apply_io(&write.target)(err)),
+        },
+    )
 }
 
 fn apply_file(write: &Write) -> Result<(), ApplyError> {
