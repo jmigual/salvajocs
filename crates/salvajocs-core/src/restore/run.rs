@@ -427,6 +427,16 @@ pub fn read(
 }
 
 impl Listed {
+    /// A listed game from its fields; `listing` is sorted by path.
+    pub fn new(staged: StagedGame, mut listing: Vec<SnapshotFile>, hashes: Option<Hashes>) -> Self {
+        listing.sort_by(|a, b| a.path.cmp(&b.path));
+        Self {
+            staged,
+            listing,
+            hashes,
+        }
+    }
+
     /// The entry of the listing that `write` copies, by `write.source` below `staged.root`;
     /// `None` when the listing has none.
     pub fn source(&self, write: &Write) -> Option<&SnapshotFile> {

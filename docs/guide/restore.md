@@ -14,10 +14,15 @@ walks through those steps and explains how to undo a restore. Back to the
 2. Click a game. The **Snapshot** list shows its backups, newest first, as `time, host`. A backup
    made by a restore adds `, pre-restore`. The newest backup that is not a `pre-restore` one is
    preselected.
-3. Choose where to restore (see below).
-4. Click **Preview**. Nothing is written yet.
+3. Choose where to restore (see below). A prefix path you type applies when you press Enter or
+   leave the field.
+4. The **Plan** shows by itself, read from the backup's file list. Nothing is downloaded or
+   written yet. Until it shows, a line next to the disabled **Restore files** says why: a snapshot
+   or a target to choose, the file list being read, or folders to choose (see
+   [Cross-OS restore](cross-os-restore.md#the-mapping-dialog)). If reading fails, the error shows
+   with **Try again**.
 5. Read the **Plan**. Fix anything you do not like (see "Overrides").
-6. Click **Restore files**.
+6. Click **Restore files**. salvajocs downloads the backup, then restores it.
 
 ## Targets
 
@@ -41,12 +46,20 @@ The prefix must have a clear user. salvajocs uses the only user folder in `drive
 a prefix, folder names match without regard to case, so `My Games` and `my games` never end up
 both existing.
 
-## The preview
+## The plan
 
 The Plan shows:
 
 - **Files to write (N).** Each file shows `<Folder>/<path>` and, under it, the real path on this
-  machine. A tag such as `(absolute path)` marks a path that was saved as a plain path.
+  machine. A tag such as `(absolute path)` marks a path that was saved as a plain path. After a
+  file's folder, an icon says what restoring it does, as in the plan of
+  [several games](#restore-several-games): a plus in a circle when nothing is there yet, a pencil
+  when the file there differs and will be overwritten, a question mark when salvajocs cannot read
+  the file there to compare it, and a cross in a circle when salvajocs will not write it. Hover
+  it to read why. An unchanged file has no icon; it is written all the same. Icons after the
+  heading count the files of each kind. When the safety backup cannot read a file at a target,
+  the plan says that nothing will be restored and lists those files, and **Restore files** stays
+  disabled. Make them readable and click **Try again**.
 - **Registry.** The number of registry keys and the prefix or the Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A **Cross-build restore** warning when the plan maps folders from the other build. The
@@ -70,20 +83,22 @@ The Plan shows:
 ### Overrides
 
 Each file line has an **Override target** field. Type an absolute path and click **Override** to
-send that one file somewhere else, for this restore only. A path that does not fit is refused with
-an error. If you typed a path and did not click **Override**, **Restore files** stays disabled and
-the tab tells you to apply or clear it.
+send that one file somewhere else, for this restore only, and its icon compares it with the new
+target. A path that does not fit is refused with an error. If you typed a path and did not click
+**Override**, **Restore files** stays disabled and the tab tells you to apply or clear it.
 
 ## What happens when you click Restore files
 
-1. **Safety backup.** Before writing, salvajocs stores the files and registry keys the restore
+1. **Download.** salvajocs downloads the game's backup into its cache folder. If the download
+   fails, nothing is restored and no safety backup is made.
+2. **Safety backup.** Before writing, salvajocs stores the files and registry keys the restore
    would replace, as a new snapshot of the same game tagged `pre-restore`, in the repository the
    backup came from. If this fails, nothing is restored. If nothing exists yet at the targets, no
    safety backup is needed, and the tab says so. If the repository already holds the same state,
    no new snapshot is added.
-2. **Files.** Each file is written to a temporary file and moved into place. A target that is a
+3. **Files.** Each file is written to a temporary file and moved into place. A target that is a
    symbolic link is never written through.
-3. **Registry.** On Windows, the keys are written to the live registry under `HKEY_CURRENT_USER`.
+4. **Registry.** On Windows, the keys are written to the live registry under `HKEY_CURRENT_USER`.
    In a Wine prefix, salvajocs edits `user.reg` directly. For each key it replaces the whole
    subtree.
 
@@ -111,8 +126,8 @@ To restore more than one game in one go:
    out and saves nothing. **Cancel** stops the whole batch, and nothing is restored; folder
    choices you already confirmed for earlier games stay saved.
 4. Read the **Plan**. For each game it shows the snapshot, where the files go, each file that
-   will fail, and the same warnings, registry and skipped items as the preview. Games that will
-   not be restored are listed with the reason. Nothing is written yet. At the end of the
+   will fail, and the same warnings, registry and skipped items as a single game's plan. Games
+   that will not be restored are listed with the reason. Nothing is written yet. At the end of the
    snapshot's line, icons count the files that are new (a plus in a circle: nothing there yet),
    changed (a pencil: the file there differs), unchanged (an equals sign) or could not be
    compared (a question mark). Counts of zero are
@@ -143,7 +158,7 @@ those files are listed under it as failed.
 ## Undo
 
 The safety backup is the undo. In the **Snapshot** list, choose the newest entry marked
-`pre-restore` for that game, preview it, and restore it.
+`pre-restore` for that game, check its plan, and restore it.
 
 An undo has limits:
 
@@ -165,7 +180,7 @@ to go ahead.
 
 Deleting all backups of a game keeps your file choices for it (see
 [Backup](backup.md#what-is-stored)). The buttons wait while the game manifest loads, the targets
-are detected, or a preview or a restore runs. When the delete is done, the tab says how many
+are detected, or a restore runs. When the delete is done, the tab says how many
 backups it removed and lists the games again. If it stops partway, the error says how many were
 removed before it.
 

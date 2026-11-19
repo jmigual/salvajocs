@@ -119,7 +119,7 @@ supported.
    **Back up N games**.
 3. On the machine you want to restore to, start salvajocs and connect to the same repository.
 4. Open the **Restore** tab, click **Load backups**, choose a game and a snapshot, pick the
-   target, click **Preview**, and then **Restore files**.
+   target, check the plan, and click **Restore files**.
 
 On Linux, add your Steam libraries and Wine prefixes in **Settings** if salvajocs does not find
 them. More in the [user guide](docs/guide/README.md).
@@ -135,7 +135,7 @@ You play a game with Proton on Linux and want its save on your Windows PC.
 3. **Connect on Windows.** Start salvajocs, choose the same backend and location, and type the same
    encryption password.
 4. **Restore on Windows.** **Load backups**, choose the game and the snapshot from the Linux
-   machine, **Preview**. The plan lists each file in your Windows folders and the registry keys. Click **Restore files**.
+   machine. The plan lists each file in your Windows folders and the registry keys. Click **Restore files**.
 
 The other direction works too. Restore on Linux into **Windows build in a Wine/Proton prefix**,
 after you started the game once with Proton so that the prefix exists, and with every Wine and

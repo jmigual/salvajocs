@@ -541,7 +541,6 @@ fn restore_tab() {
     run_until(&mut harness, "the default targets", |h| {
         shows(h, "Restore into:")
     });
-    harness.get_by_label("Preview").click();
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
     // The picker open shows the snapshots of every host and the safety backup.
     harness.get_by_label("Snapshot").click();
@@ -647,7 +646,10 @@ fn mapping_dialog() {
     run_until(&mut harness, "the default targets", |h| {
         shows(h, "Restore into:")
     });
-    harness.get_by_label("Preview").click();
+    run_until(&mut harness, "the plan", |h| {
+        h.query_by_label("Choose folders…").is_some()
+    });
+    harness.get_by_label("Choose folders…").click();
     run_until(&mut harness, "the dialog", |h| {
         shows(h, "Where should the saves")
     });

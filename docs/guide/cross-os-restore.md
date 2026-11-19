@@ -48,7 +48,7 @@ places. salvajocs can map the folders of one onto the other. This is called a cr
 restore. It happens when the backup holds folders the build you restore into does not have, for
 example Linux folders restored on Windows.
 
-The restore preview always shows a warning: the other build may use a different save format.
+The restore plan always shows a warning: the other build may use a different save format.
 The safety backup lets you [undo it](restore.md#undo).
 
 ### How a folder is matched
@@ -70,14 +70,16 @@ first answer:
    pairs them.
 4. **Unknown.** salvajocs asks you.
 
-Folders matched by 1 to 3 are applied without a dialog. The preview shows where every file goes,
+Folders matched by 1 to 3 are applied without a dialog. The plan shows where every file goes,
 and you can still override a single file there.
 
 ### The mapping dialog
 
 ![The mapping dialog](../images/mapping-dialog.png)
 
-The dialog appears only when at least one folder is unknown. It lists every folder of the game:
+The dialog is needed only when at least one folder is unknown. The plan then says how many
+folders from the other build have no place here; click **Choose folders…** to open the dialog.
+**Cancel** closes it, and the button stays. It lists every folder of the game:
 the known ones are filled in and the unknown ones need your decision. Each row shows the folder,
 its number of files and how its target was found.
 
@@ -97,7 +99,7 @@ that is not valid shows an error in the row.
 If you are on Linux and the backup holds Windows folders, **Restore into a Wine prefix instead**
 switches the restore to a prefix.
 
-Click **Use these folders**. The plan appears in the normal preview.
+Click **Use these folders**. The plan appears as usual.
 
 When you [restore several games](restore.md#restore-several-games) at once, the dialogs come one
 after another, one per game that needs it.
@@ -117,7 +119,7 @@ Choosing a target for a skipped folder removes the skip.
 
 Unity stores `PlayerPrefs` (usually game settings) in the registry on Windows, but in a file under
 `~/.config/unity3d` on Linux. salvajocs does not convert between them. When it sees this, the
-preview shows the note "Unity settings (PlayerPrefs) are stored differently and are not
+plan shows the note "Unity settings (PlayerPrefs) are stored differently and are not
 converted". The files of the mapped folder are still restored.
 
 ## Safety

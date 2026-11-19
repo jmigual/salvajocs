@@ -59,6 +59,13 @@ impl Dialog {
         Self { rows }
     }
 
+    /// How many of the roots have no proposed target, so the user must choose one.
+    pub(super) fn unknown_roots(&self) -> usize {
+        (self.rows.iter())
+            .filter(|row| row.entry.confidence == Confidence::Unknown)
+            .count()
+    }
+
     /// Shows `prepare`'s refusal of `template` on the row of `root`.
     pub(super) fn reject(&mut self, root: &SnapshotRoot, template: &str) {
         if let Some(row) = self.rows.iter_mut().find(|row| row.entry.root == *root) {

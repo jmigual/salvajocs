@@ -31,6 +31,12 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- Choosing a game or snapshot on the Restore tab shows the plan at once, read from the backup's
+  file list; the Preview button is gone. Files are downloaded only when you click **Restore
+  files**. The tab says why **Restore files** is disabled, and a backup with folders of the other
+  build waits behind **Choose folders…** instead of opening the mapping dialog by itself. Each
+  file of the plan has an icon saying whether it is new, changed, could not be compared or will
+  fail, as in the plan of several games.
 - `salvajocs-core`: public enums and result structs are `#[non_exhaustive]`, so later releases
   can add error kinds, variants and fields without a breaking version. Build such structs with
   their new `new` constructors or `Default`, and add a `_` arm when matching such enums.

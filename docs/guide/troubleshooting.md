@@ -81,7 +81,7 @@ read. Fix the permissions and back up again.
 
 ## A file or the game is skipped on restore
 
-The preview lists each skipped item with its reason. The common causes are:
+The restore plan lists each skipped item with its reason. The common causes are:
 
 - "game not found under any root": the file belongs in the game's install folder and salvajocs
   cannot find the game. Add the Steam library or games folder in

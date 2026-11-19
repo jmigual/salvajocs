@@ -189,7 +189,8 @@ impl App {
         if self.backup.take_removed() {
             self.restore.drop_listing();
         }
-        self.restore.poll(ctx, &mut self.state);
+        self.restore
+            .poll(ctx, &mut self.state, self.manifest.is_some());
         self.settings.poll(&mut self.state);
     }
 

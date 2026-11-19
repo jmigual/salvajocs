@@ -10,6 +10,7 @@ use common::{
     env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
     run_until, run_until_ready, save_config, shows,
 };
+use eframe::egui::Key;
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
@@ -153,6 +154,18 @@ fn open_tab_with(
     (harness, env)
 }
 
+/// A new app on the tests' repository showing the Restore tab's list with `title`, as after a
+/// restart, so its repository index holds snapshots another session added.
+fn reopen(env: Env, title: &str) -> Harness<'static, App> {
+    let mut harness = harness(env);
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the list", |h| shows(h, title));
+    harness
+}
+
 /// Selects `title` and waits for its default targets.
 fn select(harness: &mut Harness<'static, App>, title: &str) {
     harness.get_by_label(title).click();
@@ -161,11 +174,10 @@ fn select(harness: &mut Harness<'static, App>, title: &str) {
     });
 }
 
-/// Previews the restore and waits for the plan or the mapping dialog.
+/// Waits for the plan, which starts by itself, or for its "Choose folders…" button.
 fn preview(harness: &mut Harness<'static, App>) {
-    harness.get_by_label("Preview").click();
-    run_until(harness, "the preview", |h| {
-        shows(h, "Files to write") || shows(h, "Where should the saves")
+    run_until(harness, "the plan", |h| {
+        shows(h, "Files to write") || h.query_by_label("Choose folders…").is_some()
     });
 }
 
@@ -294,6 +306,7 @@ fn mix(tmp: &TempDir) -> (Harness<'static, App>, Env) {
     let (mut harness, env) = open_tab(tmp, vec![game], &[snapshot]);
     select(&mut harness, "Mix");
     preview(&mut harness);
+    click(&mut harness, "Choose folders…");
     (harness, env)
 }
 
@@ -335,31 +348,256 @@ fn restore_only_safety_backups_preselect_no_snapshot() {
     select(&mut harness, "Alpha");
 
     assert_eq!(value(&harness, "Snapshot"), "Choose a snapshot");
-    assert!(disabled(&harness, "Preview"));
+    assert!(shows(&harness, "Choose a snapshot."));
+    assert!(!shows(&harness, "Files to write"));
 
     click(&mut harness, "Snapshot");
     let option = harness.query_all_by_label_contains(", pre-restore").next();
     option.expect("the safety backup is listed").click();
-    run_settled(&mut harness);
+    preview(&mut harness);
     assert!(value(&harness, "Snapshot").ends_with(", pre-restore"));
-    assert!(!disabled(&harness, "Preview"));
+    assert!(!disabled(&harness, "Restore files"));
+}
+
+/// Where this process reads and downloads the single game's snapshot.
+fn work_dir(env: &Env) -> PathBuf {
+    let pid = std::process::id().to_string();
+    env.cache_dir.join("restore-work").join(pid)
 }
 
 #[test]
-fn restore_apply_disabled_until_plan_loaded() {
+fn restore_shows_the_plan_when_a_game_is_selected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    assert!(shows(&harness, "Files to write (2)"));
+    assert!(!work_dir(&env).exists(), "nothing is downloaded");
+}
+
+#[test]
+fn restore_files_says_why_it_is_disabled() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, _env, _) = alpha(&tmp);
     assert!(disabled(&harness, "Restore files"));
     select(&mut harness, "Alpha");
-    assert!(disabled(&harness, "Restore files"));
-
     preview(&mut harness);
     assert!(!disabled(&harness, "Restore files"));
 
-    // Another build drops the plan, which was made for the old targets.
+    // Another build drops the plan, which was made for the old targets, and plans again.
     click(&mut harness, "Native Linux build");
+    preview(&mut harness);
+    assert!(!disabled(&harness, "Restore files"));
+
+    click(&mut harness, "Windows build in a Wine/Proton prefix");
     assert!(!shows(&harness, "Files to write"));
     assert!(disabled(&harness, "Restore files"));
+    assert!(shows(&harness, "Choose where to restore."));
+}
+
+#[test]
+fn restore_switching_snapshots_shows_only_the_last_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, older) = native(&tmp, "Alpha", &["Alpha/old.dat"]);
+    let (app, env) = open_tab(&tmp, vec![alpha], &[older]);
+    drop(app);
+    let (_, newer) = native(&tmp, "Alpha", &["Alpha/new.dat"]);
+    let stage = tmp.path().join("fixture-stage");
+    backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], false, |_| {}).unwrap();
+    let mut harness = reopen(env, "Alpha");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    // The older snapshot, then at once the newer one, before the first plan can end.
+    for nth in [1, 0] {
+        harness.get_by_label("Snapshot").click();
+        harness.step();
+        harness.step();
+        let mut options = harness.query_all_by_label_contains(" UTC, ");
+        options.nth(nth).expect("both snapshots are listed").click();
+        drop(options);
+        harness.step();
+    }
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+
+    assert!(shows(&harness, "XdgData/Alpha/new.dat"));
+    assert!(!shows(&harness, "XdgData/Alpha/old.dat"));
+}
+
+#[test]
+fn restore_prefix_typing_waits_for_enter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let other = tmp.path().join("other-pfx");
+    fs::create_dir_all(other.join("drive_c/users/steamuser")).unwrap();
+    fs::write(other.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+
+    replace_text(&mut harness, "Prefix", other.to_str().unwrap());
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Press Enter to use this prefix."));
+    assert!(!shows(&harness, "Files to write"));
+
+    harness.key_press(Key::Enter);
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+    let target = under(
+        &other,
+        "drive_c/users/steamuser/AppData/Roaming/Alpha/save.dat",
+    );
+    assert!(shows_path(&harness, &target.display().to_string()));
+}
+
+#[test]
+fn restore_downloads_before_the_safety_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    let target = saves.join("save.dat");
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(&target, "old").unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    let alpha = backups_of(&tmp, "Alpha");
+    open_repo(&tmp).forget(&[&alpha[0]]).unwrap();
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the refusal", |h| {
+        shows(h, "Nothing was restored")
+    });
+
+    assert!(shows(&harness, "the backup cannot be fetched"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+}
+
+#[test]
+fn restore_plan_labels_each_file_and_compares_an_override_afresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), "Alpha/save.dat").unwrap();
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+    fs::write(&elsewhere, "other").unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    // The same bytes as the backup's: unchanged, so no icon.
+    assert!(
+        harness
+            .query_all_by_label("1 new, 1 unchanged")
+            .next()
+            .is_some()
+    );
+    assert!(harness.query_by_label("New: not on this PC yet").is_some());
+    assert!(
+        harness
+            .query_by_label("Changed: will be overwritten")
+            .is_none()
+    );
+
+    replace_text(
+        &mut harness,
+        "Override target 1",
+        elsewhere.to_str().unwrap(),
+    );
+    click(&mut harness, "Override 1");
+    assert!(
+        harness
+            .query_all_by_label("1 new, 1 changed")
+            .next()
+            .is_some()
+    );
+    assert!(
+        harness
+            .query_by_label("Changed: will be overwritten")
+            .is_some()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_files_waits_for_a_target_the_safety_backup_cannot_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    let locked = saves.join("save.dat");
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(&locked, "old").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let blocked = shows(&harness, "Nothing will be restored");
+    let listed = shows_path(&harness, &locked.display().to_string());
+    let disabled_while_blocked = disabled(&harness, "Restore files");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(blocked && listed && disabled_while_blocked);
+    click(&mut harness, "Try again");
+    preview(&mut harness);
+    assert!(!shows(&harness, "Nothing will be restored"));
+    assert!(!disabled(&harness, "Restore files"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_plan_offers_try_again() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    // The data packs hold `salvajocs.json`, which the plan reads; they are never cached.
+    let data = Path::new(&repo_dir(&tmp)).join("data");
+    /// Gives a dir back its mode when dropped, so a failing test does not leave it locked.
+    struct Unlock(PathBuf, u32);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(self.1));
+        }
+    }
+    let mode = fs::metadata(&data).unwrap().permissions().mode();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o000)).unwrap();
+    let unlock = Unlock(data.clone(), mode);
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read_dir(&data).is_ok() {
+        return;
+    }
+    select(&mut harness, "Alpha");
+    run_until(&mut harness, "the plan to fail", |h| {
+        h.query_by_label("Try again").is_some()
+    });
+    drop(unlock);
+    assert!(shows(&harness, "The plan failed"));
+    assert!(disabled(&harness, "Restore files"));
+
+    click(&mut harness, "Try again");
+    preview(&mut harness);
+    assert!(shows(&harness, "Files to write (2)"));
+    assert!(!disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn restore_needs_mapping_waits_behind_choose_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env) = mix(&tmp);
+    assert!(shows(&harness, "Where should the saves of Mix go?"));
+
+    click(&mut harness, "Cancel");
+    assert!(!shows(&harness, "Where should the saves"));
+    assert!(shows(
+        &harness,
+        "This backup has 1 folder from the other build without a place here."
+    ));
+    assert!(disabled(&harness, "Restore files"));
+
+    click(&mut harness, "Choose folders…");
+    assert!(shows(&harness, "Where should the saves of Mix go?"));
 }
 
 #[test]
@@ -1216,13 +1454,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
         .unwrap();
     // The same bytes with another mtime.
     put(&under(&xdg_data(&tmp), "Alpha/same.dat"), "same");
-    // A new app, whose repository index holds the new snapshot.
-    let mut harness = harness(env);
-    run_until_ready(&mut harness);
-    harness.state_mut().set_tab(Tab::Restore);
-    run_settled(&mut harness);
-    harness.get_by_label("Load backups").click();
-    run_until(&mut harness, "the list", |h| shows(h, "Alpha"));
+    let mut harness = reopen(env, "Alpha");
 
     click(&mut harness, "Include Alpha");
     plan_batch(&mut harness, "Restore 1 game");

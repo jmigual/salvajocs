@@ -44,8 +44,6 @@ struct Planned {
 /// A game of the batch waiting for its turn in the mapping dialog (ADR-0011).
 struct Mapping {
     fetched: Arc<Fetched>,
-    /// The snapshot's listing, which the confirm compares with.
-    listed: Arc<Listed>,
     /// The fetched snapshot, as the picker shows it.
     snapshot: String,
     dialog: Dialog,
@@ -359,10 +357,10 @@ impl RestoreTab {
         });
         match action {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
-                let (fetched, listed) = (mapping.fetched.clone(), mapping.listed.clone());
+                let fetched = mapping.fetched.clone();
                 let job = Job::spawn(ctx, move || {
                     let plan = fetched.prepare(&choices).map(|plan| {
-                        let compared = compare(&plan, &listed);
+                        let compared = compare(&plan, &fetched.listed);
                         (plan, compared)
                     });
                     Ok(Mapped {
@@ -473,7 +471,7 @@ impl RestoreTab {
                 .map(|(fetched, plan)| {
                     // A failure to lock fails this game, not the job.
                     let fetch = lock_storage(&fetched.storage).and_then(|mut storage| {
-                        let (snapshot, staged) = (&fetched.snapshot, &fetched.staged);
+                        let (snapshot, staged) = (&fetched.snapshot, &fetched.listed.staged);
                         Ok(restore::download(&mut storage, snapshot, staged)?)
                     });
                     downloaded.fetch_add(1, Ordering::Relaxed);
@@ -579,12 +577,12 @@ fn plan_game(
         snapshot: snapshot.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
         title,
-        staged: listed.staged.clone(),
+        listed,
         targets,
         info,
     };
     match fetched.prepare(&[]) {
-        Ok(plan) => match compare(&plan, &listed) {
+        Ok(plan) => match compare(&plan, &fetched.listed) {
             Ok(compared) => Outcome::Planned(Box::new(Planned {
                 compared,
                 snapshot: snapshot_label(snapshot),
@@ -595,7 +593,6 @@ fn plan_game(
         },
         Err(PrepareError::NeedsMapping(entries)) => Outcome::NeedsMapping(Box::new(Mapping {
             fetched: Arc::new(fetched),
-            listed,
             snapshot: snapshot_label(snapshot),
             dialog: Dialog::new(entries),
         })),

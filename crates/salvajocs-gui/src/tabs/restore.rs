@@ -1,6 +1,7 @@
 //! The Restore tab: the games in the repository with their snapshots from every host, the build
-//! to restore into, a preview of the plan and the restore behind a safety backup (ADR-0005,
-//! ADR-0010, ADR-0011). Backups can also be deleted from the repository (ADR-0015).
+//! to restore into, the plan read from the snapshot's file list and the restore behind a safety
+//! backup (ADR-0005, ADR-0010, ADR-0011, ADR-0020). Backups can also be deleted from the
+//! repository (ADR-0015).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -16,8 +17,8 @@ use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
-    self, GameBackups, GameInfo, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
-    RunError, SafetyBackup, SkippedItem, StagedGame, Targets,
+    self, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
+    RunError, SafetyBackup, SkippedItem, Targets, Write, WriteState,
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
@@ -76,6 +77,8 @@ struct TargetPick {
     use_prefix: bool,
     /// The prefix path as typed or chosen.
     prefix: String,
+    /// Whether `prefix` was typed and not applied yet, so half-typed paths are not planned.
+    typing: bool,
     /// The prefix `default_targets` found with its path as text, reused while `prefix` still
     /// names it.
     found: Option<(String, Context)>,
@@ -89,6 +92,7 @@ impl TargetPick {
             linux: targets.linux,
             use_prefix: false,
             prefix: String::new(),
+            typing: false,
             found: None,
         };
         match targets.win {
@@ -158,7 +162,15 @@ impl TargetPick {
                 .changed();
             let label = ui.label("Prefix");
             let field = TextEdit::singleline(&mut self.prefix).hint_text("/path/to/pfx");
-            changed |= ui.add(field).labelled_by(label.id).changed();
+            let field = ui.add(field).labelled_by(label.id);
+            // Enter also takes the focus away, so either applies the typed path.
+            if field.changed() {
+                self.typing = true;
+                changed = true;
+            } else if field.lost_focus() && self.typing {
+                self.typing = false;
+                changed = true;
+            }
         });
         ui.weak(
             "Saves of the other build are mapped onto the chosen one (cross-build restore); \
@@ -168,14 +180,14 @@ impl TargetPick {
     }
 }
 
-/// A fetched snapshot and what `restore::prepare` needs besides the user's choices.
+/// A snapshot's listing and what `restore::prepare` needs besides the user's choices.
 struct Fetched {
     /// The repository the snapshot came from, which the safety backup goes into.
     storage: SharedStorage,
-    /// The snapshot `staged` comes from, which `restore::download` downloads.
+    /// The snapshot `listed` comes from, which `restore::download` downloads.
     snapshot: SnapshotInfo,
     title: String,
-    staged: StagedGame,
+    listed: Arc<Listed>,
     targets: Targets,
     vars: GameVars,
     info: GameInfo,
@@ -183,22 +195,69 @@ struct Fetched {
 
 impl Fetched {
     fn prepare(&self, choices: &[(SnapshotRoot, Choice)]) -> Result<RestorePlan, PrepareError> {
-        restore::prepare(&self.staged, &self.targets, &self.vars, &self.info, choices)
+        restore::prepare(
+            &self.listed.staged,
+            &self.targets,
+            &self.vars,
+            &self.info,
+            choices,
+        )
+    }
+
+    /// `plan` with how each write compares with its target. Reads the targets, so it runs in
+    /// a job.
+    fn labelled(
+        &self,
+        plan: Result<RestorePlan, PrepareError>,
+    ) -> Result<(RestorePlan, Vec<Label>), PrepareError> {
+        plan.map(|plan| {
+            let labels = (plan.writes.iter())
+                .map(|write| Label::of(write, &self.listed))
+                .collect();
+            (plan, labels)
+        })
     }
 }
 
-/// What a preview job hands back.
+/// How one write of the plan compares with its target (`restore::compare_writes`).
+#[derive(Debug)]
+enum Label {
+    /// What the write does to its target.
+    State(WriteState),
+    /// Why the restore refuses to write it.
+    WillFail(String),
+    /// Why the safety backup cannot read its target, which fails the whole restore.
+    Blocks(String),
+}
+
+impl Label {
+    /// How `write` compares with its target, against the listing `listed` it was planned from.
+    fn of(write: &Write, listed: &Listed) -> Self {
+        let plan = RestorePlan::new(vec![write.clone()], None, Vec::new(), false, Vec::new());
+        match restore::compare_writes(&plan, listed) {
+            Ok(mut states) => match states.pop().expect("one state per write") {
+                Ok(state) => Label::State(state),
+                Err(err) => Label::WillFail(format!("{:#}", anyhow!(err))),
+            },
+            Err(err) => Label::Blocks(format!("{:#}", anyhow!(err))),
+        }
+    }
+}
+
+/// What a plan job hands back.
 struct Prepared {
     fetched: Arc<Fetched>,
     /// The dialog's choices this plan was prepared with; empty for the first try.
     choices: Vec<(SnapshotRoot, Choice)>,
-    plan: Result<RestorePlan, PrepareError>,
+    plan: Result<(RestorePlan, Vec<Label>), PrepareError>,
 }
 
 /// The plan shown before anything is written.
 struct Preview {
     fetched: Arc<Fetched>,
     plan: RestorePlan,
+    /// How each write compares with its target.
+    labels: Vec<Label>,
     /// The override text of each write.
     overrides: Vec<String>,
     /// The write whose override was refused, with why.
@@ -290,9 +349,15 @@ pub struct RestoreTab {
     detecting: Option<Job<Targets>>,
     pick: Option<TargetPick>,
     picking: Option<Job<Option<PathBuf>>>,
-    /// The preview or confirm job, with the [`RestoreTab::generation`] it started in.
+    /// The plan or dialog confirm job, with the [`RestoreTab::generation`] it started in.
     preparing: Option<(u64, Job<Prepared>)>,
+    /// The generation the last plan job started in, so a failed plan does not start again.
+    attempted: Option<u64>,
+    /// The last snapshot listing read, by snapshot id, so a change of targets reads nothing.
+    last_read: Option<(String, Arc<Listed>)>,
     mapping: Option<(Arc<Fetched>, Dialog)>,
+    /// Whether the mapping dialog waits behind its "Choose folders…" button.
+    dialog_hidden: bool,
     preview: Option<Preview>,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
@@ -311,7 +376,7 @@ impl RestoreTab {
     /// Draws the tab. Listing, fetching, planning and restoring run in jobs; the mapping dialog's
     /// choices are saved to the config. `manifest_loading` is whether the manifest job runs.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
-        self.poll(ui.ctx(), state);
+        self.poll(ui.ctx(), state, manifest_loading);
         let busy = self.busy();
         // `default_targets` looks the game's Steam id up in the manifest. An open batch keeps the
         // other controls out of reach until it runs or is cancelled.
@@ -333,7 +398,7 @@ impl RestoreTab {
                     ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state));
                 });
             theme::page(ui, |ui| {
-                ui.add_enabled_ui(idle, |ui| self.game_ui(ui, state, manifest_loading));
+                ui.add_enabled_ui(idle, |ui| self.game_ui(ui, manifest_loading));
                 if busy {
                     ui.spinner();
                 }
@@ -355,7 +420,7 @@ impl RestoreTab {
 
     /// Drops the listed backups, the chosen and ticked games and a delete waiting for its
     /// confirm, as after a cleanup that may have forgotten one of them; "Load backups" lists them
-    /// again. A running preview or restore is kept.
+    /// again. A running plan job or restore is kept.
     pub(crate) fn drop_listing(&mut self) {
         self.confirm_delete = None;
         self.repository = None;
@@ -366,12 +431,13 @@ impl RestoreTab {
         self.snapshot = None;
     }
 
-    /// Whether a listing, restore or other job of this tab is running.
+    /// Whether a listing, restore or other job of this tab is running. A plan job only reads,
+    /// so it keeps nothing waiting; with the mapping dialog open it is the dialog's confirm.
     pub(crate) fn busy(&self) -> bool {
         self.listing.is_some()
             || self.detecting.is_some()
             || self.picking.is_some()
-            || self.preparing.is_some()
+            || (self.preparing.is_some() && self.mapping.is_some())
             || self.restoring.is_some()
             || self.deleting.is_some()
             || self.batch.busy()
@@ -408,7 +474,7 @@ impl RestoreTab {
     }
 
     /// Drops the plan and the dialog, which no longer match the chosen game or targets, and the
-    /// result of a preview or confirm still running.
+    /// result of a plan job or dialog confirm still running.
     fn forget_plan(&mut self) {
         self.preview = None;
         self.mapping = None;
@@ -416,12 +482,13 @@ impl RestoreTab {
     }
 
     /// Collects the tab's finished jobs, after dropping what belongs to a repository Settings
-    /// replaced. The app calls it every frame, whichever tab is in front, so a finished job does
-    /// not stay running.
-    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
+    /// replaced, then starts the plan of the current choice when it has none. The app calls it
+    /// every frame, whichever tab is in front, so a finished job does not stay running.
+    /// `manifest_loading` is whether the manifest job runs.
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &mut State, manifest_loading: bool) {
         // The list, plan and dialog of a repository Settings replaced are dropped. A running
-        // preview or restore is kept, so its report still shows and no new fetch reuses its work
-        // dir while it runs; the generation bump drops the preview's result.
+        // restore is kept, so its report shows and no new restore clears the work dir it
+        // downloads into; the generation bump drops a running plan job's result.
         let current = state.session.as_ref().map(|session| &session.storage);
         if (self.repository.as_ref())
             .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
@@ -429,6 +496,7 @@ impl RestoreTab {
             self.forget_plan();
             self.drop_listing();
             self.batch.close();
+            self.last_read = None;
             self.detecting = None;
             self.pick = None;
             self.removed = None;
@@ -436,6 +504,29 @@ impl RestoreTab {
         }
         self.poll_jobs(ctx, state);
         self.poll_batch(ctx, state);
+        self.auto_plan(ctx, state, manifest_loading);
+    }
+
+    /// Starts the plan of the chosen game, snapshot and targets once they are all set, unless
+    /// this choice was already tried. One plan job runs at a time; a result for an older choice
+    /// is dropped and the next frame starts the current one.
+    fn auto_plan(&mut self, ctx: &egui::Context, state: &State, manifest_loading: bool) {
+        let ready = !manifest_loading
+            && state.session.is_some()
+            && !self.batch.open()
+            && self.detecting.is_none()
+            && self.preparing.is_none()
+            && self.attempted != Some(self.generation)
+            && (self.pick.as_ref()).is_some_and(|pick| pick.ready() && !pick.typing);
+        let selected = (self.games.iter()).find(|game| Some(&game.slug) == self.selected.as_ref());
+        let chosen = selected.and_then(|game| {
+            let snapshot = game.snapshots.get(self.snapshot?)?;
+            Some((game.title.clone(), snapshot.clone()))
+        });
+        if let (true, Some((title, snapshot))) = (ready, chosen) {
+            self.attempted = Some(self.generation);
+            self.start_plan(ctx, state, title, snapshot);
+        }
     }
 
     fn poll_jobs(&mut self, ctx: &egui::Context, state: &mut State) {
@@ -478,11 +569,15 @@ impl RestoreTab {
         {
             let current = *generation == self.generation;
             self.preparing = None;
+            if let Ok(prepared) = &result {
+                let listed = &prepared.fetched.listed;
+                self.last_read = Some((prepared.fetched.snapshot.id.clone(), listed.clone()));
+            }
             match result {
                 // A plan for a closed dialog or other targets is neither shown nor saved.
                 _ if !current => {}
                 Ok(prepared) => self.prepared(prepared, ctx, state),
-                Err(err) => self.error = Some(format!("The preview failed: {err:#}")),
+                Err(err) => self.error = Some(format!("The plan failed: {err:#}")),
             }
         }
         if let Some(job) = &mut self.restoring
@@ -527,7 +622,7 @@ impl RestoreTab {
             plan,
         } = prepared;
         match plan {
-            Ok(plan) => {
+            Ok((plan, labels)) => {
                 if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
                     crossbuild::apply_choices(config, &fetched.title, &choices);
                     state.save_config(ctx);
@@ -537,11 +632,13 @@ impl RestoreTab {
                     overrides: vec![String::new(); plan.writes.len()],
                     fetched,
                     plan,
+                    labels,
                     override_error: None,
                 });
             }
             Err(PrepareError::NeedsMapping(entries)) => {
                 self.mapping = Some((fetched, Dialog::new(entries)));
+                self.dialog_hidden = true;
             }
             Err(PrepareError::Unclassifiable { root, template }) => match &mut self.mapping {
                 Some((_, dialog)) => dialog.reject(&root, &template),
@@ -551,7 +648,7 @@ impl RestoreTab {
                     ));
                 }
             },
-            Err(err) => self.error = Some(format!("The preview failed: {err}")),
+            Err(err) => self.error = Some(format!("The plan failed: {err}")),
         }
     }
 
@@ -628,8 +725,8 @@ impl RestoreTab {
         self.batch_button_ui(ui, state);
     }
 
-    /// The chosen game: its snapshot, the build to restore into and the preview button.
-    fn game_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+    /// The chosen game: its snapshot and the build to restore into.
+    fn game_ui(&mut self, ui: &mut Ui, manifest_loading: bool) {
         let listed = self.repository.is_some() && self.listing.is_none();
         if listed && self.games.is_empty() && self.error.is_none() {
             ui.weak("The repository has no backups yet. Back up your games in the Backup tab.");
@@ -681,17 +778,6 @@ impl RestoreTab {
         if changed {
             self.forget_plan();
         }
-        let ready = self.pick.as_ref().is_some_and(TargetPick::ready)
-            && self.snapshot.is_some()
-            && state.session.is_some();
-        if ui
-            .add_enabled(ready, egui::Button::new("Preview"))
-            .clicked()
-            && let Some(snapshot) = self.snapshot.and_then(|index| game.snapshots.get(index))
-        {
-            let title = game.title.clone();
-            self.start_preview(ui.ctx(), state, title, snapshot.clone());
-        }
         if manifest_loading {
             ui.weak("The game manifest is loading.");
         }
@@ -737,8 +823,10 @@ impl RestoreTab {
         }));
     }
 
-    /// Fetches `snapshot` into a fresh work dir under the cache dir and plans its restore.
-    fn start_preview(
+    /// Reads `snapshot`'s listing, or takes the last one read when it is the same snapshot, and
+    /// plans its restore into the picked targets. It downloads nothing: the restore downloads
+    /// into a work dir under the cache dir (ADR-0020).
+    fn start_plan(
         &mut self,
         ctx: &egui::Context,
         state: &State,
@@ -751,7 +839,6 @@ impl RestoreTab {
         };
         let targets = pick.targets();
         self.error = None;
-        self.forget_plan();
         let (storage, manifest, config) = (
             session.storage.clone(),
             state.manifest_or_empty(),
@@ -759,11 +846,19 @@ impl RestoreTab {
         );
         let environment = state.env.environment.clone();
         let work_dir = own_dir(&state.env.cache_dir, "restore-work");
+        let last_read = (self.last_read.clone())
+            .filter(|(id, _)| *id == snapshot.id)
+            .map(|(_, listed)| listed);
         let job = Job::spawn(ctx, move || {
             let targets = targets()?;
-            remove_dir(&work_dir)
-                .with_context(|| format!("cannot clear {}", work_dir.display()))?;
-            let staged = restore::fetch(&mut *lock_storage(&storage)?, &snapshot, &work_dir)?;
+            let listed = match last_read {
+                Some(listed) => listed,
+                None => Arc::new(restore::read(
+                    &mut *lock_storage(&storage)?,
+                    &snapshot,
+                    &work_dir,
+                )?),
+            };
             let info = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
             let fetched = Fetched {
@@ -771,12 +866,12 @@ impl RestoreTab {
                 snapshot,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 title,
-                staged,
+                listed,
                 targets,
                 info,
             };
             Ok(Prepared {
-                plan: fetched.prepare(&[]),
+                plan: fetched.labelled(fetched.prepare(&[])),
                 fetched: Arc::new(fetched),
                 choices: Vec::new(),
             })
@@ -786,7 +881,8 @@ impl RestoreTab {
 
     fn mapping_ui(&mut self, ctx: &egui::Context, state: &State) {
         let (busy, error) = (self.busy(), self.error.clone());
-        let Some((fetched, dialog)) = &mut self.mapping else {
+        let Some((fetched, dialog)) = (self.mapping.as_mut()).filter(|_| !self.dialog_hidden)
+        else {
             return;
         };
         let action = theme::modal(ctx, "restore_mapping", 720.0, |ui| {
@@ -805,7 +901,7 @@ impl RestoreTab {
                 let fetched = fetched.clone();
                 let job = Job::spawn(ctx, move || {
                     Ok(Prepared {
-                        plan: fetched.prepare(&choices),
+                        plan: fetched.labelled(fetched.prepare(&choices)),
                         fetched,
                         choices,
                     })
@@ -819,7 +915,7 @@ impl RestoreTab {
                     pick.use_prefix = true;
                 }
             }
-            Some(DialogAction::Cancel) => self.forget_plan(),
+            Some(DialogAction::Cancel) => self.dialog_hidden = true,
             Some(DialogAction::Confirm(_) | DialogAction::SkipGame) | None => {}
         }
     }
@@ -880,7 +976,20 @@ impl RestoreTab {
     fn preview_ui(&mut self, ui: &mut Ui, state: &State) {
         let busy = self.busy();
         let Some(preview) = &mut self.preview else {
-            theme::row_end(ui, |ui| restore_button(ui, false));
+            let mut choose = false;
+            let mut retry = false;
+            theme::row(
+                ui,
+                |ui| self.status_ui(ui, &mut choose, &mut retry),
+                |ui| restore_button(ui, false),
+            );
+            if choose {
+                self.dialog_hidden = false;
+            }
+            if retry {
+                self.error = None;
+                self.forget_plan();
+            }
             return;
         };
         ui.add_space(16.0);
@@ -888,8 +997,32 @@ impl RestoreTab {
         let error_color = ui.visuals().error_fg_color;
         let muted = ui.visuals().weak_text_color();
         warnings_ui(ui, &preview.plan);
-        ui.label(format!("Files to write ({})", preview.plan.writes.len()));
-        let files = preview.fetched.staged.root.join(FILES_DIR);
+        let compared: Vec<_> = (preview.labels.iter())
+            .filter_map(|label| match label {
+                Label::State(state) => Some(*state),
+                Label::WillFail(_) | Label::Blocks(_) => None,
+            })
+            .collect();
+        let writes = preview.plan.writes.len();
+        theme::row(
+            ui,
+            |ui| {
+                ui.label(format!("Files to write ({writes})"));
+            },
+            |ui| batch::state_chips(ui, &compared),
+        );
+        let blocking: Vec<_> = (preview.plan.writes.iter().zip(&preview.labels))
+            .filter(|(_, label)| matches!(label, Label::Blocks(_)))
+            .map(|(write, _)| write.target.display().to_string())
+            .collect();
+        if !blocking.is_empty() {
+            let text = "Nothing will be restored: the safety backup cannot read these files:";
+            theme::status(ui, icons::X_CIRCLE, error_color, text);
+            for path in &blocking {
+                ui.weak(path);
+            }
+        }
+        let files = preview.fetched.listed.staged.root.join(FILES_DIR);
         let mut overridden = None;
         theme::group(ui, |ui| {
             for (index, write) in preview.plan.writes.iter().enumerate() {
@@ -907,7 +1040,16 @@ impl RestoreTab {
                     Some((Base::Absolute | Base::WinAbsolute, _)) => " (absolute path)",
                     Some(_) => "",
                 };
-                ui.label(source);
+                ui.horizontal(|ui| {
+                    ui.label(source);
+                    let state = match &preview.labels[index] {
+                        Label::State(state) => Ok(*state),
+                        Label::WillFail(reason) | Label::Blocks(reason) => Err(reason.as_str()),
+                    };
+                    if let Some((badge, hint)) = batch::write_badge(state) {
+                        theme::labeled_mark(ui, badge.glyph(), badge.color(ui), &hint);
+                    }
+                });
                 let target = format!("{}{flag}", write.target.display());
                 theme::icon_label(ui, icons::ARROW_RIGHT, muted, target);
                 ui.horizontal(|ui| {
@@ -932,6 +1074,11 @@ impl RestoreTab {
             preview.override_error = (preview.plan.override_target(index, target))
                 .err()
                 .map(|err| (index, err.to_string()));
+            // One target is a stat and at most one hash, unlike the whole plan's in its job.
+            if preview.override_error.is_none() {
+                let write = &preview.plan.writes[index];
+                preview.labels[index] = Label::of(write, &preview.fetched.listed);
+            }
         }
         if let Some((export, ctx)) = &preview.plan.registry {
             ui.label(format!(
@@ -957,13 +1104,58 @@ impl RestoreTab {
                 ),
             );
         }
-        let ready = !busy && state.session.is_some() && unapplied.is_none();
-        if theme::row_end(ui, |ui| restore_button(ui, ready)).clicked() {
+        let blocked = !blocking.is_empty();
+        let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked;
+        let restoring = self.restoring.is_some();
+        let mut retry = false;
+        let start = |ui: &mut Ui| {
+            if restoring {
+                ui.weak("Downloading and restoring…");
+            } else if blocked {
+                ui.weak("Make those files readable, then check again.");
+                retry |= ui.button("Try again").clicked();
+            }
+        };
+        if theme::row(ui, start, |ui| restore_button(ui, ready)).clicked() {
             self.start_restore(ui.ctx(), state);
+        }
+        if retry {
+            self.forget_plan();
         }
     }
 
-    /// Runs the previewed plan behind a safety backup staged in its own dir under the cache dir.
+    /// Why there is no plan to restore yet, next to the disabled "Restore files": what to choose
+    /// next, the running plan job, the "Choose folders…" button of a plan that needs mapping, or
+    /// "Try again" after a failed plan, whose error shows above. Sets `choose` or `retry` when
+    /// their button is clicked.
+    fn status_ui(&self, ui: &mut Ui, choose: &mut bool, retry: &mut bool) {
+        if self.selected.is_none() || self.detecting.is_some() || self.batch.open() {
+            return;
+        }
+        if let Some((_, dialog)) = &self.mapping {
+            let unknown = dialog.unknown_roots();
+            let folders = count(unknown, "folder");
+            ui.weak(format!(
+                "This backup has {folders} from the other build without a place here."
+            ));
+            *choose |= ui.button("Choose folders…").clicked();
+        } else if self.preparing.is_some() {
+            ui.spinner();
+            ui.weak("Reading the backup's file list…");
+        } else if self.snapshot.is_none() {
+            ui.weak("Choose a snapshot.");
+        } else if self.pick.as_ref().is_some_and(|pick| pick.typing) {
+            ui.weak("Press Enter to use this prefix.");
+        } else if !self.pick.as_ref().is_some_and(TargetPick::ready) {
+            ui.weak("Choose where to restore.");
+        } else if self.attempted == Some(self.generation) {
+            *retry |= ui.button("Try again").clicked();
+        }
+    }
+
+    /// Downloads the planned snapshot into its cleared work dir, then runs the plan behind a
+    /// safety backup staged in its own dir under the cache dir. A failed download writes
+    /// nothing, not even the safety backup.
     fn start_restore(&mut self, ctx: &egui::Context, state: &State) {
         let Some(preview) = &self.preview else {
             return;
@@ -971,18 +1163,19 @@ impl RestoreTab {
         self.error = None;
         self.restored = None;
         self.batch.clear_result();
-        let (storage, plan) = (preview.fetched.storage.clone(), preview.plan.clone());
-        let title = preview.fetched.title.clone();
+        let (fetched, plan) = (preview.fetched.clone(), preview.plan.clone());
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {
-            let report = restore::run(
-                &mut *lock_storage(&storage)?,
-                &title,
-                &plan,
-                &stage_root,
-                wineserver_running(),
-            )?;
+            let staged = &fetched.listed.staged;
+            remove_dir(&staged.root)
+                .with_context(|| format!("cannot clear {}", staged.root.display()))?;
+            let mut storage = lock_storage(&fetched.storage)?;
+            restore::download(&mut storage, &fetched.snapshot, staged)
+                .context("the backup cannot be fetched")?;
+            let title = fetched.title.clone();
+            let running = wineserver_running();
+            let report = restore::run(&mut storage, &title, &plan, &stage_root, running)?;
             Ok(Restored::new(title, &plan, report))
         }));
     }

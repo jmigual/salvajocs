@@ -10,6 +10,7 @@ use salvajocs_core::layout::{SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{CustomGame, Integration, parse_yaml};
 use salvajocs_core::registry::{RegData, RegValue, RegistryExport};
+use salvajocs_core::restore::StagedGame;
 use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
@@ -219,12 +220,50 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
             vec!["salvajocs".into(), "game:mix".into()],
         ),
         title: "Mix".into(),
-        staged: StagedGame::new(
-            PathBuf::from("/staged"),
-            SnapshotMeta::new(SNAPSHOT_FORMAT, "Mix".into(), Vec::new()),
+        listed: Arc::new(Listed::new(
+            StagedGame::new(
+                PathBuf::from("/staged"),
+                SnapshotMeta::new(SNAPSHOT_FORMAT, "Mix".into(), Vec::new()),
+                Vec::new(),
+                None,
+            ),
             Vec::new(),
             None,
-        ),
+        )),
+        targets: Targets {
+            linux: None,
+            win: None,
+        },
+        vars: GameVars::new("Mix", Vec::new(), &[], None),
+        info: GameInfo::default(),
+    })
+}
+
+/// Mix with one save, backed up into the repository of `storage` and read into a work dir in
+/// `dir`, so a restore can download it; no targets.
+fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
+    let real = dir.join("src/save.dat");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::write(&real, "save").unwrap();
+    let mut scan = GameScan::default();
+    scan.title = "Mix".into();
+    scan.files = vec![FoundFile::new(
+        Base::XdgData,
+        "Mix/save.dat".into(),
+        real,
+        4,
+        None,
+    )];
+    scan.roots = vec![(Base::XdgData, "Mix".into())];
+    let mut repo = storage.lock().unwrap();
+    backup_games(&mut repo, &[scan], &dir.join("stage"), &[], false, |_| {}).unwrap();
+    let snapshot = restore::list(&repo).unwrap().remove(0).snapshots.remove(0);
+    let listed = restore::read(&mut repo, &snapshot, &dir.join("work")).unwrap();
+    Arc::new(Fetched {
+        storage: storage.clone(),
+        snapshot,
+        title: "Mix".into(),
+        listed: Arc::new(listed),
         targets: Targets {
             linux: None,
             win: None,
@@ -296,11 +335,8 @@ fn confirm_job(
         Ok(Prepared {
             fetched,
             choices: vec![(unknown_root(), Choice::Template("<xdgData>/Mix".into()))],
-            plan: Ok(RestorePlan::new(
-                Vec::new(),
-                None,
-                Vec::new(),
-                true,
+            plan: Ok((
+                RestorePlan::new(Vec::new(), None, Vec::new(), true, Vec::new()),
                 Vec::new(),
             )),
         })
@@ -544,12 +580,41 @@ fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
 }
 
 #[test]
+fn a_running_restore_says_it_downloads_and_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        preview: Some(Preview {
+            fetched: fetched(storage),
+            plan: RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+            labels: Vec::new(),
+            overrides: Vec::new(),
+            override_error: None,
+        }),
+        ..RestoreTab::default()
+    });
+    let (release, hold) = mpsc::channel::<()>();
+    let job = Job::spawn(&harness.ctx.clone(), move || {
+        let _ = hold.recv();
+        Err(anyhow!("released"))
+    });
+    harness.state_mut().0.restoring = Some(job);
+    harness.step();
+    harness.step();
+
+    let shown = harness.query_all_by_label_contains("Downloading and restoring");
+    assert!(shown.count() > 0);
+    assert!(is_disabled(&harness, "Restore files"));
+    drop(release);
+}
+
+#[test]
 fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
         preview: Some(Preview {
             fetched: fetched(storage),
             plan: RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+            labels: Vec::new(),
             overrides: Vec::new(),
             override_error: None,
         }),
@@ -583,8 +648,9 @@ fn registry_restore(dir: &Path, wineserver_running: fn() -> bool) -> TabHarness 
     let registry = Some((export, Context::WinePrefix { prefix, folders }));
     let mut harness = tab_harness(dir, |storage| RestoreTab {
         preview: Some(Preview {
-            fetched: fetched(storage),
+            fetched: backed_up(storage, dir),
             plan: RestorePlan::new(Vec::new(), registry, Vec::new(), false, Vec::new()),
+            labels: Vec::new(),
             overrides: Vec::new(),
             override_error: None,
         }),
@@ -722,4 +788,39 @@ fn a_new_repository_closes_a_batch_mapping_dialog() {
 
     switch_repository_and_check_nothing_ran(&mut harness, dir.path());
     assert!(harness.query_by_label("Skip this game").is_none());
+}
+
+#[test]
+fn a_running_plan_says_it_reads_the_file_list_and_keeps_nothing_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    let (release, hold) = mpsc::channel();
+    let job = confirm_job(&harness.ctx.clone(), hold, &storage(&harness));
+    harness.state_mut().0.preparing = Some((0, job));
+    harness.step();
+    harness.step();
+
+    let reading = harness.query_all_by_label_contains("Reading the backup's file list");
+    assert!(reading.count() > 0);
+    assert!(is_disabled(&harness, "Restore files"));
+    assert!(!is_disabled(&harness, "Load backups"));
+    drop(release);
+}
+
+#[test]
+fn a_plan_for_an_older_choice_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    let (release, hold) = mpsc::channel();
+    let job = confirm_job(&harness.ctx.clone(), hold, &storage(&harness));
+    let tab = &mut harness.state_mut().0;
+    tab.generation = 1;
+    tab.preparing = Some((0, job));
+    drop(release);
+    run_until_prepared(&mut harness);
+    harness.step();
+
+    let tab = &harness.state().0;
+    assert!(tab.preview.is_none());
+    assert!(tab.mapping.is_none());
 }
