@@ -1094,6 +1094,14 @@ fn default_targets_without_a_snapshot_is_todays_default() {
 }
 
 #[test]
+fn describe_prefix_names_a_proton_prefix_by_its_app_id() {
+    let pfx = Path::new("/games/steamapps/compatdata/1868140/pfx");
+    let env = linux_env(Path::new("/home/me"), vec![]);
+    let described = describe_prefix(pfx, "Foo", &Manifest::default(), &config(vec![]), &env);
+    assert_eq!(described, Some(PrefixOrigin::Proton(1_868_140)));
+}
+
+#[test]
 fn a_bottle_backup_restores_into_that_bottle_without_cross_build() {
     let tmp = tempfile::tempdir().unwrap();
     let mut storage = init_repo(tmp.path());

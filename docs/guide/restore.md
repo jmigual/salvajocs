@@ -32,10 +32,25 @@ On Linux you choose the build you want to restore into:
 
 - **Native Linux build**: the XDG folders of this machine.
 - **Windows build in a Wine/Proton prefix**: a prefix path, such as `.../compatdata/<id>/pfx`.
-  salvajocs fills it in with the game's own prefix: the `wine_prefix` set on a
-  [custom game](custom-games.md), else a Proton prefix it can find (from its Steam id), else its
-  Heroic or Lutris prefix ([Found by salvajocs](settings.md#found-by-salvajocs)). **Browse**
-  opens a folder picker.
+  **Browse** opens a folder picker. salvajocs fills in the first prefix it finds of:
+  1. the `wine_prefix` set on a [custom game](custom-games.md);
+  2. the game's own prefix: a Proton prefix from its Steam id, else its Heroic or Lutris prefix
+     ([Found by salvajocs](settings.md#found-by-salvajocs));
+  3. the prefix the backup came from. A backup records it by launcher and name (a Proton app id,
+     a Heroic app, a Lutris game, a Bottles bottle, or a folder in your home), so another machine
+     finds its own copy. When that name fits several prefixes here, such as a bottle of both the
+     native and the Flatpak Bottles, it takes the one that holds the backup's save folders;
+  4. for a backup of the Windows build, the one prefix that already holds the folders of the
+     backup's files in the Windows folders, such as `AppData/Roaming/Godot/app_userdata/<game>`.
+     A backup of registry keys only is not looked for.
+
+  A line under the field says why it was filled in, as long as the field still shows that
+  prefix. Another line says when the backup came from a prefix this machine does not have, or
+  does not use (switched off in Settings, or without a user folder). When the save folders are
+  in several prefixes, salvajocs fills in none and names them, so you can type or browse to the
+  one to use. It also names them when the backup's prefix name fits several prefixes, none of
+  them holds the save folders and no other prefix does either. Choosing another snapshot fills
+  the targets in again, unless you changed them.
 
 You can tick both. Each folder in the backup goes into the build it belongs to. Saves of the other
 build are mapped onto the one you chose. See [Cross-OS restore](cross-os-restore.md).
@@ -50,6 +65,10 @@ both existing.
 
 The Plan shows:
 
+- **Into …**: only the targets the files and registry keys go into. A prefix is named by its
+  launcher, such as "the Steam Proton prefix of app 1868140" or "the Bottles bottle
+  Generic-Game"; hover it to read its path. While it is the prefix salvajocs filled in, the reason
+  follows in brackets, such as "(from the backup)".
 - **Files to write (N).** A file tree, as in the plan of
   [several games](#restore-several-games). Each file is under the folder it goes into, named by
   its base, such as `WinAppData/Game`. A file saved as a plain path goes under `Absolute`
@@ -63,7 +82,8 @@ The Plan shows:
   the heading count the files of each kind. When the safety backup cannot read a file at a
   target, the plan says that nothing will be restored and lists those files, and **Restore
   files** stays disabled. Make them readable and click **Try again**.
-- **Registry.** The number of registry keys and the prefix or the Windows registry they go into.
+- **Registry.** The number of registry keys and the prefix, named as on the "Into" line, or the
+  Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A **Cross-build restore** warning when the plan maps folders from the other build. The
   other build may use a different save format.

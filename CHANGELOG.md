@@ -18,6 +18,12 @@ All notable changes to salvajocs. The format follows
   (Proton app id, Heroic app, Lutris game, Bottles bottle, or a folder in your home), without
   paths of the machine. The first backup after updating makes one new snapshot of each such
   game.
+- The Restore tab says why it filled in a prefix: from the backup, found the saves there, the
+  custom game's prefix, or the game's own prefix. It says when this machine does not have or
+  does not use the backup's prefix, and names the prefixes when the saves are in several, or
+  when the backup's prefix name fits several and none holds the saves. The "Into …" and
+  "Registry" lines name a prefix by its launcher, such as "the Steam Proton prefix of app
+  1868140", with its path on hover.
 
 ### Changed
 

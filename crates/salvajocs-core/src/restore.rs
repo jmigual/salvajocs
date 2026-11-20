@@ -19,8 +19,8 @@ pub(crate) use run::parse_base;
 pub use run::{
     ApplyError, DefaultTargets, FetchError, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG,
     PrefixReason, RestoreReport, RunError, SafetyBackup, UnreadableTarget, WriteState,
-    compare_writes, default_targets, download, fetch, game_info, game_vars, list, read, run,
-    staged_target,
+    compare_writes, default_targets, describe_prefix, download, fetch, game_info, game_vars, list,
+    read, run, staged_target,
 };
 
 /// A snapshot of one game restored into a work dir (ADR-0004).

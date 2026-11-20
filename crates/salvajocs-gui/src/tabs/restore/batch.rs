@@ -19,8 +19,8 @@ use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
 use super::{
-    Fetched, RestoreTab, Restored, describe_context, describe_run_error, describe_targets, own_dir,
-    remove_dir, skipped_ui, snapshot_label, warnings_ui,
+    Fetched, RestoreTab, Restored, describe_run_error, hover_label, into_line, name_context,
+    own_dir, remove_dir, skipped_ui, snapshot_label, warnings_ui,
 };
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
@@ -567,14 +567,16 @@ fn plan_game(
         Err(err) => return Outcome::Failed(format!("the backup cannot be read: {err:#}")),
     };
     let staged = Some(&listed.staged);
-    let targets = restore::default_targets(&title, manifest, config, environment, staged).targets;
+    let defaults = restore::default_targets(&title, manifest, config, environment, staged);
     let info = restore::game_info(&title, manifest, &config.custom_games);
     let fetched = Fetched {
         storage: storage.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
         title,
         listed,
-        targets,
+        targets: defaults.targets,
+        prefix_origin: defaults.origin,
+        reason: defaults.reason,
         info,
     };
     match fetched.prepare(&[]) {
@@ -727,7 +729,8 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
             |ui| state_chips(ui, &compared),
         );
         let used = restore::used_targets(plan, &fetched.targets);
-        ui.label(format!("Into {}", describe_targets(&used)));
+        let (into, hover) = into_line(&used, fetched.prefix_origin.as_ref(), fetched.reason);
+        hover_label(ui, into, hover);
         let error_color = ui.visuals().error_fg_color;
         for (write, state) in plan.writes.iter().zip(states) {
             if let Err(reason) = state {
@@ -745,11 +748,9 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
         let clicked = ui.push_id(title, |ui| tree.ui(ui, Mode::ReadOnly, &badge, &hint));
         warnings_ui(ui, plan);
         if let Some((export, ctx)) = &plan.registry {
-            ui.label(format!(
-                "Registry: {} keys into {}, replaced",
-                export.keys.len(),
-                describe_context(ctx)
-            ));
+            let (name, hover) = name_context(ctx, fetched.prefix_origin.as_ref());
+            let text = format!("Registry: {} keys into {name}, replaced", export.keys.len());
+            hover_label(ui, text, hover);
         }
         skipped_ui(ui, plan);
         match clicked.inner {

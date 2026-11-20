@@ -14,12 +14,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Response, RichText, Role, TextEdit, Ui, Vec2, WidgetInfo};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
-use salvajocs_core::layout::{Context, GameVars, LinuxFolders, WinFolders};
+use salvajocs_core::layout::{Context, GameVars, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
-    self, DefaultTargets, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError,
-    RestorePlan, RestoreReport, RunError, SafetyBackup, SkippedItem, Targets, Used, Write,
-    WriteState,
+    self, DefaultTargets, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrefixReason,
+    PrepareError, RestorePlan, RestoreReport, RunError, SafetyBackup, SkippedItem, Targets, Used,
+    Write, WriteState,
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
@@ -92,10 +92,21 @@ struct TargetPick {
     found: Option<(String, Context)>,
     /// Whether the user changed the pick, which another snapshot's default then keeps.
     edited: bool,
+    /// Why the default chose `found`, and its launcher's name for it (ADR-0023).
+    reason: Option<PrefixReason>,
+    origin: Option<PrefixOrigin>,
+    /// The prefixes that all hold the backup's save folders, so none was chosen.
+    ambiguous: Vec<PathBuf>,
+    /// The prefixes the backup's prefix name fits when none holds its saves.
+    stored_several: Vec<PathBuf>,
+    /// The prefix the backup names when this machine does not have it.
+    missing: Option<PrefixOrigin>,
 }
 
 impl TargetPick {
-    fn new(defaults: DefaultTargets) -> Self {
+    /// The pick `defaults` preselect; `missing` is the prefix the snapshot names when this
+    /// machine does not have it.
+    fn new(defaults: DefaultTargets, missing: Option<PrefixOrigin>) -> Self {
         let targets = defaults.targets;
         let mut pick = Self {
             windows: None,
@@ -106,6 +117,11 @@ impl TargetPick {
             typing: false,
             found: None,
             edited: false,
+            reason: defaults.reason,
+            origin: defaults.origin,
+            ambiguous: defaults.ambiguous,
+            stored_several: defaults.stored_several,
+            missing,
         };
         match targets.win {
             Some(native @ Context::WindowsNative(_)) => pick.windows = Some(native),
@@ -119,6 +135,51 @@ impl TargetPick {
             _ => {}
         }
         pick
+    }
+
+    /// Why the default chose the prefix, while the field still shows it.
+    fn default_reason(&self) -> Option<PrefixReason> {
+        let shown = (self.found.as_ref()).is_some_and(|(text, _)| *text == self.prefix);
+        self.reason.filter(|_| shown)
+    }
+
+    /// What the pick says about its prefix: why the default filled it in, a prefix the backup
+    /// names that this machine lacks, the prefixes that all hold the saves, and those the
+    /// backup's prefix name fits.
+    fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if let Some(reason) = self.default_reason() {
+            let text = match reason {
+                PrefixReason::Backup => "Filled in from the backup",
+                PrefixReason::Saves => "Filled in: the backup's save folders are in this prefix",
+                PrefixReason::CustomGame => "Filled in from the custom game's Wine prefix",
+                _ => "Filled in: the game's own prefix",
+            };
+            notes.push(match self.origin.as_ref().and_then(prefix_name) {
+                Some(name) => format!("{text} ({name})"),
+                None => text.to_owned(),
+            });
+        }
+        if let Some(name) = self.missing.as_ref().and_then(prefix_name) {
+            notes.push(format!(
+                "The backup came from {name}, which this machine does not have or does not use."
+            ));
+        }
+        let lists = [
+            (&self.ambiguous, "The backup's save folders are in"),
+            (&self.stored_several, "The backup's prefix name fits"),
+        ];
+        for (prefixes, text) in lists.into_iter().filter(|(list, _)| !list.is_empty()) {
+            let paths: Vec<String> = (prefixes.iter())
+                .map(|path| path.display().to_string())
+                .collect();
+            notes.push(format!(
+                "{text} {} prefixes: {}. Type or browse to the one to use.",
+                paths.len(),
+                paths.join(", ")
+            ));
+        }
+        notes
     }
 
     /// Whether the pick names at least one target.
@@ -184,6 +245,9 @@ impl TargetPick {
                 changed = true;
             }
         });
+        for note in self.notes() {
+            ui.weak(note);
+        }
         ui.weak(
             "Saves of the other build are mapped onto the chosen one (cross-build restore); \
              with both chosen, each goes into its own.",
@@ -200,6 +264,10 @@ struct Fetched {
     title: String,
     listed: Arc<Listed>,
     targets: Targets,
+    /// The planned prefix as its launcher names it (ADR-0023).
+    prefix_origin: Option<PrefixOrigin>,
+    /// Why the default chose the planned prefix; `None` once the user picked another.
+    reason: Option<PrefixReason>,
     vars: GameVars,
     info: GameInfo,
 }
@@ -768,11 +836,23 @@ impl RestoreTab {
                 // A result for a snapshot no longer chosen is dropped.
                 Ok(detected) if detected.snapshot != self.chosen().map(|s| s.id.clone()) => {}
                 Ok(detected) => {
+                    let stored = (detected.listed.as_ref())
+                        .and_then(|listed| listed.staged.meta.prefix.clone());
                     if let Some(listed) = detected.listed {
                         self.last_read = Some(listed);
                     }
-                    if !self.pick.as_ref().is_some_and(|pick| pick.edited) {
-                        self.pick = Some(TargetPick::new(detected.defaults));
+                    match &mut self.pick {
+                        // Edited while this ran: what the default said is about the old snapshot.
+                        Some(pick) if pick.edited => {
+                            pick.reason = None;
+                            pick.missing = None;
+                            pick.ambiguous.clear();
+                            pick.stored_several.clear();
+                        }
+                        _ => {
+                            let missing = stored.filter(|_| detected.defaults.stored_missing);
+                            self.pick = Some(TargetPick::new(detected.defaults, missing));
+                        }
                     }
                 }
                 Err(err) => self.error = Some(format!("{err:#}")),
@@ -1005,8 +1085,16 @@ impl RestoreTab {
         if changed {
             self.forget_plan();
         }
-        if switched && !self.pick.as_ref().is_some_and(|pick| pick.edited) {
-            self.detect(ui.ctx(), state, &game);
+        match &mut self.pick {
+            // What the default said is about the other snapshot.
+            Some(pick) if switched && pick.edited => {
+                pick.reason = None;
+                pick.missing = None;
+                pick.ambiguous.clear();
+                pick.stored_several.clear();
+            }
+            _ if switched => self.detect(ui.ctx(), state, &game),
+            _ => {}
         }
         if manifest_loading {
             ui.weak("The game manifest is loading.");
@@ -1121,7 +1209,7 @@ impl RestoreTab {
         else {
             return;
         };
-        let targets = pick.targets();
+        let (targets, reason) = (pick.targets(), pick.default_reason());
         self.error = None;
         let (storage, manifest, config) = (
             session.storage.clone(),
@@ -1143,12 +1231,21 @@ impl RestoreTab {
             };
             let info = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
+            // A typed or browsed prefix is named too, not only the default's.
+            let prefix_origin = match &targets.win {
+                Some(Context::WinePrefix { prefix, .. }) => {
+                    restore::describe_prefix(prefix, &title, &manifest, &config, &environment)
+                }
+                _ => None,
+            };
             let fetched = Fetched {
                 storage,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 title,
                 listed,
                 targets,
+                prefix_origin,
+                reason,
                 info,
             };
             Ok(Prepared {
@@ -1276,8 +1373,10 @@ impl RestoreTab {
         };
         ui.add_space(16.0);
         ui.heading("Plan");
-        let used = restore::used_targets(&preview.plan, &preview.fetched.targets);
-        ui.label(format!("Into {}", describe_targets(&used)));
+        let fetched = &preview.fetched;
+        let used = restore::used_targets(&preview.plan, &fetched.targets);
+        let (into, hover) = into_line(&used, fetched.prefix_origin.as_ref(), fetched.reason);
+        hover_label(ui, into, hover);
         let error_color = ui.visuals().error_fg_color;
         warnings_ui(ui, &preview.plan);
         let compared: Vec<_> = (preview.labels.iter())
@@ -1313,11 +1412,9 @@ impl RestoreTab {
         }
         let opened = theme::group(ui, |ui| preview.files_ui(ui, busy));
         if let Some((export, ctx)) = &preview.plan.registry {
-            ui.label(format!(
-                "Registry: {} keys into {}",
-                export.keys.len(),
-                describe_context(ctx)
-            ));
+            let (name, hover) = name_context(ctx, preview.fetched.prefix_origin.as_ref());
+            let text = format!("Registry: {} keys into {name}", export.keys.len());
+            hover_label(ui, text, hover);
         }
         skipped_ui(ui, &preview.plan);
         // Typed text that is not the write's target would be silently ignored by the restore.
@@ -1494,21 +1591,74 @@ fn describe_delete_error(err: &anyhow::Error) -> String {
     }
 }
 
-/// Where a plan's files and registry go, as the "Into …" line names it.
-fn describe_targets(used: &Used) -> String {
-    let linux = used.linux.then(|| "native Linux".to_owned());
-    let win = used.win.as_ref().map(|ctx| match ctx {
-        Context::WindowsNative(_) => "this Windows user's folders".to_owned(),
-        ctx => describe_context(ctx),
-    });
-    let install = used
-        .install_dir
-        .then(|| "the game's install folder".to_owned());
-    let parts: Vec<String> = linux.into_iter().chain(win).chain(install).collect();
-    if parts.is_empty() {
+/// A prefix by its launcher's name for it (ADR-0023); `None` for a kind this version cannot
+/// name.
+fn prefix_name(origin: &PrefixOrigin) -> Option<String> {
+    Some(match origin {
+        PrefixOrigin::Proton(id) => format!("the Steam Proton prefix of app {id}"),
+        PrefixOrigin::Heroic(app) => format!("the Heroic prefix of {app}"),
+        PrefixOrigin::Lutris(slug) => format!("the Lutris prefix of {slug}"),
+        PrefixOrigin::Bottles(bottle) => format!("the Bottles bottle {bottle}"),
+        PrefixOrigin::Home(rest) => format!("the Wine prefix {}", rest.replacen("<home>", "~", 1)),
+        _ => return None,
+    })
+}
+
+/// `ctx` as a plan names it, with the prefix's path as hover text when a launcher's name
+/// (`origin`) stands for it.
+fn name_context(ctx: &Context, origin: Option<&PrefixOrigin>) -> (String, Option<String>) {
+    if let Context::WinePrefix { prefix, .. } = ctx
+        && let Some(name) = origin.and_then(prefix_name)
+    {
+        return (name, Some(prefix.display().to_string()));
+    }
+    (describe_context(ctx), None)
+}
+
+/// The "Into …" line of a plan: the targets its writes and registry use (`used`), the prefix
+/// named by `origin` and followed by why the default chose it (`reason`), with the prefix's
+/// path as hover text.
+fn into_line(
+    used: &Used,
+    origin: Option<&PrefixOrigin>,
+    reason: Option<PrefixReason>,
+) -> (String, Option<String>) {
+    let mut parts = Vec::new();
+    let mut hover = None;
+    if used.linux {
+        parts.push("native Linux".to_owned());
+    }
+    match &used.win {
+        Some(Context::WindowsNative(_)) => parts.push("this Windows user's folders".to_owned()),
+        Some(ctx) => {
+            let (name, path) = name_context(ctx, origin);
+            let why = reason.map_or("", |reason| match reason {
+                PrefixReason::Backup => " (from the backup)",
+                PrefixReason::Saves => " (its saves are there)",
+                PrefixReason::CustomGame => " (custom game)",
+                _ => " (the game's own prefix)",
+            });
+            parts.push(format!("{name}{why}"));
+            hover = path;
+        }
+        None => {}
+    }
+    if used.install_dir {
+        parts.push("the game's install folder".to_owned());
+    }
+    let into = if parts.is_empty() {
         "no folder on this machine".to_owned()
     } else {
         parts.join(" and ")
+    };
+    (format!("Into {into}"), hover)
+}
+
+/// A label of `text`, with `hover` as its hover text when some.
+fn hover_label(ui: &mut Ui, text: String, hover: Option<String>) {
+    let label = ui.label(text);
+    if let Some(hover) = hover {
+        label.on_hover_text(hover);
     }
 }
 

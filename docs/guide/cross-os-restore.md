@@ -32,7 +32,9 @@ Things to know:
 
 - The prefix must exist. For a Steam game, start it once with Proton, so that
   `compatdata/<id>/pfx` exists. For other launchers, set the prefix on a
-  [custom game](custom-games.md) or add it in [Settings](settings.md#wine-prefixes).
+  [custom game](custom-games.md) or add it in [Settings](settings.md#wine-prefixes). salvajocs
+  looks for the prefix the backup came from, then for one that holds the backup's save folders
+  (see [Targets](restore.md#targets)).
 - Close every Wine and Proton program before restoring registry keys into a prefix. See
   [Restore](restore.md#what-happens-when-you-click-restore-files).
 - Only `HKEY_CURRENT_USER` keys are backed up and restored.

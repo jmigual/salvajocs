@@ -1297,6 +1297,120 @@ fn restore_snapshot_switch_keeps_an_edited_pick() {
     assert_eq!(value(&harness, "Prefix"), generic.display().to_string());
     let native = harness.get_by_label("Native Linux build");
     assert_eq!(native.accesskit_node().toggled(), Some(Toggled::False));
+    // The kept prefix is not where this snapshot came from.
+    assert!(!shows(&harness, "Filled in from the backup"));
+    assert!(!shows(&harness, "(from the backup)"));
+}
+
+#[test]
+fn restore_says_the_prefix_came_from_the_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic])
+    });
+    select(&mut harness, "Tower Wizard");
+    preview(&mut harness);
+
+    let bottle = "the Bottles bottle Generic-Game";
+    assert!(shows(
+        &harness,
+        &format!("Filled in from the backup ({bottle})")
+    ));
+    assert!(shows(&harness, &format!("Into {bottle} (from the backup)")));
+}
+
+#[test]
+fn restore_says_it_found_the_saves_in_the_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    put(&tower_save(&generic), "older");
+    let (game, snapshot) = tower(&tmp, None);
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic])
+    });
+    select(&mut harness, "Tower Wizard");
+    preview(&mut harness);
+
+    let text = "Filled in: the backup's save folders are in this prefix (the Bottles bottle \
+                Generic-Game)";
+    assert!(shows(&harness, text));
+    assert!(shows(&harness, "(its saves are there)"));
+}
+
+#[test]
+fn restore_says_the_backups_prefix_is_not_here() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (game, snapshot) = tower(&tmp, Some("Gone"));
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Tower Wizard");
+
+    let text = "The backup came from the Bottles bottle Gone, which this machine does not have \
+                or does not use.";
+    assert!(shows(&harness, text));
+}
+
+#[test]
+fn restore_names_the_prefixes_when_several_hold_the_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = bottle(&tmp, "First");
+    let second = bottle(&tmp, "Second");
+    put(&tower_save(&first), "first");
+    put(&tower_save(&second), "second");
+    let (game, snapshot) = tower(&tmp, None);
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&first, &second])
+    });
+    select(&mut harness, "Tower Wizard");
+
+    let names = format!("{}, {}", first.display(), second.display());
+    let text = format!("The backup's save folders are in 2 prefixes: {names}.");
+    assert!(shows_path(&harness, &text));
+    assert_eq!(value(&harness, "Prefix"), "");
+}
+
+#[test]
+fn restore_names_the_prefixes_the_backups_prefix_name_fits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let native = bottle(&tmp, "Generic-Game");
+    let flatpak_dir = ".var/app/com.usebottles.bottles/data/bottles/bottles/Generic-Game";
+    let flatpak = under(&home(&tmp), flatpak_dir);
+    fs::create_dir_all(flatpak.join("drive_c/users/steamuser")).unwrap();
+    fs::write(flatpak.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&native, &flatpak])
+    });
+    select(&mut harness, "Tower Wizard");
+
+    let names = format!("{}, {}", native.display(), flatpak.display());
+    let text = format!("The backup's prefix name fits 2 prefixes: {names}.");
+    assert!(shows_path(&harness, &text));
+    assert!(!shows(&harness, "save folders are in"));
+    assert_eq!(value(&harness, "Prefix"), "");
+}
+
+#[test]
+fn restore_reason_goes_when_the_prefix_is_edited() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let other = bottle(&tmp, "Other");
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic, &other])
+    });
+    select(&mut harness, "Tower Wizard");
+    preview(&mut harness);
+    assert!(shows(&harness, "Filled in from the backup"));
+
+    replace_text(&mut harness, "Prefix", other.to_str().unwrap());
+    assert!(!shows(&harness, "Filled in from the backup"));
+    harness.key_press(Key::Enter);
+    run_until(&mut harness, "the plan", |h| {
+        shows(h, "Into the Bottles bottle Other")
+    });
+    assert!(!shows(&harness, "(from the backup)"));
 }
 
 #[test]
@@ -1964,10 +2078,53 @@ fn batch_restore_uses_the_prefix_the_backup_came_from() {
     click(&mut harness, "Include Tower Wizard");
     plan_batch(&mut harness, "Restore 1 game");
     assert!(!shows(&harness, "Cross-build restore"));
+    let into = "Into the Bottles bottle Generic-Game (from the backup)";
+    assert!(shows(&harness, into));
     run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
 
     let restored = fs::read_to_string(tower_save(&generic)).unwrap();
     assert_eq!(restored, format!("{TOWER}/save.tres"));
+}
+
+#[test]
+fn into_line_names_a_proton_prefix_by_app_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pfx = under(&home(&tmp), ".steam/steam/steamapps/compatdata/1868140/pfx");
+    put(&pfx.join("user.reg"), "WINE REGISTRY Version 2\n");
+    fs::create_dir_all(pfx.join("drive_c/users/steamuser")).unwrap();
+    let source = tmp.path().join("source-pfx");
+    put(
+        &source.join("user.reg"),
+        "WINE REGISTRY Version 2\n\n[Software\\\\Co\\\\Dave] 1\n#time=0\n\"v\"=\"saved\"\n",
+    );
+    let mut dave = custom("Dave", &["<winAppData>/Dave"], Some(&pfx), Vec::new());
+    let key = "HKEY_CURRENT_USER/Software/Co/Dave".to_owned();
+    dave.entry.registry.insert(key, RegistryRule::default());
+    let mut snapshot = scan(
+        &tmp,
+        "Dave",
+        &[(Base::WinAppData, "Dave/save.dat")],
+        &[(Base::WinAppData, "Dave")],
+    );
+    snapshot.registry_keys = vec![r"HKEY_CURRENT_USER\Software\Co\Dave".into()];
+    snapshot.registry_source = Some(RegistrySource::WinePrefix(source));
+    let (mut harness, _env) = open_tab(&tmp, vec![dave], &[snapshot]);
+
+    click(&mut harness, "Include Dave");
+    plan_batch(&mut harness, "Restore 1 game");
+
+    let proton = "the Steam Proton prefix of app 1868140";
+    assert!(shows(&harness, &format!("Into {proton} (custom game)")));
+    let registry = format!("Registry: 1 keys into {proton}, replaced");
+    assert!(shows(&harness, &registry));
+    let path = pfx.display().to_string();
+    assert!(!shows_path(&harness, &path), "the path shows on hover only");
+    harness
+        .get_by_label_contains("Into the Steam Proton")
+        .hover();
+    run_until(&mut harness, "the prefix's path", move |h| {
+        shows_path(h, &path)
+    });
 }
 
 #[test]

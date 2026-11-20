@@ -26,7 +26,7 @@ use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageErro
 
 mod defaults;
 
-pub use defaults::{DefaultTargets, PrefixReason, default_targets};
+pub use defaults::{DefaultTargets, PrefixReason, default_targets, describe_prefix};
 
 /// The extra tag of a safety backup made before a restore (ADR-0010).
 pub const PRE_RESTORE_TAG: &str = "pre-restore";

@@ -6,6 +6,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::crossbuild::{Confidence, MappingEntry};
+use salvajocs_core::launcher::{Launcher, LauncherPrefix};
 use salvajocs_core::layout::{Base, SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{CustomGame, Integration, parse_yaml};
@@ -236,6 +237,8 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
             linux: None,
             win: None,
         },
+        prefix_origin: None,
+        reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
     })
@@ -269,6 +272,8 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
             linux: None,
             win: None,
         },
+        prefix_origin: None,
+        reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
     })
@@ -735,6 +740,104 @@ fn planned_batch(dir: &Path, base: Base, template: &str) -> TabHarness {
     }
     harness.step();
     harness
+}
+
+/// Steps `harness` until `done` holds.
+fn step_until(harness: &mut TabHarness, what: &str, done: impl Fn(&TabHarness) -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !done(harness) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_pick_edited_while_detection_runs_drops_what_the_default_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let home = dir.join("home");
+    let mut state = state(dir);
+    let bottle = dir.join("Generic-Game");
+    fs::create_dir_all(bottle.join("drive_c/users/steamuser")).unwrap();
+    fs::write(bottle.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    let mut found = LauncherPrefix::new(Launcher::Bottles, bottle, None);
+    found.name = "Generic-Game".into();
+    let mut environment = Environment::default();
+    environment.native = Some(Context::Linux(LinuxFolders::new(
+        "me".into(),
+        home.clone(),
+        home.join(".local/share"),
+        home.join(".config"),
+    )));
+    environment.launcher_prefixes = vec![found];
+    state.env.environment = Some(environment);
+    let yaml = "Mix:\n  files:\n    <winAppData>/Mix: {tags: [save]}\n";
+    let entry = parse_yaml(yaml).unwrap().games.remove("Mix").unwrap();
+    state.config.as_mut().unwrap().custom_games =
+        vec![CustomGame::new("Mix".into(), entry, Integration::Override)];
+    let real = dir.join("src/save.dat");
+    fs::create_dir_all(real.parent().unwrap()).unwrap();
+    fs::write(&real, "save").unwrap();
+    let mut scan = GameScan::default();
+    scan.title = "Mix".into();
+    scan.files = vec![FoundFile::new(
+        Base::WinAppData,
+        "Mix/save.dat".into(),
+        real,
+        4,
+        None,
+    )];
+    scan.roots = vec![(Base::WinAppData, "Mix".into())];
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    // An older snapshot from no prefix, then the newest from the bottle.
+    for origin in [None, Some(PrefixOrigin::Bottles("Generic-Game".into()))] {
+        scan.prefix_origin = origin;
+        let mut repo = storage.lock().unwrap();
+        backup_games(
+            &mut repo,
+            &[scan.clone()],
+            &dir.join("stage"),
+            &[],
+            None,
+            |_| {},
+        )
+        .unwrap();
+    }
+    let games = restore::list(&storage.lock().unwrap()).unwrap();
+    let tab = RestoreTab {
+        repository: Some(storage.clone()),
+        games,
+        ..RestoreTab::default()
+    };
+    let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+    harness.step();
+    harness.get_by_label("Mix").click();
+    step_until(&mut harness, "the plan", |h| h.state().0.preview.is_some());
+    let from_backup = |h: &TabHarness| h.query_all_by_label_contains("from the backup").count();
+    assert!(from_backup(&harness) > 0);
+
+    // The older snapshot, whose read waits for the repository while the pick is changed.
+    let held = storage.lock().unwrap();
+    harness.get_by_label("Snapshot").click();
+    harness.step();
+    harness.step();
+    let mut options = harness.query_all_by_label_contains(" UTC, ");
+    options.nth(1).expect("both snapshots are listed").click();
+    drop(options);
+    harness.step();
+    assert!(harness.state().0.detecting.is_some());
+    harness.get_by_label("Native Linux build").click();
+    harness.step();
+    drop(held);
+    step_until(&mut harness, "the plan", |h| {
+        h.state().0.detecting.is_none() && h.state().0.preview.is_some()
+    });
+
+    assert_eq!(from_backup(&harness), 0);
 }
 
 /// Opens another repository, as Settings does, and checks the batch is gone without writing.

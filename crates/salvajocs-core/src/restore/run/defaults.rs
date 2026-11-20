@@ -2,7 +2,7 @@
 //! or the one prefix that holds its saves (ADR-0005, ADR-0017, ADR-0023).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{game_info, game_vars};
 use crate::config::AppConfig;
@@ -14,7 +14,7 @@ use crate::layout::{
 use crate::manifest::Manifest;
 use crate::prefix::{proton_prefix, wine_user};
 use crate::restore::{StagedGame, Targets, covering_root};
-use crate::scan::{Environment, describe_prefix, launcher_prefixes};
+use crate::scan::{self, Environment, launcher_prefixes};
 
 /// Why [`DefaultTargets::targets`] holds the prefix it does (ADR-0023).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,12 +151,26 @@ pub fn default_targets(
     }
     if let Some((ctx, reason)) = chosen {
         if let Context::WinePrefix { prefix, .. } = &ctx {
-            defaults.origin = describe_prefix(prefix, &own, &shared, env);
+            defaults.origin = scan::describe_prefix(prefix, &own, &shared, env);
         }
         defaults.reason = Some(reason);
         defaults.targets.win = Some(ctx);
     }
     defaults
+}
+
+/// How this machine's launchers name the prefix at `path` for `title`, as a snapshot records
+/// it (ADR-0023); `None` when it has no such name. Reads nothing from disk.
+pub fn describe_prefix(
+    path: &Path,
+    title: &str,
+    manifest: &Manifest,
+    config: &AppConfig,
+    env: &Environment,
+) -> Option<PrefixOrigin> {
+    let (own, shared) = launcher_prefixes(manifest, config, env);
+    let own = own.get(title).map_or(&[][..], Vec::as_slice);
+    scan::describe_prefix(path, own, &shared, env)
 }
 
 /// The prefix at `prefix` as a target; `None` when its Wine user cannot be determined.
