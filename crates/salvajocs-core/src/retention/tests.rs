@@ -18,6 +18,7 @@ fn snap(id: &str, host: &str, age: Duration, tags: &[&str]) -> SnapshotInfo {
             .chain(tags)
             .map(|tag| tag.to_string())
             .collect(),
+        size: None,
     }
 }
 

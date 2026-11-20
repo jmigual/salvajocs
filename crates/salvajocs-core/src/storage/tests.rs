@@ -699,3 +699,214 @@ fn a_snapshot_another_session_added_is_read_after_a_reindex() {
     storage.restore_path(&info.id, AS_PATH, &out).unwrap();
     assert_eq!(fs::read_to_string(out.join("sub/b.sav")).unwrap(), "beta");
 }
+
+#[test]
+fn a_backup_and_the_listing_carry_the_size_of_its_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    // "alpha" and "beta".
+    assert!(info.size.is_some_and(|size| size >= 9), "{info:?}");
+    assert_eq!(storage.snapshots("salvajocs").unwrap()[0].size, info.size);
+}
+
+#[test]
+fn a_snapshot_without_a_summary_has_no_size() {
+    let snap = RusticSnapshot {
+        summary: None,
+        ..RusticSnapshot::default()
+    };
+    assert_eq!(snapshot_info(&snap).size, None);
+}
+
+/// `len` bytes no compressor shrinks, the same for the same `seed`.
+fn noise(len: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed | 1;
+    (0..len)
+        .map(|_| {
+            // xorshift64
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect()
+}
+
+const NOISE_LEN: u64 = 64 * 1024;
+
+/// A save dir with a 64 KiB incompressible file, and that file.
+fn noisy_save(root: &Path) -> (PathBuf, PathBuf) {
+    let src = root.join("noisy");
+    fs::create_dir_all(&src).unwrap();
+    let file = src.join("big.sav");
+    fs::write(&file, noise(NOISE_LEN as usize, 7)).unwrap();
+    (src, file)
+}
+
+/// Backs `src` up and returns the new snapshot's id; panics when nothing was written.
+fn backed_up(storage: &mut Storage, src: &Path) -> String {
+    storage
+        .backup_dir(src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .expect("a new snapshot")
+        .id
+}
+
+/// Sets `file`'s mtime `seconds` after a fixed time, so a backup after a change stores a new
+/// tree with the same data.
+fn touch(file: &Path, seconds: u64) {
+    let file = fs::File::options().write(true).open(file).unwrap();
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + seconds);
+    file.set_modified(time).unwrap();
+}
+
+#[test]
+fn space_used_counts_a_shared_blob_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (src, file) = noisy_save(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    touch(&file, 0);
+    let first = backed_up(&mut storage, &src);
+    touch(&file, 1);
+    let second = backed_up(&mut storage, &src);
+
+    let one = storage.space_used(&[&first]).unwrap();
+    let both = storage.space_used(&[&first, &second]).unwrap();
+    assert!(one >= NOISE_LEN, "{one}");
+    assert!(
+        both > one,
+        "the second snapshot's trees count: {both} vs {one}"
+    );
+    assert!(both < 2 * one, "the data counts once: {both} vs {one}");
+}
+
+#[test]
+fn space_used_counts_a_shared_tree_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let id = backed_up(&mut storage, &src);
+
+    let once = storage.space_used(&[&id]).unwrap();
+    assert_eq!(storage.space_used(&[&id, &id]).unwrap(), once);
+}
+
+#[test]
+fn space_used_reads_a_snapshot_another_session_added() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    // Another session, such as another machine, backs up after this one loaded the index.
+    let mut other = Storage::open(&local(&tmp.path().join("repo")), "").unwrap();
+    let id = backed_up(&mut other, &src);
+
+    let expected = other.space_used(&[&id]).unwrap();
+    assert_eq!(storage.space_used(&[&id]).unwrap(), expected);
+}
+
+#[test]
+fn space_used_survives_forgetting_the_snapshot_that_added_the_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (src, file) = noisy_save(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    touch(&file, 0);
+    let first = backed_up(&mut storage, &src);
+    touch(&file, 1);
+    let second = backed_up(&mut storage, &src);
+
+    storage.forget(&[&first]).unwrap();
+    assert!(storage.space_used(&[&second]).unwrap() >= NOISE_LEN);
+}
+
+#[test]
+fn space_used_of_no_snapshot_is_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    assert_eq!(storage.space_used(&[]).unwrap(), 0);
+}
+
+/// The timing ADR-0027 records: 20 games of 20 backups each, every game's space computed from a
+/// newly opened repository with rustic's tree cache empty (cold), then again (warm).
+#[test]
+#[ignore = "timing, Linux only; set SALVAJOCS_TIMING=1 and XDG_CACHE_HOME to a dir below the \
+            temp dir or the repository's tmp/, run with --release"]
+fn space_used_timing() {
+    // CI runs the ignored tests too, and the cold run empties rustic's cache.
+    if std::env::var_os("SALVAJOCS_TIMING").is_none() {
+        eprintln!("skipped: set SALVAJOCS_TIMING=1 and XDG_CACHE_HOME to a scratch dir");
+        return;
+    }
+    let cache = PathBuf::from(std::env::var_os("XDG_CACHE_HOME").expect("XDG_CACHE_HOME set"));
+    let cache = cache.canonicalize().expect("XDG_CACHE_HOME exists");
+    // Never a developer's real cache, which holds every rustic repository's trees.
+    let scratch = [
+        std::env::temp_dir(),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp"),
+    ];
+    assert!(
+        (scratch.iter())
+            .filter_map(|dir| dir.canonicalize().ok())
+            .any(|dir| cache.starts_with(dir)),
+        "XDG_CACHE_HOME must be below the temp dir or the repository's tmp/"
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let mut games = Vec::new();
+    for game in 0..20u64 {
+        let (slug, src) = (
+            format!("game-{game}"),
+            tmp.path().join(format!("src-{game}")),
+        );
+        // Ten 16 KiB files in three folders, one of which changes before each backup.
+        for index in 0..10u64 {
+            let dir = src.join(["a", "a/b", "c"][index as usize % 3]);
+            fs::create_dir_all(&dir).unwrap();
+            let bytes = noise(16 * 1024, game * 100 + index);
+            fs::write(dir.join(format!("{index}.sav")), bytes).unwrap();
+        }
+        let tags = ["salvajocs", &format!("game:{slug}")];
+        let mut ids = Vec::new();
+        for backup in 0..20u64 {
+            let file = src.join("a/0.sav");
+            fs::write(&file, noise(16 * 1024, 10_000 + game * 100 + backup)).unwrap();
+            let as_path = format!("/salvajocs/{slug}");
+            let info = storage.backup_dir(&src, &as_path, &tags, &slug).unwrap();
+            ids.push(info.expect("a new snapshot").id);
+        }
+        games.push(ids);
+    }
+    let location = local(&tmp.path().join("repo"));
+    let measure = |label: &str| {
+        let mut storage = Storage::open(&location, "").unwrap();
+        let start = Instant::now();
+        let mut total = 0;
+        for ids in &games {
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            total += storage.space_used(&ids).unwrap();
+        }
+        println!(
+            "{label}: {:?} for {} games, {total} bytes",
+            start.elapsed(),
+            games.len()
+        );
+    };
+    let _ = fs::remove_dir_all(cache.join("rustic"));
+    measure("cold");
+    measure("warm");
+}
+
+#[test]
+fn space_used_of_an_unknown_snapshot_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let unknown = "0".repeat(64);
+    assert!(matches!(
+        storage.space_used(&[&unknown]),
+        Err(StorageError::Backend(_))
+    ));
+}

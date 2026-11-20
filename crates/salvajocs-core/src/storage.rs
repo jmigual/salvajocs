@@ -2,7 +2,7 @@
 
 mod rclone;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -12,9 +12,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rustic_backend::{BackendOptions, choose::SupportedBackend, util::location_to_type_and_path};
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, IndexedFullStatus, KeyOptions, LocalDestination,
-    LsOptions, PathList, PruneOptions, Repository, RepositoryBackends, RepositoryOptions,
-    RestoreOptions, RusticError, SnapshotOptions,
+    BackupOptions, ConfigOptions, Credentials, DataId, IndexedFullStatus, KeyOptions,
+    LocalDestination, LsOptions, PathList, PruneOptions, Repository, RepositoryBackends,
+    RepositoryOptions, RestoreOptions, RusticError, SnapshotOptions, TreeId,
     repofile::{IndexFile, Node, SnapshotFile as RusticSnapshot, SnapshotId},
 };
 
@@ -276,6 +276,9 @@ pub struct SnapshotInfo {
     pub label: String,
     /// The snapshot tags.
     pub tags: Vec<String>,
+    /// The bytes of the files the snapshot holds, before compression; `None` when it has no
+    /// summary, as a snapshot of an older restic.
+    pub size: Option<u64>,
 }
 
 impl SnapshotInfo {
@@ -293,7 +296,13 @@ impl SnapshotInfo {
             host,
             label,
             tags,
+            size: None,
         }
+    }
+
+    /// The snapshot with its files' total `size` (see [`SnapshotInfo::size`]).
+    pub fn with_size(self, size: Option<u64>) -> Self {
+        Self { size, ..self }
     }
 }
 
@@ -304,6 +313,7 @@ fn snapshot_info(snap: &RusticSnapshot) -> SnapshotInfo {
         host: snap.hostname.clone(),
         label: snap.label.clone(),
         tags: snap.tags.iter().cloned().collect(),
+        size: (snap.summary.as_ref()).map(|summary| summary.total_bytes_processed),
     }
 }
 
@@ -612,6 +622,39 @@ impl Storage {
             self.reindex()?;
         }
         Ok(snap)
+    }
+
+    /// The bytes the snapshots `snapshot_ids` take in the repository: the packed size of each
+    /// distinct tree and data blob they reference, counted once however many of them share it
+    /// (restic's `stats --mode raw-data`). Reads trees, through rustic's cache, but no data.
+    ///
+    /// # Errors
+    /// An unknown snapshot id, or a blob missing from the index even after a reindex.
+    pub fn space_used(&mut self, snapshot_ids: &[&str]) -> Result<u64, StorageError> {
+        let mut pending: Vec<TreeId> = Vec::new();
+        for id in snapshot_ids {
+            pending.push(self.snapshot(id)?.tree);
+        }
+        let repo = &self.repo;
+        let (mut trees, mut data) = (HashSet::new(), HashSet::<DataId>::new());
+        let mut total = 0;
+        while let Some(tree) = pending.pop() {
+            if !trees.insert(tree) {
+                continue;
+            }
+            let entry = repo.get_index_entry(&tree).map_err(backend)?;
+            total += u64::from(entry.location.length);
+            for node in repo.get_tree(&tree).map_err(backend)?.nodes {
+                pending.extend(node.subtree);
+                for blob in node.content.into_iter().flatten() {
+                    if data.insert(blob) {
+                        let entry = repo.get_index_entry(&blob).map_err(backend)?;
+                        total += u64::from(entry.location.length);
+                    }
+                }
+            }
+        }
+        Ok(total)
     }
 
     /// Every node below the directory `path_in_snapshot` of snapshot `snapshot_id`, with its

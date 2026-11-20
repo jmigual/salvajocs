@@ -294,6 +294,7 @@ fn snapshot(id: &str, host: &str, tags: &[&str]) -> SnapshotInfo {
         host: host.into(),
         label: "Game".into(),
         tags: tags.iter().map(|&tag| tag.to_owned()).collect(),
+        size: None,
     }
 }
 

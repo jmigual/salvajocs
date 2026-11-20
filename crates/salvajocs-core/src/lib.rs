@@ -15,5 +15,6 @@ pub mod scan;
 pub mod secret;
 pub mod selection;
 pub mod slug;
+pub mod stats;
 pub mod storage;
 pub mod update;

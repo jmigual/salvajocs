@@ -42,6 +42,10 @@ All notable changes to salvajocs. The format follows
   to `restore::run`.
 - `salvajocs-core`: `config::AppConfig` has `backup_sort` and `restore_sort`, a
   `config::ListSort` each.
+- `salvajocs-core`: `storage::SnapshotInfo` has a `size` field, the size of the snapshot's
+  files, set with `with_size`. `Storage::space_used` sums the packed blobs a set of snapshots
+  uses. The new `stats` module holds each game's last backup, its size and its space used, and
+  orders a game list by them.
 - The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.
