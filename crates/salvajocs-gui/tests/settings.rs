@@ -16,9 +16,12 @@ use eframe::egui::{OutputCommand, ThemePreference};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::{AppConfig, ListSort, PasswordMode, RepoOption, SortKey, ThemeChoice};
+use salvajocs_core::custom_games::{self, Stored};
 use salvajocs_core::layout::RootKind;
+use salvajocs_core::manifest::{CustomGame, GameEntry, Integration};
 use salvajocs_core::retention::{self, Retention, Unit};
 use salvajocs_core::secret::SecretKey;
+use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
@@ -798,6 +801,106 @@ fn applying_a_new_location_keeps_the_ignored_prefixes() {
 
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(saved.ignored_prefixes, config.ignored_prefixes);
+}
+
+#[test]
+fn settings_new_repository_gets_this_pcs_custom_games() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    let mut game = CustomGame::new("Mine".into(), GameEntry::default(), Integration::Extend);
+    game.wine_prefix = Some(tmp.path().join("prefix"));
+    config.custom_games = vec![game.clone()];
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+    run_until_saved(&mut harness, &env, |config| {
+        config.custom_games_repository.is_some()
+    });
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+    run_until_saved(&mut harness, &env, |config| {
+        config.custom_games_repository == Some(config.secret_scope())
+    });
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.custom_games, [game.clone()], "the prefix stays");
+    let mut stored = game;
+    stored.wine_prefix = None;
+    // Both repositories hold the game: the old one keeps its snapshot.
+    for repository in [repository, other] {
+        let location = RepoLocation::new(repository, Default::default());
+        let listed = custom_games::load_all(&mut Storage::open(&location, "").unwrap()).unwrap();
+        assert!(
+            matches!(&listed["Mine"], Ok(Stored::Game(game)) if **game == stored),
+            "{listed:?}"
+        );
+    }
+}
+
+/// Applies the existing repository `repository` from the Settings form and waits until the app
+/// saved it.
+fn apply_existing_location(harness: &mut Harness<'static, App>, env: &Env, repository: &str) {
+    replace_text(harness, "Location", repository);
+    harness.get_by_label("Apply").click();
+    run_until_saved(harness, env, |config| config.repository == repository);
+    run_settled(harness);
+}
+
+#[test]
+fn switching_back_after_a_failed_upload_keeps_the_other_repositorys_games() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let first = repo_dir(&tmp);
+    init_repo(&first);
+    let second = other_repo_dir(&tmp);
+    init_repo(&second);
+    let open = |repository: &str| {
+        let location = RepoLocation::new(repository.to_owned(), Default::default());
+        Storage::open(&location, "").unwrap()
+    };
+    let theirs = CustomGame::new("Theirs".into(), GameEntry::default(), Integration::Extend);
+    let stage = tmp.path().join("elsewhere");
+    custom_games::save(&mut open(&second), "Theirs", None, Some(&theirs), &stage).unwrap();
+    let mine = CustomGame::new("Mine".into(), GameEntry::default(), Integration::Extend);
+    let mut config = local_config(&first);
+    config.custom_games = vec![mine.clone()];
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+    run_until_saved(&mut harness, &env, |config| {
+        config.custom_games_repository == Some(config.secret_scope())
+    });
+
+    // A directory where Mine's file is staged makes its upload to the second repository fail.
+    let dir = env.cache_dir.join("stage").join("settings");
+    let staged = dir
+        .join("custom-games")
+        .join(slug("Mine"))
+        .join("custom-game.json");
+    std::fs::remove_file(&staged).unwrap();
+    std::fs::create_dir_all(&staged).unwrap();
+    apply_existing_location(&mut harness, &env, &second);
+    run_until_saved(&mut harness, &env, |config| config.custom_games.len() == 2);
+    assert!(shows(&harness, "Could not save the custom game Mine"));
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(
+        saved.custom_games_repository, None,
+        "the next sync migrates"
+    );
+
+    apply_existing_location(&mut harness, &env, &first);
+    run_until_saved(&mut harness, &env, |config| {
+        config.custom_games_repository == Some(config.secret_scope())
+    });
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.custom_games, [mine, theirs.clone()]);
+    let listed = custom_games::load_all(&mut open(&first)).unwrap();
+    assert!(
+        matches!(&listed["Theirs"], Ok(Stored::Game(game)) if **game == theirs),
+        "{listed:?}"
+    );
 }
 
 #[test]

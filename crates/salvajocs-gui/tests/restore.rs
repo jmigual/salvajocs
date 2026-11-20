@@ -17,6 +17,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, ListSort, SortKey};
+use salvajocs_core::custom_games::{self, Stored};
 use salvajocs_core::launcher::{Launcher, LauncherPrefix};
 use salvajocs_core::layout::{Base, Context, LinuxFolders, PrefixOrigin};
 use salvajocs_core::manifest::{
@@ -999,7 +1000,11 @@ fn restore_fetch_preview_restore_reports() {
     );
     // The safety backup was staged apart from the backup mirror.
     assert!(env.cache_dir.join("restore-stage").exists());
-    assert!(!env.cache_dir.join("stage").exists());
+    let mirror = env
+        .cache_dir
+        .join("stage")
+        .join(salvajocs_core::slug::slug("Alpha"));
+    assert!(!mirror.exists());
 
     // The reloaded list offers the safety backup, but not as the default.
     run_until(&mut harness, "the list to reload", |h| {
@@ -1491,6 +1496,89 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
             pair("<xdgConfig>/unity3d/Co/Mix", "<winLocalAppDataLow>/Co/Mix"),
             pair("<xdgData>/Mix", "<winAppData>/Mix"),
         ]
+    );
+}
+
+#[test]
+fn restore_mapping_choice_is_saved_to_the_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env) = mix(&tmp);
+    replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
+    harness.get_by_label("Use these folders").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
+
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.pairs.is_empty())
+    });
+    // Another PC reads the same mapping from the repository (ADR-0028).
+    let stored = custom_games::load_all(&mut open_repo(&tmp)).unwrap();
+    let Ok(Stored::Game(game)) = &stored["Mix"] else {
+        panic!("Mix is not in the repository: {stored:?}");
+    };
+    assert_eq!(game.pairs, games[0].pairs);
+}
+
+#[test]
+fn restore_mapping_choice_for_a_game_whose_upload_failed_keeps_its_definition() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = [
+        "<winLocalAppDataLow>/Co/Mix",
+        "<winAppData>/Mix",
+        "<xdgData>/Mix",
+        "<xdgConfig>/MixCfg",
+    ];
+    let game = custom("Mix", &files, None, Vec::new());
+    let snapshot = scan(
+        &tmp,
+        "Mix",
+        &[
+            (Base::WinLocalAppDataLow, "Co/Mix/b.sav"),
+            (Base::WinAppData, "Mix/a.sav"),
+        ],
+        &[
+            (Base::WinLocalAppDataLow, "Co/Mix"),
+            (Base::WinAppData, "Mix"),
+        ],
+    );
+    // A directory where Mix's file is staged makes its first upload fail.
+    let mut blocked = None;
+    let (mut harness, env) = open_tab_with(&tmp, vec![game.clone()], &[snapshot], &[], |env| {
+        let dir = env
+            .cache_dir
+            .join("stage")
+            .join("settings")
+            .join("custom-games");
+        let staged = dir
+            .join(salvajocs_core::slug::slug("Mix"))
+            .join("custom-game.json");
+        fs::create_dir_all(&staged).unwrap();
+        blocked = Some(staged);
+    });
+    run_until(&mut harness, "the failed upload", |h| {
+        shows(h, "Could not save the custom game Mix")
+    });
+    fs::remove_dir_all(blocked.unwrap()).unwrap();
+    // The notice names Mix too, so the list may not be there yet.
+    run_until(&mut harness, "the list", |h| {
+        h.query_all_by_label("Mix").next().is_some()
+    });
+    select(&mut harness, "Mix");
+    preview(&mut harness);
+    click(&mut harness, "Choose folders…");
+    replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
+    harness.get_by_label("Use these folders").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
+
+    let games = run_until_saved(&mut harness, &env, |games| {
+        games.iter().any(|game| !game.pairs.is_empty())
+    });
+    // The choices go on this PC's definition, which the repository then holds.
+    assert_eq!(games[0].integration, Integration::Override);
+    assert_eq!(games[0].entry, game.entry);
+    let stored = custom_games::load_all(&mut open_repo(&tmp)).unwrap();
+    assert!(
+        matches!(&stored["Mix"], Ok(Stored::Game(stored)) if **stored == games[0]),
+        "{stored:?}"
     );
 }
 

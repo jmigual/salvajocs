@@ -9,7 +9,9 @@ store the choices of a [cross-build restore](cross-os-restore.md). Back to the
 
 The tab lists your custom games. Each line says how the game relates to the manifest: a custom
 game, a game that extends the manifest entry, or one that overrides it. **Edit** and **Remove**
-change the list. **Add game** opens the form. Changes are saved to the config at once.
+change the list. **Add game** opens the form. Changes are saved to the repository at once, so
+every PC that uses the repository has the same custom games. The **Wine prefix** stays on this
+PC: each PC sets its own.
 
 ## The form
 
@@ -17,7 +19,7 @@ change the list. **Add game** opens the form. Changes are saved to the config at
 | --- | --- |
 | Name | The game's title. The name is how the game is matched with the manifest, so spell it exactly as the manifest does for an existing game. Two custom games cannot share a name. |
 | Integration | **Extend the manifest entry** adds your files, keys and install folders to the manifest's. **Override the manifest entry** replaces the manifest's entry of the same title. For a title the manifest lacks, the two behave the same. |
-| Wine prefix | The Wine prefix of the game, for example a Heroic, Lutris or Bottles prefix. Leave it empty if the game does not need one. |
+| Wine prefix | The Wine prefix of the game, for example a Heroic, Lutris or Bottles prefix. Leave it empty if the game does not need one. It is saved on this PC only, not in the repository. |
 
 ### Files
 
@@ -128,9 +130,38 @@ you tick **Skip**.
 
 ## Saving
 
-**Save game** checks the form. It reports an error for an empty or taken name, a mapping or
-skipped folder that is not a path template, and a game that changed while the form was open (use
-**Reload**).
+**Save game** checks the form, then saves the game to the repository; the form stays open with
+"Saving…" until it is done. It reports an error for an empty or taken name, a mapping or skipped
+folder that is not a path template, and a game that changed while the form was open, also on
+another PC: click **Reload** to see the game as it is now, then make your change again. If the
+repository cannot be reached, the form keeps what you entered and **Save game** tries again.
+
+A change made on another PC shows here when this PC opens the repository, and each time you open
+the Custom games tab. Renaming a game saves the new name, then removes the old one; if the second
+step fails, both names are listed and you can remove the one you do not want.
+
+Without the repository (it is missing, or could not be opened), the tab lists the custom games as
+this PC last saw them, read-only: "Open the repository to change custom games". The Backup tab
+still scans them.
+
+A game saved by a newer salvajocs shows "Written by a newer salvajocs" and cannot be edited or
+removed here. A game that cannot be read from the repository shows why. Either way this PC keeps
+its own copy of it, if it has one, and backs it up as before.
+
+## Other PCs and older versions
+
+The first time a PC opens a repository with this version, its custom games go into the
+repository: a game the repository does not have yet is added. When the repository already has a
+game of the same name with other contents, the repository's version is used, and a message names
+the game. When the repository says a game of that name was removed on another PC, it is removed
+here too, and a message says how many games were removed and names them. Before salvajocs
+changes or removes such a game on this PC, it keeps a copy of the config as
+`config-before-custom-games.yaml` in the config folder (once), so you can look up the old
+definition. The same happens after you connect another repository in Settings: this PC's custom
+games go along to the new repository, which keeps its own version of the games it already has.
+
+salvajocs 0.7 and older do not read custom games from the repository. A PC with such a version
+keeps using its own list, and does not see games added on other PCs until it is updated.
 
 ## Games from salvajocs 0.3
 

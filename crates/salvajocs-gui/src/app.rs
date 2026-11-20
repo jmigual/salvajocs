@@ -177,7 +177,7 @@ impl App {
             _ => false,
         };
         creating
-            || self.state.busy()
+            || self.state.writing()
             || self.backup.writing()
             || self.restore.writing()
             || self.settings.writing()
@@ -329,6 +329,7 @@ impl App {
                         storage: Arc::new(std::sync::Mutex::new(*storage)),
                         space: Default::default(),
                     });
+                    self.state.sync_custom_games(&ctx);
                     self.settings.reset();
                     Stage::Ready
                 }
@@ -526,6 +527,10 @@ impl eframe::App for App {
                     (None, true) => ui.weak("Manifest: loading"),
                     (None, false) => ui.weak("Manifest: not available"),
                 };
+                if state.custom_games.syncing() {
+                    ui.spinner();
+                    ui.weak("Loading custom games");
+                }
             });
         };
         let end = |ui: &mut Ui| {

@@ -1087,7 +1087,7 @@ impl RestoreTab {
             Ok(labelled) => {
                 if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
                     crossbuild::apply_choices(&mut config.custom_games, &fetched.title, &choices);
-                    state.save_config(ctx);
+                    state.save_mapping_choices(ctx, fetched.title.clone(), choices);
                 }
                 self.mapping = None;
                 self.preview = Some(Preview::new(fetched, labelled));

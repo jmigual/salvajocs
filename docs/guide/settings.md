@@ -16,7 +16,8 @@ clicking **Apply** removes them from the keyring.
 
 Click **Apply** to connect to a different repository. salvajocs checks it the same way as on
 first run, and asks before it creates a new one, with the compression to use. The tabs then show
-the new repository.
+the new repository. Your custom games go along: the new repository gets the ones it does not have
+yet ([Custom games](custom-games.md#other-pcs-and-older-versions)).
 
 Keyring entries belong to one repository and its non-secret options. After you switch to another
 repository, the tab offers **Delete entries** to remove the old ones, or **Keep entries**.
@@ -130,7 +131,8 @@ opens the changelog at the tag of this version.
 
 ## Where settings are stored
 
-All settings except the compression level and the old-backup rules are in `config.yaml`, listed
-in [Installation](installation.md#where-salvajocs-keeps-its-files). The compression level and the
-old-backup rules are in the repository; passwords and secret options are in the keyring or asked
-each session.
+All settings except the compression level, the old-backup rules and the custom games are in
+`config.yaml`, listed in [Installation](installation.md#where-salvajocs-keeps-its-files). The
+compression level, the old-backup rules and the custom games are in the repository, with a copy
+of the custom games and their Wine prefixes in `config.yaml`; passwords and secret options are in
+the keyring or asked each session.

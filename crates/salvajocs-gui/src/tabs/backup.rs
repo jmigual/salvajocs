@@ -1284,7 +1284,7 @@ impl BackupTab {
                 Ok(_) => {
                     if let Some(config) = &mut state.config {
                         crossbuild::apply_choices(&mut config.custom_games, title, &choices);
-                        state.save_config(ctx);
+                        state.save_mapping_choices(ctx, title.clone(), choices);
                     }
                     self.mapping = None;
                     self.start_preview(ctx, state);

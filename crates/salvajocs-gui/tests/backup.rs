@@ -127,6 +127,14 @@ fn start_app(
     save_config(&env, &config);
     let mut harness = harness(env.clone());
     run_until_ready(&mut harness);
+    // The custom games' first sync rewrites the config once (ADR-0028).
+    let config_dir = env.config_dir.clone();
+    run_until(&mut harness, "the custom games to be synced", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.custom_games_repository.is_some())
+    });
     run_settled(&mut harness);
     (harness, env)
 }
@@ -538,7 +546,8 @@ fn a_choice_waits_in_the_pending_file_until_a_backup() {
     click(&mut first, "Beta");
     run_until_pending(&mut first, &env, "Beta", &[Change::Skip(true)]);
     drop(first);
-    let saved = open_repo(&tmp).snapshots("salvajocs-settings").unwrap();
+    // The custom games went to the repository when it opened (ADR-0028); no selection did.
+    let saved = salvajocs_core::selection::load_all(&mut open_repo(&tmp)).unwrap();
     assert!(
         saved.is_empty(),
         "nothing is saved to the repository before a backup"
@@ -1180,12 +1189,17 @@ fn choose_folders_saves_the_choice_and_compares_again() {
     run_settled(&mut harness);
 
     assert!(!shows(&harness, "Choose folders…"));
-    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
     let pair = Pair {
         linux: "<home>/G".into(),
         windows: "<winAppData>/G".into(),
     };
-    assert_eq!(config.custom_games[0].pairs, [pair]);
+    let config_dir = env.config_dir.clone();
+    run_until(&mut harness, "the choice to be saved", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.custom_games[0].pairs == [pair.clone()])
+    });
 }
 
 #[test]

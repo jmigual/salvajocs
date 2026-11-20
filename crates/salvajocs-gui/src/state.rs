@@ -14,6 +14,10 @@ use crate::first_run::Connected;
 use crate::job::Job;
 use crate::startup::Credentials;
 
+mod custom_games;
+
+pub use custom_games::{CustomGameJobs, Edit, EditError};
+
 /// The open repository, shared with the jobs that work on it.
 pub type SharedStorage = Arc<Mutex<Storage>>;
 
@@ -83,6 +87,8 @@ pub struct State {
     pub stale: Option<StaleCredentials>,
     /// Messages for the banner, until dismissed.
     pub notices: Vec<String>,
+    /// The sync and saves of the custom games in the repository (ADR-0028).
+    pub custom_games: CustomGameJobs,
     saving: Option<Job<()>>,
     save_again: bool,
     remembering: Option<Job<()>>,
@@ -99,6 +105,7 @@ impl State {
             manifest: None,
             stale: None,
             notices: Vec::new(),
+            custom_games: CustomGameJobs::default(),
             saving: None,
             save_again: false,
             remembering: None,
@@ -113,7 +120,8 @@ impl State {
 
     /// Makes a repository the user just connected the current one and saves the config. Roots,
     /// custom games, the update setting, the theme, the sorts and the ignored prefixes come from
-    /// the current config, which may have changed since the form was built.
+    /// the current config, which may have changed since the form was built. Then syncs the custom
+    /// games, so this PC's go to a repository that lacks them (ADR-0028).
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -124,6 +132,7 @@ impl State {
         if let Some(old) = &self.config {
             config.roots = old.roots.clone();
             config.custom_games = old.custom_games.clone();
+            config.custom_games_repository = old.custom_games_repository.clone();
             config.check_updates = old.check_updates;
             config.theme = old.theme;
             config.backup_sort = old.backup_sort;
@@ -140,6 +149,7 @@ impl State {
         self.credentials = credentials;
         self.notices.extend(warnings);
         self.save_config(ctx);
+        self.sync_custom_games(ctx);
     }
 
     /// Writes the config in the background. A save already running is followed by another, so
@@ -169,13 +179,20 @@ impl State {
         }));
     }
 
-    /// Whether a config save or a keyring write is running.
+    /// Whether a config save, a keyring write or a custom games job is running.
     pub(crate) fn busy(&self) -> bool {
-        self.saving.is_some() || self.remembering.is_some()
+        self.saving.is_some() || self.remembering.is_some() || self.custom_games.busy()
+    }
+
+    /// Whether a config save, a keyring write or a custom games job that writes
+    /// ([`CustomGameJobs::writing`]) is running.
+    pub(crate) fn writing(&self) -> bool {
+        self.saving.is_some() || self.remembering.is_some() || self.custom_games.writing()
     }
 
     /// Collects finished background work, reporting failures.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        self.poll_custom_games(ctx);
         if let Some(job) = &mut self.remembering
             && let Some(result) = job.take_result()
         {

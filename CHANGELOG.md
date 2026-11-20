@@ -35,6 +35,20 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- Custom games are stored in the repository, so every PC that uses it has the same ones; a
+  change made on one PC shows on another when it opens the repository or the Custom games tab.
+  The Wine prefix of a custom game stays on each PC. The first time a PC opens a repository with
+  this version, its custom games are saved to it; when the repository already has a game of the
+  same name with other contents, the repository's version is used, and a game the repository
+  marks as removed is removed here; a message names each, and the config from before the first
+  such change is kept as `config-before-custom-games.yaml`. Connecting another repository in
+  Settings takes this PC's custom games along. Without the repository, the Custom games tab
+  lists them read-only. salvajocs 0.7 and older keep using their own list.
+- `salvajocs-core`: the new `custom_games` module stores custom games in the repository.
+  `AppConfig` gains `custom_games_repository`, and `config::BEFORE_CUSTOM_GAMES_FILE` with
+  `AppConfig::keep_before_custom_games` keep the config from before. `crossbuild::apply_choices`
+  takes the custom game list (`&mut Vec<CustomGame>`) instead of the whole config (a breaking
+  change).
 - `salvajocs-core`: `changes::Mapped::new` takes the new `sources` field, the snapshot's own path
   of each mapped file, and `changes::Baseline::backed_up` finds a file of the backup. The new
   `changes::details` module reads and compares one file; it uses the `similar` crate.

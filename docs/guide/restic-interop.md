@@ -85,11 +85,16 @@ does not show them.
 - The [Old backups](settings.md#old-backups) rules, shared by all games: tags
   `salvajocs-settings` and `settings:retention`, folder `/salvajocs-settings/retention`, file
   `retention.json`.
+- Each [custom game](custom-games.md): tags `salvajocs-settings` and `custom-game:<slug>`, folder
+  `/salvajocs-settings/custom-games/<slug>`, file `custom-game.json`. A removed game keeps one
+  small snapshot that says it was removed.
 
-salvajocs writes a new snapshot when a backup saves your choices for a game, and when you change
-the Old backups rules. It then forgets the older ones. If you remove the newest one with restic,
-you lose that setting: salvajocs then backs up every file of the game, or keeps every backup. To
-list them, use `--tag salvajocs-settings`.
+salvajocs writes a new snapshot when a backup saves your choices for a game, when you change the
+Old backups rules, and when you save or remove a custom game. It then forgets the older ones. If
+you remove the newest one with restic, you lose that setting: salvajocs then backs up every file
+of the game, or keeps every backup. For a custom game, removing its newest snapshot drops the
+game, or brings back the version before it when that one was not forgotten, as in an
+append-only repository. To list them, use `--tag salvajocs-settings`.
 
 ## Writing with restic
 
