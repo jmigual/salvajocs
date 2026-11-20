@@ -8,17 +8,18 @@ All notable changes to salvajocs. The format follows
 
 ### Added
 
-- On the Backup tab, a file with the changed icon has a **Details** button. It shows the size,
-  modification time and SHA-256 of this PC's copy and of the backup's, how many lines of each end
-  in CRLF, in LF and in a bare CR, whether it starts with a byte order mark (BOM), and for a text
-  file the lines that differ (a last line without a line ending is marked), or that only the line
-  endings, the BOM or both differ.
+- On the Backup tab and in the plan of the Restore tab, a file with the changed icon has a
+  **Details** button. It shows the size, modification time and SHA-256 of this PC's copy and of
+  the backup's, how many lines of each end in CRLF, in LF and in a bare CR, whether it starts with
+  a byte order mark (BOM), and for a text file the lines that differ (a last line without a line
+  ending is marked), or that only the line endings, the BOM or both differ.
 
 ### Changed
 
 - `salvajocs-core`: `changes::Mapped::new` takes the new `sources` field, the snapshot's own path
   of each mapped file, and `changes::Baseline::backed_up` finds a file of the backup. The new
   `changes::details` module reads and compares one file; it uses the `similar` crate.
+  `restore::Listed::backed_up` finds the snapshot's copy of a planned write.
 - The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.

@@ -81,7 +81,10 @@ The Plan shows:
   no icon; it is written all the same. A folder's line counts the icons below it, and icons after
   the heading count the files of each kind. When the safety backup cannot read a file at a
   target, the plan says that nothing will be restored and lists those files, and **Restore
-  files** stays disabled. Make them readable and click **Try again**.
+  files** stays disabled. Make them readable and click **Try again**. A file with the pencil
+  also has a **Details** button, which shows what makes it differ: the backup's copy of the
+  chosen snapshot against the file that would be overwritten, as in the
+  [Backup tab](backup.md#what-differs-from-the-last-backup).
 - **Registry.** The number of registry keys and the prefix, named as on the "Into" line, or the
   Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.

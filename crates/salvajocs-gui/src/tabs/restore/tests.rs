@@ -923,3 +923,37 @@ fn a_plan_for_an_older_choice_is_dropped() {
     assert!(tab.preview.is_none());
     assert!(tab.mapping.is_none());
 }
+
+#[test]
+fn forgetting_the_plan_closes_the_open_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |_| RestoreTab::default());
+    let storage = storage(&harness);
+    let fetched = backed_up(&storage, dir.path());
+    let source = fetched
+        .listed
+        .staged
+        .root
+        .join("files/XdgData/Mix/save.dat");
+    let write = Write::new(source, dir.path().join("target/save.dat"), None, None);
+    let copy = fetched.listed.backed_up(&write).unwrap();
+    let key = "XdgData/Mix/save.dat".to_owned();
+    let ctx = harness.ctx.clone();
+    let details = Details::start(&ctx, &storage, "mix".into(), key, write.target, copy);
+    harness.state_mut().0.details = Some(details);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while harness.query_by_label("Close details").is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dialog never showed"
+        );
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    harness.state_mut().0.forget_plan();
+    harness.step();
+
+    assert!(harness.state().0.details.is_none());
+    assert!(harness.query_by_label("Close details").is_none());
+}

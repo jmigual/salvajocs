@@ -12,7 +12,7 @@ use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
 use super::{RestorePlan, StagedGame, Write};
 use crate::backup::{BackupError, Stored, backup_games};
-use crate::changes::FileState;
+use crate::changes::{BackedUp, FileState};
 use crate::config::AppConfig;
 use crate::crossbuild::{self, Family, SnapshotRoot, pair_side};
 use crate::layout::{self, Base, Context, FILES_DIR, GameVars, Hashes, META_FILE, REGISTRY_FILE};
@@ -411,6 +411,32 @@ impl Listed {
             .binary_search_by(|entry| entry.path.as_str().cmp(&path))
             .ok()?;
         Some(&self.listing[at])
+    }
+
+    /// The plain slug of the game the snapshot holds, from its `game:<slug>` tag; `None` when it
+    /// has none.
+    pub fn slug(&self) -> Option<&str> {
+        game_slug(&self.snapshot).ok()
+    }
+
+    /// The snapshot's copy of the file `write` copies, for [`crate::changes::details`]: its path
+    /// below `files/`, size, mtime and the hash its list gives. `None` when the listing has no
+    /// regular file there.
+    pub fn backed_up(&self, write: &Write) -> Option<BackedUp> {
+        let entry = self
+            .source(write)
+            .filter(|entry| entry.kind == EntryKind::File)?;
+        let path = entry.path.strip_prefix(&format!("{FILES_DIR}/"))?;
+        let sha256 = (self.hashes.as_ref())
+            .and_then(|hashes| hashes.files.get(path))
+            .map(|file| file.sha256.clone());
+        Some(BackedUp {
+            snapshot: self.snapshot.clone(),
+            path: path.to_owned(),
+            size: entry.size,
+            modified: entry.modified,
+            sha256,
+        })
     }
 }
 

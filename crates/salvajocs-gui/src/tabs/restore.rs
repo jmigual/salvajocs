@@ -28,6 +28,7 @@ use salvajocs_core::storage::SnapshotInfo;
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
+use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::theme::{self, icons};
@@ -318,15 +319,11 @@ impl WriteTree {
     /// exist, so it runs in a job.
     fn new(plan: &RestorePlan, listed: &Listed) -> Self {
         let files: Vec<Row> = (plan.writes.iter())
-            .map(|write| {
-                let ((base, tail), _) = restore::staged_target(write)
-                    .expect("`restore::plan` gives every write its target's key");
-                Row {
-                    key: format!("{}/{tail}", base.dir_name()),
-                    size: listed.source(write).map_or(0, |entry| entry.size),
-                    real: Some(write.target.clone()),
-                    removed: false,
-                }
+            .map(|write| Row {
+                key: target_key(write).expect("`restore::plan` gives every write its target's key"),
+                size: listed.source(write).map_or(0, |entry| entry.size),
+                real: Some(write.target.clone()),
+                removed: false,
             })
             .collect();
         let mut shared = HashMap::<&str, usize>::new();
@@ -344,6 +341,13 @@ impl WriteTree {
             names,
         }
     }
+}
+
+/// The `<Base>/<tail>` key of `write`'s target, the absolute one once overridden; `None` when
+/// the target has none.
+fn target_key(write: &Write) -> Option<String> {
+    let ((base, tail), _) = restore::staged_target(write)?;
+    Some(format!("{}/{tail}", base.dir_name()))
 }
 
 /// How one write of the plan compares with its target (`restore::compare_writes`).
@@ -437,9 +441,10 @@ impl Preview {
 
     /// The tree of the writes. Each file's name and Override button show where it goes on
     /// hover; the button opens a field under it for a new target, and an overridden file shows
-    /// its target with a Clear button. Applies what was clicked and returns the folder the user
-    /// asked to open.
-    fn files_ui(&mut self, ui: &mut Ui, busy: bool) -> Option<PathBuf> {
+    /// its target with a Clear button. A file whose target differs also has a Details button.
+    /// Applies what was clicked and returns the folder the user asked to open and the write whose
+    /// details they asked for.
+    fn files_ui(&mut self, ui: &mut Ui, busy: bool) -> (Option<PathBuf>, Option<usize>) {
         let Preview {
             fetched,
             plan,
@@ -457,11 +462,20 @@ impl Preview {
         };
         let (error_color, muted) = (ui.visuals().error_fg_color, ui.visuals().weak_text_color());
         let mut action = None;
+        let mut details = None;
         let mut row = |ui: &mut Ui, index: usize, _: &str, slot: Slot<'_>| {
             let (write, name) = (&plan.writes[index], &names[index]);
             let target = write.target.display().to_string();
             if let Slot::End(shown) = slot {
                 shown.clone().on_hover_text(&target);
+                if matches!(labels[index], Label::State(WriteState::Changed)) {
+                    let button = ui.add_enabled(!busy, egui::Button::new("Details").small());
+                    let label = format!("Details of {name}");
+                    button.widget_info(|| WidgetInfo::labeled(Role::Button, !busy, &label));
+                    if button.clicked() {
+                        details = Some(index);
+                    }
+                }
                 // Small, so the row keeps the height of the batch confirm's.
                 let button = ui.add_enabled(!busy, egui::Button::new("Override").small());
                 let label = format!("Override {name}");
@@ -538,10 +552,11 @@ impl Preview {
             labels[index] = Label::of(&plan.writes[index], &fetched.listed);
             tree.invalidate();
         }
-        match clicked.inner {
+        let opened = match clicked.inner {
             Some(Clicked::Open(path)) => Some(path),
             Some(Clicked::Toggle(..)) | None => None,
-        }
+        };
+        (opened, details)
     }
 }
 
@@ -640,6 +655,8 @@ pub struct RestoreTab {
     /// Whether the mapping dialog waits behind its "Choose folders…" button.
     dialog_hidden: bool,
     preview: Option<Preview>,
+    /// The open details of a file the plan overwrites.
+    details: Option<Details>,
     restoring: Option<Job<Restored>>,
     restored: Option<Restored>,
     confirm_delete: Option<Deletion>,
@@ -700,6 +717,9 @@ impl RestoreTab {
         self.mapping_ui(ui.ctx(), state);
         self.batch_mapping_ui(ui.ctx(), state);
         self.delete_ui(ui.ctx());
+        if (self.details.as_ref()).is_some_and(|details| details.ui(ui.ctx())) {
+            self.details = None;
+        }
     }
 
     /// Drops the listed backups, the chosen and ticked games and a delete waiting for its
@@ -760,6 +780,7 @@ impl RestoreTab {
     /// result of a plan job or dialog confirm still running.
     fn forget_plan(&mut self) {
         self.preview = None;
+        self.details = None;
         self.mapping = None;
         self.generation += 1;
     }
@@ -787,6 +808,9 @@ impl RestoreTab {
         }
         self.poll_jobs(ctx, state);
         self.poll_batch(ctx, state);
+        if let Some(details) = &mut self.details {
+            details.poll();
+        }
         self.auto_plan(ctx, state, manifest_loading);
     }
 
@@ -1410,7 +1434,19 @@ impl RestoreTab {
                 ui.weak(path);
             }
         }
-        let opened = theme::group(ui, |ui| preview.files_ui(ui, busy));
+        let (opened, details) = theme::group(ui, |ui| preview.files_ui(ui, busy));
+        if let Some(index) = details {
+            let (fetched, write) = (&preview.fetched, &preview.plan.writes[index]);
+            // The plan's own snapshot names the game, so a dropped list does not matter.
+            let listed = &fetched.listed;
+            if let (Some(slug), Some(backed_up)) = (listed.slug(), listed.backed_up(write)) {
+                let key = target_key(write).unwrap_or_else(|| write.target.display().to_string());
+                let (ctx, storage) = (ui.ctx(), &fetched.storage);
+                let slug = slug.to_owned();
+                let local = write.target.clone();
+                self.details = Some(Details::start(ctx, storage, slug, key, local, backed_up));
+            }
+        }
         if let Some((export, ctx)) = &preview.plan.registry {
             let (name, hover) = name_context(ctx, preview.fetched.prefix_origin.as_ref());
             let text = format!("Registry: {} keys into {name}", export.keys.len());

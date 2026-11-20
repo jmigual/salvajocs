@@ -2288,3 +2288,170 @@ fn a_game_that_lost_its_last_regular_backup_is_unticked() {
     assert_eq!(toggled, Some(Toggled::False));
     assert!(disabled(&harness, "Restore 0 games"));
 }
+
+/// A Wine prefix in a folder as long as Windows' temp paths, which once pushed the details
+/// dialog's Close out of sight.
+fn long_prefix(tmp: &TempDir) -> PathBuf {
+    let long = "a folder whose name makes the path of the save wider than the details dialog";
+    let prefix = tmp.path().join(long).join("pfx");
+    fs::create_dir_all(prefix.join("drive_c/users/steamuser")).unwrap();
+    fs::write(prefix.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    prefix
+}
+
+/// A scan of Alpha with `save.dat` holding `saved`, a `same.dat` and a `slot2.dat`.
+fn alpha_scan(tmp: &TempDir, saved: &str) -> GameScan {
+    let mut snapshot = scan(
+        tmp,
+        "Alpha",
+        &[
+            (Base::WinAppData, "Alpha/save.dat"),
+            (Base::WinAppData, "Alpha/same.dat"),
+            (Base::WinAppData, "Alpha/slot2.dat"),
+        ],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    fs::write(&snapshot.files[0].real, saved).unwrap();
+    snapshot.files[0].size = saved.len() as u64;
+    snapshot
+}
+
+/// Alpha backed up with `save.dat` holding `saved`, a `slot2.dat` the target lacks and a
+/// `same.dat` the target already has; `save.dat` is then written with `local`.
+fn alpha_differing(
+    tmp: &TempDir,
+    saved: &str,
+    local: &str,
+) -> (Harness<'static, App>, Env, PathBuf) {
+    let prefix = long_prefix(tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let (mut harness, env) = open_tab(tmp, vec![game], &[alpha_scan(tmp, saved)]);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), local).unwrap();
+    fs::write(saves.join("same.dat"), "Alpha/same.dat").unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    (harness, env, saves)
+}
+
+#[test]
+fn a_changed_file_of_the_plan_has_details() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha_differing(&tmp, "one\ntwo\nthree\n", "one\n2\nthree\n");
+
+    harness
+        .get_by_label(&format!("Details of {ALPHA_SAVE}"))
+        .click();
+    run_until(&mut harness, "the details", |h| shows(h, "− two"));
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "+ 2"));
+    assert!(shows(&harness, "Backup ("));
+    assert!(shows_path(
+        &harness,
+        &saves.join("save.dat").display().to_string()
+    ));
+    // The backup's path below `files/`, which is also this file's key.
+    assert!(shows(&harness, "WinAppData/Alpha/save.dat"));
+    let backup = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
+    let local = "bc85caa9b61bcf3a54ccfc800e2b0eda6c11fa5df4e0481c896d31cda2462eb2";
+    assert!(shows(&harness, backup) && shows(&harness, local));
+    assert!(shows(&harness, "(from its hash list)"));
+    assert!(!shows(&harness, "Reading the backup"));
+
+    click(&mut harness, "Close details");
+    assert!(!shows(&harness, "Backup ("));
+    assert!(harness.query_by_label("Close details").is_none());
+}
+
+#[test]
+fn only_a_changed_file_of_the_plan_has_a_details_button() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, _env, _saves) = alpha_differing(&tmp, "saved\n", "local\n");
+
+    for row in ["save.dat, changed", "same.dat", "slot2.dat, new"] {
+        assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
+    }
+    // Not on the new file nor on the unchanged one.
+    assert_eq!(harness.query_all_by_label_contains("Details of").count(), 1);
+    let name = format!("Details of {ALPHA_SAVE}");
+    let button = harness.get_by_label(&name);
+    assert_eq!(button.accesskit_node().role(), Role::Button);
+}
+
+#[test]
+fn the_details_of_the_plan_show_that_only_line_endings_differ() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _saves) = alpha_differing(&tmp, "a\nb\n", "a\r\nb\r\n");
+
+    harness
+        .get_by_label(&format!("Details of {ALPHA_SAVE}"))
+        .click();
+    run_until(&mut harness, "the details", |h| {
+        shows(h, "Only the line endings differ.")
+    });
+
+    assert!(shows(&harness, "2 Windows (CRLF), 0 Linux (LF)"));
+    assert!(shows(&harness, "0 Windows (CRLF), 2 Linux (LF)"));
+}
+
+#[test]
+fn the_details_of_an_overridden_file_compare_the_new_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha_differing(&tmp, "one\ntwo\nthree\n", "one\n2\nthree\n");
+    let other = tmp.path().join("other.dat");
+    fs::write(&other, "one\nTWO\nthree\n").unwrap();
+
+    apply_override(&mut harness, ALPHA_SAVE, &other);
+    harness
+        .get_by_label(&format!("Details of {ALPHA_SAVE}"))
+        .click();
+    run_until(&mut harness, "the details", |h| shows(h, "+ TWO"));
+
+    assert!(shows(&harness, "− two"));
+    assert!(shows_path(&harness, &other.display().to_string()));
+    let replaced = saves.join("save.dat").display().to_string();
+    assert!(!shows_path(&harness, &replaced));
+    assert!(!shows(&harness, "+ 2"));
+}
+
+#[test]
+fn the_details_of_the_plan_read_the_chosen_older_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = long_prefix(&tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let older = alpha_scan(&tmp, "one\ntwo\nthree\n");
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[older]);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), "one\n2\nthree\n").unwrap();
+    // A newer backup of the same game, which the plan starts with.
+    let newer = alpha_scan(&tmp, "one\nTWO\nthree\n");
+    let stage = tmp.path().join("fixture-stage");
+    backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], None, |_| {}).unwrap();
+    click(&mut harness, "Load backups");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Snapshot").click();
+    harness.step();
+    harness.step();
+    let mut options = harness.query_all_by_label_contains(" UTC, ");
+    options.nth(1).expect("both snapshots are listed").click();
+    drop(options);
+    harness.step();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+    click(&mut harness, "Open WinAppData/Alpha");
+    harness
+        .get_by_label(&format!("Details of {ALPHA_SAVE}"))
+        .click();
+    run_until(&mut harness, "the details", |h| shows(h, "+ 2"));
+
+    assert!(shows(&harness, "− two"));
+    assert!(!shows(&harness, "− TWO"));
+    // The older save's hash, not the newer one's.
+    let hash = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
+    assert!(shows(&harness, hash));
+}

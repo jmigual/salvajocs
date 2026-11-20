@@ -1,4 +1,4 @@
-# ADR-0024: The Backup tab shows what makes a changed file differ
+# ADR-0024: The Backup and Restore tabs show what makes a changed file differ
 
 **Status:** Proposed
 **Date:** 2026-11-20
@@ -13,7 +13,13 @@ reads no file content: ADR-0018 rejected downloading every compared file.
 ## Decision
 
 - **A Details button on a `changed` row** of the Backup tab opens a dialog (`core::changes::details`
-  and `tabs/backup/details.rs`). Other rows (new, removed, not compared, unticked) have none.
+  and `tabs/details.rs`). Other rows (new, removed, not compared, unticked) have none.
+- **The Restore tab has it too**, on each row of the single-game plan whose write is `Changed`
+  (ADR-0020), not on new, unchanged or unreadable ones. The backup's copy is the plan's snapshot,
+  which may not be the newest, found by `Listed::backed_up(write)` from the listing and hash
+  list the plan was made from (the snapshot's own path, also for a cross-build or prefix target);
+  this PC's copy is the write's target, overrides included. The dialog is the Backup tab's and
+  is dropped with the plan. The batch confirm has none.
 - **Facts of both copies:** location (this PC's path; the backup's path below `files/`, which for a
   backup of the other build is its own, not the mapped one, ADR-0021), size, mtime to the second
   (UTC) and SHA-256. The backup's hash comes from its verified hash list, else from the

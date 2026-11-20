@@ -1857,6 +1857,44 @@ fn compare_writes_reads_no_snapshot_content() {
     assert!(!listed.staged.root.exists());
 }
 
+#[test]
+fn backed_up_names_the_snapshots_file_with_its_listed_hash() {
+    let mut f = fixture();
+    let (listed, plan) = backed_up_plan(&mut f, &[("save.sav", "saved")]);
+
+    let found = listed.backed_up(&plan.writes[0]).unwrap();
+
+    assert_eq!(listed.slug(), Some(crate::slug::slug("Foo").as_str()));
+    assert_eq!(found.snapshot, listed.snapshot);
+    assert_eq!(found.path, "WinAppData/Game/save.sav");
+    assert_eq!(found.size, 5);
+    let hash = &listed.hashes.as_ref().unwrap().files["WinAppData/Game/save.sav"];
+    assert_eq!(found.sha256.as_deref(), Some(hash.sha256.as_str()));
+}
+
+#[test]
+fn backed_up_without_a_hash_list_has_no_hash() {
+    let mut f = fixture();
+    let stage = crafted_game_stage(f.tmp.path().join("stage"));
+    write(&stage.join("files/WinAppData/Game/save.sav"), "saved");
+    let snapshot = crafted_snapshot(&mut f.storage, &stage);
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+
+    let found = listed.backed_up(&plan.writes[0]).unwrap();
+
+    assert_eq!(found.sha256, None);
+}
+
+#[test]
+fn backed_up_is_none_for_a_write_the_listing_lacks() {
+    let mut f = fixture();
+    let (listed, plan) = backed_up_plan(&mut f, &[("save.sav", "saved")]);
+    let mut stray = plan.writes[0].clone();
+    stray.source = f.tmp.path().join("elsewhere");
+
+    assert_eq!(listed.backed_up(&stray), None);
+}
+
 #[cfg(unix)]
 #[test]
 fn compare_writes_says_a_symlinked_source_will_fail() {
