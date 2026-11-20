@@ -4,7 +4,8 @@
 **Date:** 2026-11-16
 **Amended:** 2026-11-17: named backend fields and rclone remotes replace the bare option
 list; compression is a dropdown. 2026-11-19: a login the server refuses has its own probe
-result, `LoginRefused`. 2026-11-19: a `theme` setting.
+result, `LoginRefused`. 2026-11-19: a `theme` setting. 2026-11-20: the `backup_sort` and
+`restore_sort` of the game lists (ADR-0027).
 
 ## Context
 
@@ -31,7 +32,10 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `roots`;
   - `custom_games`;
   - `ignored_prefixes`: launcher prefixes left out of scans and restores (ADR-0017);
-  - `theme: system | light | dark`, left out when `system`.
+  - `theme: system | light | dark`, left out when `system`;
+  - `backup_sort` and `restore_sort`: `{ by: name | last_backup | last_backup_size |
+    space_used, descending }`, each left out when Name A to Z; a value that does not parse
+    reads as Name A to Z (ADR-0027).
   Compression is **not** stored here: it lives in the repository config (ADR-0003).
 - **Generic backend UI:**
   - A picker with "Local folder" (default, with a folder picker), "REST server", "rclone remote"
