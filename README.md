@@ -153,7 +153,7 @@ Proton program closed. Games with a separate native Linux build need the mapping
 | Launcher discovery on Linux | Steam/Proton, Heroic, Lutris, Bottles, prefixes you add, custom games | Steam, Heroic and Lutris among others, and roots you add | Not applicable |
 | Releases | Early (0.x) | Yes | Yes |
 | Command line | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/command-line.md) | Yes |
-| Retention of old backups | No | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/backup-retention.md) | Yes (`forget`, `prune`) |
+| Retention of old backups | [Yes](docs/guide/settings.md#old-backups): keep the last N, or those newer than a span | [Yes](https://github.com/mtkennerly/ludusavi/blob/master/docs/help/backup-retention.md) | Yes (`forget`, `prune`) |
 
 Use ludusavi if you want a mature tool with releases and wider launcher support. Use restic or
 rustic for general backups. salvajocs uses the same repository format as restic, so you can read
@@ -172,7 +172,7 @@ for what was tested.
 - A restore that includes registry keys for a Wine prefix is refused while any `wineserver` runs.
 - Unity `PlayerPrefs` are detected but not converted between the registry and the Linux file.
   Engine rules exist for Unity and Godot only.
-- Snapshots are never deleted: there is no retention and no scheduled or automatic backup.
+- There is no scheduled or automatic backup.
 - The first start needs network access to get the game list. After that, a cached copy is used.
 - `opendal:sftp` is not available in Windows builds.
 - Undo restores what the restore overwrote. Files or keys it created stay.
