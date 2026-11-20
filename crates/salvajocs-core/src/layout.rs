@@ -673,6 +673,20 @@ impl PrefixOrigin {
             .collect::<Option<Vec<_>>>()?;
         (!parts.is_empty()).then(|| Self::Home(format!("<home>/{}", parts.join("/"))))
     }
+
+    /// Where a `Home` prefix is below `home`; `None` for another kind, or a rest that is not
+    /// `<home>/` and plain components, since a snapshot is untrusted (ADR-0005).
+    pub(crate) fn home_path(&self, home: &Path) -> Option<PathBuf> {
+        let Self::Home(rest) = self else {
+            return None;
+        };
+        let parts: Vec<&str> = rest.strip_prefix("<home>/")?.split('/').collect();
+        (parts.iter().all(|part| is_plain_component(part))).then(|| {
+            parts
+                .iter()
+                .fold(home.to_path_buf(), |path, part| path.join(part))
+        })
+    }
 }
 
 /// The `salvajocs.json` of a staged game (ADR-0004).

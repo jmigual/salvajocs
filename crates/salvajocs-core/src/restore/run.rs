@@ -10,23 +10,23 @@ use std::slice;
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
-use super::{RestorePlan, StagedGame, Targets, Write};
+use super::{RestorePlan, StagedGame, Write};
 use crate::backup::{BackupError, Stored, backup_games};
 use crate::changes::FileState;
 use crate::config::AppConfig;
 use crate::crossbuild::{self, Family, SnapshotRoot, pair_side};
-use crate::layout::{
-    self, Base, Context, FILES_DIR, GameVars, Hashes, META_FILE, REGISTRY_FILE, RootKind,
-    WinFolders,
-};
+use crate::layout::{self, Base, Context, FILES_DIR, GameVars, Hashes, META_FILE, REGISTRY_FILE};
 use crate::manifest::{CustomGame, GameEntry, Manifest, Pair, merge_custom};
-use crate::prefix::{proton_prefix, wine_user};
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
 use crate::registry::wine::RegFile;
 use crate::registry::{RegistryError, RegistryExport};
-use crate::scan::{Environment, FoundFile, GameScan, RegistrySource, launcher_prefixes};
+use crate::scan::{Environment, FoundFile, GameScan, RegistrySource};
 use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
+
+mod defaults;
+
+pub use defaults::{DefaultTargets, PrefixReason, default_targets};
 
 /// The extra tag of a safety backup made before a restore (ADR-0010).
 pub const PRE_RESTORE_TAG: &str = "pre-restore";
@@ -93,55 +93,6 @@ pub fn list(storage: &Storage) -> Result<Vec<GameBackups>, StorageError> {
         .collect();
     list.sort_by(|a, b| a.title.cmp(&b.title));
     Ok(list)
-}
-
-/// The targets a restore of `title` starts with (ADR-0005). On Windows the native folders; on
-/// Linux the native folders plus, when it exists, the game's own prefix: the custom game's
-/// `wine_prefix`, else its Proton prefix under `env.steam_roots` or a configured Steam root,
-/// else its launcher prefix not in `config.ignored_prefixes` (ADR-0017), as the scan looks them
-/// up. The user may change them. A prefix whose Wine user cannot be determined is passed over.
-pub fn default_targets(
-    title: &str,
-    manifest: &Manifest,
-    config: &AppConfig,
-    env: &Environment,
-) -> Targets {
-    let custom = &config.custom_games;
-    match &env.native {
-        Some(win @ Context::WindowsNative(_)) => Targets {
-            linux: None,
-            win: Some(win.clone()),
-        },
-        native => {
-            let steam_id = (game_info(title, manifest, custom).entry)
-                .and_then(|entry| entry.steam?.id)
-                .map(u64::from);
-            let custom_prefix = (custom.iter())
-                .filter(|game| game.name == title)
-                .filter_map(|game| game.wine_prefix.clone())
-                .next_back();
-            let configured = (config.roots.iter())
-                .filter(|root| root.kind == RootKind::Steam)
-                .map(|root| &root.path);
-            let proton = (env.steam_roots.iter())
-                .chain(configured)
-                .filter_map(|root| proton_prefix(root, steam_id?));
-            let (mut launcher, _) = launcher_prefixes(manifest, config, env);
-            let launcher = launcher.remove(title).unwrap_or_default();
-            let launcher = launcher.into_iter().map(|prefix| prefix.path.clone());
-            let mut candidates = custom_prefix.into_iter().chain(proton).chain(launcher);
-            let win = candidates.find_map(|prefix| {
-                let user = wine_user(&prefix).ok()?;
-                let folders = WinFolders::for_prefix(&prefix, &user);
-                Some(Context::WinePrefix { prefix, folders })
-            });
-            let linux = match native {
-                Some(Context::Linux(folders)) => Some(folders.clone()),
-                _ => None,
-            };
-            Targets { linux, win }
-        }
-    }
 }
 
 /// What the manifest and the custom games say about one game, as a restore needs it.

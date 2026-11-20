@@ -5,9 +5,12 @@ use super::*;
 use crate::backup::{Stored, backup_games};
 use crate::config::{AppConfig, PasswordMode, ThemeChoice};
 use crate::launcher::{Launcher, LauncherGame, LauncherPrefix};
-use crate::layout::{GameVars, LinuxFolders, Root, RootKind, SnapshotMeta};
+use crate::layout::{
+    GameVars, LinuxFolders, PrefixOrigin, Root, RootKind, SnapshotMeta, WinFolders,
+};
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair, Steam};
 use crate::registry::{RegData, RegValue};
+use crate::restore::Targets;
 use crate::storage::{Compression, RepoLocation};
 
 /// Writes `contents` to `path`, creating its parent directories.
@@ -511,6 +514,20 @@ fn steam_game(id: u32) -> Manifest {
     }
 }
 
+/// A snapshot of Foo's Windows build, `<winAppData>/Foo`, that names no prefix.
+fn windows_staged() -> StagedGame {
+    StagedGame {
+        root: "/stage/foo".into(),
+        meta: SnapshotMeta::new(
+            layout::SNAPSHOT_FORMAT,
+            "Foo".into(),
+            vec![(Base::WinAppData, "Foo".into())],
+        ),
+        files: vec![(Base::WinAppData, "Foo/save.dat".into())],
+        registry: None,
+    }
+}
+
 fn in_prefix(prefix: &Path, user: &str) -> Context {
     Context::WinePrefix {
         prefix: prefix.to_path_buf(),
@@ -526,7 +543,14 @@ fn default_targets_uses_proton_compatdata() {
     let env = linux_env(&tmp.path().join("home"), vec![steam]);
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
+        default_targets(
+            "Foo",
+            &steam_game(620),
+            &config(vec![]),
+            &env,
+            Some(&windows_staged())
+        )
+        .targets,
         Targets {
             linux: Some(linux_folders(&tmp.path().join("home"))),
             win: Some(in_prefix(&pfx, "steamuser")),
@@ -554,7 +578,14 @@ fn default_targets_prefers_custom_wine_prefix() {
     let mut config = config(vec![]);
     config.custom_games = vec![custom];
 
-    let targets = default_targets("Foo", &steam_game(620), &config, &env);
+    let targets = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config,
+        &env,
+        Some(&windows_staged()),
+    )
+    .targets;
     assert_eq!(targets.win, Some(in_prefix(&own, "me")));
     assert!(targets.linux.is_some());
 }
@@ -570,7 +601,14 @@ fn default_targets_finds_proton_in_configured_steam_library() {
         kind: RootKind::Steam,
     }];
 
-    let targets = default_targets("Foo", &steam_game(620), &config(roots), &env);
+    let targets = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config(roots),
+        &env,
+        Some(&windows_staged()),
+    )
+    .targets;
     assert_eq!(targets.win, Some(in_prefix(&pfx, "steamuser")));
 }
 
@@ -596,11 +634,25 @@ fn default_targets_uses_the_launcher_prefix_after_proton() {
     let env = linux_env(&tmp.path().join("home"), vec![steam.clone()]);
     let env = with_launcher_prefix(env, &heroic, "Foo");
 
-    let targets = default_targets("Foo", &steam_game(620), &config(vec![]), &env);
+    let targets = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config(vec![]),
+        &env,
+        Some(&windows_staged()),
+    )
+    .targets;
     assert_eq!(targets.win, Some(in_prefix(&heroic, "me")));
 
     let pfx = make_prefix(&steam.join("steamapps/compatdata/620/pfx"), "steamuser");
-    let targets = default_targets("Foo", &steam_game(620), &config(vec![]), &env);
+    let targets = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config(vec![]),
+        &env,
+        Some(&windows_staged()),
+    )
+    .targets;
     assert_eq!(targets.win, Some(in_prefix(&pfx, "steamuser")));
 }
 
@@ -615,7 +667,14 @@ fn default_targets_pass_over_ignored_and_other_games_launcher_prefixes() {
     let mut config = config(vec![]);
     config.ignored_prefixes = vec![ignored];
 
-    let targets = default_targets("Foo", &steam_game(620), &config, &env);
+    let targets = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config,
+        &env,
+        Some(&windows_staged()),
+    )
+    .targets;
     assert_eq!(targets.win, None);
 }
 
@@ -628,12 +687,455 @@ fn default_targets_linux_only_without_prefix() {
     let env = linux_env(&tmp.path().join("home"), vec![steam]);
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
+        default_targets(
+            "Foo",
+            &steam_game(620),
+            &config(vec![]),
+            &env,
+            Some(&windows_staged())
+        )
+        .targets,
         Targets {
             linux: Some(linux_folders(&tmp.path().join("home"))),
             win: None,
         }
     );
+}
+
+/// A prefix of `launcher` at `path` that it names `name`, tied to no game.
+fn launcher_named(launcher: Launcher, path: &Path, name: &str) -> LauncherPrefix {
+    let mut prefix = LauncherPrefix::new(launcher, path.to_path_buf(), None);
+    prefix.name = name.into();
+    prefix
+}
+
+/// [`windows_staged`] naming the prefix `origin`.
+fn staged_from(origin: PrefixOrigin) -> StagedGame {
+    let mut staged = windows_staged();
+    staged.meta.prefix = Some(origin);
+    staged
+}
+
+/// Writes Foo's save into `prefix` of `user`, where [`windows_staged`]'s root resolves.
+fn foo_save_in(prefix: &Path, user: &str) {
+    let users = prefix.join("drive_c/users").join(user);
+    write(&users.join("AppData/Roaming/Foo/save.dat"), "foo");
+}
+
+/// A Linux machine whose home is `root/home`, with Bottles bottles named after their folders.
+fn with_bottles(root: &Path, bottles: &[&Path]) -> Environment {
+    let mut env = linux_env(&root.join("home"), vec![]);
+    env.launcher_prefixes = (bottles.iter())
+        .map(|bottle| {
+            let name = bottle.file_name().unwrap().to_str().unwrap();
+            launcher_named(Launcher::Bottles, bottle, name)
+        })
+        .collect();
+    env
+}
+
+/// The default targets of Foo, a game the manifest does not know.
+fn defaults(env: &Environment, config: &AppConfig, staged: Option<&StagedGame>) -> DefaultTargets {
+    default_targets("Foo", &Manifest::default(), config, env, staged)
+}
+
+fn bottles(name: &str) -> PrefixOrigin {
+    PrefixOrigin::Bottles(name.into())
+}
+
+#[test]
+fn default_targets_uses_the_prefix_the_backup_came_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let library = tmp.path().join("library");
+    let bottle = make_prefix(&tmp.path().join("bottle"), "me");
+    let heroic = make_prefix(&tmp.path().join("heroic"), "me");
+    let lutris = make_prefix(&tmp.path().join("lutris"), "me");
+    let proton = make_prefix(&library.join("steamapps/compatdata/620/pfx"), "steamuser");
+    let wine = make_prefix(&home.join("Games/wine"), "me");
+    let mut env = linux_env(&home, vec![]);
+    env.launcher_prefixes = vec![
+        launcher_named(Launcher::Bottles, &bottle, "Generic-Game"),
+        launcher_named(Launcher::Heroic, &heroic, "Salmon"),
+        launcher_named(Launcher::Lutris, &lutris, "foo-game"),
+    ];
+    let config = config(vec![Root {
+        path: library,
+        kind: RootKind::Steam,
+    }]);
+    let cases = [
+        (bottles("Generic-Game"), &bottle, "me"),
+        (PrefixOrigin::Heroic("Salmon".into()), &heroic, "me"),
+        (PrefixOrigin::Lutris("foo-game".into()), &lutris, "me"),
+        (PrefixOrigin::Proton(620), &proton, "steamuser"),
+        (PrefixOrigin::Home("<home>/Games/wine".into()), &wine, "me"),
+    ];
+    for (origin, prefix, user) in cases {
+        let found = defaults(&env, &config, Some(&staged_from(origin.clone())));
+        assert_eq!(
+            found.targets.win,
+            Some(in_prefix(prefix, user)),
+            "{origin:?}"
+        );
+        assert!(found.targets.linux.is_some());
+        assert_eq!(found.reason, Some(PrefixReason::Backup), "{origin:?}");
+        assert_eq!(found.origin.as_ref(), Some(&origin));
+        assert!(!found.stored_missing, "{origin:?}");
+    }
+}
+
+#[test]
+fn stored_prefix_missing_here_searches_the_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = make_prefix(&tmp.path().join("Other"), "me");
+    foo_save_in(&other, "me");
+    let env = with_bottles(tmp.path(), &[&other]);
+
+    let found = defaults(&env, &config(vec![]), Some(&staged_from(bottles("Gone"))));
+    assert_eq!(found.targets.win, Some(in_prefix(&other, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Saves));
+    assert_eq!(found.origin, Some(bottles("Other")));
+    assert!(found.stored_missing);
+}
+
+#[test]
+fn snapshot_without_prefix_finds_the_bottle_holding_its_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bottles_dir = tmp.path().join("bottles");
+    let empty = make_prefix(&bottles_dir.join("Empty"), "me");
+    let generic = make_prefix(&bottles_dir.join("Generic-Game"), "me");
+    let roaming = generic.join("drive_c/users/me/AppData/Roaming");
+    write(
+        &roaming.join("Godot/app_userdata/Tower Wizard/save.tres"),
+        "x",
+    );
+    let env = with_bottles(tmp.path(), &[&empty, &generic]);
+    let root = "Godot/app_userdata/Tower Wizard";
+    let staged = StagedGame {
+        root: "/stage/tower-wizard".into(),
+        meta: SnapshotMeta::new(
+            layout::SNAPSHOT_FORMAT,
+            "Tower Wizard".into(),
+            vec![(Base::WinAppData, root.into())],
+        ),
+        files: vec![(Base::WinAppData, format!("{root}/save.tres"))],
+        registry: None,
+    };
+
+    let found = default_targets(
+        "Tower Wizard",
+        &Manifest::default(),
+        &config(vec![]),
+        &env,
+        Some(&staged),
+    );
+    assert_eq!(found.targets.win, Some(in_prefix(&generic, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Saves));
+    assert!(!found.stored_missing);
+}
+
+#[test]
+fn search_resolves_osusername_to_the_prefix_user() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = make_prefix(&tmp.path().join("mine"), "steamuser");
+    let other = make_prefix(&tmp.path().join("other"), "me");
+    // Only `mine`'s user matches the folder below `Foo`.
+    for prefix in [&mine, &other] {
+        let user = if prefix == &mine { "steamuser" } else { "me" };
+        let local = prefix
+            .join("drive_c/users")
+            .join(user)
+            .join("AppData/Local");
+        write(&local.join("Foo/steamuser/s.sav"), "x");
+    }
+    let env = with_bottles(tmp.path(), &[&other, &mine]);
+    let mut staged = windows_staged();
+    staged.meta.roots = vec![(Base::WinLocalAppData, "Foo/<osUserName>".into())];
+    // Backed up on a machine whose user was `olduser`.
+    staged.files = vec![(Base::WinLocalAppData, "Foo/olduser/s.sav".into())];
+
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&mine, "steamuser")));
+}
+
+#[test]
+fn search_matches_folder_case_insensitively() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bottle = make_prefix(&tmp.path().join("bottle"), "me");
+    let roaming = bottle.join("drive_c/users/me/AppData/Roaming");
+    write(
+        &roaming.join("godot/App_UserData/tower wizard/save.tres"),
+        "x",
+    );
+    let env = with_bottles(tmp.path(), &[&bottle]);
+    let mut staged = windows_staged();
+    staged.meta.roots = vec![(Base::WinAppData, "Godot/app_userdata/Tower Wizard".into())];
+    let save = "Godot/app_userdata/Tower Wizard/save.tres";
+    staged.files = vec![(Base::WinAppData, save.into())];
+
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&bottle, "me")));
+}
+
+#[test]
+fn search_looks_for_the_files_folders_not_a_generic_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other_game = make_prefix(&tmp.path().join("other-game"), "me");
+    let foo = make_prefix(&tmp.path().join("foo"), "me");
+    let documents = |prefix: &Path| prefix.join("drive_c/users/me/Documents");
+    write(&documents(&other_game).join("My Games/Other/x.sav"), "x");
+    write(&documents(&foo).join("My Games/Foo/save.sav"), "x");
+    let env = with_bottles(tmp.path(), &[&other_game, &foo]);
+    let mut staged = windows_staged();
+    staged.meta.roots = vec![(Base::WinDocuments, "My Games".into())];
+    staged.files = vec![(Base::WinDocuments, "My Games/Foo/save.sav".into())];
+
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&foo, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Saves));
+}
+
+#[test]
+fn search_skips_an_empty_root_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bottle = make_prefix(&tmp.path().join("bottle"), "me");
+    let folder = bottle.join("drive_c/users/me/AppData/Roaming/Foo");
+    fs::create_dir_all(folder).unwrap();
+    let env = with_bottles(tmp.path(), &[&bottle]);
+
+    let found = defaults(&env, &config(vec![]), Some(&windows_staged()));
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.reason, None);
+    assert_eq!(found.ambiguous, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn search_finds_several_and_chooses_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = make_prefix(&tmp.path().join("first"), "me");
+    let second = make_prefix(&tmp.path().join("second"), "me");
+    foo_save_in(&first, "me");
+    foo_save_in(&second, "me");
+    let env = with_bottles(tmp.path(), &[&first, &second]);
+
+    let found = defaults(&env, &config(vec![]), Some(&windows_staged()));
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.reason, None);
+    assert_eq!(found.ambiguous, [first, second]);
+}
+
+#[test]
+fn search_counts_a_prefix_under_two_steam_roots_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let steam = tmp.path().join("steam");
+    let pfx = make_prefix(&steam.join("steamapps/compatdata/999/pfx"), "steamuser");
+    foo_save_in(&pfx, "steamuser");
+    let env = linux_env(&tmp.path().join("home"), vec![steam.clone()]);
+    // The same library, configured again under another spelling of its path.
+    let config = config(vec![Root {
+        path: steam.join("steamapps/.."),
+        kind: RootKind::Steam,
+    }]);
+
+    let found = defaults(&env, &config, Some(&windows_staged()));
+    assert_eq!(found.targets.win, Some(in_prefix(&pfx, "steamuser")));
+    assert_eq!(found.origin, Some(PrefixOrigin::Proton(999)));
+}
+
+#[test]
+fn stored_prefix_without_a_user_falls_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let unused = tmp.path().join("Generic-Game");
+    fs::create_dir_all(unused.join("drive_c/users")).unwrap();
+    write(&unused.join("user.reg"), "WINE REGISTRY Version 2\n");
+    let other = make_prefix(&tmp.path().join("Other"), "me");
+    foo_save_in(&other, "me");
+    let env = with_bottles(tmp.path(), &[&unused, &other]);
+
+    let staged = staged_from(bottles("Generic-Game"));
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&other, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Saves));
+    assert!(found.stored_missing);
+}
+
+#[test]
+fn custom_wine_prefix_comes_before_the_stored_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bottle = make_prefix(&tmp.path().join("Generic-Game"), "me");
+    let custom = make_prefix(&tmp.path().join("custom"), "me");
+    let env = with_bottles(tmp.path(), &[&bottle]);
+    let mut game = CustomGame::new("Foo".into(), GameEntry::default(), Integration::Extend);
+    game.wine_prefix = Some(custom.clone());
+    let mut config = config(vec![]);
+    config.custom_games = vec![game];
+
+    let staged = staged_from(bottles("Generic-Game"));
+    let found = defaults(&env, &config, Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&custom, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::CustomGame));
+    assert!(!found.stored_missing);
+}
+
+#[test]
+fn own_prefix_comes_before_the_stored_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let steam = tmp.path().join("steam");
+    let pfx = make_prefix(&steam.join("steamapps/compatdata/620/pfx"), "steamuser");
+    let bottle = make_prefix(&tmp.path().join("Generic-Game"), "me");
+    let mut env = with_bottles(tmp.path(), &[&bottle]);
+    env.steam_roots = vec![steam];
+
+    let staged = staged_from(bottles("Generic-Game"));
+    let found = default_targets(
+        "Foo",
+        &steam_game(620),
+        &config(vec![]),
+        &env,
+        Some(&staged),
+    );
+    assert_eq!(found.targets.win, Some(in_prefix(&pfx, "steamuser")));
+    assert_eq!(found.reason, Some(PrefixReason::OwnPrefix));
+}
+
+#[test]
+fn a_stored_name_of_several_prefixes_takes_the_one_holding_the_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let native = make_prefix(&tmp.path().join("native/Generic-Game"), "me");
+    let flatpak = make_prefix(&tmp.path().join("flatpak/Generic-Game"), "me");
+    let other = make_prefix(&tmp.path().join("Other"), "me");
+    let env = with_bottles(tmp.path(), &[&native, &flatpak, &other]);
+    let staged = staged_from(bottles("Generic-Game"));
+
+    // No prefix holds the saves: none is chosen, and the name's prefixes are named.
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.ambiguous, Vec::<PathBuf>::new());
+    assert_eq!(found.stored_several, [native.clone(), flatpak.clone()]);
+    assert!(!found.stored_missing);
+
+    // Neither bottle of the name holds them, so the search finds the one that does.
+    foo_save_in(&other, "me");
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&other, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Saves));
+    assert_eq!(found.stored_several, Vec::<PathBuf>::new());
+
+    foo_save_in(&flatpak, "me");
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&flatpak, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Backup));
+
+    // Both hold them: none is chosen, both are named, and nothing is searched.
+    foo_save_in(&native, "me");
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.ambiguous, [native, flatpak]);
+    assert_eq!(found.stored_several, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn stored_prefix_comes_before_the_search() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stored = make_prefix(&tmp.path().join("Generic-Game"), "me");
+    let saves = make_prefix(&tmp.path().join("Saves"), "me");
+    foo_save_in(&saves, "me");
+    let env = with_bottles(tmp.path(), &[&saves, &stored]);
+
+    let staged = staged_from(bottles("Generic-Game"));
+    let found = defaults(&env, &config(vec![]), Some(&staged));
+    assert_eq!(found.targets.win, Some(in_prefix(&stored, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Backup));
+}
+
+#[test]
+fn stored_and_searched_prefixes_skip_ignored_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stored = make_prefix(&tmp.path().join("Generic-Game"), "me");
+    let saves = make_prefix(&tmp.path().join("Saves"), "me");
+    foo_save_in(&saves, "me");
+    let env = with_bottles(tmp.path(), &[&stored, &saves]);
+    let mut config = config(vec![]);
+    config.ignored_prefixes = vec![stored, saves];
+
+    let staged = staged_from(bottles("Generic-Game"));
+    let found = defaults(&env, &config, Some(&staged));
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.ambiguous, Vec::<PathBuf>::new());
+    assert!(found.stored_missing);
+}
+
+#[test]
+fn stored_home_prefix_with_dotdot_is_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_prefix(&tmp.path().join("outside"), "me");
+    let env = linux_env(&tmp.path().join("home"), vec![]);
+    fs::create_dir_all(tmp.path().join("home")).unwrap();
+
+    for rest in ["<home>/../outside", "<home>//../outside", "/outside"] {
+        let staged = staged_from(PrefixOrigin::Home(rest.into()));
+        let found = defaults(&env, &config(vec![]), Some(&staged));
+        assert_eq!(found.targets.win, None, "{rest}");
+        assert!(found.stored_missing, "{rest}");
+    }
+}
+
+#[test]
+fn default_targets_without_a_snapshot_is_todays_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bottle = make_prefix(&tmp.path().join("bottle"), "me");
+    foo_save_in(&bottle, "me");
+    let env = with_bottles(tmp.path(), &[&bottle]);
+
+    let found = defaults(&env, &config(vec![]), None);
+    assert_eq!(found.targets.win, None);
+    assert_eq!(found.reason, None);
+    assert!(!found.stored_missing);
+}
+
+#[test]
+fn a_bottle_backup_restores_into_that_bottle_without_cross_build() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let home = tmp.path().join("home");
+    let bottle = make_prefix(
+        &home.join(".local/share/bottles/bottles/Generic-Game"),
+        "me",
+    );
+    let roaming = bottle.join("drive_c/users/me/AppData/Roaming");
+    write(
+        &roaming.join("Godot/app_userdata/Tower Wizard/save.tres"),
+        "x",
+    );
+    let manifest = crate::manifest::parse_yaml(
+        "Tower Wizard:\n  files:\n    <winAppData>/Godot/app_userdata/Tower Wizard: {}\n",
+    )
+    .unwrap();
+    let env = with_bottles(tmp.path(), &[&bottle]);
+    let config = config(vec![]);
+    let report = crate::scan::scan(&manifest, &config, &env, |_, _| {});
+    assert_eq!(report.problems, []);
+    back_up(&mut storage, tmp.path(), &report.games, &[]);
+    let game = list(&storage).unwrap().remove(0);
+    let snapshot = &game.snapshots[game.default.unwrap()];
+    let listed = super::read(&mut storage, snapshot, &tmp.path().join("work")).unwrap();
+    assert_eq!(listed.staged.meta.prefix, Some(bottles("Generic-Game")));
+
+    let found = default_targets(
+        "Tower Wizard",
+        &manifest,
+        &config,
+        &env,
+        Some(&listed.staged),
+    );
+    assert_eq!(found.targets.win, Some(in_prefix(&bottle, "me")));
+    assert_eq!(found.reason, Some(PrefixReason::Backup));
+    let info = game_info("Tower Wizard", &manifest, &[]);
+    let vars = game_vars("Tower Wizard", info.entry.as_ref(), &config, &env);
+    let plan = super::super::prepare(&listed.staged, &found.targets, &vars, &info, &[]).unwrap();
+    assert!(!plan.cross_build);
+    let save = roaming.join("Godot/app_userdata/Tower Wizard/save.tres");
+    assert_eq!(plan.writes[0].target, save);
 }
 
 #[test]
@@ -817,7 +1319,14 @@ fn default_targets_on_windows_host_is_native_only() {
     };
 
     assert_eq!(
-        default_targets("Foo", &steam_game(620), &config(vec![]), &env),
+        default_targets(
+            "Foo",
+            &steam_game(620),
+            &config(vec![]),
+            &env,
+            Some(&staged_from(PrefixOrigin::Proton(620)))
+        )
+        .targets,
         Targets {
             linux: None,
             win: Some(native),

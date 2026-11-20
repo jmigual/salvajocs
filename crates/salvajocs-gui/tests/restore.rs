@@ -17,7 +17,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::AppConfig;
-use salvajocs_core::layout::{Base, Context, LinuxFolders};
+use salvajocs_core::launcher::{Launcher, LauncherPrefix};
+use salvajocs_core::layout::{Base, Context, LinuxFolders, PrefixOrigin};
 use salvajocs_core::manifest::{
     self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
 };
@@ -884,29 +885,39 @@ fn restore_files_waits_for_a_target_the_safety_backup_cannot_read() {
     assert!(!disabled(&harness, "Restore files"));
 }
 
+/// Gives a dir back its mode when dropped, so a failing test does not leave it locked.
 #[cfg(unix)]
-#[test]
-fn a_failed_plan_offers_try_again() {
-    use std::os::unix::fs::PermissionsExt;
+struct Unlock(PathBuf, u32);
 
-    let tmp = tempfile::tempdir().unwrap();
-    let (mut harness, _env, _) = alpha(&tmp);
-    // The data packs hold `salvajocs.json`, which the plan reads; they are never cached.
-    let data = Path::new(&repo_dir(&tmp)).join("data");
-    /// Gives a dir back its mode when dropped, so a failing test does not leave it locked.
-    struct Unlock(PathBuf, u32);
-    impl Drop for Unlock {
-        fn drop(&mut self) {
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(self.1));
-        }
+#[cfg(unix)]
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(self.1));
     }
+}
+
+/// Makes the repository's data packs unreadable until the result is dropped; `None` when they
+/// stay readable, as for root, so there is nothing to test.
+#[cfg(unix)]
+fn lock_data(tmp: &TempDir) -> Option<Unlock> {
+    use std::os::unix::fs::PermissionsExt;
+    // The data packs hold `salvajocs.json`, which the plan reads; they are never cached.
+    let data = Path::new(&repo_dir(tmp)).join("data");
     let mode = fs::metadata(&data).unwrap().permissions().mode();
     fs::set_permissions(&data, fs::Permissions::from_mode(0o000)).unwrap();
     let unlock = Unlock(data.clone(), mode);
-    // Root reads it anyway, so there is nothing to test.
-    if fs::read_dir(&data).is_ok() {
+    fs::read_dir(&data).is_err().then_some(unlock)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_plan_offers_try_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    let Some(unlock) = lock_data(&tmp) else {
         return;
-    }
+    };
     select(&mut harness, "Alpha");
     run_until(&mut harness, "the plan to fail", |h| {
         h.query_by_label("Try again").is_some()
@@ -919,6 +930,36 @@ fn a_failed_plan_offers_try_again() {
     preview(&mut harness);
     assert!(shows(&harness, "Files to write (2)"));
     assert!(!disabled(&harness, "Restore files"));
+}
+
+#[cfg(unix)]
+#[test]
+fn try_again_after_a_failed_read_fills_in_the_backups_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic])
+    });
+    let Some(unlock) = lock_data(&tmp) else {
+        return;
+    };
+    select(&mut harness, "Tower Wizard");
+    run_until(&mut harness, "the plan to fail", |h| {
+        h.query_by_label("Try again").is_some()
+    });
+    drop(unlock);
+
+    click(&mut harness, "Try again");
+    preview(&mut harness);
+    assert!(!shows(&harness, "Cross-build restore"));
+    let folder = format!("WinAppData/{TOWER}");
+    goes_to(
+        &mut harness,
+        &folder,
+        "save.tres, new",
+        &tower_save(&generic),
+    );
 }
 
 #[test]
@@ -1129,6 +1170,133 @@ fn restore_prefix_found_but_user_picks_native_linux_mapping() {
     assert!(shows(&harness, "Cross-build restore"));
     let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
     goes_to(&mut harness, native, "save.dat, new", &target);
+}
+
+/// Tower Wizard's save folder below `<winAppData>`.
+const TOWER: &str = "Godot/app_userdata/Tower Wizard";
+
+/// A Bottles bottle `name` below the tests' home, with a `steamuser` home.
+fn bottle(tmp: &TempDir, name: &str) -> PathBuf {
+    let bottle = under(&home(tmp), ".local/share/bottles/bottles").join(name);
+    fs::create_dir_all(bottle.join("drive_c/users/steamuser")).unwrap();
+    fs::write(bottle.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    bottle
+}
+
+/// Makes Bottles report `bottles`, each named after its folder.
+fn found_bottles(env: &mut Env, bottles: &[&Path]) {
+    let environment = env.environment.as_mut().unwrap();
+    for path in bottles {
+        let mut prefix = LauncherPrefix::new(Launcher::Bottles, path.to_path_buf(), None);
+        prefix.name = path.file_name().unwrap().to_str().unwrap().into();
+        environment.launcher_prefixes.push(prefix);
+    }
+}
+
+/// Tower Wizard, a Godot game backed up from its Windows build, from the bottle `from`.
+fn tower(tmp: &TempDir, from: Option<&str>) -> (CustomGame, GameScan) {
+    let template = format!("<winAppData>/{TOWER}");
+    let game = custom("Tower Wizard", &[&template], None, Vec::new());
+    let tail = format!("{TOWER}/save.tres");
+    let files = [(Base::WinAppData, tail.as_str())];
+    let mut snapshot = scan(tmp, "Tower Wizard", &files, &[(Base::WinAppData, TOWER)]);
+    snapshot.prefix_origin = from.map(|name| PrefixOrigin::Bottles(name.into()));
+    (game, snapshot)
+}
+
+/// Where Tower Wizard's save goes in `bottle`.
+fn tower_save(bottle: &Path) -> PathBuf {
+    let rel = format!("drive_c/users/steamuser/AppData/Roaming/{TOWER}/save.tres");
+    under(bottle, &rel)
+}
+
+#[test]
+fn restore_fills_in_the_prefix_the_backup_came_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic])
+    });
+    select(&mut harness, "Tower Wizard");
+    preview(&mut harness);
+
+    assert!(!shows(&harness, "Cross-build restore"));
+    let folder = format!("WinAppData/{TOWER}");
+    goes_to(
+        &mut harness,
+        &folder,
+        "save.tres, new",
+        &tower_save(&generic),
+    );
+}
+
+#[test]
+fn restore_finds_the_prefix_that_holds_the_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = bottle(&tmp, "Empty");
+    let generic = bottle(&tmp, "Generic-Game");
+    put(&tower_save(&generic), "older");
+    let (game, snapshot) = tower(&tmp, None);
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&empty, &generic])
+    });
+    select(&mut harness, "Tower Wizard");
+    preview(&mut harness);
+
+    assert!(!shows(&harness, "Cross-build restore"));
+    let folder = format!("WinAppData/{TOWER}");
+    goes_to(
+        &mut harness,
+        &folder,
+        "save.tres, changed",
+        &tower_save(&generic),
+    );
+}
+
+/// Opens the snapshot list and picks its `nth` snapshot, newest first.
+fn choose_snapshot(harness: &mut Harness<'static, App>, nth: usize) {
+    harness.get_by_label("Snapshot").click();
+    harness.step();
+    harness.step();
+    let mut options = harness.query_all_by_label_contains(" UTC, ");
+    options.nth(nth).expect("the snapshot is listed").click();
+    drop(options);
+    harness.step();
+}
+
+#[test]
+fn restore_snapshot_switch_keeps_an_edited_pick() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let other = bottle(&tmp, "Other");
+    let (game, older) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[older], &[], |env| {
+        found_bottles(env, &[&generic, &other])
+    });
+    let (_, newer) = tower(&tmp, Some("Other"));
+    let stage = tmp.path().join("fixture-stage");
+    backup_games(&mut open_repo(&tmp), &[newer], &stage, &[], None, |_| {}).unwrap();
+    click(&mut harness, "Load backups");
+    select(&mut harness, "Tower Wizard");
+    let shown = |prefix: &Path| {
+        let want = prefix.display().to_string();
+        move |h: &Harness<'static, App>| value(h, "Prefix") == want
+    };
+    run_until(&mut harness, "the newest snapshot's bottle", shown(&other));
+
+    // Untouched, the pick follows the snapshot.
+    choose_snapshot(&mut harness, 1);
+    run_until(&mut harness, "the older snapshot's bottle", shown(&generic));
+    preview(&mut harness);
+
+    // Changed by the user, it stays.
+    click(&mut harness, "Native Linux build");
+    choose_snapshot(&mut harness, 0);
+    preview(&mut harness);
+    assert_eq!(value(&harness, "Prefix"), generic.display().to_string());
+    let native = harness.get_by_label("Native Linux build");
+    assert_eq!(native.accesskit_node().toggled(), Some(Toggled::False));
 }
 
 #[test]
@@ -1782,6 +1950,24 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     assert!(!disabled(&harness, "Restore 1 game"), "the ticks stay");
     assert!(!saves.join("new.dat").exists());
     assert!(snapshots(&tmp, "pre-restore").is_empty());
+}
+
+#[test]
+fn batch_restore_uses_the_prefix_the_backup_came_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generic = bottle(&tmp, "Generic-Game");
+    let (game, snapshot) = tower(&tmp, Some("Generic-Game"));
+    let (mut harness, _env) = open_tab_with(&tmp, vec![game], &[snapshot], &[], |env| {
+        found_bottles(env, &[&generic])
+    });
+
+    click(&mut harness, "Include Tower Wizard");
+    plan_batch(&mut harness, "Restore 1 game");
+    assert!(!shows(&harness, "Cross-build restore"));
+    run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
+
+    let restored = fs::read_to_string(tower_save(&generic)).unwrap();
+    assert_eq!(restored, format!("{TOWER}/save.tres"));
 }
 
 #[test]

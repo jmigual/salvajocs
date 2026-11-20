@@ -35,6 +35,17 @@ All notable changes to salvajocs. The format follows
   matched places, instead of showing every file as removed and new. Folders with no known place
   here are named in the tooltips. The backup is skipped when the files are the same once matched
   and the registry keys are too.
+- On Linux, a restore of a game with no custom prefix and no prefix of its own (Proton, or a
+  Heroic or Lutris prefix of the game) fills in the Wine prefix the backup came from when this
+  machine has it; when that names several prefixes here, such as a bottle of both the native and
+  the Flatpak Bottles, it takes the one holding the saves. Otherwise, for a backup of the Windows
+  build, it fills in the prefix that already holds the folders of the backup's files in the
+  Windows folders (a backup of registry keys only is not looked for), and none when several do.
+  Otherwise it restores into the native build as before. A restore of several games does the
+  same, and choosing another snapshot works the default out again unless you changed it.
+- `salvajocs-core`: `restore::default_targets` takes the snapshot read by `restore::read`
+  (`Option<&StagedGame>`) and returns a `restore::DefaultTargets`, which says why it chose its
+  prefix.
 - `salvajocs-core`: `backup::backup_games` takes an `Option<&changes::Mapper>` instead of
   `same_as_newest: bool`; `None` turns the skip against the newest backup off, as `false` did.
   `changes::baseline` is replaced by `changes::Mapper::baseline`, which returns a

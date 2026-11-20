@@ -560,13 +560,14 @@ fn plan_game(
     config: &AppConfig,
     environment: &Environment,
 ) -> Outcome {
-    let targets = restore::default_targets(&title, manifest, config, environment);
     let listed = lock_storage(storage)
         .and_then(|mut storage| Ok(restore::read(&mut storage, snapshot, work_dir)?));
     let listed = match listed {
         Ok(listed) => Arc::new(listed),
         Err(err) => return Outcome::Failed(format!("the backup cannot be read: {err:#}")),
     };
+    let staged = Some(&listed.staged);
+    let targets = restore::default_targets(&title, manifest, config, environment, staged).targets;
     let info = restore::game_info(&title, manifest, &config.custom_games);
     let fetched = Fetched {
         storage: storage.clone(),

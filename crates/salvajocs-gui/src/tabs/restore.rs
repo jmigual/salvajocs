@@ -17,8 +17,9 @@ use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Context, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
-    self, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
-    RunError, SafetyBackup, SkippedItem, Targets, Used, Write, WriteState,
+    self, DefaultTargets, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError,
+    RestorePlan, RestoreReport, RunError, SafetyBackup, SkippedItem, Targets, Used, Write,
+    WriteState,
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
@@ -89,10 +90,13 @@ struct TargetPick {
     /// The prefix `default_targets` found with its path as text, reused while `prefix` still
     /// names it.
     found: Option<(String, Context)>,
+    /// Whether the user changed the pick, which another snapshot's default then keeps.
+    edited: bool,
 }
 
 impl TargetPick {
-    fn new(targets: Targets) -> Self {
+    fn new(defaults: DefaultTargets) -> Self {
+        let targets = defaults.targets;
         let mut pick = Self {
             windows: None,
             use_linux: targets.linux.is_some(),
@@ -101,6 +105,7 @@ impl TargetPick {
             prefix: String::new(),
             typing: false,
             found: None,
+            edited: false,
         };
         match targets.win {
             Some(native @ Context::WindowsNative(_)) => pick.windows = Some(native),
@@ -183,6 +188,7 @@ impl TargetPick {
             "Saves of the other build are mapped onto the chosen one (cross-build restore); \
              with both chosen, each goes into its own.",
         );
+        self.edited |= changed;
         changed
     }
 }
@@ -303,6 +309,15 @@ impl Label {
             Label::WillFail(reason) | Label::Blocks(reason) => Err(reason.as_str()),
         })
     }
+}
+
+/// What a detection job hands back: the default targets of the chosen snapshot, and its listing
+/// when it could be read.
+struct Detected {
+    /// The id of the snapshot detected for; `None` when none was chosen.
+    snapshot: Option<String>,
+    listed: Option<Arc<Listed>>,
+    defaults: DefaultTargets,
 }
 
 /// What a plan job hands back.
@@ -544,7 +559,7 @@ pub struct RestoreTab {
     /// The chosen snapshot's index in the game's `snapshots`. It starts as the game's default, so
     /// `None` when every snapshot is a safety backup, which is never preselected (ADR-0010).
     snapshot: Option<usize>,
-    detecting: Option<Job<Targets>>,
+    detecting: Option<Job<Detected>>,
     pick: Option<TargetPick>,
     picking: Option<Job<Option<PathBuf>>>,
     /// The plan or dialog confirm job, with the [`RestoreTab::generation`] it started in.
@@ -599,8 +614,8 @@ impl RestoreTab {
                     ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state));
                 });
             theme::page(ui, |ui| {
-                ui.add_enabled_ui(idle, |ui| self.game_ui(ui, manifest_loading));
-                if busy {
+                ui.add_enabled_ui(idle, |ui| self.game_ui(ui, state, manifest_loading));
+                if busy || self.detecting.is_some() {
                     ui.spinner();
                 }
                 self.error_ui(ui);
@@ -636,7 +651,6 @@ impl RestoreTab {
     /// so it keeps nothing waiting; with the mapping dialog open it is the dialog's confirm.
     pub(crate) fn busy(&self) -> bool {
         self.listing.is_some()
-            || self.detecting.is_some()
             || self.picking.is_some()
             || (self.preparing.is_some() && self.mapping.is_some())
             || self.restoring.is_some()
@@ -751,7 +765,16 @@ impl RestoreTab {
         {
             self.detecting = None;
             match result {
-                Ok(targets) => self.pick = Some(TargetPick::new(targets)),
+                // A result for a snapshot no longer chosen is dropped.
+                Ok(detected) if detected.snapshot != self.chosen().map(|s| s.id.clone()) => {}
+                Ok(detected) => {
+                    if let Some(listed) = detected.listed {
+                        self.last_read = Some(listed);
+                    }
+                    if !self.pick.as_ref().is_some_and(|pick| pick.edited) {
+                        self.pick = Some(TargetPick::new(detected.defaults));
+                    }
+                }
                 Err(err) => self.error = Some(format!("{err:#}")),
             }
         }
@@ -762,6 +785,7 @@ impl RestoreTab {
             if let (Ok(Some(path)), Some(pick)) = (result, &mut self.pick) {
                 pick.prefix = path.to_string_lossy().into_owned();
                 pick.use_prefix = true;
+                pick.edited = true;
                 self.forget_plan();
             }
         }
@@ -928,7 +952,7 @@ impl RestoreTab {
     }
 
     /// The chosen game: its snapshot and the build to restore into.
-    fn game_ui(&mut self, ui: &mut Ui, manifest_loading: bool) {
+    fn game_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
         let listed = self.repository.is_some() && self.listing.is_none();
         if listed && self.games.is_empty() && self.error.is_none() {
             ui.weak("The repository has no backups yet. Back up your games in the Backup tab.");
@@ -968,7 +992,8 @@ impl RestoreTab {
                 });
             }
         });
-        let mut changed = self.snapshot != before;
+        let switched = self.snapshot != before;
+        let mut changed = switched;
         if let Some(pick) = &mut self.pick {
             changed |= pick.ui(ui);
             if pick.windows.is_none() && ui.button("Browse").clicked() {
@@ -979,6 +1004,9 @@ impl RestoreTab {
         }
         if changed {
             self.forget_plan();
+        }
+        if switched && !self.pick.as_ref().is_some_and(|pick| pick.edited) {
+            self.detect(ui.ctx(), state, &game);
         }
         if manifest_loading {
             ui.weak("The game manifest is loading.");
@@ -999,29 +1027,83 @@ impl RestoreTab {
 
     /// Selects `game` with its default snapshot and looks up its default targets.
     fn choose(&mut self, ctx: &egui::Context, state: &State, game: &GameBackups) {
-        let Some(config) = &state.config else {
+        if state.config.is_none() {
             return;
-        };
+        }
         self.selected = Some(game.slug.clone());
         self.snapshot = game.default;
         self.pick = None;
         self.error = None;
         self.removed = None;
         self.forget_plan();
+        self.detect(ctx, state, game);
+    }
+
+    /// The chosen snapshot of the chosen game.
+    fn chosen(&self) -> Option<&SnapshotInfo> {
+        let game = (self.games.iter()).find(|game| Some(&game.slug) == self.selected.as_ref())?;
+        game.snapshots.get(self.snapshot?)
+    }
+
+    /// Works the default targets out again when the chosen snapshot's read failed during
+    /// detection and the user has not changed the pick, so a retry can still use its prefix.
+    fn detect_unread(&mut self, ctx: &egui::Context, state: &State) {
+        let read = (self.chosen()).is_some_and(|snapshot| {
+            (self.last_read.as_ref()).is_some_and(|listed| listed.snapshot.id == snapshot.id)
+        });
+        let edited = self.pick.as_ref().is_some_and(|pick| pick.edited);
+        let selected = (self.games.iter()).find(|game| Some(&game.slug) == self.selected.as_ref());
+        if let (false, false, Some(game)) = (read, edited, selected.cloned()) {
+            self.detect(ctx, state, &game);
+        }
+    }
+
+    /// Reads the chosen snapshot of `game` and works out its default targets, which depend on
+    /// the prefix it names and the folders it holds (ADR-0023). The listing is kept for the plan.
+    fn detect(&mut self, ctx: &egui::Context, state: &State, game: &GameBackups) {
+        let Some(config) = &state.config else {
+            return;
+        };
+        let snapshot = self
+            .snapshot
+            .and_then(|index| game.snapshots.get(index))
+            .cloned();
         let (title, manifest, config) = (
             game.title.clone(),
             state.manifest_or_empty(),
             config.clone(),
         );
+        let storage = state
+            .session
+            .as_ref()
+            .map(|session| session.storage.clone());
         let environment = state.env.environment.clone();
+        let work_dir = own_dir(&state.env.cache_dir, "restore-work");
+        let last_read = self.last_read.clone();
         self.detecting = Some(Job::spawn(ctx, move || {
             let environment = environment.unwrap_or_else(Environment::detect);
-            Ok(restore::default_targets(
-                &title,
-                &manifest,
-                &config,
-                &environment,
-            ))
+            // Without a listing the default is today's; the plan job reads again and says why.
+            let listed = snapshot
+                .as_ref()
+                .zip(storage)
+                .and_then(|(snapshot, storage)| {
+                    match last_read.filter(|listed| listed.snapshot.id == snapshot.id) {
+                        Some(listed) => Some(listed),
+                        None => {
+                            let mut storage = lock_storage(&storage).ok()?;
+                            let listed = restore::read(&mut storage, snapshot, &work_dir).ok()?;
+                            Some(Arc::new(listed))
+                        }
+                    }
+                });
+            let staged = listed.as_ref().map(|listed| &listed.staged);
+            let defaults =
+                restore::default_targets(&title, &manifest, &config, &environment, staged);
+            Ok(Detected {
+                snapshot: snapshot.map(|snapshot| snapshot.id),
+                listed,
+                defaults,
+            })
         }));
     }
 
@@ -1188,6 +1270,7 @@ impl RestoreTab {
             if retry {
                 self.error = None;
                 self.forget_plan();
+                self.detect_unread(ui.ctx(), state);
             }
             return;
         };
