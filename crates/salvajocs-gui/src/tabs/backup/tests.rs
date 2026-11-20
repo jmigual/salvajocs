@@ -363,6 +363,63 @@ fn a_replaced_repository_is_compared_again() {
     assert!(tab.previewing.is_some());
 }
 
+/// A header is worked out once, not every frame: a preview swapped behind the tab's back shows
+/// only once a change to the game's settings invalidates it.
+#[test]
+fn a_header_is_worked_out_again_only_when_its_game_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tab = listing(&["Game"]);
+    tab.previews = vec![compared(FileState::Changed, false)];
+    let mut harness = theme::harness(
+        |ui, (tab, state)| tab.ui(ui, state, false),
+        (tab, state(dir.path())),
+    );
+    settle(&mut harness);
+    let shows = |harness: &Harness<'_, (BackupTab, State)>, text| {
+        harness.query_all_by_label_contains(text).next().is_some()
+    };
+    assert!(shows(&harness, "1 changed since the backup from there"));
+
+    harness.state_mut().0.previews = vec![compared(FileState::Same, false)];
+    harness.step();
+    assert!(shows(&harness, "1 changed since the backup from there"));
+
+    // Unticking its one file leaves nothing to back up, so the header goes; ticking it again
+    // shows the swapped preview.
+    harness.get_by_label("1 file, 1 B").click();
+    harness.step();
+    harness.get_by_label("Home").click();
+    settle(&mut harness);
+    assert!(!shows(&harness, "since the backup from there"));
+    harness.get_by_label("Home").click();
+    settle(&mut harness);
+    assert!(shows(&harness, "No changes since the backup from there"));
+}
+
+/// A header drawn with the default settings while the repository's settings load is worked
+/// out again once they are loaded.
+#[test]
+fn loaded_settings_work_the_headers_out_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let stage = dir.path().join("stage");
+    let skip = [Change::Skip(true)];
+    selection::save(&mut lock_storage(&storage).unwrap(), "Game", &skip, &stage).unwrap();
+    let mut tab = listing(&["Game"]);
+    tab.previews = vec![compared(FileState::Changed, false)];
+    let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+    let shows = |harness: &Harness<'_, (BackupTab, State)>, text| {
+        harness.query_all_by_label_contains(text).next().is_some()
+    };
+
+    // The first frame starts the load, so it draws the header with every file included.
+    harness.step();
+    assert!(shows(&harness, "1 changed since the backup from there"));
+    settle(&mut harness);
+    assert!(!shows(&harness, "since the backup from there"));
+}
+
 #[test]
 fn an_unticked_file_in_the_backup_is_badged_removed_unless_staging_keeps_it() {
     let preview = compared(FileState::Same, false);

@@ -522,36 +522,95 @@ fn sentence(next: &Next<'_>) -> String {
     }
 }
 
-/// What the next backup would do to `game` by `preview`, in its header: one icon of
-/// [`Next::glyph`], or how many files are new, changed, removed or could not be compared. Each
-/// shows [`preview_text`] on hover. A failed preview shows nothing here, as [`files_ui`] says
-/// why below.
-fn preview_ui(ui: &mut Ui, game: &GameScan, preview: Option<&Preview>, settings: &GameSettings) {
+/// What a game's header shows of its next backup, each with [`preview_text`] for its hover.
+enum Header {
+    /// Nothing: no preview yet, the game would not be backed up, or the preview failed, which
+    /// [`files_ui`] says below.
+    Nothing,
+    /// How many files are new, changed, removed or could not be compared.
+    Chips(Counts, String),
+    /// One icon of [`Next::glyph`], `muted` when the same files are backed up again.
+    Mark {
+        glyph: &'static str,
+        muted: bool,
+        text: String,
+    },
+}
+
+/// The [`Header`] of `game` by `preview` and `settings`. [`next_backup`] keys and clones every
+/// file of the game, so [`Listed`] keeps it rather than each frame working it out.
+fn header_of(game: &GameScan, preview: Option<&Preview>, settings: &GameSettings) -> Header {
     let Some(preview) = preview else {
-        return;
+        return Header::Nothing;
     };
     let Some(next) = next_backup(game, preview, settings) else {
-        return;
+        return Header::Nothing;
     };
     let text = noted(sentence(&next), preview);
     if let Next::Changes { counts, .. } = next {
-        let chips = [
-            (Badge::New, counts.new),
-            (Badge::Changed, counts.changed),
-            (Badge::Removed, counts.removed),
-            (Badge::Unknown, counts.unknown),
-        ]
-        .map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
-        theme::chips(ui, &chips, &text);
+        Header::Chips(counts, text)
     } else if let Some(glyph) = next.glyph() {
         // The same files backed up again is no news, so it is muted.
-        let color = match next {
+        let muted = matches!(
+            next,
             Next::Same {
-                blocker: Some(_), ..
-            } => ui.visuals().weak_text_color(),
-            _ => theme::palette(ui).accent,
-        };
-        theme::labeled_mark(ui, glyph, color, &text);
+                blocker: Some(_),
+                ..
+            }
+        );
+        Header::Mark { glyph, muted, text }
+    } else {
+        Header::Nothing
+    }
+}
+
+/// What the next backup would do to a game, in its header, by its `header`.
+fn preview_ui(ui: &mut Ui, header: &Header) {
+    match header {
+        Header::Nothing => {}
+        Header::Chips(counts, text) => {
+            let chips = [
+                (Badge::New, counts.new),
+                (Badge::Changed, counts.changed),
+                (Badge::Removed, counts.removed),
+                (Badge::Unknown, counts.unknown),
+            ]
+            .map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
+            theme::chips(ui, &chips, text);
+        }
+        Header::Mark { glyph, muted, text } => {
+            let color = if *muted {
+                ui.visuals().weak_text_color()
+            } else {
+                theme::palette(ui).accent
+            };
+            theme::labeled_mark(ui, glyph, color, text);
+        }
+    }
+}
+
+/// A game of the report as the list shows it: its file tree and its header, kept until
+/// [`Listed::invalidate`].
+struct Listed {
+    tree: FileTree,
+    /// `None` until the next frame draws, after [`Listed::invalidate`].
+    header: Option<Header>,
+}
+
+impl Listed {
+    /// `game`, with its tree by `preview`.
+    fn new(game: &GameScan, preview: Option<&Preview>) -> Self {
+        Listed {
+            tree: file_tree(game, preview),
+            header: None,
+        }
+    }
+
+    /// Forgets the tree's cached counts and the header. Call it whenever the game's settings
+    /// change.
+    fn invalidate(&mut self) {
+        self.tree.invalidate();
+        self.header = None;
     }
 }
 
@@ -619,8 +678,8 @@ pub struct BackupTab {
     scanning: Option<Job<ScanReport>>,
     report: Option<ScanReport>,
     scan_error: Option<String>,
-    /// One tree per game of `report`, in its order.
-    trees: Vec<FileTree>,
+    /// Each game of `report`, in its order.
+    listed: Vec<Listed>,
     /// Compares each game of `report` with its last backups; not counted as busy, since it only
     /// reads.
     previewing: Option<Job<Vec<Preview>>>,
@@ -716,7 +775,7 @@ impl BackupTab {
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
                     if self.choices.backed_up(after) {
-                        self.trees.iter_mut().for_each(FileTree::invalidate);
+                        self.listed.iter_mut().for_each(Listed::invalidate);
                     }
                 }
                 Err(err) => self.run_error = Some(format!("{err:#}")),
@@ -731,8 +790,8 @@ impl BackupTab {
             self.previewing = None;
             self.previews = Vec::new();
             if let Some(report) = &self.report {
-                self.trees = (report.games.iter())
-                    .map(|game| file_tree(game, None))
+                self.listed = (report.games.iter())
+                    .map(|game| Listed::new(game, None))
                     .collect();
             }
             self.start_preview(ctx, state);
@@ -748,13 +807,13 @@ impl BackupTab {
             };
             if let Some(report) = &self.report {
                 let games = report.games.iter().zip(&self.previews);
-                self.trees = games
-                    .map(|(game, preview)| file_tree(game, Some(preview)))
+                self.listed = games
+                    .map(|(game, preview)| Listed::new(game, Some(preview)))
                     .collect();
             }
         }
         if self.choices.poll(ctx, state) {
-            self.trees.iter_mut().for_each(FileTree::invalidate);
+            self.listed.iter_mut().for_each(Listed::invalidate);
         }
         self.start_requested(ctx, state);
     }
@@ -788,8 +847,8 @@ impl BackupTab {
 
     /// Shows `report`, with a file tree per game and no preview yet.
     fn adopt(&mut self, report: ScanReport) {
-        self.trees = (report.games.iter())
-            .map(|game| file_tree(game, None))
+        self.listed = (report.games.iter())
+            .map(|game| Listed::new(game, None))
             .collect();
         self.previews = Vec::new();
         self.previewing = None;
@@ -830,14 +889,16 @@ impl BackupTab {
             return 0;
         };
         let choices = &self.choices;
-        let games = report.games.iter().zip(&mut self.trees);
+        let games = report.games.iter().zip(&mut self.listed);
         let previews = &self.previews;
         games
             .enumerate()
-            .map(|(index, (game, tree))| match choices.game(&game.title) {
+            .map(|(index, (game, listed))| match choices.game(&game.title) {
                 Ok(settings) => {
                     let badge = badges(game, previews.get(index), &settings);
-                    let (files, _) = tree.included(&|key| settings.path_included(key), &badge);
+                    let (files, _) = listed
+                        .tree
+                        .included(&|key| settings.path_included(key), &badge);
                     let keys = &game.registry_keys;
                     !settings.skip
                         && (files > 0
@@ -984,14 +1045,14 @@ impl BackupTab {
             );
             return;
         }
-        let (choices, trees, prefixes) = (&self.choices, &mut self.trees, &self.prefixes);
+        let (choices, listed, prefixes) = (&self.choices, &mut self.listed, &self.prefixes);
         let previews = &self.previews;
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().interact_size.y = 24.0;
-            let games = report.games.iter().zip(trees).zip(prefixes);
-            for (index, ((game, tree), prefixes)) in games.enumerate() {
+            let games = report.games.iter().zip(listed).zip(prefixes);
+            for (index, ((game, listed), prefixes)) in games.enumerate() {
                 if index > 0 {
                     theme::row_separator(ui);
                 }
@@ -1001,6 +1062,8 @@ impl BackupTab {
                 };
                 let enabled = editable && error.is_none();
                 let preview = previews.get(index);
+                let header =
+                    (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
                 theme::row(
                     ui,
                     |ui| {
@@ -1010,7 +1073,7 @@ impl BackupTab {
                             changes.push((index, Change::Skip(!checked)));
                         }
                     },
-                    |ui| preview_ui(ui, game, preview, &settings),
+                    |ui| preview_ui(ui, header),
                 );
                 // Under the title, without the indent line: the row already groups them.
                 ui.scope(|ui| {
@@ -1040,6 +1103,7 @@ impl BackupTab {
                                 }
                             });
                         }
+                        let tree = &mut listed.tree;
                         let change =
                             files_ui(ui, game, tree, preview, &settings, enabled, &mut opened);
                         if let Some(change) = change {
@@ -1052,7 +1116,7 @@ impl BackupTab {
         for (index, change) in changes {
             self.choices
                 .change(ui.ctx(), state, &report.games[index].title, change);
-            self.trees[index].invalidate();
+            self.listed[index].invalidate();
         }
         if let Some(path) = opened
             && let Err(err) = (state.env.open_folder)(&path)
