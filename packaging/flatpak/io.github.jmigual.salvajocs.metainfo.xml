@@ -52,6 +52,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.8.0" date="2026-11-20">
+      <description>
+        <p>Custom games are stored in the repository, so every PC that uses it has the same ones.
+        A changed file on the Backup tab and in the restore plan has a Details button that shows
+        what differs, such as line endings. The restore plan has a checkbox on each file and
+        registry key, to restore only some. The Backup and Restore tabs sort their games by name,
+        last backup or space used, and Settings shows the version and build.</p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-11-20">
       <description>
         <p>The AppImage updates itself. The Backup tab compares saves across Linux and Windows
