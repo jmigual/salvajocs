@@ -1,5 +1,6 @@
 //! The dialog that shows what makes a changed file differ from its backup: both copies' size,
-//! mtime and SHA-256, their line endings, and the changed lines of a text file (ADR-0024).
+//! mtime and SHA-256, their line endings, and the changed lines of a text file (ADR-0024). The
+//! Backup and Restore tabs share it.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -9,9 +10,6 @@ use salvajocs_core::changes::BackedUp;
 use salvajocs_core::changes::details::{
     self, BackupHash, Content, FileDetails, Hunk, LineEndings, LineKind, LocalFile, TEXT_CAP,
 };
-use salvajocs_core::scan::GameScan;
-use salvajocs_core::selection;
-use salvajocs_core::slug::slug;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, lock_storage};
@@ -26,7 +24,7 @@ const MAX_LINES: usize = 1000;
 const DIFF_HEIGHT: f32 = 400.0;
 
 /// The details of one changed file, while they are read and once they are shown.
-pub(super) struct Details {
+pub(crate) struct Details {
     /// The file's name, for the heading.
     name: String,
     /// The file's `<Base>/<tail>` key on this PC.
@@ -40,31 +38,31 @@ pub(super) struct Details {
 }
 
 impl Details {
-    /// Starts reading the backup's copy `backed_up` of the file number `file` of `game` and
-    /// comparing it with this PC's, holding the repository's lock only for the read.
-    pub(super) fn start(
+    /// Starts reading the backup's copy `backed_up` of the file `key` (its `<Base>/<tail>` key on
+    /// this PC) of the game `slug` and comparing it with this PC's file at `local`, holding the
+    /// repository's lock only for the read.
+    pub(crate) fn start(
         ctx: &egui::Context,
         storage: &SharedStorage,
-        game: &GameScan,
-        file: usize,
+        slug: String,
+        key: String,
+        local: PathBuf,
         backed_up: BackedUp,
     ) -> Self {
-        let found = &game.files[file];
-        let key = selection::path_key(found);
         let name = key.rsplit('/').next().unwrap_or_default().to_owned();
-        let (storage, slug) = (storage.clone(), slug(&game.title));
-        let (local, copy) = (found.real.clone(), backed_up.clone());
+        let storage = storage.clone();
+        let (path, copy) = (local.clone(), backed_up.clone());
         let job = Job::spawn(ctx, move || {
             let bytes = {
                 let mut storage = lock_storage(&storage)?;
-                details::read_backed_up(&mut storage, &slug, &copy, &local)?
+                details::read_backed_up(&mut storage, &slug, &copy, &path)?
             };
-            Ok(details::details(&local, &copy, bytes.as_deref()))
+            Ok(details::details(&path, &copy, bytes.as_deref()))
         });
         Details {
             name,
             key,
-            local: found.real.clone(),
+            local,
             backed_up,
             job: Some(job),
             result: None,
@@ -72,7 +70,7 @@ impl Details {
     }
 
     /// Takes the job's result once it is there.
-    pub(super) fn poll(&mut self) {
+    pub(crate) fn poll(&mut self) {
         if let Some(job) = &mut self.job
             && let Some(result) = job.take_result()
         {
@@ -82,7 +80,7 @@ impl Details {
     }
 
     /// Draws the dialog; returns whether it was closed.
-    pub(super) fn ui(&self, ctx: &egui::Context) -> bool {
+    pub(crate) fn ui(&self, ctx: &egui::Context) -> bool {
         let mut closed = false;
         theme::modal(ctx, "backup_file_details", 720.0, |ui| {
             ui.heading(&self.name);

@@ -28,15 +28,14 @@ use salvajocs_core::storage::SnapshotInfo;
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::status_bar;
+use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
-use details::Details;
 
 mod choices;
-mod details;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -1145,9 +1144,11 @@ impl BackupTab {
                     && let Some(backed_up) = baseline.newest.backed_up(&key)
                     && let Some(session) = &state.session
                 {
-                    let storage = &session.storage;
-                    let ctx = ui.ctx();
-                    self.details = Some(Details::start(ctx, storage, game, file, backed_up));
+                    let (ctx, storage) = (ui.ctx(), &session.storage);
+                    let local = game.files[file].real.clone();
+                    let details =
+                        Details::start(ctx, storage, slug(&game.title), key, local, backed_up);
+                    self.details = Some(details);
                 }
             }
             None => {}

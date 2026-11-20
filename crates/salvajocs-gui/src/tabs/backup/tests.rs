@@ -996,7 +996,9 @@ fn a_new_scan_closes_the_open_details() {
     tab.adopt(report.clone());
     let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
     let ctx = harness.ctx.clone();
-    let details = Details::start(&ctx, &storage, &game, 0, backed_up);
+    let key = selection::path_key(&game.files[0]);
+    let local = game.files[0].real.clone();
+    let details = Details::start(&ctx, &storage, slug(&game.title), key, local, backed_up);
     harness.state_mut().0.details = Some(details);
     let deadline = Instant::now() + Duration::from_secs(60);
     while harness.query_by_label("Close details").is_none() {

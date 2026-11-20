@@ -59,6 +59,7 @@ fn utc_parts(time: SystemTime) -> (String, u64) {
 
 pub mod backup;
 pub mod custom_games;
+mod details;
 mod mapping;
 pub mod restore;
 pub mod settings;
