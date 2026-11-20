@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -154,7 +155,15 @@ fn of_the_other_build(
     if let Ok(Some(baseline)) = &mut preview {
         let hashes = baseline.newest.hashes.clone();
         let unplaced = unplaced.iter().map(|&key| key.to_owned()).collect();
-        let mapped = Mapped::new(Vec::new(), hashes, unplaced_roots, unplaced, Vec::new());
+        let sources = BTreeMap::new();
+        let mapped = Mapped::new(
+            Vec::new(),
+            hashes,
+            sources,
+            unplaced_roots,
+            unplaced,
+            Vec::new(),
+        );
         baseline.newest.mapped = Some(mapped);
     }
     preview
@@ -964,4 +973,41 @@ fn clean_up_never_forgets_the_snapshots_it_is_given() {
     assert!(cleaned.error.is_none());
     assert_eq!(cleaned.done.forgotten, 0);
     assert_eq!(snapshot_ids(&storage, "Game"), ids);
+}
+
+#[test]
+fn a_new_scan_closes_the_open_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
+    let game = saved_game(dir.path(), "Game", "old");
+    let stage = dir.path().join("stage");
+    let games = std::slice::from_ref(&game);
+    back_up(&storage, games, &stage, &mapper, |_| {}).unwrap();
+    let previews = preview(&storage, games, &mapper).unwrap();
+    let Ok(Some(baseline)) = &previews[0] else {
+        panic!("the game has a backup");
+    };
+    let backed_up = baseline.newest.backed_up("Home/save").unwrap();
+    let report = ScanReport::new(vec![game.clone()], Vec::new());
+    let mut tab = BackupTab::default();
+    tab.adopt(report.clone());
+    let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+    let ctx = harness.ctx.clone();
+    let details = Details::start(&ctx, &storage, &game, 0, backed_up);
+    harness.state_mut().0.details = Some(details);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while harness.query_by_label("Close details").is_none() {
+        assert!(Instant::now() < deadline, "the dialog never showed");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    harness.state_mut().0.adopt(report);
+    harness.step();
+
+    assert!(harness.state().0.details.is_none());
+    assert!(harness.query_by_label("Close details").is_none());
 }

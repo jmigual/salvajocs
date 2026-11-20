@@ -18,3 +18,17 @@ fn times_read_as_utc_dates() {
     assert_eq!(format_time(at(1_709_210_096)), "2024-02-29 12:34 UTC");
     assert_eq!(format_time(at(1_798_761_540)), "2026-12-31 23:59 UTC");
 }
+
+#[test]
+fn times_can_show_seconds() {
+    let at = |secs| UNIX_EPOCH + Duration::from_secs(secs);
+    assert_eq!(format_time_seconds(at(0)), "1970-01-01 00:00:00 UTC");
+    assert_eq!(
+        format_time_seconds(at(1_709_210_096)),
+        "2024-02-29 12:34:56 UTC"
+    );
+    assert_eq!(
+        format_time_seconds(at(1_798_761_599)),
+        "2026-12-31 23:59:59 UTC"
+    );
+}

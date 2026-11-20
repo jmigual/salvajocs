@@ -29,12 +29,14 @@ use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::status_bar;
 use crate::tabs::mapping::{Dialog, DialogAction};
-use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
+use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
+use details::Details;
 
 mod choices;
+mod details;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -705,6 +707,8 @@ pub struct BackupTab {
     backup_requested: bool,
     /// The open mapping dialog: the game's title and the roots it shows.
     mapping: Option<(String, Vec<MappingEntry>, Dialog)>,
+    /// The open details of a changed file; it only reads, so it is not counted as busy.
+    details: Option<Details>,
 }
 
 impl BackupTab {
@@ -734,6 +738,9 @@ impl BackupTab {
             self.results_ui(ui);
         });
         self.mapping_ui(ui.ctx(), state);
+        if (self.details.as_ref()).is_some_and(|details| details.ui(ui.ctx())) {
+            self.details = None;
+        }
     }
 
     /// Collects the tab's finished jobs and starts what waits on them. The app calls it every
@@ -784,6 +791,7 @@ impl BackupTab {
         {
             self.compared_in = None;
             self.previewing = None;
+            self.details = None;
             self.previews = Vec::new();
             if let Some(report) = &self.report {
                 self.listed = (report.games.iter())
@@ -807,6 +815,9 @@ impl BackupTab {
                     .map(|(game, preview)| Listed::new(game, Some(preview)))
                     .collect();
             }
+        }
+        if let Some(details) = &mut self.details {
+            details.poll();
         }
         if self.choices.poll(ctx, state) {
             self.listed.iter_mut().for_each(Listed::invalidate);
@@ -848,6 +859,7 @@ impl BackupTab {
             .collect();
         self.previews = Vec::new();
         self.previewing = None;
+        self.details = None;
         self.prefixes = report
             .games
             .iter()
@@ -1007,7 +1019,8 @@ impl BackupTab {
         };
         // By index into `report.games`, applied after drawing, like the folder to open.
         let mut changes = Vec::new();
-        let mut opened = None;
+        // The game's index and what was clicked in its tree.
+        let mut clicked: Option<(usize, FileAction)> = None;
         let mut choose = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
@@ -1100,10 +1113,14 @@ impl BackupTab {
                             });
                         }
                         let tree = &mut listed.tree;
+                        let mut action = None;
                         let change =
-                            files_ui(ui, game, tree, preview, &settings, enabled, &mut opened);
+                            files_ui(ui, game, tree, preview, &settings, enabled, &mut action);
                         if let Some(change) = change {
                             changes.push((index, change));
+                        }
+                        if let Some(action) = action {
+                            clicked = Some((index, action));
                         }
                     });
                 });
@@ -1114,11 +1131,26 @@ impl BackupTab {
                 .change(ui.ctx(), state, &report.games[index].title, change);
             self.listed[index].invalidate();
         }
-        if let Some(path) = opened
-            && let Err(err) = (state.env.open_folder)(&path)
-        {
-            let path = path.display();
-            state.notices.push(format!("Could not open {path}: {err}"));
+        match clicked {
+            Some((_, FileAction::Open(path))) => {
+                if let Err(err) = (state.env.open_folder)(&path) {
+                    let path = path.display();
+                    state.notices.push(format!("Could not open {path}: {err}"));
+                }
+            }
+            Some((index, FileAction::Details(file))) => {
+                let game = &report.games[index];
+                let key = selection::path_key(&game.files[file]);
+                if let Some(Ok(Some(baseline))) = self.previews.get(index)
+                    && let Some(backed_up) = baseline.newest.backed_up(&key)
+                    && let Some(session) = &state.session
+                {
+                    let storage = &session.storage;
+                    let ctx = ui.ctx();
+                    self.details = Some(Details::start(ctx, storage, game, file, backed_up));
+                }
+            }
+            None => {}
         }
         if let Some(index) = choose
             && let Some(entries) = to_choose(self.previews.get(index))
@@ -1620,8 +1652,17 @@ fn chosen_files(report: &ScanReport, settings: &Games) -> Vec<GameScan> {
         .collect()
 }
 
+/// What the user clicked in a game's file tree besides a checkbox.
+enum FileAction {
+    /// A folder's open button: the folder on disk.
+    Open(PathBuf),
+    /// The Details button of the game's file at this position of its scan.
+    Details(usize),
+}
+
 /// What the scan found for one game, with its files as a checkbox tree and its registry keys
-/// folded away. Returns the change the user made this frame; a folder to open goes to `opened`.
+/// folded away. Returns the change the user made this frame; a folder to open or a file's
+/// details to show goes to `action`.
 fn files_ui(
     ui: &mut Ui,
     game: &GameScan,
@@ -1629,7 +1670,7 @@ fn files_ui(
     preview: Option<&Preview>,
     settings: &GameSettings,
     enabled: bool,
-    opened: &mut Option<PathBuf>,
+    action: &mut Option<FileAction>,
 ) -> Option<Change> {
     let included = |key: &str| settings.path_included(key);
     let badge = badges(game, preview, settings);
@@ -1652,12 +1693,30 @@ fn files_ui(
                 included: &included,
                 enabled,
             };
-            let hint = |key: &str, badge| hint(preview, key, badge);
-            let clicked = ui.push_id(&game.title, |ui| tree.ui(ui, mode, &badge, &hint));
+            let hint = |_: usize, key: &str, badge| hint(preview, key, badge);
+            let by_row = |_: usize, key: &str| badge(key);
+            // Rows of found files come first in the tree, in the scan's order.
+            let mut row = |ui: &mut Ui, index: usize, key: &str, slot: Slot<'_>| {
+                if let Slot::End(_) = slot
+                    && index < game.files.len()
+                    && by_row(index, key) == Some(Badge::Changed)
+                {
+                    let name = format!("Details of {}", key.rsplit('/').next().unwrap_or(key));
+                    // Small, as the restore plan's Override button, to keep the row's height.
+                    let button = ui.add(egui::Button::new("Details").small());
+                    button.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
+                    if button.clicked() {
+                        *action = Some(FileAction::Details(index));
+                    }
+                }
+            };
+            let clicked = ui.push_id(&game.title, |ui| {
+                tree.ui_with_rows(ui, mode, &by_row, &hint, &mut row)
+            });
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {
-                    *opened = Some(path);
+                    *action = Some(FileAction::Open(path));
                     None
                 }
                 None => None,

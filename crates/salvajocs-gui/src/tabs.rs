@@ -27,6 +27,19 @@ pub(crate) fn format_size(bytes: u64) -> String {
 
 /// A UTC time as `YYYY-MM-DD HH:MM UTC`.
 pub(crate) fn format_time(time: SystemTime) -> String {
+    let (date, rest) = utc_parts(time);
+    format!("{date} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
+}
+
+/// A UTC time as `YYYY-MM-DD HH:MM:SS UTC`.
+pub(crate) fn format_time_seconds(time: SystemTime) -> String {
+    let (date, rest) = utc_parts(time);
+    let (hours, minutes) = (rest / 3600, rest % 3600 / 60);
+    format!("{date} {hours:02}:{minutes:02}:{:02} UTC", rest % 60)
+}
+
+/// The date of `time` as `YYYY-MM-DD` and the seconds since its midnight, in UTC.
+fn utc_parts(time: SystemTime) -> (String, u64) {
     let secs = time
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -41,11 +54,7 @@ pub(crate) fn format_time(time: SystemTime) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + u64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
-        rest / 3600,
-        rest % 3600 / 60
-    )
+    (format!("{year:04}-{month:02}-{day:02}"), rest)
 }
 
 pub mod backup;

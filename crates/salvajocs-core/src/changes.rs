@@ -2,7 +2,7 @@
 //! preview, the skip rule of a backup and the restore's confirm tree. A snapshot of the other
 //! build is compared through the folder pairs a restore would use (ADR-0021).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -21,6 +21,8 @@ use crate::scan::{Environment, GameScan};
 use crate::selection::{self, GameSettings};
 use crate::slug::slug;
 use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
+
+pub mod details;
 
 /// How a local file compares with a snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +119,8 @@ pub struct Mapped {
     pub listing: Vec<SnapshotFile>,
     /// The snapshot's hash list with its files keyed as in `listing`.
     pub hashes: Option<Hashes>,
+    /// The snapshot's own path key of each file of `listing`, by its mapped key.
+    pub sources: BTreeMap<String, String>,
     /// The roots of the other build whose files have no place here, as a restore would skip
     /// them.
     pub unplaced_roots: Vec<SnapshotRoot>,
@@ -133,6 +137,7 @@ impl Mapped {
     pub fn new(
         listing: Vec<SnapshotFile>,
         hashes: Option<Hashes>,
+        sources: BTreeMap<String, String>,
         unplaced_roots: Vec<SnapshotRoot>,
         unplaced: BTreeSet<String>,
         entries: Vec<MappingEntry>,
@@ -140,6 +145,7 @@ impl Mapped {
         Self {
             listing,
             hashes,
+            sources,
             unplaced_roots,
             unplaced,
             entries,
@@ -161,6 +167,23 @@ pub struct Baseline {
     pub mapped: Option<Mapped>,
 }
 
+/// A file of a backup, as [`Baseline::backed_up`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BackedUp {
+    /// The backup.
+    pub snapshot: SnapshotInfo,
+    /// The file's path key in the snapshot, below `files/`: the other build's own path when the
+    /// backup was mapped.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// The mtime the snapshot stored, if any.
+    pub modified: Option<SystemTime>,
+    /// The SHA-256 its hash list gives, in hex; `None` when the backup has no usable list.
+    pub sha256: Option<String>,
+}
+
 impl Baseline {
     /// A baseline from its fields.
     pub fn new(
@@ -175,6 +198,27 @@ impl Baseline {
             hashes,
             mapped,
         }
+    }
+
+    /// The backup's copy of the file at the path key `key` of the scan, matched as
+    /// [`compare_game`] does; `None` when the backup has no file there.
+    pub fn backed_up(&self, key: &str) -> Option<BackedUp> {
+        let (listing, hashes) = self.compared();
+        let entries = files_below(listing);
+        let (matched, entry) = entries[Lookup::new(&entries).find(key)?];
+        let path = match &self.mapped {
+            Some(mapped) => mapped.sources.get(matched)?.clone(),
+            None => matched.to_owned(),
+        };
+        Some(BackedUp {
+            snapshot: self.snapshot.clone(),
+            path,
+            size: entry.size,
+            modified: entry.modified,
+            sha256: hashes
+                .and_then(|hashes| hashes.files.get(matched))
+                .map(|file| file.sha256.clone()),
+        })
     }
 
     /// The listing and hash list to pass [`compare_game`]: the mapped ones when mapped.
@@ -416,6 +460,9 @@ impl<'a> Mapper<'a> {
                 ..(*entry).clone()
             })
             .collect();
+        let sources = (files.iter().zip(&keys))
+            .map(|((old, _), key)| (key.clone(), (*old).to_owned()))
+            .collect();
         let hashes = listed.hashes.as_ref().map(|hashes| Hashes {
             format: hashes.format,
             meta: hashes.meta.clone(),
@@ -437,6 +484,7 @@ impl<'a> Mapper<'a> {
         Some(Mapped {
             listing,
             hashes,
+            sources,
             unplaced_roots,
             unplaced,
             entries,
@@ -527,38 +575,20 @@ pub fn compare_game(
     baseline: &[SnapshotFile],
     hashes: Option<&Hashes>,
 ) -> Comparison {
-    let prefix = format!("{FILES_DIR}/");
-    let entries: Vec<(&str, &SnapshotFile)> = baseline
-        .iter()
-        .filter_map(|entry| Some((entry.path.strip_prefix(&prefix)?, entry)))
-        .collect();
-    let exact: HashMap<&str, usize> = (entries.iter().enumerate())
-        .map(|(at, (key, _))| (*key, at))
-        .collect();
-    let mut folded: HashMap<String, usize> = HashMap::new();
-    for (at, (key, _)) in entries.iter().enumerate().rev() {
-        if let Some(key) = fold(key) {
-            folded.insert(key, at);
-        }
-    }
+    let entries = files_below(baseline);
+    let lookup = Lookup::new(&entries);
     let mut matched = vec![false; entries.len()];
     let found = (scan.files.iter())
-        .map(|file| {
-            let key = selection::path_key(file);
-            let at = exact
-                .get(key.as_str())
-                .or_else(|| fold(&key).and_then(|key| folded.get(&key)));
-            match at {
-                Some(&at) => {
-                    matched[at] = true;
-                    let (key, entry) = entries[at];
-                    let sha256 = hashes
-                        .and_then(|hashes| hashes.files.get(key))
-                        .map(|file| file.sha256.as_str());
-                    compare_file(&file.real, file.modified, entry, sha256)
-                }
-                None => FileState::New,
+        .map(|file| match lookup.find(&selection::path_key(file)) {
+            Some(at) => {
+                matched[at] = true;
+                let (key, entry) = entries[at];
+                let sha256 = hashes
+                    .and_then(|hashes| hashes.files.get(key))
+                    .map(|file| file.sha256.as_str());
+                compare_file(&file.real, file.modified, entry, sha256)
             }
+            None => FileState::New,
         })
         .collect();
     let gone = (entries.into_iter().zip(matched))
@@ -569,6 +599,44 @@ pub fn compare_game(
         })
         .collect();
     Comparison { found, gone }
+}
+
+/// The entries of `listing` below `files/`, each with its path key.
+fn files_below(listing: &[SnapshotFile]) -> Vec<(&str, &SnapshotFile)> {
+    let prefix = format!("{FILES_DIR}/");
+    (listing.iter())
+        .filter_map(|entry| Some((entry.path.strip_prefix(&prefix)?, entry)))
+        .collect()
+}
+
+/// Finds the entry of a snapshot's files that a path key names: the one at that key, else below
+/// a Windows-family base the first whose key differs only in ASCII case (ADR-0014).
+struct Lookup<'a> {
+    exact: HashMap<&'a str, usize>,
+    folded: HashMap<String, usize>,
+}
+
+impl<'a> Lookup<'a> {
+    /// A lookup over `entries`, as [`files_below`] gives them.
+    fn new(entries: &[(&'a str, &SnapshotFile)]) -> Self {
+        let exact = (entries.iter().enumerate())
+            .map(|(at, (key, _))| (*key, at))
+            .collect();
+        let mut folded = HashMap::new();
+        for (at, (key, _)) in entries.iter().enumerate().rev() {
+            if let Some(key) = fold(key) {
+                folded.insert(key, at);
+            }
+        }
+        Self { exact, folded }
+    }
+
+    /// The position of the entry `key` names.
+    fn find(&self, key: &str) -> Option<usize> {
+        (self.exact.get(key))
+            .or_else(|| fold(key).and_then(|key| self.folded.get(&key)))
+            .copied()
+    }
 }
 
 /// `key` (a path key) with its tail ASCII-lowercased, when its base folds case

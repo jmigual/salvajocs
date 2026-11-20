@@ -761,7 +761,15 @@ fn mapped_baseline(files: &[(&str, &[u8])], unplaced: &[&str], registry: Option<
         .collect();
     let unplaced = unplaced.iter().map(|&key| key.to_owned()).collect();
     let hashes_of_mapped = Some(hashes.clone());
-    let mapped = Mapped::new(listing.clone(), hashes_of_mapped, vec![], unplaced, vec![]);
+    let sources = BTreeMap::new();
+    let mapped = Mapped::new(
+        listing.clone(),
+        hashes_of_mapped,
+        sources,
+        vec![],
+        unplaced,
+        vec![],
+    );
     let snapshot = snapshot("theirs", "there", &["salvajocs", "game:game"]);
     Baseline::new(snapshot, listing, Some(hashes), Some(mapped))
 }
@@ -898,4 +906,72 @@ fn the_baseline_maps_only_a_snapshot_of_the_other_build() {
     assert_eq!(comparison.found, [FileState::Same]);
     // Read from the listing: the work dir is never made.
     assert!(!Path::new("baseline").exists());
+}
+
+/// `listed` as a baseline, mapped onto the build of `game` when `map` can.
+fn baseline_of(listed: &Listed, mapper: &Mapper, game: &GameScan) -> Baseline {
+    let mapped = map(mapper, listed, game);
+    let (snapshot, listing) = (listed.snapshot.clone(), listed.listing.clone());
+    Baseline::new(snapshot, listing, listed.hashes.clone(), mapped)
+}
+
+#[test]
+fn backed_up_gives_the_snapshot_path_of_a_mapped_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let save = write(&home.join(".factorio/saves/a.zip"), b"save", at(100));
+    let game = scan(
+        &[(Base::Home, ".factorio/saves")],
+        vec![found(Base::Home, ".factorio/saves/a.zip", &save)],
+        &[],
+    );
+    let listed = backup(
+        &[(Base::WinAppData, "Factorio/saves")],
+        &[("WinAppData/Factorio/saves/a.zip", b"save")],
+    );
+    let config = config(
+        &[("<home>/.factorio/saves", "<winAppData>/Factorio/saves")],
+        &[],
+    );
+    let (manifest, env) = (Manifest::default(), linux_env(&home));
+    let baseline = baseline_of(&listed, &Mapper::new(&manifest, &config, &env), &game);
+
+    let backed_up = baseline.backed_up("Home/.factorio/saves/a.zip").unwrap();
+
+    assert_eq!(backed_up.path, "WinAppData/Factorio/saves/a.zip");
+    assert_eq!(backed_up.snapshot, listed.snapshot);
+    assert_eq!(backed_up.size, 4);
+    assert_eq!(backed_up.modified, Some(at(5)));
+    assert_eq!(backed_up.sha256, Some(sha256(b"save")));
+    assert_eq!(baseline.backed_up("Home/.factorio/saves/none.zip"), None);
+}
+
+#[test]
+fn backed_up_finds_a_case_variant_below_windows_bases() {
+    let files: &[(&str, &[u8])] = &[("WinAppData/G/Save.dat", b"x")];
+    let listed = backup(&[(Base::WinAppData, "G")], files);
+    let baseline = Baseline::new(listed.snapshot, listed.listing, listed.hashes, None);
+
+    let backed_up = baseline.backed_up("WinAppData/g/save.dat").unwrap();
+
+    assert_eq!(backed_up.path, "WinAppData/G/Save.dat");
+    assert_eq!(baseline.backed_up("Home/g/save.dat"), None);
+}
+
+#[test]
+fn backed_up_prefers_the_exact_key() {
+    let files: &[(&str, &[u8])] = &[
+        ("WinAppData/G/SAVE.dat", b"upper"),
+        ("WinAppData/G/save.dat", b"lower"),
+    ];
+    let listed = backup(&[(Base::WinAppData, "G")], files);
+    let baseline = Baseline::new(listed.snapshot, listed.listing, listed.hashes, None);
+
+    let exact = baseline.backed_up("WinAppData/G/save.dat").unwrap();
+
+    assert_eq!(exact.path, "WinAppData/G/save.dat");
+    assert_eq!(exact.sha256, Some(sha256(b"lower")));
+    // No exact entry: the first of the case variants.
+    let folded = baseline.backed_up("WinAppData/G/Save.dat").unwrap();
+    assert_eq!(folded.path, "WinAppData/G/SAVE.dat");
 }

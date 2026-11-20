@@ -1212,3 +1212,205 @@ fn cancelling_choose_folders_saves_nothing() {
     assert!(shows(&harness, "Choose folders…"));
     assert_eq!(fs::read(&config_file).unwrap(), config, "nothing is saved");
 }
+
+/// The folder of the saves of the game `name` in `prefix`.
+fn save_dir(prefix: &Path, name: &str) -> PathBuf {
+    (prefix.join("drive_c/users/steamuser/AppData/Roaming")).join(name)
+}
+
+/// The tab of the game `Alpha` after a backup of its file `save.dat` holding `before` and a
+/// scan that finds it holding `after`, with the file's folder open: the file is a changed row.
+/// The scratch folders stay alive with the harness.
+fn alpha_changed(
+    before: &[u8],
+    after: &[u8],
+) -> (Harness<'static, App>, Env, [TempDir; 2], PathBuf) {
+    let scratch = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(scratch.path());
+    let save = save_dir(&prefix, "Alpha").join("save.dat");
+    fs::create_dir_all(save.parent().unwrap()).unwrap();
+    fs::write(&save, before).unwrap();
+    let games = vec![custom_game("Alpha", false, &prefix)];
+    let (mut harness, env, tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    fs::write(&save, after).unwrap();
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    // Its size reads in KiB for a long file.
+    harness.get_by_label_contains("1 file, ").click();
+    run_settled(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    (harness, env, [scratch, tmp], save)
+}
+
+/// Clicks the Details button of `save.dat` and waits until the dialog shows `text` and has
+/// settled: a centered dialog moves while it grows, so a click needs its final place.
+fn open_details(harness: &mut Harness<'static, App>, text: &str) {
+    harness.get_by_label("Details of save.dat").click();
+    run_until(harness, "the details", |h| shows(h, text));
+    run_settled(harness);
+}
+
+#[test]
+fn details_show_that_only_line_endings_differ() {
+    let (mut harness, _env, _dirs, save) = alpha_changed(b"a\nb\n", b"a\r\nb\r\n");
+
+    open_details(&mut harness, "Only the line endings differ.");
+
+    assert!(shows(&harness, "2 Windows (CRLF), 0 Linux (LF)"));
+    assert!(shows(&harness, "0 Windows (CRLF), 2 Linux (LF)"));
+    assert!(shows(&harness, "Backup ("));
+    assert!(shows(&harness, &save.display().to_string()));
+    let local = "58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab";
+    let backup = "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2";
+    assert!(shows(&harness, local));
+    assert!(shows(&harness, backup));
+    assert!(shows(&harness, "(from its hash list)"));
+    assert!(!shows(&harness, "Reading the backup"));
+}
+
+#[test]
+fn details_show_the_changed_lines() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"one\ntwo\nthree\n", b"one\n2\nthree\n");
+
+    open_details(&mut harness, "− two");
+
+    assert!(shows(&harness, "+ 2"));
+    assert!(shows(&harness, "  one"), "context lines are shown");
+    assert!(!shows(&harness, "Only the line endings differ."));
+    let backup = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
+    let local = "bc85caa9b61bcf3a54ccfc800e2b0eda6c11fa5df4e0481c896d31cda2462eb2";
+    assert!(shows(&harness, backup) && shows(&harness, local));
+    // The backup keeps the file's path below `files/`, which is also its key here.
+    assert!(shows(&harness, "WinAppData/Alpha/save.dat"));
+
+    click(&mut harness, "Close details");
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Backup ("));
+}
+
+#[test]
+fn a_long_diff_stops_at_a_thousand_lines_and_counts_the_rest() {
+    let lines = |prefix: &str| {
+        (0..600)
+            .map(|n| format!("{prefix}{n}\n"))
+            .collect::<String>()
+    };
+    let (mut harness, _env, _dirs, _save) =
+        alpha_changed(lines("a").as_bytes(), lines("b").as_bytes());
+
+    open_details(&mut harness, "200 more lines not shown.");
+
+    // 600 removed lines, then added ones up to the 1000th line drawn.
+    assert!(shows(&harness, "− a599"));
+    assert!(shows(&harness, "+ b399"));
+    assert!(!shows(&harness, "+ b400"));
+    // The button is in sight below the diff, not after it.
+    click(&mut harness, "Close details");
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "more lines not shown."));
+}
+
+#[test]
+fn a_missing_final_newline_shows_in_the_details() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"a\nb\n", b"a\nb");
+
+    open_details(&mut harness, "(no newline at end)");
+
+    assert_eq!(
+        harness
+            .query_all_by_label_contains("(no newline at end)")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn details_say_a_binary_file_is_not_text() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"\0\x01\x02", b"\0\x01\x02\x03");
+
+    open_details(&mut harness, "Not shown: not text.");
+
+    assert!(!shows(&harness, "Windows (CRLF)"));
+    assert!(shows(&harness, "SHA-256 of This PC"));
+}
+
+#[test]
+fn only_changed_files_have_a_details_button() {
+    let scratch = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(scratch.path());
+    let dir = save_dir(&prefix, "Alpha");
+    fs::create_dir_all(&dir).unwrap();
+    for name in ["same.dat", "changed.dat", "removed.dat"] {
+        fs::write(dir.join(name), "abc").unwrap();
+    }
+    let games = vec![custom_game("Alpha", false, &prefix)];
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    fs::write(dir.join("changed.dat"), "abcd").unwrap();
+    fs::write(dir.join("new.dat"), "n").unwrap();
+    fs::remove_file(dir.join("removed.dat")).unwrap();
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    click(&mut harness, "3 files, 8 B");
+    click(&mut harness, "Open WinAppData/Alpha");
+    for row in [
+        "new.dat, new",
+        "changed.dat, changed",
+        "removed.dat, removed",
+    ] {
+        assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
+    }
+    // Not on the new file, the removed one and the unchanged one.
+    assert_eq!(harness.query_all_by_label_contains("Details of").count(), 1);
+    let button = harness.get_by_label("Details of changed.dat");
+    assert_eq!(button.accesskit_node().role(), Role::Button);
+
+    // Unticked, the changed file is a removed one.
+    click(&mut harness, "changed.dat, changed");
+    assert_eq!(harness.query_all_by_label_contains("Details of").count(), 0);
+}
+
+#[test]
+fn details_show_a_read_error() {
+    let (mut harness, _env, dirs, _save) = alpha_changed(b"abc\n", b"abcd\n");
+    // The repository lost its data packs since the comparison.
+    fs::remove_dir_all(Path::new(&repo_dir(&dirs[1])).join("data")).unwrap();
+
+    open_details(&mut harness, "Could not read the backup");
+
+    assert!(!shows(&harness, "Reading the backup"));
+    assert!(!shows(&harness, "SHA-256 of"));
+    click(&mut harness, "Close details");
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Could not read the backup"));
+}
+
+#[test]
+fn details_of_the_other_build_name_its_path_in_the_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abcd");
+    let game = paired("  files: {}\n", &prefix);
+    let (mut harness, _env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    click(&mut harness, "1 file, 4 B");
+    click(&mut harness, "Open WinAppData/G");
+
+    harness.get_by_label("Details of save.dat").click();
+    run_until(&mut harness, "the details", |h| shows(h, "Location"));
+
+    // This PC's key, and the other build's own path in the backup.
+    assert!(shows(&harness, "WinAppData/G/save.dat"));
+    assert!(shows(&harness, "Home/G/save.dat"));
+}

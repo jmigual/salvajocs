@@ -108,6 +108,26 @@ modification time is not; otherwise its SHA-256 is compared with the list of has
 holds. A backup made by salvajocs 0.5.0 or older has no such list, and a list that does not match
 its backup's files is not used, so there the modification time decides.
 
+To see what makes a file differ, click the **Details** button after a file with the changed
+icon. The dialog shows, for this PC's copy and the backup's, where the file is (the backup's path
+below `files/`, which for a backup of the other build is its own folder), its size, its
+modification time to the second (UTC) and its SHA-256, which you can select and copy. The
+backup's hash comes from its list of hashes; a backup without one gets it from the downloaded
+file.
+
+A text file also shows the lines that differ, with three lines of context: lines of the backup
+marked `−`, lines on this PC marked `+`. Windows ends a line with CRLF and Linux with LF, so the
+dialog counts each copy's line endings (`2 Windows (CRLF), 0 Linux (LF)`) and compares the lines
+with every line ending read as LF and a byte order mark (BOM, which some Windows editors write
+at the start of a file) left out; a copy with a BOM says so. When that leaves no difference, it
+says that only the line endings, the BOM or both differ. A last line without a line ending is
+marked `(no newline at end)`.
+A copy is text when it is valid UTF-8 without a NUL byte. When a copy is not text, or either copy
+is larger than 1 MiB, no lines are shown, and nothing is downloaded from the repository for a
+file that large. A long diff shows its first 1000 lines. The backup's copy is read when you click
+the button, so the repository must be reachable; if it is not, the dialog says it could not read
+the backup.
+
 The comparison leaves out the registry keys and the list of save folders, so a game shown as
 unchanged is still backed up when only those changed.
 

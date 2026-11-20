@@ -244,6 +244,13 @@ pub(crate) fn sha256_file(path: &Path) -> io::Result<String> {
     }
 }
 
+/// The SHA-256 of `bytes`, in hex.
+pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex(hasher)
+}
+
 /// The digest of `hasher`, in lowercase hex.
 fn hex(hasher: Sha256) -> String {
     (hasher.finalize().iter())
