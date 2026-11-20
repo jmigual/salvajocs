@@ -30,6 +30,8 @@ All notable changes to salvajocs. The format follows
   of a game's backups use, with the **Sort by** row above the list and an arrow that reverses
   the order. Each game shows its last backup, that backup's size and the space its backups use.
   The choice is saved in the config.
+- The Restore tab's list of games has its own **Sort by** row, and a short line under each title
+  with the same figures, the sorted one first.
 
 ### Changed
 
@@ -58,6 +60,8 @@ All notable changes to salvajocs. The format follows
 
 - A tab keeps its scroll position when you show another tab and come back: the Backup tab's list
   of games no longer jumps to the top.
+- After a restore or a delete in the Restore tab, the Backup tab compares the games with their
+  backups again, instead of showing what differed before.
 
 ## [0.7.0] - 2026-11-20
 

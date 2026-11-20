@@ -71,6 +71,40 @@ fn a_game_with_only_safety_backups_or_none_has_no_backup() {
 }
 
 #[test]
+fn the_restore_line_puts_the_sorted_figure_first() {
+    let stats = stats(true, Some(1_003_520));
+    let line = |by| restore_line(&stats, Some(Ok(3_250_586)), by);
+    let name = line(SortKey::Name);
+    assert_eq!(name.text(), "2026-11-19, 980.0 KiB, 3.1 MiB used");
+    assert!(emphasized(&name).is_empty());
+    let size = line(SortKey::LastBackupSize);
+    assert_eq!(size.text(), "980.0 KiB, 2026-11-19, 3.1 MiB used");
+    assert_eq!(emphasized(&size), ["980.0 KiB"]);
+    let space = line(SortKey::SpaceUsed);
+    assert_eq!(space.text(), "3.1 MiB used, 2026-11-19, 980.0 KiB");
+    assert_eq!(emphasized(&space), ["3.1 MiB used"]);
+    assert!(
+        name.hover
+            .starts_with("Last backup 2026-11-19 14:02 UTC, 980.0 KiB.")
+    );
+}
+
+#[test]
+fn the_restore_line_marks_missing_figures() {
+    let no_size = stats(true, None);
+    let computing = restore_line(&no_size, None, SortKey::Name);
+    assert_eq!(computing.text(), "2026-11-19, … used");
+    assert!(computing.hover.contains("size unknown"));
+
+    let failed = restore_line(&no_size, Some(Err("broken".into())), SortKey::Name);
+    assert_eq!(failed.text(), "2026-11-19, ? used");
+    assert!(failed.hover.contains("broken"));
+
+    let safety = restore_line(&stats(false, None), Some(Ok(1024)), SortKey::Name);
+    assert_eq!(safety.text(), "Only safety backups, 1.0 KiB used");
+}
+
+#[test]
 fn the_direction_is_named_in_words() {
     let words = |by, descending| order_words(ListSort::new(by, descending));
     assert_eq!(words(SortKey::Name, false), "A to Z");

@@ -31,6 +31,11 @@ pub(crate) fn format_time(time: SystemTime) -> String {
     format!("{date} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
 }
 
+/// The UTC date of `time` as `YYYY-MM-DD`.
+pub(crate) fn format_date(time: SystemTime) -> String {
+    utc_parts(time).0
+}
+
 /// A UTC time as `YYYY-MM-DD HH:MM:SS UTC`.
 pub(crate) fn format_time_seconds(time: SystemTime) -> String {
     let (date, rest) = utc_parts(time);

@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Response, RichText, Role, TextEdit, Ui, Vec2, WidgetInfo};
+use salvajocs_core::config::ListSort;
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::layout::{Context, GameVars, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
@@ -24,6 +25,7 @@ use salvajocs_core::restore::{
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::selection::GameSettings;
+use salvajocs_core::stats::{self, BackupStats};
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
@@ -31,6 +33,8 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
+use crate::tabs::sort::{self, Line};
+use crate::tabs::space::{Polled, Space};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::theme::{self, icons};
 use crate::widgets::named_button;
@@ -731,6 +735,20 @@ pub struct RestoreTab {
     repository: Option<SharedStorage>,
     listing: Option<Job<Vec<GameBackups>>>,
     games: Vec<GameBackups>,
+    /// The backup figures of each of `games`, in its order, built with `order` (ADR-0027).
+    figures: Vec<BackupStats>,
+    /// Works out the space of each listed game's backups.
+    space: Option<Space>,
+    /// Counts the listings and the space runs that ended, which `order` is built from.
+    list_changes: u64,
+    /// The indices of `games` in the order shown.
+    order: Vec<usize>,
+    /// The sort and `list_changes` that `order` was built for.
+    sorted: Option<(ListSort, u64)>,
+    /// The short line of figures under each of `games`, in its order; `None` until drawn.
+    lines: Vec<Option<Line>>,
+    /// A restore, batch restore or delete ended since [`RestoreTab::take_written`] last ran.
+    written: bool,
     /// The slug of the chosen game.
     selected: Option<String>,
     /// The slugs of the games ticked for a batch restore.
@@ -826,9 +844,18 @@ impl RestoreTab {
         self.repository = None;
         self.listing = None;
         self.games.clear();
+        self.space = None;
+        self.list_changes += 1;
         self.selected = None;
         self.checked.clear();
         self.snapshot = None;
+    }
+
+    /// Whether a restore, batch restore or delete ended since the last call, so other views of
+    /// the repository may be out of date. A flag rather than `poll`'s result, since `ui` polls
+    /// too and would swallow it.
+    pub(crate) fn take_written(&mut self) -> bool {
+        mem::take(&mut self.written)
     }
 
     /// Whether a listing, restore or other job of this tab is running. A plan job only reads,
@@ -904,6 +931,14 @@ impl RestoreTab {
         }
         self.poll_jobs(ctx, state);
         self.poll_batch(ctx, state);
+        if let Some(space) = &mut self.space {
+            match space.poll() {
+                Polled::Arrived => self.lines.fill(None),
+                // The order changes once, when every figure is in.
+                Polled::Finished => self.list_changes += 1,
+                Polled::Nothing => {}
+            }
+        }
         if let Some(details) = &mut self.details {
             details.poll();
         }
@@ -944,6 +979,7 @@ impl RestoreTab {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())
                     });
                     self.games = games;
+                    self.start_space(ctx, state);
                 }
                 Err(err) => self.error = Some(format!("The backups cannot be listed: {err:#}")),
             }
@@ -1008,6 +1044,7 @@ impl RestoreTab {
             && let Some(result) = job.take_result()
         {
             self.restoring = None;
+            self.written = true;
             match result {
                 Ok(restored) => {
                     self.restored = Some(restored);
@@ -1023,6 +1060,7 @@ impl RestoreTab {
             && let Some(result) = job.take_result()
         {
             self.deleting = None;
+            self.written = true;
             match result {
                 Ok(done) if done.append_only_kept > 0 => {
                     self.error =
@@ -1070,6 +1108,41 @@ impl RestoreTab {
         }
     }
 
+    /// Starts working out the space of the listed games' backups that the session has not yet.
+    fn start_space(&mut self, ctx: &egui::Context, state: &State) {
+        if let Some(session) = &state.session {
+            let games = (self.games.iter())
+                .map(|game| BackupStats::of(&game.snapshots).snapshot_ids)
+                .collect();
+            let space = Space::start(ctx, &session.storage, &session.space, games);
+            self.space = Some(space);
+        }
+        self.list_changes += 1;
+    }
+
+    /// Builds the figures and the order of the games by `sort`, and drops their lines, when the
+    /// sort, the listing or the space used changed since they were last built.
+    fn sort_rows(&mut self, sort: ListSort) {
+        if self.sorted == Some((sort, self.list_changes)) {
+            return;
+        }
+        let space = self.space.as_ref();
+        self.figures = (self.games.iter())
+            .map(|game| {
+                let mut figures = BackupStats::of(&game.snapshots);
+                let space_used = space.and_then(|space| space.get(&figures.snapshot_ids));
+                figures.space_used = space_used.and_then(Result::ok);
+                figures
+            })
+            .collect();
+        let rows: Vec<_> = (self.games.iter().zip(&self.figures))
+            .map(|(game, figures)| (game.title.as_str(), Some(figures)))
+            .collect();
+        self.order = stats::order(&rows, sort);
+        self.lines = vec![None; self.games.len()];
+        self.sorted = Some((sort, self.list_changes));
+    }
+
     fn start_listing(&mut self, ctx: &egui::Context, state: &State) {
         let Some(session) = &state.session else {
             return;
@@ -1109,8 +1182,9 @@ impl RestoreTab {
         self.start_listing(ctx, state);
     }
 
-    /// The sidebar: the listing button and the games of the repository.
-    fn games_ui(&mut self, ui: &mut Ui, state: &State) {
+    /// The sidebar: the listing button, the Sort by row and the games of the repository in the
+    /// config's order, each with a line of its backup figures.
+    fn games_ui(&mut self, ui: &mut Ui, state: &mut State) {
         let load = egui::Button::new("Load backups").min_size(Vec2::new(ui.available_width(), 0.0));
         if ui.add_enabled(state.session.is_some(), load).clicked() {
             self.load(ui.ctx(), state);
@@ -1122,23 +1196,54 @@ impl RestoreTab {
             return;
         }
         self.select_all_ui(ui);
+        let sort = (state.config.as_ref()).map_or(ListSort::default(), |c| c.restore_sort);
+        if let Some(picked) = sort::sort_ui(ui, "restore_sort", sort)
+            && let Some(config) = &mut state.config
+        {
+            config.restore_sort = picked;
+            state.save_config(ui.ctx());
+        }
+        self.sort_rows(sort);
         let mut chosen = None;
+        let (figures, space, lines) = (&self.figures, &self.space, &mut self.lines);
         theme::group(ui, |ui| {
-            for game in &self.games {
-                ui.horizontal(|ui| {
-                    batch::include_ui(ui, &mut self.checked, game);
-                    let selected = self.selected.as_ref() == Some(&game.slug);
-                    // The pill list drops the outline of the buttons, which the checkbox keeps.
-                    ui.scope(|ui| {
-                        theme::pill_list(ui);
-                        // The grow atom left-aligns the title in the row, which the title
-                        // truncates to.
-                        let title = (game.title.as_str(), egui::Atom::grow());
-                        let row = egui::Button::selectable(selected, title)
-                            .truncate()
-                            .min_size(Vec2::new(ui.available_width(), 0.0));
-                        let row = ui.add(row).on_hover_text(&game.title);
-                        if row.clicked() && !selected {
+            for &index in &self.order {
+                let game = &self.games[index];
+                let selected = self.selected.as_ref() == Some(&game.slug);
+                let line = lines[index].get_or_insert_with(|| {
+                    let figures = &figures[index];
+                    let space_used = space.as_ref().and_then(|s| s.get(&figures.snapshot_ids));
+                    sort::restore_line(figures, space_used, sort.by)
+                });
+                ui.scope(|ui| {
+                    // No gap and no row height, so the figures sit right under their title.
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let title = ui.horizontal(|ui| {
+                        batch::include_ui(ui, &mut self.checked, game);
+                        // The pill list drops the outline of the buttons, which the checkbox
+                        // keeps.
+                        ui.scope(|ui| {
+                            theme::pill_list(ui);
+                            // The grow atom left-aligns the title in the row, which the title
+                            // truncates to.
+                            let title = (game.title.as_str(), egui::Atom::grow());
+                            let row = egui::Button::selectable(selected, title)
+                                .truncate()
+                                .min_size(Vec2::new(ui.available_width(), 0.0));
+                            let row = ui.add(row).on_hover_text(&game.title);
+                            if row.clicked() && !selected {
+                                chosen = Some(game.clone());
+                            }
+                        })
+                        .response
+                        .rect
+                        .left()
+                    });
+                    ui.spacing_mut().interact_size.y = 0.0;
+                    ui.horizontal(|ui| {
+                        let indent = title.inner - ui.cursor().left();
+                        ui.add_space(indent + ui.spacing().button_padding.x);
+                        if line.compact_ui(ui).clicked() && !selected {
                             chosen = Some(game.clone());
                         }
                     });

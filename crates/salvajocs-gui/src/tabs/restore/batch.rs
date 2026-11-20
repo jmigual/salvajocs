@@ -310,6 +310,7 @@ impl RestoreTab {
             && let Some(result) = job.take_result()
         {
             self.batch.running = None;
+            self.written = true;
             match result {
                 Ok(restored) => self.batch.restored = Some(restored),
                 Err(err) => self.error = Some(format!("{err:#}")),

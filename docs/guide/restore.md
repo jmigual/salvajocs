@@ -9,8 +9,13 @@ walks through those steps and explains how to undo a restore. Back to the
 
 ## Steps
 
-1. Click **Load backups**. The list shows every game in the repository, sorted by title. It
-   includes backups made on other machines.
+1. Click **Load backups**. The list shows every game in the repository, including backups made
+   on other machines. Under each title a short line gives the date of its last backup, that
+   backup's size and the space all its backups use, such as `2026-11-19, 980.0 KiB, 3.1 MiB
+   used`; hover it for the full sentence. `… used` means the space is still being worked out,
+   and `Only safety backups` a game with only the backups a restore makes. The **Sort by** row
+   above the list works as on the [Backup tab](backup.md#sort-and-backup-sizes), with a choice
+   of its own, and the figure the list is sorted by comes first on each line.
 2. Click a game. The **Snapshot** list shows its backups, newest first, as `time, host`. A backup
    made by a restore adds `, pre-restore`. The newest backup that is not a `pre-restore` one is
    preselected.

@@ -78,7 +78,7 @@ size** or **Space used**; hover an item to read what it means. The arrow button 
 reverses the order and says the current one, such as **Largest first**. Picking a key starts in
 its natural order: names A to Z, times newest first, sizes largest first. Games without the
 value, such as one without a backup, stay at the end either way. The figure the list is sorted
-by is drawn brighter on each line. The choice is saved.
+by is drawn brighter on each line. The choice is saved, and the Restore tab keeps its own.
 
 Open the line to see the game's files as a tree of folders, each with a checkbox, and its registry
 keys under **Registry**:

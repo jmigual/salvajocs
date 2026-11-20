@@ -2,11 +2,11 @@
 //! of backup figures under each game (ADR-0027).
 
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{Button, ComboBox, Label, Response, Role, TextStyle, Ui, WidgetInfo};
+use eframe::egui::{Button, ComboBox, Label, Response, Role, Sense, TextStyle, Ui, WidgetInfo};
 use salvajocs_core::config::{ListSort, SortKey};
 use salvajocs_core::stats::BackupStats;
 
-use crate::tabs::{format_size, format_time};
+use crate::tabs::{format_date, format_size, format_time};
 use crate::theme::{self, icons};
 
 /// The widest the dropdown grows, enough for its longest item.
@@ -112,8 +112,7 @@ impl Line {
     }
 
     /// The line's text, without emphasis.
-    #[cfg(test)]
-    pub(crate) fn text(&self) -> String {
+    fn text(&self) -> String {
         self.parts.iter().map(|(text, _)| text.as_str()).collect()
     }
 
@@ -122,14 +121,28 @@ impl Line {
         if self.parts.is_empty() {
             return None;
         }
-        let font_id = TextStyle::Body.resolve(ui.style());
+        let label = Label::new(self.job(ui, TextStyle::Body));
+        Some(ui.add(label).on_hover_text(&self.hover))
+    }
+
+    /// Draws the line small and cut to the width there is, as a target that takes clicks.
+    pub(crate) fn compact_ui(&self, ui: &mut Ui) -> Response {
+        let label = Label::new(self.job(ui, TextStyle::Small))
+            .truncate()
+            .sense(Sense::click());
+        ui.add(label).on_hover_text(&self.hover)
+    }
+
+    /// The parts in `style`, the emphasized ones in the text color and the rest weak.
+    fn job(&self, ui: &Ui, style: TextStyle) -> LayoutJob {
+        let font_id = style.resolve(ui.style());
         let (strong, weak) = (ui.visuals().text_color(), ui.visuals().weak_text_color());
         let mut job = LayoutJob::default();
         for (text, emphasized) in &self.parts {
             let color = if *emphasized { strong } else { weak };
             job.append(text, 0.0, TextFormat::simple(font_id.clone(), color));
         }
-        Some(ui.add(Label::new(job)).on_hover_text(&self.hover))
+        job
     }
 }
 
@@ -179,6 +192,47 @@ pub(crate) fn backup_line(
             line.push(".", false);
             line.hover += &format!("\n\nThe space could not be worked out: {err}");
         }
+    }
+    line
+}
+
+/// The Restore sidebar's short line of a listed game's `stats` and `space` (`None` while it is
+/// worked out): the figure `by` sorts by first and emphasized, the date without the time, and
+/// an unknown size left out. Its hover text is the Backup tab's sentence.
+pub(crate) fn restore_line(
+    stats: &BackupStats,
+    space: Option<Result<u64, String>>,
+    by: SortKey,
+) -> Line {
+    let full = backup_line(Some(stats), space.clone(), by);
+    let used = match space {
+        None => "… used".to_owned(),
+        Some(Ok(bytes)) => format!("{} used", format_size(bytes)),
+        Some(Err(_)) => "? used".to_owned(),
+    };
+    let used = Some((used, by == SortKey::SpaceUsed));
+    let figures = match stats.last {
+        None => [Some(("Only safety backups".to_owned(), false)), used, None],
+        Some(time) => {
+            let date = Some((format_date(time), by == SortKey::LastBackup));
+            let size =
+                (stats.last_size).map(|size| (format_size(size), by == SortKey::LastBackupSize));
+            match by {
+                SortKey::LastBackupSize => [size, date, used],
+                SortKey::SpaceUsed => [used, date, size],
+                _ => [date, size, used],
+            }
+        }
+    };
+    let mut line = Line {
+        hover: format!("{}\n\n{}", full.text(), full.hover),
+        ..Line::default()
+    };
+    for (index, (text, emphasized)) in figures.into_iter().flatten().enumerate() {
+        if index > 0 {
+            line.push(", ", false);
+        }
+        line.push(text, emphasized);
     }
     line
 }

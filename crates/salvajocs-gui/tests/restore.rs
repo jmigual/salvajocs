@@ -16,7 +16,7 @@ use eframe::egui::{Key, Pos2, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
-use salvajocs_core::config::AppConfig;
+use salvajocs_core::config::{AppConfig, ListSort, SortKey};
 use salvajocs_core::launcher::{Launcher, LauncherPrefix};
 use salvajocs_core::layout::{Base, Context, LinuxFolders, PrefixOrigin};
 use salvajocs_core::manifest::{
@@ -3047,4 +3047,134 @@ fn a_batch_game_with_nothing_to_restore_is_left_out() {
     assert!(shows(&harness, "Nothing to restore, so this game"));
     assert!(!shows(&harness, "Nothing ticked"));
     assert!(!disabled(&harness, "Restore 1 game"));
+}
+
+/// A scan of `title` with `files` save files in its own folder.
+fn scan_of(tmp: &TempDir, title: &str, files: usize) -> GameScan {
+    let tails: Vec<String> = (0..files).map(|n| format!("{title}/{n}.sav")).collect();
+    let files: Vec<_> = (tails.iter())
+        .map(|tail| (Base::WinAppData, tail.as_str()))
+        .collect();
+    scan(tmp, title, &files, &[(Base::WinAppData, title)])
+}
+
+/// The titles among `titles`, top to bottom as the sidebar shows them.
+fn listed_order<'a>(harness: &Harness<'static, App>, titles: &[&'a str]) -> Vec<&'a str> {
+    let mut titles = titles.to_vec();
+    let top = |title: &str| harness.get_by_label(title).rect().min.y;
+    titles.sort_by(|a, b| top(a).total_cmp(&top(b)));
+    titles
+}
+
+/// Picks `key` in the Sort by dropdown.
+fn sort_by(harness: &mut Harness<'static, App>, key: &str) {
+    harness
+        .get_by_role_and_label(Role::ComboBox, "Sort by")
+        .click();
+    run_settled(harness);
+    harness.get_by_label(key).click();
+    run_settled(harness);
+}
+
+/// Runs frames until the sidebar shows the space of `count` games, worked out.
+fn run_until_space_listed(harness: &mut Harness<'static, App>, count: usize) {
+    run_until(harness, "the space used", |h| {
+        h.query_all_by_label_contains(" used").count() == count && !shows(h, "… used")
+    });
+    run_settled(harness);
+}
+
+const TITLES: [&str; 3] = ["Alpha", "Beta", "Gamma"];
+
+#[test]
+fn restore_list_sorts_by_last_backup_newest_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Backed up in this order, so Alpha is the newest.
+    let games = ["Beta", "Gamma", "Alpha"].map(|title| scan_of(&tmp, title, 1));
+    let (mut harness, _env) = open_tab(&tmp, Vec::new(), &games);
+    run_settled(&mut harness);
+    assert_eq!(listed_order(&harness, &TITLES), TITLES, "by name");
+
+    sort_by(&mut harness, "Last backup");
+    assert_eq!(listed_order(&harness, &TITLES), ["Alpha", "Gamma", "Beta"]);
+    click(&mut harness, "Newest first");
+    assert!(shows(&harness, "Oldest first"));
+    assert_eq!(listed_order(&harness, &TITLES), ["Beta", "Gamma", "Alpha"]);
+}
+
+#[test]
+fn a_game_with_only_safety_backups_sorts_last_by_last_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let games = ["Alpha", "Beta"].map(|title| scan_of(&tmp, title, 1));
+    let (mut harness, _env) = open_tab(&tmp, Vec::new(), &games);
+    let gamma = [scan_of(&tmp, "Gamma", 1)];
+    let stage = tmp.path().join("fixture-stage");
+    backup_games(
+        &mut open_repo(&tmp),
+        &gamma,
+        &stage,
+        &["pre-restore"],
+        None,
+        |_| {},
+    )
+    .unwrap();
+    click(&mut harness, "Load backups");
+    run_until(&mut harness, "the list", |h| shows(h, "Gamma"));
+    assert!(shows(&harness, "Only safety backups"));
+
+    sort_by(&mut harness, "Last backup");
+    assert_eq!(listed_order(&harness, &TITLES), ["Beta", "Alpha", "Gamma"]);
+    click(&mut harness, "Newest first");
+    assert_eq!(listed_order(&harness, &TITLES), ["Alpha", "Beta", "Gamma"]);
+}
+
+#[test]
+fn clicking_the_figures_under_a_title_selects_the_game() {
+    let tmp = tempfile::tempdir().unwrap();
+    let games = ["Alpha", "Beta"].map(|title| scan_of(&tmp, title, 1));
+    let (mut harness, _env) = open_tab(&tmp, Vec::new(), &games);
+    run_settled(&mut harness);
+
+    let title = harness.get_by_label("Beta").rect();
+    let line = (harness.query_all_by_label_contains(" used"))
+        .filter(|line| line.rect().min.y >= title.max.y)
+        .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+        .expect("Beta has a line of figures");
+    line.click();
+    run_until(&mut harness, "Beta to be chosen", |h| {
+        shows(h, "Delete all backups of Beta")
+    });
+}
+
+#[test]
+fn restore_sort_is_independent_of_backup_sort() {
+    let tmp = tempfile::tempdir().unwrap();
+    let games = ["Alpha", "Beta"].map(|title| scan_of(&tmp, title, 1));
+    let (mut harness, env) = open_tab(&tmp, Vec::new(), &games);
+
+    sort_by(&mut harness, "Last backup size");
+    // The config is written in the background, which asks for no frames while it runs.
+    let config_dir = env.config_dir.clone();
+    let picked = ListSort::new(SortKey::LastBackupSize, true);
+    run_until(&mut harness, "the sort to be saved", move |_| {
+        let saved = AppConfig::load(&config_dir).ok().flatten();
+        saved.is_some_and(|saved| saved.restore_sort == picked)
+    });
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(config.backup_sort, ListSort::default());
+}
+
+#[test]
+fn restore_list_sorts_by_space_used_once_computed() {
+    let tmp = tempfile::tempdir().unwrap();
+    // More files take more space: the blobs and the tree entries add up.
+    let games = [("Alpha", 5), ("Beta", 1), ("Gamma", 20)];
+    let games = games.map(|(title, files)| scan_of(&tmp, title, files));
+    let (mut harness, _env) = open_tab(&tmp, Vec::new(), &games);
+    run_until_space_listed(&mut harness, 3);
+
+    sort_by(&mut harness, "Space used");
+    assert_eq!(listed_order(&harness, &TITLES), ["Gamma", "Alpha", "Beta"]);
+    click(&mut harness, "Largest first");
+    assert_eq!(listed_order(&harness, &TITLES), ["Beta", "Alpha", "Gamma"]);
 }

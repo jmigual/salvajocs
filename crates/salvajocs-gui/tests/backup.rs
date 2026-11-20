@@ -1609,3 +1609,100 @@ fn game_line_shows_last_backup_and_space_used() {
     assert!(text.starts_with("Last backup 20"), "{text}");
     assert_eq!(harness.query_all_by_label("No backup.").count(), 1);
 }
+
+#[test]
+fn deleting_backups_in_the_restore_tab_updates_the_backup_tab() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "Beta");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    run_until_space_shown(&mut harness, 1);
+
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    click(&mut harness, "Load backups");
+    run_until(&mut harness, "the list", |h| {
+        h.query_by_label("Include Alpha").is_some()
+    });
+    harness.get_by_label("Alpha").click();
+    run_until(&mut harness, "the default targets", |h| {
+        shows(h, "Restore into:")
+    });
+    click(&mut harness, "Delete all backups of Alpha");
+    harness.get_by_label("Delete").click();
+    run_until(&mut harness, "the delete", |h| shows(h, "Removed 1 backup"));
+    harness.state_mut().set_tab(Tab::Backup);
+    run_until(&mut harness, "the comparison again", |h| {
+        h.query_all_by_label("No backup.").count() == 2
+    });
+}
+
+/// The text of the one figures line that says how much space the backups use.
+fn space_line(harness: &Harness<'static, App>) -> String {
+    let line = harness.get_by_label_contains("All backups use");
+    // A label's text is its value.
+    line.accesskit_node().value().unwrap_or_default()
+}
+
+/// Backs up Beta alone, changes its save, and shows the Restore tab's list with the figures
+/// line the Backup tab showed, whose space a restore's safety backup of the change will grow.
+fn beta_changed_since_its_backup(scratch: &TempDir) -> (Harness<'static, App>, String, TempDir) {
+    let (prefix, games) = alpha_beta(scratch);
+    let (mut harness, _env, tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "Alpha");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Beta: backed up");
+    run_until_space_shown(&mut harness, 1);
+    let before = space_line(&harness);
+    write_save(&prefix, "Beta", "changed since the backup");
+
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    click(&mut harness, "Load backups");
+    run_until(&mut harness, "the list", |h| {
+        h.query_by_label("Include Beta").is_some()
+    });
+    (harness, before, tmp)
+}
+
+/// Shows the Backup tab and waits until its figures line differs from `before`, worked out.
+fn run_until_space_changed(harness: &mut Harness<'static, App>, before: &str) {
+    harness.state_mut().set_tab(Tab::Backup);
+    run_until(harness, "the comparison again", |h| {
+        let line = space_line(h);
+        line != before && !line.contains('…')
+    });
+}
+
+#[test]
+fn a_restore_in_the_restore_tab_updates_the_backup_tab() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (mut harness, before, _tmp) = beta_changed_since_its_backup(&scratch);
+    harness.get_by_label("Beta").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Beta"));
+
+    run_until_space_changed(&mut harness, &before);
+}
+
+#[test]
+fn a_batch_restore_updates_the_backup_tab() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (mut harness, before, _tmp) = beta_changed_since_its_backup(&scratch);
+    click(&mut harness, "Include Beta");
+    harness.get_by_label("Restore 1 game").click();
+    run_until(&mut harness, "the batch confirm", |h| {
+        h.query_by_label("Cancel").is_some()
+    });
+    harness.get_by_label("Restore 1 game").click();
+    run_until(&mut harness, "the batch", |h| {
+        shows(h, "Restored 1 of 1 game")
+    });
+
+    run_until_space_changed(&mut harness, &before);
+}

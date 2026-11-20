@@ -192,6 +192,11 @@ impl App {
         }
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
+        // A restore adds safety backups and a delete removes backups, which the comparison and
+        // the figures of the Backup tab show.
+        if self.restore.take_written() {
+            self.backup.start_preview(ctx, &self.state);
+        }
         self.settings.poll(&mut self.state);
     }
 

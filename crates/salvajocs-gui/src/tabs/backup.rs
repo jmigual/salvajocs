@@ -872,8 +872,8 @@ impl BackupTab {
 
     /// Compares the shown report with the last backups when the repository is open, through
     /// the config's folder pairs for a backup of the other build. Replacing the job drops the
-    /// comparison of an older report.
-    fn start_preview(&mut self, ctx: &egui::Context, state: &State) {
+    /// comparison of an older report. Does nothing before the first scan.
+    pub(crate) fn start_preview(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config), Some(report)) =
             (&state.session, &state.config, &self.report)
         else {
