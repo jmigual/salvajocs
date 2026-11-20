@@ -6,6 +6,8 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-20
+
 ### Added
 
 - The AppImage checks for updates at start and updates itself: **Update now** replaces the
@@ -59,6 +61,8 @@ All notable changes to salvajocs. The format follows
 
 ### Fixed
 
+- Scrolling the Backup tab no longer lags or spikes the CPU: each game's comparison icons are
+  worked out once, not on every frame.
 - In the list of games on the Restore tab, game names are left-aligned next to their checkbox
   and cut with "…" when they do not fit, instead of centered and running past the edge, and
   the checkboxes show their outline.
@@ -268,7 +272,8 @@ First release.
 - Custom games, Wine prefixes and cross-OS game pairs.
 - Windows installer with in-app updates, Windows zip, Linux AppImage and tarball, and crates.io.
 
-[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jmigual/salvajocs/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jmigual/salvajocs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jmigual/salvajocs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jmigual/salvajocs/compare/v0.3.1...v0.4.0

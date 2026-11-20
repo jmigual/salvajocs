@@ -52,6 +52,15 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.7.0" date="2026-11-20">
+      <description>
+        <p>The AppImage updates itself. The Backup tab compares saves across Linux and Windows
+        through the folder pairs, with Choose folders… for games it cannot match, and scrolls
+        without lag. A backup remembers the Wine prefix it came from, and a restore fills it in
+        again. The single-game restore plan is a file tree. The manifest status, the update
+        notice and Back up share one bar at the bottom.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-19">
       <description>
         <p>Restore several games in one go. The Restore tab shows the plan as soon as a snapshot
