@@ -16,11 +16,18 @@ password:
 
 Not tested: the `rustic` command line, a repository with a password, and `restic forget` or
 `restic prune` on a salvajocs repository. The Restore tab and the undo of a restore need the
-snapshots, so do not remove any without a copy of the repository.
+snapshots, so do not remove any with restic without a copy of the repository.
 
-Do not run `restic prune` while salvajocs may back up into the repository. salvajocs does not
-take restic's locks, and `restic prune` deletes unused data at once, so it can remove data a
-salvajocs backup running at the same time is about to use.
+## How salvajocs removes old backups
+
+If you set the [Old backups](settings.md#old-backups) rules in Settings, salvajocs forgets the
+snapshots they let go after each backup, then prunes. With the rules off it forgets nothing. Its
+prune marks unused data first and deletes it at least 23 hours later. salvajocs does not take
+restic's locks, and restic's locks do not stop it.
+
+Do not run `restic prune` while salvajocs may back up into the repository. `restic prune` deletes
+unused data at once, so it can remove data a salvajocs backup running at the same time is about to
+use.
 
 ## Opening the repository
 
@@ -39,14 +46,18 @@ restic -r /path/to/repository snapshots --tag salvajocs
 
 ## What a snapshot holds
 
-Each game is one snapshot, tagged `salvajocs` and `game:<slug>`. The saved folder is
-`/salvajocs/<slug>`, and it holds:
+Each game is one snapshot, tagged `salvajocs` and `game:<slug>`. The safety backup a restore
+makes first also has the tag `pre-restore`. The saved folder is `/salvajocs/<slug>`, and it holds:
 
 ```
 files/<Folder>/<path>    the save files
 salvajocs.json           where each folder came from, and the Wine prefix it was found in
 registry.json            registry keys, when the game has any
+hashes.json              the SHA-256 of every other file, and the size of the save files
 ```
+
+salvajocs reads `hashes.json` to see which files changed since the newest backup. Backups made
+before 0.6.0 do not have it, and salvajocs then compares size and modification time.
 
 `<Folder>` is one of `WinHome`, `WinDocuments`, `WinAppData`, `WinLocalAppData`,
 `WinLocalAppDataLow`, `WinPublic`, `WinProgramData`, `WinDir`, `Home`, `XdgData`, `XdgConfig`,
@@ -62,6 +73,23 @@ restic -r /path/to/repository restore <snapshot-id> --target /tmp/out
 
 `restore` gives you this staging tree, not the saves in their original places. Use salvajocs to put
 them back where the game reads them. It handles the user names, the prefixes and the registry.
+
+## Settings snapshots
+
+The repository also holds snapshots that are not game backups. They carry the tag
+`salvajocs-settings`, not `salvajocs`, so `--tag salvajocs` does not list them and the Restore tab
+does not show them.
+
+- The choices of what to back up for a game: tags `salvajocs-settings` and `settings:<slug>`,
+  folder `/salvajocs-settings/<slug>`, file `settings.json`.
+- The [Old backups](settings.md#old-backups) rules, shared by all games: tags
+  `salvajocs-settings` and `settings:retention`, folder `/salvajocs-settings/retention`, file
+  `retention.json`.
+
+salvajocs writes a new snapshot when a backup saves your choices for a game, and when you change
+the Old backups rules. It then forgets the older ones. If you remove the newest one with restic,
+you lose that setting: salvajocs then backs up every file of the game, or keeps every backup. To
+list them, use `--tag salvajocs-settings`.
 
 ## Writing with restic
 
