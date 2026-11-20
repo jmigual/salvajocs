@@ -298,6 +298,8 @@ Service `pcloud`. The form has every key of the service: `endpoint`, `username`,
 ## SFTP
 
 Service `sftp`. Not in Windows builds. The form has `endpoint`, `user`, `key` and `root`.
+On Windows, use an rclone remote of type `sftp`. See
+[Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |

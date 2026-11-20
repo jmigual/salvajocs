@@ -174,7 +174,8 @@ for what was tested.
   Engine rules exist for Unity and Godot only.
 - There is no scheduled or automatic backup.
 - The first start needs network access to get the game list. After that, a cached copy is used.
-- `opendal:sftp` is not available in Windows builds.
+- `opendal:sftp` is not available in Windows builds. Use an rclone remote of type `sftp`. See
+  [Troubleshooting](docs/guide/troubleshooting.md#sftp-is-missing-on-windows).
 - Undo restores what the restore overwrote. Files or keys it created stay.
 
 ## Documentation

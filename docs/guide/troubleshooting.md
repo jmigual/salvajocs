@@ -100,10 +100,26 @@ is named `steamuser`.
 
 ## sftp is missing on Windows
 
-The `sftp` service of the OpenDAL backend is not built for Windows. The backend list on Windows
-does not show it, and the dialog says so. A repository on `opendal:sftp` therefore cannot be used
-from a Windows build. Pick a backend that both systems have, such as a REST server, rclone or
-another cloud service.
+The `sftp` service of the OpenDAL backend is not built for Windows. It needs a Unix-only SSH
+library. The backend list on Windows does not show it, and the dialog says so. You cannot open the
+repository with `opendal:sftp` from a Windows build, but you can reach the same server folder with
+rclone.
+
+To reach the same SFTP server from Windows, use rclone:
+
+1. Install rclone on the Windows PC. It must be on your `PATH`.
+2. Run `rclone config`. Make a new remote of type `sftp`, and enter the host, the user and the
+   key or password of the server. rclone checks the server key only when `known_hosts_file` is
+   set in the remote. Set it to your `known_hosts` file to keep the check that `opendal:sftp`
+   does by default.
+3. In salvajocs, pick the **rclone remote** backend. Pick the remote in the **Remote** list, or
+   type `remote:path` in **Location**. Use the folder that the other machine uses. If the other
+   machine uses `root` `/srv/games`, type `remote:/srv/games`. Start the path with `/`, or rclone
+   reads it from the home folder.
+
+salvajocs starts `rclone serve restic` itself. The data on the server is the same, so a Linux PC
+can keep `opendal:sftp` on the same folder. See
+[rclone remote](advanced-options.md#rclone-remote) for the options.
 
 ## The Unity settings did not come across
 

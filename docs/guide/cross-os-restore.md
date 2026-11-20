@@ -41,7 +41,8 @@ Things to know:
 - A game's files that live in its install folder need the game to be found under a Steam library or
   a games folder you added in [Settings](settings.md#roots).
 - Both machines must reach the same repository. Do not use `opendal:sftp` if one machine is
-  Windows.
+  Windows. Use an rclone remote of type `sftp` on Windows instead. See
+  [Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
 
 ## Case 2: a native Linux build and a Windows build
 

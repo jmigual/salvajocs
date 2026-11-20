@@ -36,8 +36,9 @@ that holds a key or token. If a saved option has no field of its own, the list o
 
 If `rclone` is not installed, the rclone entry says so and you can still type the location.
 
-`sftp` does not exist in Windows builds. If you use two machines and one runs Windows, pick another
-backend. See [Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
+`sftp` does not exist in Windows builds. If you use two machines and one runs Windows, use an
+rclone remote of type `sftp` on Windows. See
+[Troubleshooting](troubleshooting.md#sftp-is-missing-on-windows).
 
 Four OpenDAL services are hidden because they do not make sense for backups: `memory` (data is
 lost on exit), `http` (read only), `ghac` (works only in GitHub Actions) and `fs` (use Local

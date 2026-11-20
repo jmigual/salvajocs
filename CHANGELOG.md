@@ -6,6 +6,10 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
+
 ## [0.7.0] - 2026-11-20
 
 ### Added
