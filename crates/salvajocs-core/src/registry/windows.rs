@@ -1,17 +1,18 @@
 //! The live Windows registry (HKCU only) as the normalized model of [`super`] (ADR-0006).
 //!
 //! Same contract as the Wine side: an export of key `K` holds `K` itself plus every key below
-//! it, and replacing deletes the subtree of each exported key before writing it. Value data
-//! that is not in canonical form (unterminated or odd-length strings, a `REG_DWORD` of 8 bytes)
-//! is kept as [`RegData::Other`] so it writes back byte for byte. Windows may append a NUL when
-//! writing an unterminated `REG_SZ`: the string is unchanged but the bytes are not exact.
+//! it, and replacing deletes the subtree of each exported key, except what a kept key owns,
+//! before writing it. Value data that is not in canonical form (unterminated or odd-length
+//! strings, a `REG_DWORD` of 8 bytes) is kept as [`RegData::Other`] so it writes back byte for
+//! byte. Windows may append a NUL when writing an unterminated `REG_SZ`: the string is unchanged
+//! but the bytes are not exact.
 
 use std::io;
 
 use windows_registry::{CURRENT_USER, Key, Type, Value};
 
 use super::wine::hkcu_relative;
-use super::{HKCU, RegData, RegValue, RegistryError, RegistryExport};
+use super::{HKCU, Owner, Owners, RegData, RegValue, RegistryError, RegistryExport};
 
 /// `HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)`, what a missing key reports.
 const NOT_FOUND: i32 = 0x8007_0002_u32 as i32;
@@ -56,26 +57,75 @@ pub fn export<S: AsRef<str>>(keys: &[S]) -> Result<RegistryExport, WindowsRegist
     Ok(export)
 }
 
-/// Deletes the subtree of every key in `export`, then writes the exported keys and values.
+/// Deletes the subtree of every key in `export`, except what a key of `kept` owns, then writes
+/// the exported keys and values (ADR-0026).
 ///
-/// All key paths are validated before anything is deleted. An empty export changes nothing. Not
-/// atomic: a failure after the deletes leaves the keys deleted or partly written, so callers
-/// back up the current state first.
-pub fn replace_subtrees(export: &RegistryExport) -> Result<(), WindowsRegistryError> {
+/// A key belongs to the deepest key of `export` or `kept` it is at or below. A key owned by
+/// `export` loses its values and is removed unless a key owned by `kept` lies below it; a key
+/// owned by `kept`, or by neither, is left as it is. All key paths of both are validated before
+/// anything is deleted, and a key in both is refused ([`RegistryError::KeptAndWritten`]). An
+/// empty export changes nothing. Not atomic: a failure after the deletes leaves the keys deleted
+/// or partly written, so callers back up the current state first.
+pub fn replace_subtrees(
+    export: &RegistryExport,
+    kept: &[String],
+) -> Result<(), WindowsRegistryError> {
     let keys = export
         .keys
         .keys()
         .map(|key| hkcu_relative(key).map(|relative| (key.as_str(), relative)))
         .collect::<Result<Vec<_>, _>>()?;
+    let kept = (kept.iter())
+        .map(|key| hkcu_relative(key))
+        .collect::<Result<Vec<_>, _>>()?;
+    let relatives: Vec<&str> = keys.iter().map(|(_, relative)| *relative).collect();
+    let owners = Owners::new(&relatives, &kept)?;
     // Delete every subtree first: a later delete would erase keys already written below it.
     for (key, relative) in &keys {
-        found(key, CURRENT_USER.remove_tree(relative))?;
+        if owners.kept_below(relative) {
+            clear(relative, &owners)?;
+        } else {
+            found(key, CURRENT_USER.remove_tree(relative))?;
+        }
     }
     for ((key, relative), values) in keys.iter().zip(export.keys.values()) {
         let target = os(key, CURRENT_USER.options().write().create().open(relative))?;
         for value in values {
             let (ty, bytes) = to_raw(&value.data);
             os(key, target.set_bytes(&value.name, ty, &bytes))?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes the values of the key `relative` (to HKCU), then each subkey below it that `owners`
+/// gives to a written key, keeping the kept keys and the keys above them. A missing key is
+/// skipped.
+fn clear(relative: &str, owners: &Owners) -> Result<(), WindowsRegistryError> {
+    let path = format!("{HKCU}\\{relative}");
+    let opened = CURRENT_USER.options().read().write().open(relative);
+    let Some(key) = found(&path, opened)? else {
+        return Ok(());
+    };
+    let values = stable(&path, || {
+        Ok(os(&path, key.values())?.map(|(name, _)| name).collect())
+    })?;
+    for name in values {
+        os(&path, key.remove_value(&name))?;
+    }
+    for name in stable(&path, || Ok(os(&path, key.keys())?.collect()))? {
+        let child = format!("{relative}\\{name}");
+        if owners.owner(&child) == Owner::Keep {
+            continue;
+        }
+        // A listed name that cannot be reopened (e.g. lossy UTF-16) must fail, not be skipped,
+        // as in `collect`: removing it would silently miss.
+        os(&path, key.open(&name))?;
+        if owners.kept_below(&child) {
+            clear(&child, owners)?;
+        } else {
+            // Through HKCU, whose handle has the DELETE right `RegDeleteTree` needs.
+            found(&path, CURRENT_USER.remove_tree(&child))?;
         }
     }
     Ok(())

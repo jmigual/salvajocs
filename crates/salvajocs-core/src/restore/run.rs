@@ -20,7 +20,7 @@ use crate::manifest::{CustomGame, GameEntry, Manifest, Pair, merge_custom};
 #[cfg(windows)]
 use crate::registry::windows::WindowsRegistryError;
 use crate::registry::wine::RegFile;
-use crate::registry::{RegistryError, RegistryExport};
+use crate::registry::{RegistryError, RegistryExport, is_under, lowered_below};
 use crate::scan::{Environment, FoundFile, GameScan, RegistrySource};
 use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo, Storage, StorageError};
 
@@ -666,7 +666,8 @@ pub fn run(
         }
     }
     if let Some((export, ctx)) = &plan.registry {
-        existing.registry_keys = export.keys.keys().cloned().collect();
+        // Whole subtrees, kept keys below included, so an undo needs no record of them.
+        existing.registry_keys = safety_keys(export, &plan.registry_kept, ctx);
         existing.registry_source = registry_source(&existing.registry_keys, ctx);
     }
     let safety_backup = if existing.files.is_empty() && existing.registry_source.is_none() {
@@ -685,7 +686,8 @@ pub fn run(
     let files = (plan.writes.iter().zip(checks))
         .map(|(write, check)| check.and_then(|_| apply_file(write)))
         .collect();
-    let registry = (plan.registry.as_ref()).map(|(export, ctx)| apply_registry(export, ctx));
+    let registry = (plan.registry.as_ref())
+        .map(|(export, ctx)| apply_registry(export, &plan.registry_kept, ctx));
     Ok(RestoreReport {
         safety_backup,
         files,
@@ -732,6 +734,69 @@ fn registry_source(keys: &[String], ctx: &Context) -> Option<RegistrySource> {
         // Off Windows the backup reports that the live registry cannot be read.
         #[cfg(not(windows))]
         Context::WindowsNative(_) => Some(RegistrySource::Windows),
+        Context::Linux(_) => None,
+    }
+}
+
+/// The keys the safety backup exports for a registry restore into `ctx` that writes `write` and
+/// keeps `kept`: every written key and, for a written key `ctx` lacks, its nearest ancestor that
+/// `ctx` has within the plan's keys, unless a written key covers it (ADR-0026). An undo then
+/// replaces that ancestor whole and so removes the key the restore created.
+fn safety_keys(write: &RegistryExport, kept: &[String], ctx: &Context) -> Vec<String> {
+    let mut keys: Vec<String> = write.keys.keys().cloned().collect();
+    // Without kept keys, every ancestor in the plan is written and covers the new key.
+    if kept.is_empty() {
+        return keys;
+    }
+    let plan: Vec<&String> = write.keys.keys().chain(kept).collect();
+    let roots: Vec<&str> = (plan.iter())
+        .filter(|key| {
+            !plan
+                .iter()
+                .any(|above| above.len() < key.len() && is_under(key, above))
+        })
+        .map(|key| key.as_str())
+        .collect();
+    // A source that cannot be read adds nothing: the safety backup fails on it anyway.
+    let Some(here) = read_keys(&roots, ctx) else {
+        return keys;
+    };
+    let here: Vec<String> = here.keys.keys().map(|key| key.to_lowercase()).collect();
+    let exists = |key: &str| {
+        let key = key.to_lowercase();
+        (here.iter()).any(|found| *found == key || lowered_below(found, &key))
+    };
+    for key in write.keys.keys().filter(|key| !exists(key)) {
+        let Some(root) = roots.iter().find(|root| is_under(key, root)) else {
+            continue;
+        };
+        let ancestor = (key.rmatch_indices('\\').map(|(at, _)| &key[..at]))
+            .take_while(|above| is_under(above, root))
+            .find(|above| exists(above));
+        if let Some(ancestor) = ancestor
+            && !write.keys.keys().any(|written| is_under(ancestor, written))
+        {
+            keys.push(ancestor.to_owned());
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// `keys` with everything below them as `ctx` holds them; `None` when they cannot be read.
+fn read_keys(keys: &[&str], ctx: &Context) -> Option<RegistryExport> {
+    match ctx {
+        Context::WinePrefix { prefix, .. } => {
+            let text = fs::read_to_string(prefix.join("user.reg")).ok()?;
+            RegFile::parse(&text)
+                .and_then(|file| file.export(keys))
+                .ok()
+        }
+        #[cfg(windows)]
+        Context::WindowsNative(_) => crate::registry::windows::export(keys).ok(),
+        #[cfg(not(windows))]
+        Context::WindowsNative(_) => None,
         Context::Linux(_) => None,
     }
 }
@@ -874,7 +939,11 @@ fn apply_file(write: &Write) -> Result<(), ApplyError> {
     })
 }
 
-fn apply_registry(export: &RegistryExport, ctx: &Context) -> Result<(), ApplyError> {
+fn apply_registry(
+    export: &RegistryExport,
+    kept: &[String],
+    ctx: &Context,
+) -> Result<(), ApplyError> {
     match ctx {
         Context::WinePrefix { prefix, .. } => {
             let path = prefix.join("user.reg");
@@ -883,14 +952,14 @@ fn apply_registry(export: &RegistryExport, ctx: &Context) -> Result<(), ApplyErr
                 path: path.clone(),
                 source,
             })?;
-            (file.replace_subtrees(export)).map_err(|source| ApplyError::WineRegistry {
+            (file.replace_subtrees(export, kept)).map_err(|source| ApplyError::WineRegistry {
                 path: path.clone(),
                 source,
             })?;
             replace(&path, |out| out.write_all(file.to_string().as_bytes()))
         }
         #[cfg(windows)]
-        Context::WindowsNative(_) => Ok(crate::registry::windows::replace_subtrees(export)?),
+        Context::WindowsNative(_) => Ok(crate::registry::windows::replace_subtrees(export, kept)?),
         _ => Err(ApplyError::NoRegistry),
     }
 }

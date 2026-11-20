@@ -2865,6 +2865,149 @@ fn a_batch_game_without_its_registry_keys_restores_while_wine_runs() {
     assert_eq!(user_reg, co_user_reg("old"));
 }
 
+/// The block of `Software\Co\Reg` or of its subkey `child` with `v` = `<age>-<name>`, `name`
+/// being the child in lowercase or `reg`.
+fn slot_block(age: &str, child: &str) -> String {
+    let (path, name) = match child {
+        "" => (r"Software\\Co\\Reg".to_owned(), "reg".to_owned()),
+        _ => (format!(r"Software\\Co\\Reg\\{child}"), child.to_lowercase()),
+    };
+    format!("[{path}] 1\n#time=0\n\"v\"=\"{age}-{name}\"\n")
+}
+
+/// A `user.reg` holding `Software\Co\Reg` with `Slot1` and `Slot2`, each value `<age>-…`; with
+/// `local`, also `Reg\Local`, which only the restore's target has.
+fn slots_user_reg(age: &str, local: bool) -> String {
+    let children: &[&str] = if local {
+        &["", "Local", "Slot1", "Slot2"]
+    } else {
+        &["", "Slot1", "Slot2"]
+    };
+    let blocks: Vec<String> = children
+        .iter()
+        .map(|child| slot_block(age, child))
+        .collect();
+    format!("WINE REGISTRY Version 2\n\n{}\n", blocks.join("\n"))
+}
+
+/// Reg, a Windows build in a prefix with a long path that declares `Software\Co\Reg`, backed up
+/// with a save and `new` values of `Reg`, `Slot1` and `Slot2`, while the prefix holds them with
+/// `old` values and `Reg\Local`; and Beta, a native game. Returns the prefix.
+fn slot_games(tmp: &TempDir) -> (Harness<'static, App>, PathBuf) {
+    let prefix = long_prefix(tmp);
+    put(&prefix.join("user.reg"), &slots_user_reg("old", true));
+    let source = tmp.path().join("source-pfx");
+    put(&source.join("user.reg"), &slots_user_reg("new", false));
+    let mut reg = custom("Reg", &["<winAppData>/Reg"], Some(&prefix), Vec::new());
+    let key = "HKEY_CURRENT_USER/Software/Co/Reg".to_owned();
+    reg.entry.registry.insert(key, RegistryRule::default());
+    let mut reg_scan = scan(
+        tmp,
+        "Reg",
+        &[(Base::WinAppData, "Reg/save.dat")],
+        &[(Base::WinAppData, "Reg")],
+    );
+    reg_scan.registry_keys = vec![REG_KEY.into()];
+    reg_scan.registry_source = Some(RegistrySource::WinePrefix(source));
+    let (beta, beta_scan) = native(tmp, "Beta", &["Beta/save.dat"]);
+    let (harness, _env) = open_tab(tmp, vec![reg, beta], &[reg_scan, beta_scan]);
+    (harness, prefix)
+}
+
+/// Asserts that `prefix` holds the old `Slot1` byte for byte, the new `Reg` and `Slot2`, and no
+/// `Local`, and that Reg's safety backup holds the old `Slot1`.
+fn assert_slot1_left_alone(tmp: &TempDir, prefix: &Path) {
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    assert!(user_reg.contains(&slot_block("old", "Slot1")), "{user_reg}");
+    assert!(
+        user_reg.contains("new-reg") && user_reg.contains("new-slot2"),
+        "{user_reg}"
+    );
+    assert!(
+        !user_reg.contains("old-reg") && !user_reg.contains("old-slot2"),
+        "{user_reg}"
+    );
+    assert!(
+        !user_reg.contains("Local"),
+        "owned by the ticked Reg: {user_reg}"
+    );
+    let safety = snapshots(tmp, "pre-restore");
+    let safety = safety
+        .iter()
+        .find(|snapshot| snapshot.label == "Reg")
+        .unwrap();
+    let path = format!(
+        "/salvajocs/{}/registry.json",
+        salvajocs_core::slug::slug("Reg")
+    );
+    let saved = open_repo(tmp).read_file(&safety.id, &path).unwrap();
+    let saved = String::from_utf8(saved).unwrap();
+    assert!(
+        saved.contains("old-slot1") && saved.contains("old-local"),
+        "{saved}"
+    );
+}
+
+#[test]
+fn an_unticked_registry_subkey_is_left_as_it_is() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = slot_games(&tmp);
+    select(&mut harness, "Reg");
+    preview(&mut harness);
+    assert!(shows(&harness, "Registry: 3 keys into"));
+
+    click(&mut harness, &format!("Open {REG_KEY}"));
+    click(&mut harness, "Slot1");
+    assert!(shows(&harness, "Registry: 2 keys into"));
+    assert!(shows(&harness, "2 of 3 keys"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Reg"));
+
+    assert_slot1_left_alone(&tmp, &prefix);
+}
+
+#[test]
+fn a_ticked_subkey_under_an_unticked_key_is_restored_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = slot_games(&tmp);
+    select(&mut harness, "Reg");
+    preview(&mut harness);
+
+    click(&mut harness, &format!("Open {REG_KEY}"));
+    click(&mut harness, &format!("Values of {REG_KEY}"));
+    assert!(shows(&harness, "Registry: 2 keys into"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Reg"));
+
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    for child in ["", "Local"] {
+        assert!(user_reg.contains(&slot_block("old", child)), "{user_reg}");
+    }
+    assert!(
+        user_reg.contains("new-slot1") && user_reg.contains("new-slot2"),
+        "{user_reg}"
+    );
+    assert!(
+        !user_reg.contains("old-slot1") && !user_reg.contains("old-slot2"),
+        "{user_reg}"
+    );
+}
+
+#[test]
+fn batch_leaves_an_unticked_registry_subkey_as_it_is() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = slot_games(&tmp);
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, &format!("Open {REG_KEY}"));
+    click(&mut harness, "Slot1");
+    assert!(shows(&harness, "Registry: 2 keys into"));
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    assert_slot1_left_alone(&tmp, &prefix);
+}
+
 /// Beta, a native game, and Stray, whose only backed-up file lies outside its declared folder,
 /// so its plan skips it and has nothing to restore.
 fn with_nothing_to_restore(tmp: &TempDir) -> Harness<'static, App> {

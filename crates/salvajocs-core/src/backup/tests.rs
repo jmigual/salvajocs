@@ -689,7 +689,7 @@ fn registry_exported_from_recorded_windows_source() {
             data: RegData::Sz("live".into()),
         }],
     );
-    crate::registry::windows::replace_subtrees(&live).unwrap();
+    crate::registry::windows::replace_subtrees(&live, &[]).unwrap();
     let mut scan = game("Foo", vec![]);
     scan.registry_keys = vec![key];
     scan.registry_source = Some(RegistrySource::Windows);

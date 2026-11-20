@@ -163,6 +163,12 @@ pub struct RestorePlan {
     pub writes: Vec<Write>,
     /// The registry export and the Windows target it goes into.
     pub registry: Option<(RegistryExport, Context)>,
+    /// Keys of the Windows target the registry restore leaves as they are, as
+    /// `registry::windows::replace_subtrees` and [`RegFile::replace_subtrees`] take them
+    /// (ADR-0026). Empty from [`Self::new`] and [`plan`].
+    ///
+    /// [`RegFile::replace_subtrees`]: crate::registry::wine::RegFile::replace_subtrees
+    pub registry_kept: Vec<String>,
     /// Items not restored, with the reason.
     pub skipped: Vec<Skipped>,
     /// Whether a write goes through a cross-build mapping, so the other build's save format
@@ -209,6 +215,7 @@ impl RestorePlan {
         Self {
             writes,
             registry,
+            registry_kept: Vec::new(),
             skipped,
             cross_build,
             notes,
@@ -571,6 +578,7 @@ pub fn plan(
     let mut plan = RestorePlan {
         writes: Vec::new(),
         registry: None,
+        registry_kept: Vec::new(),
         skipped: Vec::new(),
         cross_build: false,
         notes: Vec::new(),

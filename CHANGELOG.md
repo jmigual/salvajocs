@@ -14,11 +14,15 @@ All notable changes to salvajocs. The format follows
   a byte order mark (BOM), and for a text file the lines that differ (a last line without a line
   ending is marked), or that only the line endings, the BOM or both differ. A file over 10 MiB
   shows no lines until you click **Show anyway**.
-- In the restore plan, of one game or of several, a checkbox on each file, folder and registry
-  key chooses what is restored. Everything starts ticked. What you untick is neither written nor
-  in the safety backup. Unticking a file the safety backup cannot read lets the rest of the game
-  restore, and unticking every registry key lets the files restore while Wine runs. A new plan
-  ticks everything again.
+- In the restore plan, of one game or of several, a checkbox on each file and folder, and on each
+  registry key and subkey, chooses what is restored. Registry keys show as a tree of folders,
+  whose **(values)** row ticks a key without its subkeys. Everything starts ticked. What you
+  untick is not written; an unticked registry key keeps its values and subkeys, also the ones
+  only on this PC. An unticked file, or registry key with no ticked key above it, is not in the
+  safety backup; an unticked registry key under a ticked one, or above a key the restore
+  creates, is, so an undo puts it back as it was before the restore. Unticking a file the
+  safety backup cannot read lets the rest of the game restore, and unticking every registry key
+  lets the files restore while Wine runs. A new plan ticks everything again.
 - An **About** section at the end of the Settings tab shows the version, the commit, the Rust
   compiler, the target, the build profile and the storage library version, with a link to the
   release notes and a **Copy** button for bug reports.
@@ -29,8 +33,13 @@ All notable changes to salvajocs. The format follows
   of each mapped file, and `changes::Baseline::backed_up` finds a file of the backup. The new
   `changes::details` module reads and compares one file; it uses the `similar` crate.
   `restore::Listed::backed_up` finds the snapshot's copy of a planned write.
-- `salvajocs-core`: `registry::RegistryExport::roots` lists the keys of an export that have no
-  ancestor key in it, and `remove_subtree` removes one with every key below it.
+- `salvajocs-core`: `registry::RegistryExport::tree` lists the keys of an export as
+  `registry::KeyNode`s, with the keys a Wine export leaves out between them, and `select` gives
+  what a restore of the ticked ones writes and keeps. `registry::wine::RegFile::replace_subtrees`
+  and `registry::windows::replace_subtrees` take the kept keys, whose keys they leave as they
+  are (a breaking change), and refuse a key both written and kept with the new
+  `RegistryError::KeptAndWritten`. `restore::RestorePlan::registry_kept` carries the kept keys
+  to `restore::run`.
 - The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.

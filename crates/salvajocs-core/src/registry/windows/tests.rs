@@ -105,7 +105,7 @@ fn windows_registry_round_trip() {
         (key.path("Empty"), vec![]),
     ]);
 
-    replace_subtrees(&expected).unwrap();
+    replace_subtrees(&expected, &[]).unwrap();
 
     assert_eq!(key.export(), expected);
 }
@@ -113,17 +113,20 @@ fn windows_registry_round_trip() {
 #[test]
 fn replace_deletes_the_old_subtree() {
     let key = TestKey::new();
-    replace_subtrees(&export_of(vec![
-        (key.path(""), vec![value("stale", RegData::Dword(1))]),
-        (key.path("Gone"), vec![value("x", RegData::Dword(2))]),
-    ]))
+    replace_subtrees(
+        &export_of(vec![
+            (key.path(""), vec![value("stale", RegData::Dword(1))]),
+            (key.path("Gone"), vec![value("x", RegData::Dword(2))]),
+        ]),
+        &[],
+    )
     .unwrap();
 
     let new = export_of(vec![(
         key.path(""),
         vec![value("fresh", RegData::Dword(3))],
     )]);
-    replace_subtrees(&new).unwrap();
+    replace_subtrees(&new, &[]).unwrap();
 
     assert_eq!(key.export(), new);
 }
@@ -137,11 +140,14 @@ fn export_of_an_absent_key_is_empty() {
 #[test]
 fn export_of_a_subkey_excludes_its_siblings() {
     let key = TestKey::new();
-    replace_subtrees(&export_of(vec![
-        (key.path(""), vec![]),
-        (key.path("A"), vec![value("a", RegData::Dword(1))]),
-        (key.path("B"), vec![value("b", RegData::Dword(2))]),
-    ]))
+    replace_subtrees(
+        &export_of(vec![
+            (key.path(""), vec![]),
+            (key.path("A"), vec![value("a", RegData::Dword(1))]),
+            (key.path("B"), vec![value("b", RegData::Dword(2))]),
+        ]),
+        &[],
+    )
     .unwrap();
 
     let only_a = export(&[key.path("A")]).unwrap();
@@ -152,10 +158,13 @@ fn export_of_a_subkey_excludes_its_siblings() {
 #[test]
 fn the_exported_root_keeps_the_callers_spelling_and_children_the_stored_one() {
     let key = TestKey::new();
-    replace_subtrees(&export_of(vec![(
-        key.path("Mixed\\Child"),
-        vec![value("v", RegData::Dword(1))],
-    )]))
+    replace_subtrees(
+        &export_of(vec![(
+            key.path("Mixed\\Child"),
+            vec![value("v", RegData::Dword(1))],
+        )]),
+        &[],
+    )
     .unwrap();
 
     let root = key.path("mixed").to_uppercase();
@@ -188,16 +197,19 @@ fn a_listing_that_never_settles_is_an_error() {
 fn replace_leaves_siblings_and_prefix_sharing_keys_alone() {
     let key = TestKey::new();
     let sibling = |name: &str| (key.path(name), vec![value(name, RegData::Dword(9))]);
-    replace_subtrees(&export_of(vec![
-        sibling("A"),
-        sibling("B"),
-        sibling("AB"),
-        (key.path("A\\Child"), vec![]),
-    ]))
+    replace_subtrees(
+        &export_of(vec![
+            sibling("A"),
+            sibling("B"),
+            sibling("AB"),
+            (key.path("A\\Child"), vec![]),
+        ]),
+        &[],
+    )
     .unwrap();
 
     let new_a = export_of(vec![(key.path("A"), vec![value("new", RegData::Dword(1))])]);
-    replace_subtrees(&new_a).unwrap();
+    replace_subtrees(&new_a, &[]).unwrap();
 
     let all = key.export();
     assert_eq!(all.keys[&key.path("A")], new_a.keys[&key.path("A")]);
@@ -270,7 +282,7 @@ fn non_canonical_values_are_kept_as_other() {
     }
 
     // Writing the export back leaves the bytes unchanged.
-    replace_subtrees(&exported).unwrap();
+    replace_subtrees(&exported, &[]).unwrap();
     let restored = raw_values(
         &CURRENT_USER.open(&key.relative).unwrap(),
         cases.map(|(name, ..)| name),
@@ -295,7 +307,7 @@ fn non_canonical_values_are_kept_as_other() {
 fn invalid_keys_are_refused_before_anything_is_deleted() {
     let key = TestKey::new();
     let kept = export_of(vec![(key.path(""), vec![value("v", RegData::Dword(1))])]);
-    replace_subtrees(&kept).unwrap();
+    replace_subtrees(&kept, &[]).unwrap();
 
     for bad in [
         HKCU.to_owned(),
@@ -309,7 +321,7 @@ fn invalid_keys_are_refused_before_anything_is_deleted() {
         ));
         let mixed = export_of(vec![(key.path(""), vec![]), (bad, vec![])]);
         assert!(matches!(
-            replace_subtrees(&mixed),
+            replace_subtrees(&mixed, &[]),
             Err(WindowsRegistryError::Key(RegistryError::InvalidKey { .. }))
         ));
     }
@@ -321,4 +333,169 @@ fn invalid_keys_are_refused_before_anything_is_deleted() {
     ));
 
     assert_eq!(key.export(), kept);
+}
+
+/// The children of [`old_tree`]: `Here`, `Keep` (holding `Deep` and `Here`) and `Swap`.
+const OLD_CHILDREN: [&str; 5] = ["Here", "Keep", "Keep\\Deep", "Keep\\Here", "Swap"];
+
+fn old_values(child: &str) -> Vec<RegValue> {
+    let old = value("old", RegData::Dword(1));
+    match child {
+        "" => vec![value("", RegData::Sz("default".into())), old],
+        _ => vec![old],
+    }
+}
+
+/// Writes the test key, with a default value, and [`OLD_CHILDREN`], each holding `old`.
+fn old_tree(key: &TestKey) {
+    let keys = std::iter::once("").chain(OLD_CHILDREN);
+    let tree = export_of(
+        keys.map(|child| (key.path(child), old_values(child)))
+            .collect(),
+    );
+    replace_subtrees(&tree, &[]).unwrap();
+}
+
+/// An export of `children` of the test key (`""` for itself), each holding `new`.
+fn new_values(key: &TestKey, children: &[&str]) -> RegistryExport {
+    let new = || vec![value("new", RegData::Dword(2))];
+    export_of(
+        children
+            .iter()
+            .map(|child| (key.path(child), new()))
+            .collect(),
+    )
+}
+
+/// The test key's export after a replace: `old` children as [`old_tree`] wrote them, `new` ones
+/// as [`new_values`] does, and `empty` ones without values.
+fn expected(key: &TestKey, old: &[&str], new: &[&str], empty: &[&str]) -> RegistryExport {
+    let mut want = new_values(key, new);
+    for child in old {
+        want.keys.insert(key.path(child), old_values(child));
+    }
+    for child in empty {
+        want.keys.insert(key.path(child), Vec::new());
+    }
+    want
+}
+
+fn kept(key: &TestKey, children: &[&str]) -> Vec<String> {
+    children.iter().map(|child| key.path(child)).collect()
+}
+
+#[test]
+fn replace_keeps_an_unticked_subkey_with_its_values_and_subkeys() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    replace_subtrees(&new_values(&key, &[""]), &kept(&key, &["Keep"])).unwrap();
+
+    let old = ["Keep", "Keep\\Deep", "Keep\\Here"];
+    assert_eq!(key.export(), expected(&key, &old, &[""], &[]));
+}
+
+#[test]
+fn replace_writes_the_ticked_sibling_of_a_kept_key() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    let write = new_values(&key, &["", "Swap"]);
+    replace_subtrees(&write, &kept(&key, &["Keep"])).unwrap();
+
+    let old = ["Keep", "Keep\\Deep", "Keep\\Here"];
+    assert_eq!(key.export(), expected(&key, &old, &["", "Swap"], &[]));
+}
+
+#[test]
+fn replace_deletes_keys_only_here_under_a_ticked_key_and_keeps_them_under_a_kept_one() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    let write = new_values(&key, &["", "Keep\\Deep"]);
+    replace_subtrees(&write, &kept(&key, &["Keep"])).unwrap();
+
+    let old = ["Keep", "Keep\\Here"];
+    assert_eq!(key.export(), expected(&key, &old, &["", "Keep\\Deep"], &[]));
+}
+
+#[test]
+fn replace_writes_a_ticked_key_below_a_kept_one() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    let write = new_values(&key, &["Keep\\Deep"]);
+    replace_subtrees(&write, &kept(&key, &[""])).unwrap();
+
+    let old = ["", "Here", "Keep", "Keep\\Here", "Swap"];
+    assert_eq!(key.export(), expected(&key, &old, &["Keep\\Deep"], &[]));
+}
+
+#[test]
+fn replace_matches_kept_keys_case_insensitively() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    let mut write = RegistryExport::default();
+    let values = vec![value("new", RegData::Dword(2))];
+    write.keys.insert(key.path("").to_uppercase(), values);
+    replace_subtrees(&write, &[key.path("keep").to_lowercase()]).unwrap();
+
+    let old = ["Keep", "Keep\\Deep", "Keep\\Here"];
+    assert_eq!(key.export(), expected(&key, &old, &[""], &[]));
+}
+
+#[test]
+fn replace_with_a_kept_key_equal_to_an_export_key_changes_nothing() {
+    let key = TestKey::new();
+    old_tree(&key);
+    let before = key.export();
+
+    let write = new_values(&key, &["", "Keep"]);
+    let result = replace_subtrees(&write, &[key.path("KEEP")]);
+
+    assert!(matches!(
+        result,
+        Err(WindowsRegistryError::Key(
+            RegistryError::KeptAndWritten { .. }
+        ))
+    ));
+    assert_eq!(key.export(), before);
+}
+
+#[test]
+fn replace_validates_kept_keys_before_changes() {
+    let key = TestKey::new();
+    old_tree(&key);
+    let before = key.export();
+
+    let write = new_values(&key, &[""]);
+    for bad in [
+        HKCU.to_owned(),
+        key.path("A\\\\B"),
+        format!("{}\\", key.path("")),
+    ] {
+        assert!(matches!(
+            replace_subtrees(&write, &[bad]),
+            Err(WindowsRegistryError::Key(RegistryError::InvalidKey { .. }))
+        ));
+    }
+    assert!(matches!(
+        replace_subtrees(&write, &["HKEY_LOCAL_MACHINE\\Software".to_owned()]),
+        Err(WindowsRegistryError::Key(
+            RegistryError::UnsupportedRoot { .. }
+        ))
+    ));
+    assert_eq!(key.export(), before);
+}
+
+#[test]
+fn an_owned_key_with_a_kept_descendant_loses_its_old_values_but_stays() {
+    let key = TestKey::new();
+    old_tree(&key);
+
+    replace_subtrees(&new_values(&key, &[""]), &kept(&key, &["Keep\\Deep"])).unwrap();
+
+    let want = expected(&key, &["Keep\\Deep"], &[""], &["Keep"]);
+    assert_eq!(key.export(), want);
 }

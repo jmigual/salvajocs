@@ -30,6 +30,9 @@ pub enum RegistryError {
     /// A key path is the HKCU root itself or has an empty element (doubled or trailing `\`).
     #[error("invalid key path: {key}")]
     InvalidKey { key: String },
+    /// A replace was asked to both write and keep `key` (ADR-0026).
+    #[error("registry key is both written and kept: {key}")]
+    KeptAndWritten { key: String },
 }
 
 /// A registry value's data, tagged by Windows value type.
@@ -82,28 +85,167 @@ pub struct RegistryExport {
 }
 
 impl RegistryExport {
-    /// The keys with no ancestor key in the export, in map order: the declared keys as backed
-    /// up. Every key lies under exactly one root; of keys equal but for case, the first is it.
-    ///
-    /// Roots are disjoint, so [`Self::remove_subtree`] of one leaves the others whole, and a
-    /// restore of the rest replaces nothing below the removed root.
-    pub fn roots(&self) -> Vec<&str> {
-        let keys: Vec<&str> = self.keys.keys().map(String::as_str).collect();
-        let below_another = |at: usize, key: &str| {
-            (keys.iter().enumerate()).any(|(other_at, other)| {
-                other_at != at && is_under(key, other) && (other_at < at || !is_under(other, key))
-            })
-        };
-        (keys.iter().enumerate())
-            .filter(|&(at, key)| !below_another(at, key))
-            .map(|(_, key)| *key)
-            .collect()
+    /// The export's keys as a tree, in preorder: every key, plus each missing key between a key
+    /// and its nearest ancestor in the export (an added node: a Wine export leaves out a
+    /// valueless key with subkeys). Nothing is added above a key without an ancestor. Keys equal
+    /// but for case are one node, matched as the restore matches them; siblings sort by their
+    /// lowercase elements, so `a` comes before `a-b`.
+    pub fn tree(&self) -> Vec<KeyNode> {
+        // Keyed by lowercase elements: case variants merge and every subtree is contiguous.
+        let mut nodes: BTreeMap<Vec<String>, (String, Vec<String>)> = BTreeMap::new();
+        for key in self.keys.keys() {
+            let folded = key.to_lowercase().split('\\').map(String::from).collect();
+            let node = nodes
+                .entry(folded)
+                .or_insert_with(|| (key.clone(), Vec::new()));
+            node.1.push(key.clone());
+        }
+        let present: Vec<(Vec<String>, String)> = (nodes.iter())
+            .map(|(folded, (key, _))| (folded.clone(), key.clone()))
+            .collect();
+        for (folded, key) in present {
+            let nearest = (1..folded.len())
+                .rev()
+                .find(|&n| nodes.contains_key(&folded[..n]));
+            let Some(ancestor) = nearest else {
+                continue;
+            };
+            let elements: Vec<&str> = key.split('\\').collect();
+            for n in ancestor + 1..folded.len() {
+                (nodes.entry(folded[..n].to_vec()))
+                    .or_insert_with(|| (elements[..n].join("\\"), Vec::new()));
+            }
+        }
+        let mut tree: Vec<KeyNode> = Vec::with_capacity(nodes.len());
+        let mut open: Vec<(usize, Vec<String>)> = Vec::new();
+        for (folded, (key, keys)) in nodes {
+            while let Some((at, above)) = open.last() {
+                if folded.starts_with(above) {
+                    break;
+                }
+                tree[*at].end = tree.len();
+                open.pop();
+            }
+            open.push((tree.len(), folded));
+            tree.push(KeyNode {
+                key,
+                keys,
+                depth: open.len() - 1,
+                end: 0,
+            });
+        }
+        for (at, _) in open {
+            tree[at].end = tree.len();
+        }
+        tree
     }
 
-    /// Removes `root` and every key below it, matching whole `\` elements with case ignored, as
-    /// the restore's subtree replace does.
-    pub fn remove_subtree(&mut self, root: &str) {
-        self.keys.retain(|key, _| !is_under(key, root));
+    /// What a restore of the ticked nodes of `tree` writes, and the keys it keeps (ADR-0026):
+    /// the export of every ticked node with its values, under all of its spellings, and one
+    /// spelling of every unticked node. A ticked added node is written, without values, only
+    /// when its parent is unticked; under a ticked parent it would change nothing.
+    ///
+    /// `tree` must be [`Self::tree`] of this export and `ticked` hold one tick per node.
+    ///
+    /// # Panics
+    /// When `ticked` and `tree` differ in length, or `tree` holds a key this export does not.
+    pub fn select(&self, tree: &[KeyNode], ticked: &[bool]) -> (RegistryExport, Vec<String>) {
+        assert_eq!(tree.len(), ticked.len(), "one tick per node");
+        let mut write = RegistryExport::default();
+        let mut kept = Vec::new();
+        for (at, node) in tree.iter().enumerate() {
+            if !ticked[at] {
+                kept.push(node.key.clone());
+            } else if node.keys.is_empty() {
+                let parent = tree[..at]
+                    .iter()
+                    .rposition(|above| above.depth < node.depth);
+                if parent.is_some_and(|parent| !ticked[parent]) {
+                    write.keys.insert(node.key.clone(), Vec::new());
+                }
+            } else {
+                for key in &node.keys {
+                    write.keys.insert(key.clone(), self.keys[key].clone());
+                }
+            }
+        }
+        (write, kept)
+    }
+}
+
+/// One key of [`RegistryExport::tree`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeyNode {
+    /// The full key path, as the export first spells it.
+    pub key: String,
+    /// The export's spellings of the key, which differ only in case; empty for an added node.
+    pub keys: Vec<String>,
+    /// How many nodes lie above it.
+    pub depth: usize,
+    /// The index past its subtree: the nodes below it are those before `end`.
+    pub end: usize,
+}
+
+/// What owns a key of the target in a replace (ADR-0026).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// A written key: the target key loses its values, and goes unless it holds a kept key.
+    Write,
+    /// A kept key: the target key stays as it is.
+    Keep,
+    /// No key of the replace: the target key stays as it is.
+    None,
+}
+
+/// The written and kept keys of a replace, lowercased once.
+pub(crate) struct Owners {
+    write: Vec<String>,
+    kept: Vec<String>,
+}
+
+impl Owners {
+    /// The owners of a replace that writes `write` and keeps `kept`, paths relative to HKCU.
+    /// Refuses a key in both, ignoring case, with [`RegistryError::KeptAndWritten`].
+    pub(crate) fn new(write: &[&str], kept: &[&str]) -> Result<Owners, RegistryError> {
+        let lower = |keys: &[&str]| {
+            keys.iter()
+                .map(|key| key.to_lowercase())
+                .collect::<Vec<_>>()
+        };
+        let owners = Owners {
+            write: lower(write),
+            kept: lower(kept),
+        };
+        if let Some(both) = (owners.kept.iter()).position(|key| owners.write.contains(key)) {
+            let key = format!("{HKCU}\\{}", kept[both]);
+            return Err(RegistryError::KeptAndWritten { key });
+        }
+        Ok(owners)
+    }
+
+    /// The owner of `path`: the deepest written or kept key it is at or below.
+    pub(crate) fn owner(&self, path: &str) -> Owner {
+        let path = path.to_lowercase();
+        let deepest = |keys: &[String]| {
+            (keys.iter())
+                .filter(|key| path == **key || lowered_below(&path, key))
+                .map(String::len)
+                .max()
+        };
+        match (deepest(&self.write), deepest(&self.kept)) {
+            (Some(write), Some(kept)) if kept > write => Owner::Keep,
+            (Some(_), _) => Owner::Write,
+            (None, Some(_)) => Owner::Keep,
+            (None, None) => Owner::None,
+        }
+    }
+
+    /// Whether a kept key lies strictly below `path`.
+    #[cfg(windows)]
+    pub(crate) fn kept_below(&self, path: &str) -> bool {
+        let path = path.to_lowercase();
+        self.kept.iter().any(|key| lowered_below(key, &path))
     }
 }
 
@@ -112,8 +254,13 @@ impl RegistryExport {
 pub(crate) fn is_under(path: &str, root: &str) -> bool {
     // Unicode lowercase approximates Wine's uppercase table; exotic names may differ.
     let (path, root) = (path.to_lowercase(), root.to_lowercase());
-    path.strip_prefix(&root)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('\\'))
+    path == root || lowered_below(&path, &root)
+}
+
+/// Whether the lowercased key `path` lies strictly below the lowercased key `root`.
+pub(crate) fn lowered_below(path: &str, root: &str) -> bool {
+    path.strip_prefix(root)
+        .is_some_and(|rest| rest.starts_with('\\'))
 }
 
 #[cfg(test)]
@@ -153,59 +300,147 @@ mod tests {
         assert!(json.contains(r#""kind":"multi_sz""#));
     }
 
-    /// An export of the given keys, each without values.
+    fn full(key: &str) -> String {
+        format!("{HKCU}\\{key}")
+    }
+
+    /// An export of the given keys, each with one value naming its spelling.
     fn export_of(keys: &[&str]) -> RegistryExport {
         let mut export = RegistryExport::default();
         for key in keys {
-            export.keys.insert(format!("{HKCU}\\{key}"), Vec::new());
+            let value = RegValue::new("v".into(), RegData::Sz((*key).into()));
+            export.keys.insert(full(key), vec![value]);
         }
         export
     }
 
-    /// Nested keys, siblings sharing a text prefix and case variants, in and out of map order.
-    const KEYS: [&str; 7] = [
-        r"Software\Co",
-        r"Software\Co\Game",
-        r"Software\Com",
-        r"Software\co",
-        r"Software\Other\Deep",
-        r"software\other",
-        r"Software\Other\Deep\Er",
+    /// Each node of `tree` as `(key relative to HKCU, added, depth, end)`.
+    fn shape(tree: &[KeyNode]) -> Vec<(String, bool, usize, usize)> {
+        (tree.iter())
+            .map(|node| {
+                let key = node.key.strip_prefix(&full("")).unwrap().to_owned();
+                (key, node.keys.is_empty(), node.depth, node.end)
+            })
+            .collect()
+    }
+
+    /// Two roots under a key the export lacks, and a root with a gap of two keys below it.
+    const GAPPED: [&str; 4] = [
+        r"Software\Bar\X",
+        r"Software\Bar\Y",
+        r"Software\Foo",
+        r"Software\Foo\A\B\C",
     ];
 
     #[test]
-    fn roots_are_the_keys_without_an_ancestor_in_the_export() {
-        let export = export_of(&KEYS);
+    fn tree_fills_only_between_a_key_and_its_nearest_ancestor() {
+        let tree = export_of(&GAPPED).tree();
 
-        let roots = export.roots();
-        let want = [r"Software\Co", r"Software\Com", r"software\other"];
-        let want: Vec<String> = want.iter().map(|key| format!("{HKCU}\\{key}")).collect();
-        assert_eq!(roots, want);
-        // Every key lies under exactly one root.
-        for key in export.keys.keys() {
-            let under = roots.iter().filter(|root| is_under(key, root)).count();
-            assert_eq!(under, 1, "{key}");
+        let want = [
+            (r"Software\Bar\X", false, 0, 1),
+            (r"Software\Bar\Y", false, 0, 2),
+            (r"Software\Foo", false, 0, 6),
+            (r"Software\Foo\A", true, 1, 6),
+            (r"Software\Foo\A\B", true, 2, 6),
+            (r"Software\Foo\A\B\C", false, 3, 6),
+        ];
+        let want: Vec<_> = (want.iter())
+            .map(|&(key, added, depth, end)| (key.to_owned(), added, depth, end))
+            .collect();
+        assert_eq!(shape(&tree), want);
+    }
+
+    #[test]
+    fn tree_merges_case_variants_into_one_node() {
+        let export = export_of(&[r"Software\co", r"Software\Co", r"Software\CO\x"]);
+
+        let tree = export.tree();
+
+        let want = [
+            (r"Software\Co", false, 0, 2),
+            (r"Software\CO\x", false, 1, 2),
+        ];
+        let want: Vec<_> = (want.iter())
+            .map(|&(key, added, depth, end)| (key.to_owned(), added, depth, end))
+            .collect();
+        assert_eq!(shape(&tree), want);
+        assert_eq!(tree[0].keys, [full(r"Software\Co"), full(r"Software\co")]);
+    }
+
+    #[test]
+    fn tree_ranges_span_each_subtree() {
+        // Siblings sharing a text prefix, nested keys and case variants, out of map order.
+        let export = export_of(&[
+            r"Software\Co",
+            r"Software\Co\Game",
+            r"Software\Com",
+            r"Software\Other\Deep",
+            r"software\other",
+            r"Software\Other\Deep\Er",
+            r"Software\Other\Side",
+        ]);
+
+        let tree = export.tree();
+
+        let order: Vec<_> = shape(&tree).into_iter().map(|(key, ..)| key).collect();
+        let want = [
+            r"Software\Co",
+            r"Software\Co\Game",
+            r"Software\Com",
+            r"software\other",
+            r"Software\Other\Deep",
+            r"Software\Other\Deep\Er",
+            r"Software\Other\Side",
+        ];
+        assert_eq!(order, want);
+        for (at, node) in tree.iter().enumerate() {
+            for (other_at, other) in tree.iter().enumerate() {
+                let below = other_at != at && is_under(&other.key, &node.key);
+                assert_eq!(
+                    (at + 1..node.end).contains(&other_at),
+                    below,
+                    "{at} {other_at}"
+                );
+            }
         }
     }
 
     #[test]
-    fn remove_subtree_removes_a_root_and_everything_below_only() {
-        let mut export = export_of(&KEYS);
+    fn select_all_ticked_writes_the_export_and_keeps_nothing() {
+        let export = export_of(&GAPPED);
+        let tree = export.tree();
 
-        export.remove_subtree(&format!("{HKCU}\\Software\\Co"));
+        let (write, kept) = export.select(&tree, &vec![true; tree.len()]);
 
-        let left: Vec<&str> = export.keys.keys().map(String::as_str).collect();
-        let want = [
-            r"Software\Com",
-            r"Software\Other\Deep",
-            r"Software\Other\Deep\Er",
-            r"software\other",
-        ];
-        let want: Vec<String> = want.iter().map(|key| format!("{HKCU}\\{key}")).collect();
-        assert_eq!(left, want);
-        // A case variant of a root removes the same subtree.
-        export.remove_subtree(&format!("{HKCU}\\SOFTWARE\\OTHER"));
-        export.remove_subtree(&format!("{HKCU}\\Software\\Com"));
-        assert!(export.keys.is_empty(), "{export:?}");
+        assert_eq!(write, export, "no added node under a ticked parent");
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn select_unticked_node_is_kept_and_not_written() {
+        let export = export_of(&[r"Software\Co", r"Software\co", r"Software\Co\Game"]);
+        let tree = export.tree();
+
+        let (write, kept) = export.select(&tree, &[false, true]);
+
+        assert_eq!(write, export_of(&[r"Software\Co\Game"]));
+        assert_eq!(kept, [full(r"Software\Co")]);
+    }
+
+    #[test]
+    fn select_ticked_added_node_is_written_without_values() {
+        let export = export_of(&GAPPED);
+        let tree = export.tree();
+
+        // `Software\Foo` unticked; its added `A` and `A\B` ticked.
+        let (write, kept) = export.select(&tree, &[true, true, false, true, true, true]);
+
+        let mut want = export_of(&[r"Software\Bar\X", r"Software\Bar\Y", r"Software\Foo\A\B\C"]);
+        want.keys.insert(full(r"Software\Foo\A"), Vec::new());
+        assert_eq!(
+            write, want,
+            "only the added node right below the unticked one"
+        );
+        assert_eq!(kept, [full(r"Software\Foo")]);
     }
 }

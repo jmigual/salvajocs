@@ -1445,6 +1445,7 @@ fn plan_of(writes: Vec<Write>, registry: Option<(RegistryExport, Context)>) -> R
     RestorePlan {
         writes,
         registry,
+        registry_kept: vec![],
         skipped: vec![],
         cross_build: false,
         notes: vec![],
@@ -1574,10 +1575,11 @@ fn a_removed_registry_root_is_neither_replaced_nor_backed_up() {
     let value = RegValue::new("keep".into(), RegData::Sz("new".into()));
     export.keys.insert(OTHER.into(), vec![value]);
     export.keys.insert(format!("{OTHER}\\Sub"), Vec::new());
-    assert_eq!(export.roots(), [FOO, OTHER]);
 
-    export.remove_subtree(OTHER);
-    let plan = plan_of(Vec::new(), Some((export, f.ctx())));
+    let unticked = [OTHER.to_owned(), format!("{OTHER}\\Sub")];
+    let (write, kept) = selected(&export, &unticked);
+    assert_eq!(kept, unticked);
+    let plan = plan_kept(write, kept, f.ctx());
     let report = f.run(&plan, false).unwrap();
 
     assert!(matches!(report.registry, Some(Ok(()))));
@@ -1595,6 +1597,309 @@ fn a_removed_registry_root_is_neither_replaced_nor_backed_up() {
         foo_registry("old"),
         "only the kept root is backed up"
     );
+}
+
+/// What a restore of `export` writes and keeps with the nodes `unticked` (by key) unticked, as
+/// the GUI asks for it.
+fn selected(export: &RegistryExport, unticked: &[String]) -> (RegistryExport, Vec<String>) {
+    let tree = export.tree();
+    let ticked: Vec<bool> = (tree.iter())
+        .map(|node| !unticked.contains(&node.key))
+        .collect();
+    export.select(&tree, &ticked)
+}
+
+/// A registry-only plan writing `write` into `ctx` and keeping `kept`.
+fn plan_kept(write: RegistryExport, kept: Vec<String>, ctx: Context) -> RestorePlan {
+    let mut plan = plan_of(Vec::new(), Some((write, ctx)));
+    plan.registry_kept = kept;
+    plan
+}
+
+/// `key` relative to HKCU.
+fn hkcu(key: &str) -> String {
+    format!("HKEY_CURRENT_USER\\{key}")
+}
+
+/// The block of `key` (relative to HKCU, `\`-separated) with the value `name` = `value`, as
+/// [`FOO_TREE`] writes it.
+fn old_block(key: &str, name: &str, value: &str) -> String {
+    let key = key.replace('\\', "\\\\");
+    format!("[{key}] 1\n#time=0\n\"{name}\"=\"{value}\"\n")
+}
+
+/// `Software\Foo` with `KEEP` (spelled in another case than the backup), `Keep\Deep`,
+/// `Keep\Deep\Back`, `Keep\OnlyHere`, `OnlyHere`, `Swap` and `Gap\Leaf` without a `Gap` block,
+/// then `Software\Other`.
+const FOO_TREE: [(&str, &str); 9] = [
+    (r"Software\Foo", "v"),
+    (r"Software\Foo\Gap\Leaf", "l"),
+    (r"Software\Foo\KEEP", "k"),
+    (r"Software\Foo\Keep\Deep", "d"),
+    (r"Software\Foo\Keep\Deep\Back", "b"),
+    (r"Software\Foo\Keep\OnlyHere", "o"),
+    (r"Software\Foo\OnlyHere", "o"),
+    (r"Software\Foo\Swap", "s"),
+    (r"Software\Other", "keep"),
+];
+
+/// Writes [`FOO_TREE`] with every value `old` as the `user.reg` of `prefix`.
+fn foo_tree(prefix: &Path) {
+    let blocks: Vec<String> = (FOO_TREE.iter())
+        .map(|(key, name)| old_block(key, name, "old"))
+        .collect();
+    let text = format!("WINE REGISTRY Version 2\n\n{}", blocks.join("\n"));
+    write(&prefix.join("user.reg"), &text);
+}
+
+/// The backup's export of `Software\Foo`: `Foo`, `Gap\Leaf`, `Keep`, `Keep\Deep`,
+/// `Keep\Deep\Back`, `Swap` and `NewKey`, each with `x` = `new`.
+fn foo_backup() -> RegistryExport {
+    let keys = [
+        r"Software\Foo",
+        r"Software\Foo\Gap\Leaf",
+        r"Software\Foo\Keep",
+        r"Software\Foo\Keep\Deep",
+        r"Software\Foo\Keep\Deep\Back",
+        r"Software\Foo\NewKey",
+        r"Software\Foo\Swap",
+    ];
+    let mut export = RegistryExport::default();
+    for key in keys {
+        let value = RegValue::new("x".into(), RegData::Sz("new".into()));
+        export.keys.insert(hkcu(key), vec![value]);
+    }
+    export
+}
+
+/// The registry of the safety backup `report` made.
+fn safety_registry(f: &mut Fixture, report: &RestoreReport) -> RegistryExport {
+    let dir = f.restored(created(report));
+    serde_json::from_slice(&fs::read(dir.join(REGISTRY_FILE)).unwrap()).unwrap()
+}
+
+/// Restores [`foo_backup`] over [`foo_tree`] with `Keep` and `Keep\Deep` unticked. Returns the
+/// report and `Software\Foo` as it was before.
+fn partial_restore(f: &mut Fixture) -> (RestoreReport, RegistryExport) {
+    partial_restore_unticking(f, &[r"Software\Foo\Keep", r"Software\Foo\Keep\Deep"])
+}
+
+/// Restores [`foo_backup`] over [`foo_tree`] with the nodes `unticked` (relative to HKCU)
+/// unticked. Returns the report and `Software\Foo` as it was before.
+fn partial_restore_unticking(
+    f: &mut Fixture,
+    unticked: &[&str],
+) -> (RestoreReport, RegistryExport) {
+    foo_tree(&f.prefix);
+    let before = reg(&f.prefix, FOO);
+    let unticked: Vec<String> = unticked.iter().map(|key| hkcu(key)).collect();
+    let (write, kept) = selected(&foo_backup(), &unticked);
+    assert_eq!(kept, unticked);
+    let report = f.run(&plan_kept(write, kept, f.ctx()), false).unwrap();
+    assert!(matches!(report.registry, Some(Ok(()))), "{report:?}");
+    (report, before)
+}
+
+/// Plans the safety backup `report` made into the fixture's prefix and restores it with the
+/// nodes `unticked` unticked.
+fn undo(f: &mut Fixture, report: &RestoreReport, unticked: &[String]) {
+    let (_, plan) = read_and_plan(f, created(report));
+    let Some((export, ctx)) = plan.registry else {
+        panic!("the safety backup has no registry: {plan:?}");
+    };
+    let (write, kept) = selected(&export, unticked);
+    let report = f.run(&plan_kept(write, kept, ctx), false).unwrap();
+    assert!(matches!(report.registry, Some(Ok(()))), "{report:?}");
+}
+
+#[test]
+fn a_partial_registry_restore_leaves_unticked_subkeys_alone() {
+    let mut f = fixture();
+
+    let (report, before) = partial_restore(&mut f);
+
+    let text = read(&f.prefix.join("user.reg"));
+    for (key, name) in [
+        (r"Software\Foo\KEEP", "k"),
+        (r"Software\Foo\Keep\Deep", "d"),
+        (r"Software\Foo\Keep\OnlyHere", "o"),
+        (r"Software\Other", "keep"),
+    ] {
+        assert!(
+            text.contains(&old_block(key, name, "old")),
+            "{key}:\n{text}"
+        );
+    }
+    let after = reg(&f.prefix, FOO);
+    let new = foo_backup();
+    for key in [
+        r"Software\Foo",
+        r"Software\Foo\Gap\Leaf",
+        r"Software\Foo\Keep\Deep\Back",
+        r"Software\Foo\NewKey",
+        r"Software\Foo\Swap",
+    ] {
+        assert_eq!(
+            after.keys.get(&hkcu(key)),
+            new.keys.get(&hkcu(key)),
+            "{key}"
+        );
+    }
+    assert!(!after.keys.contains_key(&hkcu(r"Software\Foo\OnlyHere")));
+    assert!(!text.contains("[Software\\\\Foo\\\\Gap]"), "{text}");
+    // F1-A: the ticked keys' whole subtrees, the unticked ones below included.
+    assert_eq!(safety_registry(&mut f, &report), before);
+}
+
+#[test]
+fn undo_of_a_partial_registry_restore_restores_the_old_state_and_nothing_else() {
+    let mut f = fixture();
+    let (report, before) = partial_restore(&mut f);
+    let other = reg(&f.prefix, &hkcu(r"Software\Other"));
+
+    undo(&mut f, &report, &[]);
+
+    assert_eq!(reg(&f.prefix, FOO), before);
+    assert_eq!(reg(&f.prefix, &hkcu(r"Software\Other")), other);
+    let text = read(&f.prefix.join("user.reg"));
+    assert!(
+        !text.contains("NewKey") && !text.contains("[Software\\\\Foo\\\\Gap]"),
+        "{text}"
+    );
+}
+
+#[test]
+fn undo_removes_a_key_created_under_an_unticked_key() {
+    let mut f = fixture();
+    // `NewKey` is not on this PC; its parent `Foo` keeps its values.
+    let (report, before) = partial_restore_unticking(&mut f, &[r"Software\Foo"]);
+    assert!(
+        reg(&f.prefix, FOO)
+            .keys
+            .contains_key(&hkcu(r"Software\Foo\NewKey"))
+    );
+    // Foo whole; the written added `Foo\Gap` may show as an empty key besides.
+    let safety = safety_registry(&mut f, &report);
+    for (key, values) in &before.keys {
+        assert_eq!(safety.keys.get(key), Some(values), "{key}");
+    }
+
+    undo(&mut f, &report, &[]);
+
+    assert_eq!(reg(&f.prefix, FOO), before);
+}
+
+/// Writes the blocks of `keys` (relative to HKCU, each with `v` = `old`) as the `user.reg` of
+/// `prefix`, and returns `Software\Foo` as it then is.
+fn user_reg_of(prefix: &Path, keys: &[&str]) -> RegistryExport {
+    let blocks: Vec<String> = keys.iter().map(|key| old_block(key, "v", "old")).collect();
+    let text = format!("WINE REGISTRY Version 2\n\n{}", blocks.join("\n"));
+    write(&prefix.join("user.reg"), &text);
+    reg(prefix, FOO)
+}
+
+/// An export of `keys` (relative to HKCU), each with `v` = `new`.
+fn new_export(keys: &[&str]) -> RegistryExport {
+    let mut export = RegistryExport::default();
+    for key in keys {
+        let value = RegValue::new("v".into(), RegData::Sz("new".into()));
+        export.keys.insert(hkcu(key), vec![value]);
+    }
+    export
+}
+
+#[test]
+fn undo_removes_a_key_created_under_a_kept_key_below_a_written_one() {
+    let mut f = fixture();
+    let before = user_reg_of(&f.prefix, &[r"Software\Foo", r"Software\Foo\K"]);
+    let backup = new_export(&[r"Software\Foo", r"Software\Foo\K", r"Software\Foo\K\New"]);
+    let (write, kept) = selected(&backup, &[hkcu(r"Software\Foo\K")]);
+    let report = f.run(&plan_kept(write, kept, f.ctx()), false).unwrap();
+    assert!(
+        reg(&f.prefix, FOO)
+            .keys
+            .contains_key(&hkcu(r"Software\Foo\K\New"))
+    );
+
+    undo(&mut f, &report, &[]);
+
+    assert_eq!(reg(&f.prefix, FOO), before);
+}
+
+#[test]
+fn undo_keeps_a_created_root_without_an_existing_ancestor_in_the_plan() {
+    let mut f = fixture();
+    // `Foo` exists but is above the plan's roots `Foo\A` and `Foo\B`.
+    let before = user_reg_of(&f.prefix, &[r"Software\Foo", r"Software\Foo\A"]);
+    let backup = new_export(&[r"Software\Foo\A", r"Software\Foo\B", r"Software\Foo\B\Sub"]);
+    let (write, kept) = selected(&backup, &[hkcu(r"Software\Foo\B\Sub")]);
+    let report = f.run(&plan_kept(write, kept, f.ctx()), false).unwrap();
+
+    undo(&mut f, &report, &[]);
+
+    let mut want = before;
+    let created = hkcu(r"Software\Foo\B");
+    want.keys
+        .insert(created.clone(), backup.keys[&created].clone());
+    assert_eq!(
+        reg(&f.prefix, FOO),
+        want,
+        "documented: a created root stays"
+    );
+}
+
+#[test]
+fn undo_with_an_unticked_subkey_keeps_its_current_state() {
+    let mut f = fixture();
+    let (report, before) = partial_restore(&mut f);
+    let path = f.prefix.join("user.reg");
+    let changed = read(&path).replace("\"k\"=\"old\"", "\"k\"=\"changed\"");
+    write(&path, &changed);
+
+    undo(&mut f, &report, &[hkcu(r"Software\Foo\KEEP")]);
+
+    let mut want = before;
+    let keep = want.keys.get_mut(&hkcu(r"Software\Foo\KEEP")).unwrap();
+    *keep = vec![RegValue::new("k".into(), RegData::Sz("changed".into()))];
+    assert_eq!(reg(&f.prefix, FOO), want);
+}
+
+#[test]
+fn a_restore_of_a_key_folder_without_its_values_writes_no_empty_block_and_undoes_exactly() {
+    let mut f = fixture();
+    let blocks = [
+        old_block(r"Software\Foo", "v", "old"),
+        old_block(r"Software\Foo\A\B", "b", "old"),
+        old_block(r"Software\Foo\A\Only", "o", "old"),
+    ];
+    let text = format!("WINE REGISTRY Version 2\n\n{}", blocks.join("\n"));
+    write(&f.prefix.join("user.reg"), &text);
+    let before = reg(&f.prefix, FOO);
+    let mut backup = foo_registry("new");
+    let value = RegValue::new("b".into(), RegData::Sz("new".into()));
+    backup.keys.insert(hkcu(r"Software\Foo\A\B"), vec![value]);
+
+    // Foo's "(values)" row unticked: the added `Foo\A` owns `Only`.
+    let (write, kept) = selected(&backup, &[FOO.to_owned()]);
+    assert!(write.keys.contains_key(&hkcu(r"Software\Foo\A")));
+    let report = f.run(&plan_kept(write, kept, f.ctx()), false).unwrap();
+
+    let after = read(&f.prefix.join("user.reg"));
+    assert!(after.contains(&blocks[0]), "{after}");
+    assert!(
+        !after.contains("Only") && !after.contains("[Software\\\\Foo\\\\A]"),
+        "{after}"
+    );
+    assert_eq!(
+        reg(&f.prefix, FOO).keys[&hkcu(r"Software\Foo\A\B")],
+        backup.keys[&hkcu(r"Software\Foo\A\B")]
+    );
+
+    undo(&mut f, &report, &[]);
+
+    assert_eq!(reg(&f.prefix, FOO), before);
+    let undone = read(&f.prefix.join("user.reg"));
+    assert!(!undone.contains("[Software\\\\Foo\\\\A]"), "{undone}");
 }
 
 #[test]

@@ -15,7 +15,9 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{HKCU, RegData, RegValue, RegistryError, RegistryExport, is_under};
+use super::{
+    HKCU, Owner, Owners, RegData, RegValue, RegistryError, RegistryExport, is_under, lowered_below,
+};
 
 #[cfg(test)]
 mod tests;
@@ -95,16 +97,29 @@ impl RegFile {
         Ok(export)
     }
 
-    /// Deletes the subtree of every key in `export`, then writes the exported keys with the
-    /// current time. An empty export changes nothing.
-    pub fn replace_subtrees(&mut self, export: &RegistryExport) -> Result<(), RegistryError> {
+    /// Deletes the subtree of every key in `export`, except what a key of `kept` owns, then
+    /// writes the exported keys with the current time (ADR-0026). A key belongs to the deepest
+    /// key of `export` or `kept` it is at or below; a block owned by `kept`, or by neither, stays
+    /// byte for byte. An exported key without values gets no block when a block lies below it,
+    /// as wineserver saves it. An empty export changes nothing.
+    ///
+    /// # Errors
+    /// Every key is checked before anything changes: [`RegistryError::UnsupportedRoot`] and
+    /// [`RegistryError::InvalidKey`] as for [`Self::export`], and
+    /// [`RegistryError::KeptAndWritten`] for a key in both `export` and `kept`.
+    pub fn replace_subtrees(
+        &mut self,
+        export: &RegistryExport,
+        kept: &[String],
+    ) -> Result<(), RegistryError> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH);
-        self.replace_subtrees_at(export, now.map_or(0, |d| d.as_secs()))
+        self.replace_subtrees_at(export, kept, now.map_or(0, |d| d.as_secs()))
     }
 
     fn replace_subtrees_at(
         &mut self,
         export: &RegistryExport,
+        kept: &[String],
         unix_secs: u64,
     ) -> Result<(), RegistryError> {
         let roots = export
@@ -112,30 +127,42 @@ impl RegFile {
             .keys()
             .map(|key| hkcu_relative(key))
             .collect::<Result<Vec<_>, _>>()?;
+        let kept = (kept.iter())
+            .map(|key| hkcu_relative(key))
+            .collect::<Result<Vec<_>, _>>()?;
+        let owners = Owners::new(&roots, &kept)?;
         self.blocks
-            .retain(|b| !roots.iter().any(|root| is_under(&b.path, root)));
-        if roots.is_empty() {
-            return Ok(());
-        }
-        // Wine separates key blocks with a blank line.
-        let tail = self
-            .blocks
-            .last_mut()
-            .map_or(&mut self.header, |b| &mut b.raw);
-        if !tail.ends_with("\n\n") {
-            if !tail.ends_with('\n') {
-                tail.push('\n');
-            }
-            tail.push('\n');
-        }
-        // Appended, not sorted in: wineserver re-sorts on its next save.
-        for (root, values) in roots.into_iter().zip(export.keys.values()) {
-            self.blocks.push(Block {
-                path: root.to_owned(),
+            .retain(|b| owners.owner(&b.path) != Owner::Write);
+        // Lowercased once: the save rule checks them for each valueless key.
+        let after: Vec<String> = (self.blocks.iter().map(|b| b.path.as_str()))
+            .chain(roots.iter().copied())
+            .map(str::to_lowercase)
+            .collect();
+        let mut appended: Vec<Block> = (roots.iter().zip(export.keys.values()))
+            .filter(|(root, values)| {
+                // A key exists through its subkeys' blocks; an empty block would add it to the
+                // next export when the backup's export left it out.
+                let root = root.to_lowercase();
+                !values.is_empty() || !after.iter().any(|path| lowered_below(path, &root))
+            })
+            .map(|(root, values)| Block {
+                path: (*root).to_owned(),
                 line: 0,
                 raw: key_text(root, values, unix_secs),
-            });
+            })
+            .collect();
+        let Some(first) = appended.first_mut() else {
+            return Ok(());
+        };
+        // Wine separates key blocks with a blank line. It goes into the new block, so a kept
+        // last block stays byte for byte.
+        let tail = (self.blocks.last()).map_or(self.header.as_str(), |b| b.raw.as_str());
+        if !tail.ends_with("\n\n") {
+            let separator = if tail.ends_with('\n') { "\n" } else { "\n\n" };
+            first.raw.insert_str(0, separator);
         }
+        // Appended, not sorted in: wineserver re-sorts on its next save.
+        self.blocks.extend(appended);
         Ok(())
     }
 }

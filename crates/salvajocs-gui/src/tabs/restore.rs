@@ -36,8 +36,10 @@ use crate::theme::{self, icons};
 use crate::widgets::named_button;
 
 mod batch;
+mod keys;
 
 use batch::Batch;
+use keys::KeyTree;
 
 /// The width of the games sidebar at rest, and the least it can be dragged to.
 const SIDEBAR_WIDTH: f32 = 240.0;
@@ -285,59 +287,33 @@ impl Fetched {
         )
     }
 
-    /// `plan` with how each write compares with its target, the tree of its writes and its
-    /// registry roots. Reads the targets and which target folders exist, so it runs in a job.
+    /// `plan` with how each write compares with its target, the tree of its writes and the tree
+    /// of its registry keys. Reads the targets and which target folders exist, so it runs in a
+    /// job.
     fn labelled(&self, plan: Result<RestorePlan, PrepareError>) -> Result<Labelled, PrepareError> {
         plan.map(|plan| {
             let labels = (plan.writes.iter())
                 .map(|write| Label::of(write, &self.listed))
                 .collect();
             let tree = WriteTree::new(&plan, &self.listed);
-            let roots = Root::of(&plan);
+            let keys = KeyTree::of(&plan);
             Labelled {
                 plan,
                 labels,
                 tree,
-                roots,
+                keys,
             }
         })
     }
 }
 
 /// A plan with how each write compares with its target, its writes as a tree and its registry
-/// roots.
+/// keys as a tree.
 struct Labelled {
     plan: RestorePlan,
     labels: Vec<Label>,
     tree: WriteTree,
-    roots: Vec<Root>,
-}
-
-/// A registry root of a plan, the unit its registry is ticked by (ADR-0025), with how many
-/// exported keys it covers. Worked out once per plan: `RegistryExport::roots` compares every
-/// pair of keys.
-struct Root {
-    key: String,
-    keys: usize,
-}
-
-impl Root {
-    /// The registry roots of `plan`, in the export's order.
-    fn of(plan: &RestorePlan) -> Vec<Root> {
-        let Some((export, _)) = &plan.registry else {
-            return Vec::new();
-        };
-        (export.roots().into_iter())
-            .map(|root| {
-                let mut rest = export.clone();
-                rest.remove_subtree(root);
-                Root {
-                    key: root.to_owned(),
-                    keys: export.keys.len() - rest.keys.len(),
-                }
-            })
-            .collect()
-    }
+    keys: KeyTree,
 }
 
 /// A plan's writes as a tree keyed by where they land as planned, with a checkbox on each file
@@ -456,9 +432,10 @@ struct Preview {
     /// How each write compares with its target.
     labels: Vec<Label>,
     tree: WriteTree,
-    roots: Vec<Root>,
-    /// What the restore writes: the files by planned key and the registry roots, all ticked at
-    /// first. Never saved; a new plan starts with a new one.
+    /// The registry keys with their ticks.
+    keys: KeyTree,
+    /// Which files the restore writes, by planned key, all ticked at first. Never saved; a new
+    /// plan starts with a new one.
     selection: GameSettings,
     /// The text of each write whose override field is open.
     editing: BTreeMap<usize, String>,
@@ -482,7 +459,7 @@ impl Preview {
             plan,
             labels,
             tree,
-            roots,
+            keys,
         } = labelled;
         Self {
             fetched,
@@ -490,7 +467,7 @@ impl Preview {
             plan,
             labels,
             tree,
-            roots,
+            keys,
             selection: GameSettings::default(),
             editing: BTreeMap::new(),
             override_error: None,
@@ -629,69 +606,40 @@ impl Preview {
         (opened, details)
     }
 
-    /// The registry line, counting the keys of the ticked roots, and a checkbox per root.
+    /// The registry line, counting the ticked keys, and the tree of the keys.
     fn registry_ui(&mut self, ui: &mut Ui, busy: bool) {
         let Some((_, ctx)) = &self.plan.registry else {
             return;
         };
         let (name, hover) = name_context(ctx, self.fetched.prefix_origin.as_ref());
-        let keys = ticked_keys(&self.roots, &self.selection);
+        let keys = self.keys.ticked_count();
         hover_label(ui, format!("Registry: {keys} keys into {name}"), hover);
-        roots_ui(ui, &self.roots, &mut self.selection, !busy);
+        self.keys.ui(ui, !busy);
     }
 }
 
-/// `plan` with only what `selection` ticks (ADR-0025): the writes whose planned key (`keys`, by
-/// write index) is included, and the registry without the subtrees of the unticked `roots`, or
-/// none when no key is left. The restore backs up and writes this one plan, so nothing unticked
-/// is touched. A root is the unit: the restore replaces each exported key's whole subtree, so a
-/// lone subkey cannot stay out.
+/// `plan` with only what is ticked (ADR-0025, ADR-0026): the writes whose planned key (`keys`,
+/// by write index) `selection` includes, and the registry keys `registry` ticks with the keys
+/// it unticks kept, or no registry when nothing is written. The restore backs up and writes
+/// this one plan, so nothing unticked is written.
 fn ticked_plan(
     plan: &RestorePlan,
     keys: &[String],
-    roots: &[Root],
+    registry: &KeyTree,
     selection: &GameSettings,
 ) -> RestorePlan {
     let mut ticked = plan.clone();
     let mut keys = keys.iter();
     (ticked.writes).retain(|_| keys.next().is_some_and(|key| selection.path_included(key)));
     if let Some((export, _)) = &mut ticked.registry {
-        for root in roots
-            .iter()
-            .filter(|root| !selection.registry_included(&root.key))
-        {
-            export.remove_subtree(&root.key);
-        }
+        (*export, ticked.registry_kept) = registry.select(export);
     }
     // An empty export would still refuse the restore while a wineserver runs.
     if (ticked.registry.as_ref()).is_some_and(|(export, _)| export.keys.is_empty()) {
         ticked.registry = None;
+        ticked.registry_kept.clear();
     }
     ticked
-}
-
-/// How many exported keys lie under the `roots` that `selection` ticks.
-fn ticked_keys(roots: &[Root], selection: &GameSettings) -> usize {
-    (roots.iter())
-        .filter(|root| selection.registry_included(&root.key))
-        .map(|root| root.keys)
-        .sum()
-}
-
-/// Whether `selection` ticks one of `roots`.
-fn registry_ticked(roots: &[Root], selection: &GameSettings) -> bool {
-    (roots.iter()).any(|root| selection.registry_included(&root.key))
-}
-
-/// A checkbox per root, labelled with its key, as the Backup tab has per key.
-fn roots_ui(ui: &mut Ui, roots: &[Root], selection: &mut GameSettings, enabled: bool) {
-    for root in roots {
-        let mut included = selection.registry_included(&root.key);
-        let checkbox = egui::Checkbox::new(&mut included, &root.key);
-        if ui.add_enabled(enabled, checkbox).changed() {
-            selection.set_registry(&root.key, included);
-        }
-    }
 }
 
 /// Whether `plan` has neither a file to write nor a registry key, so nothing can be ticked.
@@ -1618,7 +1566,7 @@ impl RestoreTab {
             );
         }
         let blocked = !blocking.is_empty();
-        let nothing = writes == 0 && !registry_ticked(&preview.roots, &preview.selection);
+        let nothing = writes == 0 && !preview.keys.any_ticked();
         let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked && !nothing;
         let restoring = self.restoring.is_some();
         let empty = nothing_to_restore(&preview.plan);
@@ -1694,7 +1642,7 @@ impl RestoreTab {
         let plan = ticked_plan(
             &preview.plan,
             &preview.tree.keys,
-            &preview.roots,
+            &preview.keys,
             &preview.selection,
         );
         let fetched = preview.fetched.clone();

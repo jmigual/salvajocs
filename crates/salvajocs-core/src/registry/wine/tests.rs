@@ -196,7 +196,7 @@ fn non_ascii_key_name_from_real_prefix_round_trips() {
     let export = file.export(&[&key]).unwrap();
     assert_eq!(export.keys[&key], [sz("Currencies", "USD")]);
     let mut other = fixture();
-    other.replace_subtrees_at(&export, SECS).unwrap();
+    other.replace_subtrees_at(&export, &[], SECS).unwrap();
     assert!(other.to_string().contains(
         "[Control Panel\\\\International\\\\\\xd83c\\xdf0e\\xd83c\\xdf0f\\xd83c\\xdf0d] 1774238072"
     ));
@@ -285,7 +285,7 @@ fn export_then_replace_round_trips() {
     assert!(export.keys.len() > 5);
 
     let mut target = fixture();
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     assert_eq!(target.export(&keys).unwrap(), export);
 
     // The result is still valid Wine text.
@@ -297,7 +297,7 @@ fn export_then_replace_round_trips() {
 fn replace_leaves_other_keys_verbatim() {
     let export = fixture().export(&[full("Software\\Valve")]).unwrap();
     let mut target = fixture();
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     for block in fixture()
         .blocks
         .iter()
@@ -315,7 +315,7 @@ fn replace_drops_old_subkeys() {
     export.keys.get_mut(&steam).unwrap().push(sz("New", "1"));
 
     let mut target = fixture();
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     let after = target.export(&[&steam]).unwrap();
     assert_eq!(after, export);
     assert!(!target.to_string().contains("ActiveProcess"));
@@ -325,7 +325,7 @@ fn replace_drops_old_subkeys() {
 fn replace_with_empty_export_changes_nothing() {
     let mut target = fixture();
     target
-        .replace_subtrees_at(&RegistryExport::default(), SECS)
+        .replace_subtrees_at(&RegistryExport::default(), &[], SECS)
         .unwrap();
     assert_eq!(target.to_string(), FIXTURE);
 }
@@ -338,7 +338,7 @@ fn replace_rejects_other_roots_without_changes() {
         .keys
         .insert("HKEY_LOCAL_MACHINE\\Software\\Foo".into(), vec![]);
     let mut target = fixture();
-    let err = target.replace_subtrees_at(&export, SECS).unwrap_err();
+    let err = target.replace_subtrees_at(&export, &[], SECS).unwrap_err();
     assert!(matches!(err, RegistryError::UnsupportedRoot { .. }));
     assert_eq!(target.to_string(), FIXTURE);
 }
@@ -348,7 +348,7 @@ fn replace_separates_appended_key_with_blank_line() {
     let mut target = RegFile::parse(&format!("{MAGIC}\n\n[A] 1\n\"a\"=\"1\"\n")).unwrap();
     let mut export = RegistryExport::default();
     export.keys.insert(full("B"), vec![sz("b", "2")]);
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     assert!(
         target
             .to_string()
@@ -393,7 +393,7 @@ fn replace_matches_whole_elements_only() {
         .keys
         .insert(full("Software\\Steam"), vec![sz("n", "3")]);
     let mut target = steam_pair();
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     let steam_x = before
         .blocks
         .iter()
@@ -410,7 +410,7 @@ fn replace_matches_case_insensitively_without_duplicates() {
         .keys
         .insert(full("software\\STEAM"), vec![sz("n", "3")]);
     let mut target = steam_pair();
-    target.replace_subtrees_at(&export, SECS).unwrap();
+    target.replace_subtrees_at(&export, &[], SECS).unwrap();
     let after = target.export(&[full("Software\\Steam")]).unwrap();
     assert_eq!(after.keys.len(), 1);
     assert_eq!(after.keys.values().next().unwrap(), &[sz("n", "3")]);
@@ -437,8 +437,260 @@ fn root_and_empty_elements_are_invalid_keys() {
         let mut export = RegistryExport::default();
         export.keys.insert(key, vec![]);
         let mut target = fixture();
-        let err = target.replace_subtrees_at(&export, SECS).unwrap_err();
+        let err = target.replace_subtrees_at(&export, &[], SECS).unwrap_err();
         assert!(matches!(err, RegistryError::InvalidKey { .. }));
         assert_eq!(target.to_string(), FIXTURE);
     }
+}
+
+/// `Software\Foo` with its own value and the subkeys `Keep` (holding `Deep` and `Here`), `Swap`
+/// and `Here`, and `Software\Other`. Every block has time 1, so a rewritten block shows.
+const FOO_TREE: &str = r#"WINE REGISTRY Version 2
+
+[Software\\Foo] 1
+"v"="old"
+
+[Software\\Foo\\Here] 1
+"h"="old"
+
+[Software\\Foo\\Keep] 1
+"k"="old"
+
+[Software\\Foo\\Keep\\Deep] 1
+"d"="old"
+
+[Software\\Foo\\Keep\\Here] 1
+"h"="old"
+
+[Software\\Foo\\Swap] 1
+"s"="old"
+
+[Software\\Other] 1
+"o"="old"
+
+"#;
+
+/// An export of `keys` (relative to HKCU), each with the value `x` = `new`.
+fn new_values(keys: &[&str]) -> RegistryExport {
+    let mut export = RegistryExport::default();
+    for key in keys {
+        export.keys.insert(full(key), vec![sz("x", "new")]);
+    }
+    export
+}
+
+fn full_keys(keys: &[&str]) -> Vec<String> {
+    keys.iter().map(|key| full(key)).collect()
+}
+
+/// The text of the block of `path` (relative to HKCU, spelled exactly), if any.
+fn block<'a>(file: &'a RegFile, path: &str) -> Option<&'a str> {
+    (file.blocks.iter())
+        .find(|b| b.path == path)
+        .map(|b| b.raw.as_str())
+}
+
+/// Replaces `export` keeping `kept` (both relative to HKCU) in [`FOO_TREE`].
+fn replaced(file: &str, export: &RegistryExport, kept: &[&str]) -> RegFile {
+    let mut target = RegFile::parse(file).unwrap();
+    target
+        .replace_subtrees_at(export, &full_keys(kept), SECS)
+        .unwrap();
+    target
+}
+
+/// Asserts that each block of `paths` is in `after` exactly as in `before`.
+fn assert_untouched(before: &str, after: &RegFile, paths: &[&str]) {
+    let before = RegFile::parse(before).unwrap();
+    for path in paths {
+        assert_eq!(block(after, path), block(&before, path), "{path}");
+        assert!(block(after, path).is_some(), "{path}");
+    }
+}
+
+/// Whether the block of `path` was written by the replace, holding `x` = `new`.
+fn rewritten(file: &RegFile, path: &str) -> bool {
+    block(file, path)
+        .is_some_and(|raw| raw.contains(&format!("] {SECS}\n")) && raw.contains("\"x\"=\"new\""))
+}
+
+#[test]
+fn replace_keeps_an_unticked_subkey_with_its_values_and_subkeys() {
+    let export = new_values(&[r"Software\Foo"]);
+
+    let target = replaced(FOO_TREE, &export, &[r"Software\Foo\Keep"]);
+
+    let kept = [
+        r"Software\Foo\Keep",
+        r"Software\Foo\Keep\Deep",
+        r"Software\Foo\Keep\Here",
+        r"Software\Other",
+    ];
+    assert_untouched(FOO_TREE, &target, &kept);
+    assert!(rewritten(&target, r"Software\Foo"));
+    assert_eq!(block(&target, r"Software\Foo\Swap"), None);
+}
+
+#[test]
+fn replace_leaves_a_kept_last_block_without_a_blank_line_byte_for_byte() {
+    let before = FOO_TREE.trim_end_matches('\n');
+    for before in [before.to_owned(), format!("{before}\n")] {
+        let export = new_values(&[r"Software\Foo"]);
+
+        let target = replaced(&before, &export, &[r"Software\Other"]);
+
+        assert_untouched(&before, &target, &[r"Software\Other"]);
+        let text = target.to_string();
+        assert!(text.contains("\"o\"=\"old\"\n\n["), "{text}");
+        let reparsed = RegFile::parse(&text).unwrap();
+        assert!(rewritten(&reparsed, r"Software\Foo"), "{text}");
+    }
+}
+
+#[test]
+fn replace_writes_the_ticked_sibling_of_a_kept_key() {
+    let export = new_values(&[r"Software\Foo", r"Software\Foo\Swap"]);
+
+    let target = replaced(FOO_TREE, &export, &[r"Software\Foo\Keep"]);
+
+    assert!(rewritten(&target, r"Software\Foo\Swap"));
+    assert!(!target.to_string().contains("\"s\"=\"old\""));
+    assert_untouched(FOO_TREE, &target, &[r"Software\Foo\Keep"]);
+}
+
+#[test]
+fn replace_deletes_keys_only_here_under_a_ticked_key_and_keeps_them_under_a_kept_one() {
+    let export = new_values(&[r"Software\Foo", r"Software\Foo\Keep\Deep"]);
+
+    let target = replaced(FOO_TREE, &export, &[r"Software\Foo\Keep"]);
+
+    assert_eq!(block(&target, r"Software\Foo\Here"), None);
+    let kept = [r"Software\Foo\Keep", r"Software\Foo\Keep\Here"];
+    assert_untouched(FOO_TREE, &target, &kept);
+    assert!(rewritten(&target, r"Software\Foo\Keep\Deep"));
+}
+
+#[test]
+fn replace_writes_a_ticked_key_below_a_kept_one() {
+    let export = new_values(&[r"Software\Foo\Keep\Deep"]);
+
+    let target = replaced(FOO_TREE, &export, &[r"Software\Foo"]);
+
+    assert!(rewritten(&target, r"Software\Foo\Keep\Deep"));
+    let kept = [
+        r"Software\Foo",
+        r"Software\Foo\Here",
+        r"Software\Foo\Keep",
+        r"Software\Foo\Keep\Here",
+        r"Software\Foo\Swap",
+        r"Software\Other",
+    ];
+    assert_untouched(FOO_TREE, &target, &kept);
+}
+
+#[test]
+fn replace_matches_kept_keys_case_insensitively() {
+    let export = new_values(&[r"software\FOO"]);
+
+    let target = replaced(FOO_TREE, &export, &[r"SOFTWARE\foo\KEEP"]);
+
+    let kept = [
+        r"Software\Foo\Keep",
+        r"Software\Foo\Keep\Deep",
+        r"Software\Foo\Keep\Here",
+    ];
+    assert_untouched(FOO_TREE, &target, &kept);
+    assert!(rewritten(&target, r"software\FOO"));
+    assert_eq!(block(&target, r"Software\Foo"), None);
+    assert_eq!(block(&target, r"Software\Foo\Swap"), None);
+}
+
+#[test]
+fn replace_with_a_kept_key_equal_to_an_export_key_changes_nothing() {
+    let export = new_values(&[r"Software\Foo", r"Software\Foo\Keep"]);
+    let mut target = RegFile::parse(FOO_TREE).unwrap();
+
+    let kept = full_keys(&[r"software\FOO\keep"]);
+    let err = (target.replace_subtrees_at(&export, &kept, SECS)).unwrap_err();
+
+    assert!(matches!(err, RegistryError::KeptAndWritten { .. }), "{err}");
+    assert_eq!(target.to_string(), FOO_TREE);
+}
+
+#[test]
+fn replace_validates_kept_keys_before_changes() {
+    let export = new_values(&[r"Software\Foo"]);
+    let mut target = RegFile::parse(FOO_TREE).unwrap();
+
+    for (kept, invalid) in [
+        (HKCU.to_owned(), true),
+        (full(r"Software\\Foo"), true),
+        (full(r"Software\Foo\"), true),
+        (r"HKEY_LOCAL_MACHINE\Software\Foo".to_owned(), false),
+    ] {
+        let err = (target.replace_subtrees_at(&export, &[kept], SECS)).unwrap_err();
+        if invalid {
+            assert!(matches!(err, RegistryError::InvalidKey { .. }), "{err}");
+        } else {
+            assert!(
+                matches!(err, RegistryError::UnsupportedRoot { .. }),
+                "{err}"
+            );
+        }
+        assert_eq!(target.to_string(), FOO_TREE);
+    }
+}
+
+/// `Software\Foo` and `Foo\A\B` with no block of `Foo\A`, as wineserver saves a valueless key
+/// with subkeys, plus `Foo\A\Only`, which only this PC has.
+const GAPPED: &str = r#"WINE REGISTRY Version 2
+
+[Software\\Foo] 1
+"v"="old"
+
+[Software\\Foo\\A\\B] 1
+"b"="old"
+
+[Software\\Foo\\A\\Only] 1
+"o"="old"
+
+"#;
+
+#[test]
+fn replace_of_an_export_with_a_gap_round_trips() {
+    let foo = full(r"Software\Foo");
+    let mut backed_up = RegFile::parse(GAPPED).unwrap();
+    backed_up.blocks.retain(|b| !b.path.ends_with("Only"));
+    let export = backed_up.export(&[&foo]).unwrap();
+    let tree = export.tree();
+    assert_eq!(tree.len(), 3, "Foo, the added Foo\\A and Foo\\A\\B");
+
+    let (write, kept) = export.select(&tree, &vec![true; tree.len()]);
+    let mut target = RegFile::parse(GAPPED).unwrap();
+    target.replace_subtrees_at(&write, &kept, SECS).unwrap();
+
+    assert_eq!(target.export(&[&foo]).unwrap(), export);
+    assert_eq!(block(&target, r"Software\Foo\A"), None);
+    assert_eq!(block(&target, r"Software\Foo\A\Only"), None);
+}
+
+#[test]
+fn replace_writes_no_block_for_a_valueless_key_with_a_block_below() {
+    // `Foo` unticked, so the added `Foo\A` is written to own `Foo\A\Only`.
+    let mut export = new_values(&[r"Software\Foo\A\B"]);
+    export.keys.insert(full(r"Software\Foo\A"), Vec::new());
+
+    let target = replaced(GAPPED, &export, &[r"Software\Foo"]);
+
+    assert_untouched(GAPPED, &target, &[r"Software\Foo"]);
+    assert_eq!(block(&target, r"Software\Foo\A\Only"), None);
+    assert_eq!(block(&target, r"Software\Foo\A"), None);
+    assert!(rewritten(&target, r"Software\Foo\A\B"));
+
+    // A valueless key with nothing below gets an empty block, as wineserver saves one.
+    let mut leaf = RegistryExport::default();
+    leaf.keys.insert(full(r"Software\Foo\A\B"), Vec::new());
+    let target = replaced(GAPPED, &leaf, &[]);
+    let empty = format!("[Software\\\\Foo\\\\A\\\\B] {SECS}\n");
+    assert!(block(&target, r"Software\Foo\A\B").is_some_and(|raw| raw.starts_with(&empty)));
 }

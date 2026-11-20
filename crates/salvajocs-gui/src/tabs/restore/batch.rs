@@ -21,8 +21,8 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use super::{
     Fetched, Label, Labelled, RestoreTab, Restored, WriteTree, blocking, describe_run_error,
-    hover_label, into_line, name_context, nothing_to_restore, own_dir, registry_ticked, remove_dir,
-    roots_ui, skipped_ui, snapshot_label, ticked_keys, ticked_plan, warnings_ui,
+    hover_label, into_line, name_context, nothing_to_restore, own_dir, remove_dir, skipped_ui,
+    snapshot_label, ticked_plan, warnings_ui,
 };
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
@@ -59,11 +59,10 @@ impl Planned {
             plan,
             labels,
             tree,
-            roots,
+            keys,
         } = &self.labelled;
         let ticked = tree.ticked(&self.selection);
-        (ticked.contains(&true) || registry_ticked(roots, &self.selection))
-            && blocking(plan, labels, &ticked).is_empty()
+        (ticked.contains(&true) || keys.any_ticked()) && blocking(plan, labels, &ticked).is_empty()
     }
 }
 
@@ -461,9 +460,9 @@ impl RestoreTab {
                         ..
                     } = *planned;
                     let Labelled {
-                        plan, tree, roots, ..
+                        plan, tree, keys, ..
                     } = &labelled;
-                    let plan = ticked_plan(plan, &tree.keys, roots, &selection);
+                    let plan = ticked_plan(plan, &tree.keys, keys, &selection);
                     Some((fetched, plan))
                 }
                 Outcome::Planned(_)
@@ -689,7 +688,7 @@ fn remove_stale(parent: &Path) {
 
 /// One planned game of the confirm: its snapshot with how many ticked files are new, changed or
 /// unchanged, its targets, the ticked writes that will fail or block it, the tree of its files
-/// with a checkbox on each, the plan's warnings, the registry with a checkbox per root and the
+/// with a checkbox on each, the plan's warnings, the registry with a checkbox per key and the
 /// skipped items. `enabled` false greys the checkboxes. Returns the folder the user asked to open.
 fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) -> Option<PathBuf> {
     let ticked = planned.labelled.tree.ticked(&planned.selection);
@@ -701,7 +700,7 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) ->
                 plan,
                 labels,
                 tree: WriteTree { tree, .. },
-                roots,
+                keys,
             },
         selection,
     } = planned;
@@ -742,7 +741,7 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) ->
             ui.weak("Untick them to restore the rest of this game.");
         } else if nothing_to_restore(plan) {
             ui.weak("Nothing to restore, so this game will not be restored.");
-        } else if !ticked.contains(&true) && !registry_ticked(roots, selection) {
+        } else if !ticked.contains(&true) && !keys.any_ticked() {
             ui.weak("Nothing ticked, so this game will not be restored.");
         }
         let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
@@ -762,10 +761,13 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) ->
         warnings_ui(ui, plan);
         if let Some((_, ctx)) = &plan.registry {
             let (name, hover) = name_context(ctx, fetched.prefix_origin.as_ref());
-            let keys = ticked_keys(roots, selection);
-            let text = format!("Registry: {keys} keys into {name}, replaced");
+            let text = format!(
+                "Registry: {} keys into {name}, replaced",
+                keys.ticked_count()
+            );
             hover_label(ui, text, hover);
-            roots_ui(ui, roots, selection, enabled);
+            // Two games may declare the same key.
+            ui.push_id((title, "registry"), |ui| keys.ui(ui, enabled));
         }
         skipped_ui(ui, plan);
         match clicked.inner {

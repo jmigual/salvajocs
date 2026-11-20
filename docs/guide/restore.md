@@ -92,14 +92,19 @@ The Plan shows:
   also has a **Details** button, which shows what makes it differ: the backup's copy of the
   chosen snapshot against the file that would be overwritten, as in the
   [Backup tab](backup.md#what-differs-from-the-last-backup).
-- **Registry.** The number of registry keys and the prefix, named as on the "Into" line, or the
-  Windows registry they go into. Under it, a checkbox for each registry key as it was backed up,
-  ticked at first; a key backed up inside another shares that one's checkbox. The number counts
-  the keys of the ticked ones. A key you untick, with every key below it, is not replaced and not
-  in the safety backup. Each key comes with the keys below it, since the restore replaces a key's
-  whole subtree. In a restore of several games, another game that declares a key above it still
-  replaces it; that game's safety backup holds it. With every key unticked, the files restore
-  even while Wine runs (see below).
+- **Registry.** The number of ticked registry keys and the prefix, named as on the "Into" line,
+  or the Windows registry they go into. Under it, the registry keys as a tree, all ticked at
+  first. A key with subkeys is a folder, closed at first, like a folder of files: its checkbox
+  ticks or unticks it with every key below it, and its line counts its ticked keys. The first row
+  in an open key, **(values)**, ticks only that key itself: its values, and its subkeys that only
+  this PC has. A ticked key is replaced: its values and its subkeys that only this PC has are
+  deleted, then the backup's are written. A key you untick is left as it is, with its values and
+  its subkeys, also the ones only this PC has, unless you tick a key below it. An unticked key
+  with no ticked key above it is not in the safety backup; one under a ticked key is, as it was
+  before the restore, and so is one above a ticked key this PC does not have yet, so that an
+  undo removes the new key (see "Undo"). In a restore of several games, another game that
+  declares a key above it still replaces it; that game's safety backup holds it. With every key
+  unticked, the files restore even while Wine runs (see below).
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A **Cross-build restore** warning when the plan maps folders from the other build. The
   other build may use a different save format.
@@ -139,14 +144,15 @@ overrides and with everything ticked again.
    fails, nothing is restored and no safety backup is made.
 2. **Safety backup.** Before writing, salvajocs stores the files and registry keys the restore
    would replace, as a new snapshot of the same game tagged `pre-restore`, in the repository the
-   backup came from. If this fails, nothing is restored. If nothing exists yet at the targets, no
+   backup came from. A ticked registry key is stored with every key below it, unticked ones
+   included. If this fails, nothing is restored. If nothing exists yet at the targets, no
    safety backup is needed, and the tab says so. If the repository already holds the same state,
    no new snapshot is added.
 3. **Files.** Each file is written to a temporary file and moved into place. A target that is a
    symbolic link is never written through.
 4. **Registry.** On Windows, the keys are written to the live registry under `HKEY_CURRENT_USER`.
-   In a Wine prefix, salvajocs edits `user.reg` directly. For each key it replaces the whole
-   subtree.
+   In a Wine prefix, salvajocs edits `user.reg` directly. For each ticked key it replaces the
+   whole subtree, except the keys you unticked and what lies below them.
 
 The result lists each file as restored or failed, and the registry result.
 
@@ -182,8 +188,9 @@ To restore more than one game in one go:
    left out; hover the icons to read the counts as text.
 
    Under it, a file tree lists every file the game writes, by the folder it goes into on this
-   machine, with a checkbox on each file and folder as in a single game's plan, and the
-   registry keys with theirs. Only what is ticked is restored. A file has an icon after
+   machine, with a checkbox on each file and folder as in a single game's plan, and the tree of
+   registry keys with a checkbox on each key and subkey, also as there. Only what is ticked is
+   restored. A file has an icon after
    its size: a plus in a circle when nothing is there yet, a pencil when the file there differs
    and will be overwritten, a question mark when salvajocs cannot read the file there to compare
    it, and a cross in a circle when salvajocs will not write it. Hover the icon to read
@@ -216,9 +223,14 @@ The safety backup is the undo. In the **Snapshot** list, choose the newest entry
 
 An undo has limits:
 
-- It puts back what the restore overwrote. Files and registry keys the restore created are not in
-  the old state, so they stay.
+- It puts back what the restore overwrote. Files the restore created are not in the old state,
+  so they stay. A registry key the restore created below a key that already existed is removed
+  by the undo; a ticked key that did not exist before stays, with everything the restore wrote
+  below it.
 - Files and registry keys you unticked were not touched, so they are not in the safety backup.
+  Two kinds of unticked registry key are the exception: one under a ticked key, and one above a
+  key the restore created. They are in the safety backup, so the undo puts them back as they were
+  before the restore. Untick them in the undo's plan to leave them as they are now.
 - A safety backup of a file that you redirected with **Override** is stored by its full path. Such
   files show up as skipped when you restore that snapshot through the normal flow.
 
