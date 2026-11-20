@@ -22,6 +22,7 @@ fn config(repository: &str, options: &[(&str, &str, bool)]) -> AppConfig {
         theme: ThemeChoice::System,
         backup_sort: ListSort::default(),
         restore_sort: ListSort::default(),
+        custom_games_repository: None,
     }
 }
 

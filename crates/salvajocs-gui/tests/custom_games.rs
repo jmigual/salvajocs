@@ -121,7 +121,7 @@ fn kept_rules_game() -> CustomGame {
 fn dialog_game(title: &str) -> CustomGame {
     let mut config = local_config("unused");
     crossbuild::apply_choices(
-        &mut config,
+        &mut config.custom_games,
         title,
         &[(
             (Base::XdgData, "Foo".to_owned()),
@@ -135,7 +135,7 @@ fn dialog_game(title: &str) -> CustomGame {
 fn skipped_game(title: &str) -> CustomGame {
     let mut config = local_config("unused");
     crossbuild::apply_choices(
-        &mut config,
+        &mut config.custom_games,
         title,
         &[((Base::XdgData, "Foo".to_owned()), Choice::Skip)],
     );

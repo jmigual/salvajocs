@@ -1283,7 +1283,7 @@ impl BackupTab {
             Some(DialogAction::Confirm(choices)) => match crossbuild::resolve(entries, &choices) {
                 Ok(_) => {
                     if let Some(config) = &mut state.config {
-                        crossbuild::apply_choices(config, title, &choices);
+                        crossbuild::apply_choices(&mut config.custom_games, title, &choices);
                         state.save_config(ctx);
                     }
                     self.mapping = None;

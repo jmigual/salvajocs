@@ -39,6 +39,7 @@ fn sample() -> AppConfig {
         theme: ThemeChoice::Dark,
         backup_sort: ListSort::default(),
         restore_sort: ListSort::default(),
+        custom_games_repository: None,
     }
 }
 
@@ -580,6 +581,39 @@ fn custom_game_without_skips_loads_and_skips_round_trip() {
     config.custom_games[0].skips = vec!["<xdgData>/Foo".into()];
     config.save(tmp.path()).unwrap();
     assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn custom_games_repository_is_left_out_until_set_and_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    fs::write(&file, "repository: /backups\npassword: none\n").unwrap();
+    let mut config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.custom_games_repository, None);
+    config.save(tmp.path()).unwrap();
+    let yaml = fs::read_to_string(&file).unwrap();
+    assert!(!yaml.contains("custom_games_repository"), "{yaml}");
+
+    config.custom_games_repository = Some(config.secret_scope());
+    config.save(tmp.path()).unwrap();
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn the_config_before_custom_games_is_copied_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join(BEFORE_CUSTOM_GAMES_FILE);
+    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
+    assert!(!copy.exists(), "no config, no copy");
+
+    let mut config = sample();
+    config.save(tmp.path()).unwrap();
+    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
+    config.custom_games.clear();
+    config.save(tmp.path()).unwrap();
+    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
+    let copied: AppConfig = serde_saphyr::from_str(&fs::read_to_string(&copy).unwrap()).unwrap();
+    assert_eq!(copied, sample());
 }
 
 #[test]

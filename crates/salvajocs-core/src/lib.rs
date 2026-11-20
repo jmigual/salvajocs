@@ -4,6 +4,7 @@ pub mod backup;
 pub mod changes;
 pub mod config;
 pub mod crossbuild;
+pub mod custom_games;
 pub mod launcher;
 pub mod layout;
 pub mod manifest;

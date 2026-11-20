@@ -1086,7 +1086,7 @@ impl RestoreTab {
         match plan {
             Ok(labelled) => {
                 if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
-                    crossbuild::apply_choices(config, &fetched.title, &choices);
+                    crossbuild::apply_choices(&mut config.custom_games, &fetched.title, &choices);
                     state.save_config(ctx);
                 }
                 self.mapping = None;

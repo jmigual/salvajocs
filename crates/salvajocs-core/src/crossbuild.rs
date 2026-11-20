@@ -4,7 +4,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::config::AppConfig;
 use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta, WinFolders};
 use crate::manifest::{CustomFile, CustomGame, FileRule, GameEntry, Integration, Os, Pair, Tag};
 
@@ -716,12 +715,12 @@ pub fn template_for(path: &Path, ctx: &Context, vars: &GameVars) -> Option<Strin
     })
 }
 
-/// Saves each choice on the custom game `title`, creating an `Extend` custom game when there is
-/// none: `Template` as a [`Pair`] of the root and the chosen template, `Skip` as the root's
-/// template in `skips`. A choice replaces any earlier pair or skip for the same root; a pair one
-/// of the game's file rows already declares ([`CustomGame::file_pairs`]) is not stored. Templates
-/// must have passed [`resolve`].
-pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRoot, Choice)]) {
+/// Saves each choice on the custom game `title` of `games`, creating an `Extend` custom game when
+/// there is none: `Template` as a [`Pair`] of the root and the chosen template, `Skip` as the
+/// root's template in `skips`. A choice replaces any earlier pair or skip for the same root; a
+/// pair one of the game's file rows already declares ([`CustomGame::file_pairs`]) is not stored.
+/// Templates must have passed [`resolve`].
+pub fn apply_choices(games: &mut Vec<CustomGame>, title: &str, choices: &[(SnapshotRoot, Choice)]) {
     let choices: Vec<_> = choices
         .iter()
         .filter_map(|(root, choice)| Some((base_family(root.0)?, root, choice)))
@@ -729,12 +728,11 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
     if choices.is_empty() {
         return;
     }
-    let index = config
-        .custom_games
+    let index = games
         .iter()
         .position(|game| game.name == title)
         .unwrap_or_else(|| {
-            config.custom_games.push(CustomGame {
+            games.push(CustomGame {
                 name: title.to_owned(),
                 files: Vec::new(),
                 entry: GameEntry::default(),
@@ -743,9 +741,9 @@ pub fn apply_choices(config: &mut AppConfig, title: &str, choices: &[(SnapshotRo
                 pairs: Vec::new(),
                 skips: Vec::new(),
             });
-            config.custom_games.len() - 1
+            games.len() - 1
         });
-    let game = &mut config.custom_games[index];
+    let game = &mut games[index];
     let rows = game.file_pairs();
     for (family, root, choice) in choices {
         game.pairs

@@ -22,6 +22,9 @@ use services::{OPENDAL_SERVICES, opendal_reads_key};
 
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";
+/// The copy of the config file taken before the repository's custom games first replaced one of
+/// this PC's (ADR-0028).
+pub const BEFORE_CUSTOM_GAMES_FILE: &str = "config-before-custom-games.yaml";
 
 /// Errors from reading, writing and resolving the config.
 #[derive(Debug, thiserror::Error)]
@@ -286,7 +289,8 @@ pub struct AppConfig {
     /// Configured game roots (ADR-0005).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<Root>,
-    /// Games defined or adjusted by the user (ADR-0008).
+    /// Games defined or adjusted by the user (ADR-0008): this PC's copy of the repository's,
+    /// with each game's Wine prefix (ADR-0028).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_games: Vec<CustomGame>,
     /// Whether the app asks GitHub for a newer release at start (ADR-0013).
@@ -312,6 +316,10 @@ pub struct AppConfig {
         skip_serializing_if = "ListSort::is_default"
     )]
     pub restore_sort: ListSort,
+    /// The key ([`AppConfig::secret_scope`]) of the repository whose custom games
+    /// `custom_games` mirrors; `None` until one was synced (ADR-0028).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_games_repository: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -326,7 +334,7 @@ pub fn default_dir() -> Option<PathBuf> {
 impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
     /// reads from the file: no options, roots or custom games, update checks on, the system
-    /// theme and both lists sorted by name.
+    /// theme, both lists sorted by name and no repository's custom games mirrored.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -339,6 +347,7 @@ impl AppConfig {
             theme: ThemeChoice::System,
             backup_sort: ListSort::default(),
             restore_sort: ListSort::default(),
+            custom_games_repository: None,
         }
     }
 
@@ -367,6 +376,20 @@ impl AppConfig {
         file.sync_all()?;
         fs::rename(&tmp, dir.join(CONFIG_FILE))?;
         Ok(())
+    }
+
+    /// Copies `dir/config.yaml` to [`BEFORE_CUSTOM_GAMES_FILE`] in `dir`, unless that copy
+    /// exists, so the custom games it held before the repository's replaced them can be
+    /// recovered by hand (ADR-0028). A missing config file copies nothing.
+    pub fn keep_before_custom_games(dir: &Path) -> io::Result<()> {
+        let copy = dir.join(BEFORE_CUSTOM_GAMES_FILE);
+        if copy.try_exists()? {
+            return Ok(());
+        }
+        match fs::copy(dir.join(CONFIG_FILE), copy) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+            _ => Ok(()),
+        }
     }
 
     /// The keyring scope of this repository: JSON of the repository string and its sorted

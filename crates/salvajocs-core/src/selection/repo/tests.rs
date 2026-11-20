@@ -208,6 +208,26 @@ fn games_do_not_interfere() {
     );
 }
 
+/// Custom games are settings snapshots too, under a tag outside `settings:`, which this code,
+/// the same since 0.4.0, would read as a game's selection (ADR-0028).
+#[test]
+fn load_all_ignores_custom_game_snapshots() {
+    let (f, mut storage) = Fixture::new();
+    let game = crate::manifest::CustomGame::new(
+        GAME.into(),
+        crate::manifest::GameEntry::default(),
+        crate::manifest::Integration::Extend,
+    );
+    crate::custom_games::save(&mut storage, GAME, None, Some(&game), &f.stage).unwrap();
+    assert!(load_all(&mut storage).unwrap().is_empty());
+
+    f.save(&mut storage, GAME, &[Change::Skip(true)]).unwrap();
+    assert_eq!(
+        loaded(&mut f.open()),
+        BTreeMap::from([(GAME.to_string(), expected(&[Change::Skip(true)]))])
+    );
+}
+
 #[test]
 fn newer_format_is_neither_loaded_nor_saved() {
     let (f, mut storage) = Fixture::new();

@@ -337,7 +337,7 @@ impl RestoreTab {
         match plan {
             Ok(labelled) => {
                 if let Some(config) = &mut state.config {
-                    crossbuild::apply_choices(config, &game.title, &choices);
+                    crossbuild::apply_choices(&mut config.custom_games, &game.title, &choices);
                     state.save_config(ctx);
                 }
                 let (fetched, snapshot) = (mapping.fetched.clone(), mapping.snapshot.clone());

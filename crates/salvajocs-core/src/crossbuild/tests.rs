@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::*;
-use crate::config::{ListSort, PasswordMode, ThemeChoice};
+use crate::config::{AppConfig, ListSort, PasswordMode, ThemeChoice};
 use crate::layout::{Root, RootKind};
 use crate::manifest::{CustomFile, RegistryRule, When};
 
@@ -68,6 +68,7 @@ fn config() -> AppConfig {
         theme: ThemeChoice::System,
         backup_sort: ListSort::default(),
         restore_sort: ListSort::default(),
+        custom_games_repository: None,
     }
 }
 
@@ -355,7 +356,7 @@ fn user_choice_saved_as_pairing() {
     let windows = win_root("<winDocuments>/Foo");
     let mut config = config();
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[
             (linux.clone(), Choice::Template("<winAppData>/Old".into())),
@@ -364,7 +365,7 @@ fn user_choice_saved_as_pairing() {
     );
     // Choosing again for the same root replaces the earlier pair.
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(linux.clone(), Choice::Template("<winAppData>/Foo".into()))],
     );
@@ -385,7 +386,7 @@ fn user_choice_saved_as_pairing() {
 
     // A Windows root stores its own template on the Windows side of the pair.
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(windows, Choice::Template("<xdgConfig>/Foo".into()))],
     );
@@ -408,7 +409,7 @@ fn apply_choices_keeps_existing_custom_game() {
         skips: Vec::new(),
     });
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(
             linux_root("<xdgData>/B"),
@@ -419,7 +420,7 @@ fn apply_choices_keeps_existing_custom_game() {
     assert_eq!(config.custom_games[0].integration, Integration::Override);
     assert_eq!(config.custom_games[0].pairs.len(), 2);
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Other",
         &[(linux_root("<xdgData>/B"), Choice::Skip)],
     );
@@ -431,8 +432,8 @@ fn skip_choice_is_remembered() {
     let linux = linux_root("<xdgData>/Foo");
     let mut config = config();
     let choice = [(linux.clone(), Choice::Skip)];
-    apply_choices(&mut config, "Game", &choice);
-    apply_choices(&mut config, "Game", &choice);
+    apply_choices(&mut config.custom_games, "Game", &choice);
+    apply_choices(&mut config.custom_games, "Game", &choice);
     let [game] = &config.custom_games[..] else {
         panic!("one custom game expected");
     };
@@ -442,17 +443,17 @@ fn skip_choice_is_remembered() {
     // A pair for the same root gives way to the skip.
     let mut with_pair = config.clone();
     apply_choices(
-        &mut with_pair,
+        &mut with_pair.custom_games,
         "Game",
         &[(linux, Choice::Template("<winAppData>/Foo".into()))],
     );
-    apply_choices(&mut with_pair, "Game", &choice);
+    apply_choices(&mut with_pair.custom_games, "Game", &choice);
     assert_eq!(with_pair.custom_games[0].skips, ["<xdgData>/Foo"]);
     assert!(with_pair.custom_games[0].pairs.is_empty());
 
     // A Windows root stores its own template.
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(win_root("<winDocuments>/Foo"), Choice::Skip)],
     );
@@ -466,9 +467,13 @@ fn skip_choice_is_remembered() {
 fn template_choice_clears_skip() {
     let linux = linux_root("<xdgData>/Foo");
     let mut config = config();
-    apply_choices(&mut config, "Game", &[(linux.clone(), Choice::Skip)]);
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
+        "Game",
+        &[(linux.clone(), Choice::Skip)],
+    );
+    apply_choices(
+        &mut config.custom_games,
         "Game",
         &[(linux, Choice::Template("<winAppData>/Foo".into()))],
     );
@@ -568,7 +573,7 @@ fn saved_skip_beats_engine_rule() {
 fn home_skip_applies_in_both_directions() {
     let mut config = config();
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(linux_root("<home>/Foo"), Choice::Skip)],
     );
@@ -585,7 +590,7 @@ fn home_skip_applies_in_both_directions() {
 
     // Choosing a target for the Windows root removes the Linux-side skip.
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(
             win_root("<home>/Foo"),
@@ -889,7 +894,7 @@ fn apply_choices_replaces_pair_spelled_differently() {
         skips: Vec::new(),
     });
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[(
             linux_root("<xdgConfig>/Foo"),
@@ -1214,7 +1219,7 @@ fn apply_choices_does_not_store_a_pair_a_file_row_declares() {
         skips: vec!["<xdgData>/g".into()],
     });
     apply_choices(
-        &mut config,
+        &mut config.custom_games,
         "Game",
         &[
             (
