@@ -1,5 +1,5 @@
 //! The Settings tab: repository, compression, password, old backups (ADR-0015), roots (ADR-0009,
-//! ADR-0017), appearance and updates (ADR-0013).
+//! ADR-0017), appearance, updates (ADR-0013) and the build.
 
 use std::path::PathBuf;
 
@@ -16,6 +16,7 @@ use crate::theme::{self, icons};
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{form_grid, labelled_edit};
 
+mod about;
 mod launchers;
 mod retention;
 
@@ -160,6 +161,8 @@ impl SettingsTab {
             appearance_ui(ui, state);
             updates_ui(ui, state);
             self.cleanup_ui(ui, state);
+            ui.add_space(16.0);
+            about::ui(ui);
             adopted
         })
     }

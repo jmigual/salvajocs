@@ -120,6 +120,14 @@ On Windows and in the AppImage, **Check for updates at start** (on by default) a
 newer release each time salvajocs starts. Untick it to stop the check. Other builds do not show
 this setting.
 
+## About
+
+The last section shows which build runs: the version, the commit (marked "modified" when the
+source had changes, "unknown" when the build could not tell), the commit date, the target
+(system and processor), the Rust compiler, the build profile and the version of the storage
+library. **Copy** puts these lines on the clipboard, to paste into a bug report. **Release notes**
+opens the changelog at the tag of this version.
+
 ## Where settings are stored
 
 All settings except the compression level and the old-backup rules are in `config.yaml`, listed

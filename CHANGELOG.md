@@ -19,6 +19,9 @@ All notable changes to salvajocs. The format follows
   in the safety backup. Unticking a file the safety backup cannot read lets the rest of the game
   restore, and unticking every registry key lets the files restore while Wine runs. A new plan
   ticks everything again.
+- An **About** section at the end of the Settings tab shows the version, the commit, the Rust
+  compiler, the target, the build profile and the storage library version, with a link to the
+  release notes and a **Copy** button for bug reports.
 
 ### Changed
 

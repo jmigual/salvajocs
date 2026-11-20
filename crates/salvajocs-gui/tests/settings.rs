@@ -11,8 +11,8 @@ use common::{
     refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled, run_until,
     run_until_ready, save_config, shows,
 };
-use eframe::egui::ThemePreference;
 use eframe::egui::accesskit::{Role, Toggled};
+use eframe::egui::{OutputCommand, ThemePreference};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption, ThemeChoice};
@@ -618,6 +618,39 @@ fn unreadable_config_blocks_settings_and_is_left_alone() {
         std::fs::read_to_string(path).unwrap(),
         "repository: [unclosed"
     );
+}
+
+#[test]
+fn settings_about_shows_the_build_and_copies_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env);
+
+    assert!(shows(&harness, "About"));
+    assert!(shows(&harness, env!("CARGO_PKG_VERSION")));
+    assert!(shows(&harness, "Commit"));
+    assert!(shows(&harness, "Storage library"));
+    harness.get_by_label("Copy").scroll_to_me();
+    run_settled(&mut harness);
+    harness.get_by_label("Copy").click();
+    // The command lasts one frame, so read it right after the click is handled.
+    harness.step();
+    let copied: Vec<String> = harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied.len(), 1);
+    assert!(copied[0].starts_with(concat!("Version: ", env!("CARGO_PKG_VERSION"))));
+    assert!(copied[0].contains("\nTarget: "));
 }
 
 #[test]
