@@ -17,6 +17,10 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- The plan of a single game on the Restore tab is a file tree with closed folders, as in the
+  plan of several games, so a game with thousands of files stays responsive. A file's path shows
+  on hover. Each file has an **Override** button that opens its path field, and an override can
+  be cleared.
 - On the Backup tab, a file shown as changed by modified time only, because its backup has no
   list of hashes (made by 0.5.0 or older), says so in its tooltip.
 - The manifest status and the update notice moved from the top bar to a thinner bar along the

@@ -1,6 +1,8 @@
 //! Controls shared by several screens.
 
-use eframe::egui::{Color32, Grid, Label, Response, RichText, TextEdit, Ui};
+use eframe::egui::{
+    Button, Color32, Grid, Label, Response, RichText, Role, TextEdit, Ui, WidgetInfo,
+};
 
 use crate::theme;
 
@@ -27,6 +29,14 @@ pub fn labelled_edit(ui: &mut Ui, label: &str, text: &mut String, password: bool
     let label = ui.label(label);
     ui.add(TextEdit::singleline(text).password(password))
         .labelled_by(label.id)
+}
+
+/// A button showing `text` whose accessible name is `name`, so a button repeated on every row
+/// can still be told apart.
+pub fn named_button(ui: &mut Ui, enabled: bool, text: &str, name: &str) -> Response {
+    let response = ui.add_enabled(enabled, Button::new(text));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, name));
+    response
 }
 
 /// A two-column form grid whose rows are only as tall as their contents, so a hint row sits

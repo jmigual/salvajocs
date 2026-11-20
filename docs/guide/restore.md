@@ -50,16 +50,19 @@ both existing.
 
 The Plan shows:
 
-- **Files to write (N).** Each file shows `<Folder>/<path>` and, under it, the real path on this
-  machine. A tag such as `(absolute path)` marks a path that was saved as a plain path. After a
-  file's folder, an icon says what restoring it does, as in the plan of
-  [several games](#restore-several-games): a plus in a circle when nothing is there yet, a pencil
-  when the file there differs and will be overwritten, a question mark when salvajocs cannot read
-  the file there to compare it, and a cross in a circle when salvajocs will not write it. Hover
-  it to read why. An unchanged file has no icon; it is written all the same. Icons after the
-  heading count the files of each kind. When the safety backup cannot read a file at a target,
-  the plan says that nothing will be restored and lists those files, and **Restore files** stays
-  disabled. Make them readable and click **Try again**.
+- **Files to write (N).** A file tree, as in the plan of
+  [several games](#restore-several-games). Each file is under the folder it goes into, named by
+  its base, such as `WinAppData/Game`. A file saved as a plain path goes under `Absolute`
+  (`WinAbsolute` on Windows). Hover a file's name to read the full path it goes to on this
+  machine. Folders start closed; click one to open it. A folder that already exists has a button
+  that opens it in the file manager. After a file's size, an icon says what restoring it does: a
+  plus in a circle when nothing is there yet, a pencil when the file there differs and will be
+  overwritten, a question mark when salvajocs cannot read the file there to compare it, and a
+  cross in a circle when salvajocs will not write it. Hover it to read why. An unchanged file has
+  no icon; it is written all the same. A folder's line counts the icons below it, and icons after
+  the heading count the files of each kind. When the safety backup cannot read a file at a
+  target, the plan says that nothing will be restored and lists those files, and **Restore
+  files** stays disabled. Make them readable and click **Try again**.
 - **Registry.** The number of registry keys and the prefix or the Windows registry they go into.
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A **Cross-build restore** warning when the plan maps folders from the other build. The
@@ -82,10 +85,15 @@ The Plan shows:
 
 ### Overrides
 
-Each file line has an **Override target** field. Type an absolute path and click **Override** to
-send that one file somewhere else, for this restore only, and its icon compares it with the new
-target. A path that does not fit is refused with an error. If you typed a path and did not click
-**Override**, **Restore files** stays disabled and the tab tells you to apply or clear it.
+Each file has an **Override** button; hover it to read where the file goes now. Click it to
+open a field under that file, type an absolute path and click **Apply** to send that one file
+somewhere else, for this restore only. The file stays in its folder, with the new path and
+`(overridden for this restore)` under it, and its icon compares it with the new target. The
+heading counts the overridden files, so you see them while the folders are closed. **Clear**
+sends a file back to its planned target. A path that does not fit is refused with an error. If
+you typed a path and did not click **Apply**, **Restore files** stays disabled and the tab tells
+you to apply or clear it. Clicking **Override** again closes the field and drops what you typed.
+A new plan, after you change the snapshot or where to restore, starts without overrides.
 
 ## What happens when you click Restore files
 

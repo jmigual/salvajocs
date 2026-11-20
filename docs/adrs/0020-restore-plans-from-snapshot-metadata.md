@@ -63,6 +63,11 @@ small file costs one ranged read of a data pack.
 - **Labels in the single-game plan too.** Each write of the single-game plan carries the batch's
   labels: new, changed, could not be compared or will fail. An overridden write is compared
   again against its new target. This reverses the plan's first proposal to leave them out.
+- **The single-game plan is the batch's file tree.** Its rows are keyed by where each write
+  lands as planned, its folders start closed and it is built once in the plan job; a list with a
+  field per write drew about 15,000 widgets a frame for 3,000 files. A file's path shows on
+  hover. Its **Override** button opens a path field under that row only; an overridden write
+  keeps its row and shows its new target with **Clear**, which puts the planned write back.
 
 ## Alternatives considered
 

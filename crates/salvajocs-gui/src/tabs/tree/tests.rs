@@ -59,7 +59,7 @@ fn included_in(tree: &mut FileTree, folder: &[&str], included: &dyn Fn(&str) -> 
         let range = &self::folder(tree, folder).range;
         (range.start, range.end)
     };
-    let totals = totals(&mut tree.included, &tree.files, included, &|_| None);
+    let totals = totals(&mut tree.included, &tree.files, included, &|_, _| None);
     totals[end].files - totals[start].files
 }
 
@@ -605,4 +605,71 @@ fn only_existing_folders_keep_their_open_button() {
     let tree = FileTree::new(rows).existing_folders_only();
     assert!(folder(&tree, &["Base", "present"]).real.is_some());
     assert_eq!(folder(&tree, &["Base", "missing"]).real, None);
+}
+
+#[test]
+fn the_row_slot_draws_on_and_under_each_open_file_row_with_its_row_position() {
+    // Given out of order, so a row's position differs from where the tree lists it.
+    let mut harness = theme::harness(
+        |ui, tree: &mut FileTree| {
+            let mut row = |ui: &mut Ui, at: usize, key: &str, slot: Slot<'_>| {
+                let place = match slot {
+                    Slot::End(_) => "End",
+                    Slot::Below => "Below",
+                };
+                ui.label(format!("{place} {at} {key}"));
+            };
+            let (badge, hint) = (
+                |_: usize, _: &str| None,
+                |_: usize, _: &str, _| String::new(),
+            );
+            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut row);
+        },
+        tree(&["Base/b.sav", "Base/a.sav"]),
+    );
+    harness.run();
+    assert_eq!(harness.query_all_by_label_contains("End ").count(), 0);
+
+    harness.get_by_label("Open Base").click();
+    harness.run();
+    let rect = |label: &str| harness.get_by_label(label).rect();
+    let (a, end, below, b) = (
+        rect("a.sav"),
+        rect("End 1 Base/a.sav"),
+        rect("Below 1 Base/a.sav"),
+        rect("b.sav"),
+    );
+    assert!(end.min.x > a.max.x && end.min.y < a.max.y && end.max.y > a.min.y);
+    assert!(a.max.y <= below.min.y && below.max.y <= b.min.y);
+    assert!(harness.query_by_label("End 0 Base/b.sav").is_some());
+}
+
+#[test]
+fn rows_that_share_a_key_get_their_badges_by_position() {
+    // Two rows land on one key, as a restore of both builds' roots into one build does.
+    let mut harness = theme::harness(
+        |ui, tree: &mut FileTree| {
+            let badge = |at: usize, _: &str| Some([Badge::New, Badge::Changed][at]);
+            let hint = |at: usize, key: &str, _| format!("{key} at {at}");
+            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut |_, _, _, _| {});
+        },
+        tree(&["Base/a.sav", "Base/a.sav"]),
+    );
+    harness.run();
+    let chips = harness
+        .get_by_label("1 new, 1 changed")
+        .accesskit_node()
+        .role();
+    assert_eq!(chips, Role::Image);
+
+    harness.get_by_label("Open Base").click();
+    harness.run();
+    for row in [
+        "a.sav, new",
+        "a.sav, changed",
+        "Base/a.sav at 0",
+        "Base/a.sav at 1",
+    ] {
+        assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
+    }
 }

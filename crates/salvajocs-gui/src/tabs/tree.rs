@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::collapsing_header::CollapsingState;
-use eframe::egui::{Button, Checkbox, Color32, Label, Role, Ui, WidgetInfo};
+use eframe::egui::{Button, Checkbox, Color32, Label, Response, Role, Ui, WidgetInfo};
 use salvajocs_core::selection;
 
 use super::format_size;
@@ -88,11 +88,22 @@ pub(crate) enum Mode<'a> {
 
 /// One file of the tree, from its [`Row`], with the last component of its key as `name`.
 struct File {
+    /// The position of its row among the rows [`FileTree::new`] was given.
+    index: usize,
     key: String,
     name: String,
     size: u64,
     real: Option<PathBuf>,
     removed: bool,
+}
+
+/// Where [`FileTree::ui_with_rows`] calls its row slot on a file's row.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Slot<'a> {
+    /// At the end of the row, after the file's badge, with the response of the file's name.
+    End(&'a Response),
+    /// Under the row.
+    Below,
 }
 
 /// What the user clicked in a [`FileTree`].
@@ -167,9 +178,11 @@ impl FileTree {
     pub(crate) fn new(rows: impl IntoIterator<Item = Row>) -> Self {
         let mut files: Vec<File> = rows
             .into_iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 let name = row.key.rsplit('/').next().unwrap_or_default().to_owned();
                 File {
+                    index,
                     key: row.key,
                     name,
                     size: row.size,
@@ -249,7 +262,8 @@ impl FileTree {
         included: &dyn Fn(&str) -> bool,
         badge: &dyn Fn(&str) -> Option<Badge>,
     ) -> (usize, u64) {
-        let totals = totals(&mut self.included, &self.files, included, badge);
+        let badge = |_: usize, key: &str| badge(key);
+        let totals = totals(&mut self.included, &self.files, included, &badge);
         let all = totals.last().copied().unwrap_or_default();
         (all.files, all.size)
     }
@@ -264,6 +278,25 @@ impl FileTree {
         mode: Mode<'_>,
         badge: &dyn Fn(&str) -> Option<Badge>,
         hint: &dyn Fn(&str, Badge) -> String,
+    ) -> Option<Clicked> {
+        let (badge, hint) = (
+            |_: usize, key: &str| badge(key),
+            |_: usize, key: &str, badge: Badge| hint(key, badge),
+        );
+        self.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {})
+    }
+
+    /// [`FileTree::ui`], with `badge` and `hint` taking a file's row position too, so rows that
+    /// share a key can differ, and calling `row` on each file row it draws: with the row's
+    /// position, its key and where on the row it draws. A row's position is its place among the
+    /// rows [`FileTree::new`] was given.
+    pub(crate) fn ui_with_rows(
+        &mut self,
+        ui: &mut Ui,
+        mode: Mode<'_>,
+        badge: &dyn Fn(usize, &str) -> Option<Badge>,
+        hint: &dyn Fn(usize, &str, Badge) -> String,
+        row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
     ) -> Option<Clicked> {
         let FileTree {
             files,
@@ -283,7 +316,7 @@ impl FileTree {
             hint,
         };
         let mut clicked = None;
-        drawing.children(ui, root, &mut clicked);
+        drawing.children(ui, root, &mut clicked, row);
         clicked
     }
 }
@@ -306,11 +339,11 @@ fn folded(key: &str) -> Vec<String> {
 }
 
 /// The badge of `file`: [`Badge::Removed`] when it is a removed row, else what `badge` says.
-fn badge_of(file: &File, badge: &dyn Fn(&str) -> Option<Badge>) -> Option<Badge> {
+fn badge_of(file: &File, badge: &dyn Fn(usize, &str) -> Option<Badge>) -> Option<Badge> {
     if file.removed {
         Some(Badge::Removed)
     } else {
-        badge(&file.key)
+        badge(file.index, &file.key)
     }
 }
 
@@ -319,7 +352,7 @@ fn totals<'a>(
     cache: &'a mut Option<Vec<Included>>,
     files: &[File],
     included: &dyn Fn(&str) -> bool,
-    badge: &dyn Fn(&str) -> Option<Badge>,
+    badge: &dyn Fn(usize, &str) -> Option<Badge>,
 ) -> &'a [Included] {
     cache.get_or_insert_with(|| {
         let mut sum = Included::default();
@@ -372,15 +405,21 @@ struct Drawing<'a> {
     files: &'a [File],
     totals: &'a [Included],
     mode: Mode<'a>,
-    badge: &'a dyn Fn(&str) -> Option<Badge>,
-    hint: &'a dyn Fn(&str, Badge) -> String,
+    badge: &'a dyn Fn(usize, &str) -> Option<Badge>,
+    hint: &'a dyn Fn(usize, &str, Badge) -> String,
 }
 
 impl Drawing<'_> {
-    /// The subfolders of `parent`, then the files directly in it.
-    fn children(&self, ui: &mut Ui, parent: &Folder, clicked: &mut Option<Clicked>) {
+    /// The subfolders of `parent`, then the files directly in it, each with the `row` slot.
+    fn children(
+        &self,
+        ui: &mut Ui,
+        parent: &Folder,
+        clicked: &mut Option<Clicked>,
+        row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+    ) {
         for folder in &parent.folders {
-            self.folder(ui, folder, clicked);
+            self.folder(ui, folder, clicked, row);
         }
         for &at in &parent.files {
             let file = &self.files[at];
@@ -391,7 +430,7 @@ impl Drawing<'_> {
                 None => file.name.clone(),
             };
             ui.horizontal(|ui| {
-                match &self.mode {
+                let shown = match &self.mode {
                     Mode::Select { included, enabled } if !file.removed => {
                         let mut checked = included(&file.key);
                         let checkbox = Checkbox::new(&mut checked, &file.name);
@@ -402,6 +441,7 @@ impl Drawing<'_> {
                         response.widget_info(|| {
                             WidgetInfo::selected(Role::CheckBox, *enabled, checked, &name)
                         });
+                        response
                     }
                     _ => {
                         let label = if file.removed {
@@ -409,16 +449,19 @@ impl Drawing<'_> {
                         } else {
                             Label::new(&file.name)
                         };
-                        ui.add(label)
-                            .widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+                        let response = ui.add(label);
+                        response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &name));
+                        response
                     }
-                }
+                };
                 ui.weak(format_size(file.size));
                 if let Some(badge) = badge {
-                    let hint = (self.hint)(&file.key, badge);
+                    let hint = (self.hint)(file.index, &file.key, badge);
                     theme::labeled_mark(ui, badge.glyph(), badge.color(ui), &hint);
                 }
+                row(ui, file.index, &file.key, Slot::End(&shown));
             });
+            row(ui, file.index, &file.key, Slot::Below);
         }
     }
 
@@ -426,7 +469,13 @@ impl Drawing<'_> {
     /// folders that each hold only the next one is one row, labelled with their joined names. Its
     /// checkbox toggles the top folder, to clear saved choices on every level; counts and the open
     /// button are the deepest folder's. A folder with only removed files has no checkbox.
-    fn folder(&self, ui: &mut Ui, first: &Folder, clicked: &mut Option<Clicked>) {
+    fn folder(
+        &self,
+        ui: &mut Ui,
+        first: &Folder,
+        clicked: &mut Option<Clicked>,
+        row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+    ) {
         let mut folder = first;
         let mut label = folder.name.clone();
         while let ([only], true) = (folder.folders.as_slice(), folder.files.is_empty()) {
@@ -492,7 +541,7 @@ impl Drawing<'_> {
                     }
                 }
             })
-            .body(|ui| self.children(ui, folder, clicked));
+            .body(|ui| self.children(ui, folder, clicked, row));
         // The arrow is a bare interaction, so name it for screen readers; not the bare folder
         // name, which the checkbox carries.
         arrow.widget_info(|| {

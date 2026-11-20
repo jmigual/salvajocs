@@ -6,7 +6,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::crossbuild::{Confidence, MappingEntry};
-use salvajocs_core::layout::{SNAPSHOT_FORMAT, SnapshotMeta};
+use salvajocs_core::layout::{Base, SNAPSHOT_FORMAT, SnapshotMeta};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{CustomGame, Integration, parse_yaml};
 use salvajocs_core::registry::{RegData, RegValue, RegistryExport};
@@ -333,15 +333,19 @@ fn confirm_job(
     let fetched = fetched(storage);
     Job::spawn(ctx, move || {
         let _ = hold.recv();
+        let plan = RestorePlan::new(Vec::new(), None, Vec::new(), true, Vec::new());
         Ok(Prepared {
+            plan: fetched.labelled(Ok(plan)),
             fetched,
             choices: vec![(unknown_root(), Choice::Template("<xdgData>/Mix".into()))],
-            plan: Ok((
-                RestorePlan::new(Vec::new(), None, Vec::new(), true, Vec::new()),
-                Vec::new(),
-            )),
         })
     })
+}
+
+/// The plan `plan` of `fetched`, as the plan job hands it to the tab.
+fn preview(fetched: Arc<Fetched>, plan: RestorePlan) -> Preview {
+    let labelled = fetched.labelled(Ok(plan)).unwrap();
+    Preview::new(fetched, labelled)
 }
 
 type TabHarness = Harness<'static, (RestoreTab, State)>;
@@ -584,13 +588,10 @@ fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
 fn a_running_restore_says_it_downloads_and_restores() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
-        preview: Some(Preview {
-            fetched: fetched(storage),
-            plan: RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
-            labels: Vec::new(),
-            overrides: Vec::new(),
-            override_error: None,
-        }),
+        preview: Some(preview(
+            fetched(storage),
+            RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+        )),
         ..RestoreTab::default()
     });
     let (release, hold) = mpsc::channel::<()>();
@@ -612,13 +613,10 @@ fn a_running_restore_says_it_downloads_and_restores() {
 fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
-        preview: Some(Preview {
-            fetched: fetched(storage),
-            plan: RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
-            labels: Vec::new(),
-            overrides: Vec::new(),
-            override_error: None,
-        }),
+        preview: Some(preview(
+            fetched(storage),
+            RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+        )),
         ..RestoreTab::default()
     });
     let job = Job::spawn(&harness.ctx.clone(), || {
@@ -648,13 +646,10 @@ fn registry_restore(dir: &Path, wineserver_running: fn() -> bool) -> TabHarness 
     let folders = WinFolders::for_prefix(&prefix, "me");
     let registry = Some((export, Context::WinePrefix { prefix, folders }));
     let mut harness = tab_harness(dir, |storage| RestoreTab {
-        preview: Some(Preview {
-            fetched: backed_up(storage, dir),
-            plan: RestorePlan::new(Vec::new(), registry, Vec::new(), false, Vec::new()),
-            labels: Vec::new(),
-            overrides: Vec::new(),
-            override_error: None,
-        }),
+        preview: Some(preview(
+            backed_up(storage, dir),
+            RestorePlan::new(Vec::new(), registry, Vec::new(), false, Vec::new()),
+        )),
         ..RestoreTab::default()
     });
     harness.state_mut().1.env.wineserver_running = wineserver_running;

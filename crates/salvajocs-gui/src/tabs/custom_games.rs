@@ -20,7 +20,7 @@ use crate::env::Env;
 use crate::job::Job;
 use crate::state::State;
 use crate::theme::{self, icons};
-use crate::widgets::{guide_url, labelled_edit};
+use crate::widgets::{guide_url, labelled_edit, named_button};
 
 /// The placeholders section of the guide.
 const PLACEHOLDERS_DOCS: &str = guide_url!("custom-games.md#placeholders");
@@ -426,14 +426,6 @@ enum Action {
     Cancel,
     Reload,
     Browse(Pick),
-}
-
-/// A button showing `text` whose accessible name is `name`, so a button repeated on every row
-/// can still be told apart.
-fn named_button(ui: &mut Ui, enabled: bool, text: &str, name: &str) -> egui::Response {
-    let response = ui.add_enabled(enabled, egui::Button::new(text));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
-    response
 }
 
 /// An error line in the error color.

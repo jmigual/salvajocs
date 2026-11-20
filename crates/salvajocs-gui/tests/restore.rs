@@ -184,18 +184,6 @@ fn shows_path(harness: &Harness<'static, App>, text: &str) -> bool {
     harness.query_all(by().predicate(shown)).next().is_some()
 }
 
-/// The text of the label right after the label `source`, in screen order: in a plan row, where
-/// that file goes. `\` reads as `/`, as in `shows_path`.
-fn target_of(harness: &Harness<'static, App>, source: &str) -> Option<String> {
-    let labels: Vec<String> = harness
-        .query_all(by().role(Role::Label))
-        .filter_map(|node| node.accesskit_node().value())
-        .map(|text| text.replace('\\', "/"))
-        .collect();
-    let row = labels.iter().position(|text| text == source)?;
-    labels.get(row + 1).cloned()
-}
-
 fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
@@ -208,6 +196,28 @@ fn value(harness: &Harness<'static, App>, label: &str) -> String {
 fn click(harness: &mut Harness<'static, App>, label: &str) {
     harness.get_by_label(label).click();
     run_settled(harness);
+}
+
+/// Opens the plan's folder `folder` and waits for the hover text of its file row `row` to name
+/// `target`: where that file goes.
+fn goes_to(harness: &mut Harness<'static, App>, folder: &str, row: &str, target: &Path) {
+    let open = format!("Open {folder}");
+    if harness.query_by_label(&open).is_some() {
+        click(harness, &open);
+    }
+    harness.get_by_label(row).hover();
+    let want = target.display().to_string();
+    run_until(harness, "where the file goes", move |h| {
+        shows_path(h, &want)
+    });
+}
+
+/// Opens the override field of the plan's file `key`, types `target` and applies it.
+fn apply_override(harness: &mut Harness<'static, App>, key: &str, target: &Path) {
+    click(harness, &format!("Override {key}"));
+    let field = format!("New target of {key}");
+    replace_text(harness, &field, target.to_str().unwrap());
+    click(harness, &format!("Apply the new target of {key}"));
 }
 
 /// The custom games in the saved config, once `ready` holds; saving is a background job.
@@ -238,6 +248,14 @@ fn pair(linux: &str, windows: &str) -> Pair {
 
 /// Alpha, a Windows build in the prefix `pfx`, with two saves and a file outside its root.
 fn alpha(tmp: &TempDir) -> (Harness<'static, App>, Env, PathBuf) {
+    alpha_with(tmp, |_| {})
+}
+
+/// Like [`alpha`], with `adjust` applied to the app's environment.
+fn alpha_with(
+    tmp: &TempDir,
+    adjust: impl FnOnce(&mut Env),
+) -> (Harness<'static, App>, Env, PathBuf) {
     let prefix = make_prefix(tmp);
     let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
     let snapshot = scan(
@@ -250,7 +268,7 @@ fn alpha(tmp: &TempDir) -> (Harness<'static, App>, Env, PathBuf) {
         ],
         &[(Base::WinAppData, "Alpha")],
     );
-    let (harness, env) = open_tab(tmp, vec![game], &[snapshot]);
+    let (harness, env) = open_tab_with(tmp, vec![game], &[snapshot], &[], adjust);
     let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
     (harness, env, saves)
 }
@@ -269,6 +287,9 @@ fn unity(tmp: &TempDir, prefix: Option<&Path>) -> Harness<'static, App> {
     );
     open_tab(tmp, vec![game], &[snapshot]).0
 }
+
+/// The key of Alpha's `save.dat` in the plan's tree: where it lands.
+const ALPHA_SAVE: &str = "WinAppData/Alpha/save.dat";
 
 /// Mix, backed up from its Windows build: a Unity root and a root no rule knows. Two Linux saves
 /// leave no auto-pair and are the candidates.
@@ -302,17 +323,20 @@ fn mix(tmp: &TempDir) -> (Harness<'static, App>, Env) {
 #[test]
 fn restore_preview_lists_writes_and_skips() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut harness, _env, saves) = alpha(&tmp);
+    let mut opened = None;
+    let (mut harness, _env, saves) = alpha_with(&tmp, |env| opened = Some(record_opened(env)));
+    fs::create_dir_all(&saves).unwrap();
     select(&mut harness, "Alpha");
     preview(&mut harness);
 
     assert!(shows(&harness, "Files to write (2)"));
-    // Each file's row names its own target.
-    for file in ["save.dat", "slot2.dat"] {
-        let target = saves.join(file).display().to_string().replace('\\', "/");
-        let source = format!("WinAppData/Alpha/{file}");
-        assert_eq!(target_of(&harness, &source), Some(target), "{source}");
+    // Each file is listed under the folder it goes into, which opens where they land.
+    click(&mut harness, "Open WinAppData/Alpha");
+    for row in ["save.dat, new", "slot2.dat, new"] {
+        assert!(harness.query_by_label(row).is_some(), "{row}");
     }
+    click(&mut harness, "Show WinAppData/Alpha in the file manager");
+    assert_eq!(*opened.unwrap().lock().unwrap(), [saves]);
     assert!(shows(&harness, "Skipped (1)"));
     assert!(shows(
         &harness,
@@ -510,19 +534,23 @@ fn restore_switching_snapshots_shows_only_the_last_plan() {
     }
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
 
-    assert!(shows(&harness, "XdgData/Alpha/new.dat"));
-    assert!(!shows(&harness, "XdgData/Alpha/old.dat"));
+    click(&mut harness, "Open XdgData/Alpha");
+    assert!(shows(&harness, "new.dat"));
+    assert!(!shows(&harness, "old.dat"));
 }
 
 #[test]
 fn restore_prefix_typing_waits_for_enter() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut harness, _env, _) = alpha(&tmp);
+    let mut opened = None;
+    let (mut harness, _env, _) = alpha_with(&tmp, |env| opened = Some(record_opened(env)));
     select(&mut harness, "Alpha");
     preview(&mut harness);
     let other = tmp.path().join("other-pfx");
     fs::create_dir_all(other.join("drive_c/users/steamuser")).unwrap();
     fs::write(other.join("user.reg"), "WINE REGISTRY Version 2\n").unwrap();
+    let saves = under(&other, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    fs::create_dir_all(&saves).unwrap();
 
     replace_text(&mut harness, "Prefix", other.to_str().unwrap());
     run_settled(&mut harness);
@@ -531,11 +559,8 @@ fn restore_prefix_typing_waits_for_enter() {
 
     harness.key_press(Key::Enter);
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
-    let target = under(
-        &other,
-        "drive_c/users/steamuser/AppData/Roaming/Alpha/save.dat",
-    );
-    assert!(shows_path(&harness, &target.display().to_string()));
+    click(&mut harness, "Show WinAppData/Alpha in the file manager");
+    assert_eq!(*opened.unwrap().lock().unwrap(), [saves]);
 }
 
 #[test]
@@ -571,6 +596,7 @@ fn restore_plan_labels_each_file_and_compares_an_override_afresh() {
     fs::write(&elsewhere, "other").unwrap();
     select(&mut harness, "Alpha");
     preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
 
     // The same bytes as the backup's: unchanged, so no icon.
     assert!(
@@ -579,6 +605,7 @@ fn restore_plan_labels_each_file_and_compares_an_override_afresh() {
             .next()
             .is_some()
     );
+    assert!(harness.query_by_label("save.dat").is_some());
     assert!(harness.query_by_label("New: not on this PC yet").is_some());
     assert!(
         harness
@@ -586,21 +613,227 @@ fn restore_plan_labels_each_file_and_compares_an_override_afresh() {
             .is_none()
     );
 
-    replace_text(
-        &mut harness,
-        "Override target 1",
-        elsewhere.to_str().unwrap(),
-    );
-    click(&mut harness, "Override 1");
+    apply_override(&mut harness, ALPHA_SAVE, &elsewhere);
     assert!(
         harness
             .query_all_by_label("1 new, 1 changed")
             .next()
             .is_some()
     );
+    assert!(harness.query_by_label("save.dat, changed").is_some());
+    assert!(shows_path(
+        &harness,
+        &format!("{} (overridden for this restore)", elsewhere.display())
+    ));
+
+    // Clearing it puts the planned target back, compared afresh.
+    click(&mut harness, &format!("Clear the override of {ALPHA_SAVE}"));
+    assert!(harness.query_by_label("save.dat").is_some());
+    assert!(!shows(&harness, "overridden for this restore"));
     assert!(
         harness
-            .query_by_label("Changed: will be overwritten")
+            .query_all_by_label("1 new, 1 unchanged")
+            .next()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_big_plan_draws_only_its_folders_until_one_is_opened() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tails: Vec<String> = (["a", "b"].iter())
+        .flat_map(|dir| (0..100).map(move |file| format!("Big/{dir}/file{file:03}.dat")))
+        .collect();
+    let tails: Vec<&str> = tails.iter().map(String::as_str).collect();
+    let (big, snapshot) = native(&tmp, "Big", &tails);
+    let (mut harness, _env) = open_tab(&tmp, vec![big], &[snapshot]);
+    select(&mut harness, "Big");
+    preview(&mut harness);
+    let rows = |harness: &Harness<'static, App>| {
+        let rows = (harness.query_all_by_label_contains("file0"))
+            .filter(|node| node.accesskit_node().role() == Role::Label)
+            .count();
+        let buttons = harness.query_all_by_label_contains("Override ").count();
+        (rows, buttons)
+    };
+
+    assert!(shows(&harness, "Files to write (200)"));
+    assert!(shows(&harness, "200 files"));
+    assert_eq!(rows(&harness), (0, 0));
+
+    click(&mut harness, "Open XdgData/Big");
+    assert!(harness.query_by_label("Open a").is_some());
+    assert_eq!(rows(&harness), (0, 0));
+
+    click(&mut harness, "Open a");
+    assert_eq!(rows(&harness), (100, 100));
+    assert!(harness.query_by_label("file000.dat, new").is_some());
+}
+
+#[test]
+fn override_on_one_row_shows_one_field() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    assert!(!shows(&harness, "New target of "));
+
+    click(&mut harness, &format!("Override {ALPHA_SAVE}"));
+    let fields: Vec<_> = (harness.query_all_by_label_contains("New target of "))
+        .filter(|node| node.accesskit_node().role() == Role::TextInput)
+        .collect();
+    assert_eq!(fields.len(), 1);
+    drop(fields);
+    let field = format!("New target of {ALPHA_SAVE}");
+    assert!(harness.query_by_label(&field).is_some());
+
+    // A second click closes it again.
+    click(&mut harness, &format!("Override {ALPHA_SAVE}"));
+    assert!(!shows(&harness, "New target of "));
+}
+
+/// The key of Alpha's `slot2.dat` in the plan's tree.
+const ALPHA_SLOT2: &str = "WinAppData/Alpha/slot2.dat";
+
+#[test]
+fn a_cleared_override_restores_to_the_planned_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    click(&mut harness, "Open WinAppData/Alpha");
+
+    apply_override(&mut harness, ALPHA_SAVE, &elsewhere);
+    assert!(shows(&harness, "1 file overridden"));
+    click(&mut harness, &format!("Clear the override of {ALPHA_SAVE}"));
+    assert!(!shows(&harness, "overridden"));
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+    let restored = fs::read_to_string(saves.join("save.dat")).unwrap();
+    assert_eq!(restored, "Alpha/save.dat");
+    assert!(!elsewhere.exists());
+}
+
+#[test]
+fn an_override_onto_a_directory_will_fail_until_cleared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    let dir = under(tmp.path(), "elsewhere/slot2.dat");
+    fs::create_dir_all(&dir).unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+
+    apply_override(&mut harness, ALPHA_SLOT2, &dir);
+    assert!(harness.query_by_label("slot2.dat, will fail").is_some());
+    assert!(harness.query_by_label("save.dat, new").is_some());
+
+    click(
+        &mut harness,
+        &format!("Clear the override of {ALPHA_SLOT2}"),
+    );
+    assert!(harness.query_by_label("slot2.dat, new").is_some());
+    assert!(!shows(&harness, "Will fail"));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_override_onto_an_unreadable_file_blocks_the_restore_until_cleared() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    let locked = under(tmp.path(), "elsewhere/slot2.dat");
+    put(&locked, "old");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+
+    apply_override(&mut harness, ALPHA_SLOT2, &locked);
+    assert!(shows(&harness, "Nothing will be restored"));
+    assert!(disabled(&harness, "Restore files"));
+
+    click(
+        &mut harness,
+        &format!("Clear the override of {ALPHA_SLOT2}"),
+    );
+    assert!(!shows(&harness, "Nothing will be restored"));
+    assert!(harness.query_by_label("slot2.dat, new").is_some());
+    assert!(!disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn a_new_plan_drops_the_overrides_and_open_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    click(&mut harness, "Open WinAppData/Alpha");
+    apply_override(&mut harness, ALPHA_SAVE, &elsewhere);
+    click(&mut harness, &format!("Override {ALPHA_SLOT2}"));
+    let field = format!("New target of {ALPHA_SLOT2}");
+    replace_text(&mut harness, &field, elsewhere.to_str().unwrap());
+    assert!(disabled(&harness, "Restore files"));
+
+    // Other targets plan again.
+    click(&mut harness, "Native Linux build");
+    preview(&mut harness);
+    if harness.query_by_label("Open WinAppData/Alpha").is_some() {
+        click(&mut harness, "Open WinAppData/Alpha");
+    }
+
+    assert!(harness.query_by_label("save.dat, new").is_some());
+    assert!(!shows(&harness, "overridden"));
+    assert!(!shows(&harness, "New target of "));
+    assert!(!shows(&harness, "is not applied"));
+    assert!(!disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn writes_that_land_on_one_file_keep_their_own_icons_and_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Both builds' saves, restored into the native build through a pair: two writes, one target.
+    let pairs = vec![pair("<xdgData>/Dup", "<winAppData>/Dup")];
+    let game = custom("Dup", &["<xdgData>/Dup", "<winAppData>/Dup"], None, pairs);
+    let snapshot = scan(
+        &tmp,
+        "Dup",
+        &[
+            (Base::XdgData, "Dup/save.dat"),
+            (Base::WinAppData, "Dup/save.dat"),
+        ],
+        &[(Base::XdgData, "Dup"), (Base::WinAppData, "Dup")],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    put(&elsewhere, "other");
+    select(&mut harness, "Dup");
+    preview(&mut harness);
+    assert!(shows(&harness, "Files to write (2)"));
+    click(&mut harness, "Open XdgData/Dup");
+    let key = "XdgData/Dup/save.dat";
+    for nth in [1, 2] {
+        let button = format!("Override {key} ({nth})");
+        assert!(harness.query_by_label(&button).is_some(), "{button}");
+    }
+
+    apply_override(&mut harness, &format!("{key} (2)"), &elsewhere);
+
+    assert_eq!(harness.query_all_by_label("save.dat, new").count(), 1);
+    assert_eq!(harness.query_all_by_label("save.dat, changed").count(), 1);
+    assert!(
+        harness
+            .query_all_by_label("1 new, 1 changed")
+            .next()
             .is_some()
     );
 }
@@ -741,26 +974,15 @@ fn restore_preview_per_file_override_changes_one_write() {
     select(&mut harness, "Alpha");
     preview(&mut harness);
     let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    click(&mut harness, "Open WinAppData/Alpha");
 
-    replace_text(
-        &mut harness,
-        "Override target 1",
-        elsewhere.to_str().unwrap(),
-    );
-    click(&mut harness, "Override 1");
+    apply_override(&mut harness, ALPHA_SAVE, &elsewhere);
 
     assert!(shows_path(
         &harness,
         &format!("{} (overridden for this restore)", elsewhere.display())
     ));
-    assert!(!shows_path(
-        &harness,
-        &saves.join("save.dat").display().to_string()
-    ));
-    assert!(shows_path(
-        &harness,
-        &saves.join("slot2.dat").display().to_string()
-    ));
+    assert!(!shows(&harness, "New target of "), "the field closes");
 
     harness.get_by_label("Restore files").click();
     run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
@@ -776,16 +998,27 @@ fn restore_waits_for_a_typed_override_to_be_applied() {
     select(&mut harness, "Alpha");
     preview(&mut harness);
     let elsewhere = under(tmp.path(), "elsewhere/save.dat");
+    click(&mut harness, "Open WinAppData/Alpha");
 
-    replace_text(
-        &mut harness,
-        "Override target 1",
-        elsewhere.to_str().unwrap(),
-    );
+    click(&mut harness, &format!("Override {ALPHA_SAVE}"));
+    let field = format!("New target of {ALPHA_SAVE}");
+    replace_text(&mut harness, &field, elsewhere.to_str().unwrap());
     assert!(disabled(&harness, "Restore files"));
-    assert!(shows(&harness, "Override target 1 is not applied"));
+    let unapplied = format!("The new target of {ALPHA_SAVE} is not applied");
+    assert!(shows(&harness, &unapplied));
 
-    click(&mut harness, "Override 1");
+    // Closing the field drops what was typed.
+    click(&mut harness, &format!("Override {ALPHA_SAVE}"));
+    assert!(!disabled(&harness, "Restore files"));
+    click(&mut harness, &format!("Override {ALPHA_SAVE}"));
+    assert_eq!(value(&harness, &field), "");
+    replace_text(&mut harness, &field, elsewhere.to_str().unwrap());
+    assert!(shows(&harness, &unapplied));
+
+    click(
+        &mut harness,
+        &format!("Apply the new target of {ALPHA_SAVE}"),
+    );
     assert!(!disabled(&harness, "Restore files"));
     assert!(!shows(&harness, "is not applied"));
 }
@@ -796,12 +1029,14 @@ fn restore_override_with_a_relative_path_shows_error() {
     let (mut harness, _env, _) = alpha(&tmp);
     select(&mut harness, "Alpha");
     preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
 
-    replace_text(&mut harness, "Override target 2", "relative/save.dat");
-    click(&mut harness, "Override 2");
+    apply_override(&mut harness, ALPHA_SAVE, Path::new("relative/save.dat"));
 
     assert!(shows(&harness, "not an absolute path"));
     assert!(!shows(&harness, "overridden for this restore"));
+    assert!(harness.query_by_label("save.dat, new").is_some());
+    assert!(disabled(&harness, "Restore files"));
 }
 
 #[cfg(unix)]
@@ -823,11 +1058,14 @@ fn restore_preview_flags_an_absolute_target() {
     select(&mut harness, "Abso");
     preview(&mut harness);
 
-    let target = saves.join("save.dat");
-    assert!(shows(
-        &harness,
-        &format!("{} (absolute path)", target.display())
-    ));
+    // The file lands under the `Absolute` folder, by its full path.
+    let folder = format!("Absolute/{rest}");
+    goes_to(
+        &mut harness,
+        &folder,
+        "save.dat, new",
+        &saves.join("save.dat"),
+    );
 }
 
 #[test]
@@ -838,10 +1076,15 @@ fn restore_engine_rule_mapping_needs_no_dialog() {
     preview(&mut harness);
 
     assert!(!shows(&harness, "Where should the saves"));
-    let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows_path(&harness, &target.display().to_string()));
     assert!(shows(&harness, "Cross-build restore"));
     assert!(shows(&harness, "Note: Unity settings (PlayerPrefs)"));
+    let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
+    goes_to(
+        &mut harness,
+        "XdgConfig/unity3d/Co/Uni",
+        "save.dat, new",
+        &target,
+    );
 }
 
 #[test]
@@ -850,23 +1093,25 @@ fn restore_prefix_found_but_user_picks_native_linux_mapping() {
     let prefix = make_prefix(&tmp);
     let mut harness = unity(&tmp, Some(&prefix));
     select(&mut harness, "Uni");
-    let in_prefix = under(
-        &prefix,
-        "drive_c/users/steamuser/AppData/LocalLow/Co/Uni/save.dat",
-    );
+    let (in_prefix, native) = ("WinLocalAppDataLow/Co/Uni", "XdgConfig/unity3d/Co/Uni");
 
     // The found prefix is the default, next to the native build.
     preview(&mut harness);
-    assert!(shows_path(&harness, &in_prefix.display().to_string()));
     assert!(!shows(&harness, "Cross-build restore"));
+    let target = under(
+        &prefix,
+        "drive_c/users/steamuser/AppData/LocalLow/Co/Uni/save.dat",
+    );
+    goes_to(&mut harness, in_prefix, "save.dat, new", &target);
 
     click(&mut harness, "Windows build in a Wine/Proton prefix");
     preview(&mut harness);
 
-    let native = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
-    assert!(shows_path(&harness, &native.display().to_string()));
-    assert!(!shows_path(&harness, &in_prefix.display().to_string()));
+    assert!(!shows(&harness, &format!("Open {in_prefix}")));
+    assert!(!shows(&harness, &format!("Close {in_prefix}")));
     assert!(shows(&harness, "Cross-build restore"));
+    let target = under(&home(&tmp), ".config/unity3d/Co/Uni/save.dat");
+    goes_to(&mut harness, native, "save.dat, new", &target);
 }
 
 #[test]
@@ -892,7 +1137,7 @@ fn restore_cross_build_warning_shown() {
         &prefix,
         "drive_c/users/steamuser/AppData/Roaming/Pairy/save.dat",
     );
-    assert!(shows_path(&harness, &target.display().to_string()));
+    goes_to(&mut harness, "WinAppData/Pairy", "save.dat, new", &target);
 }
 
 #[test]
@@ -951,7 +1196,7 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
 
     assert!(!shows(&harness, "Where should the saves"));
     let target = under(&home(&tmp), ".local/share/Mix/a.sav");
-    assert!(shows_path(&harness, &target.display().to_string()));
+    goes_to(&mut harness, "XdgData/Mix", "a.sav, new", &target);
     let games = run_until_saved(&mut harness, &env, |games| {
         games.iter().any(|game| !game.pairs.is_empty())
     });

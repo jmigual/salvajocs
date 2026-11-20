@@ -3,7 +3,7 @@
 //! backup (ADR-0005, ADR-0010, ADR-0011, ADR-0020). Backups can also be deleted from the
 //! repository (ADR-0015).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::mem;
@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
-use eframe::egui::{self, Response, RichText, TextEdit, Ui, Vec2};
+use eframe::egui::{self, Response, RichText, Role, TextEdit, Ui, Vec2, WidgetInfo};
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
-use salvajocs_core::layout::{Base, Context, FILES_DIR, GameVars, LinuxFolders, WinFolders};
+use salvajocs_core::layout::{Context, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
     self, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
@@ -28,7 +28,9 @@ use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::tabs::mapping::{Dialog, DialogAction};
+use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::theme::{self, icons};
+use crate::widgets::named_button;
 
 mod batch;
 
@@ -207,18 +209,66 @@ impl Fetched {
         )
     }
 
-    /// `plan` with how each write compares with its target. Reads the targets, so it runs in
-    /// a job.
-    fn labelled(
-        &self,
-        plan: Result<RestorePlan, PrepareError>,
-    ) -> Result<(RestorePlan, Vec<Label>), PrepareError> {
+    /// `plan` with how each write compares with its target and the tree of its writes. Reads
+    /// the targets and which target folders exist, so it runs in a job.
+    fn labelled(&self, plan: Result<RestorePlan, PrepareError>) -> Result<Labelled, PrepareError> {
         plan.map(|plan| {
             let labels = (plan.writes.iter())
                 .map(|write| Label::of(write, &self.listed))
                 .collect();
-            (plan, labels)
+            let tree = WriteTree::new(&plan, &self.listed);
+            Labelled { plan, labels, tree }
         })
+    }
+}
+
+/// A plan with how each write compares with its target, and its writes as a tree.
+struct Labelled {
+    plan: RestorePlan,
+    labels: Vec<Label>,
+    tree: WriteTree,
+}
+
+/// A plan's writes as a read-only tree keyed by where they land as planned, like the batch
+/// confirm's (ADR-0019). Its row positions are the write indices. An overridden write keeps its
+/// row, so it stays where the user is.
+struct WriteTree {
+    tree: FileTree,
+    /// What each write's controls are named after: its key, and its row number when another
+    /// write lands on the same key, so screen readers tell them apart.
+    names: Vec<String>,
+}
+
+impl WriteTree {
+    /// The tree of `plan`'s writes, sized from the listing `listed`. Reads which target folders
+    /// exist, so it runs in a job.
+    fn new(plan: &RestorePlan, listed: &Listed) -> Self {
+        let files: Vec<Row> = (plan.writes.iter())
+            .map(|write| {
+                let ((base, tail), _) = restore::staged_target(write)
+                    .expect("`restore::plan` gives every write its target's key");
+                Row {
+                    key: format!("{}/{tail}", base.dir_name()),
+                    size: listed.source(write).map_or(0, |entry| entry.size),
+                    real: Some(write.target.clone()),
+                    removed: false,
+                }
+            })
+            .collect();
+        let mut shared = HashMap::<&str, usize>::new();
+        for file in &files {
+            *shared.entry(&file.key).or_default() += 1;
+        }
+        let names = (files.iter().enumerate())
+            .map(|(index, file)| match shared[file.key.as_str()] {
+                1 => file.key.clone(),
+                _ => format!("{} ({})", file.key, index + 1),
+            })
+            .collect();
+        Self {
+            tree: FileTree::new(files).existing_folders_only(),
+            names,
+        }
     }
 }
 
@@ -245,6 +295,14 @@ impl Label {
             Err(err) => Label::Blocks(format!("{:#}", anyhow!(err))),
         }
     }
+
+    /// The icon of the write in the plan with its tooltip; `None` for an unchanged one.
+    fn badge(&self) -> Option<(Badge, String)> {
+        batch::write_badge(match self {
+            Label::State(state) => Ok(*state),
+            Label::WillFail(reason) | Label::Blocks(reason) => Err(reason.as_str()),
+        })
+    }
 }
 
 /// What a plan job hands back.
@@ -252,19 +310,156 @@ struct Prepared {
     fetched: Arc<Fetched>,
     /// The dialog's choices this plan was prepared with; empty for the first try.
     choices: Vec<(SnapshotRoot, Choice)>,
-    plan: Result<(RestorePlan, Vec<Label>), PrepareError>,
+    plan: Result<Labelled, PrepareError>,
 }
 
 /// The plan shown before anything is written.
 struct Preview {
     fetched: Arc<Fetched>,
     plan: RestorePlan,
+    /// The writes as planned, which clearing an override puts back.
+    planned: Vec<Write>,
     /// How each write compares with its target.
     labels: Vec<Label>,
-    /// The override text of each write.
-    overrides: Vec<String>,
+    tree: WriteTree,
+    /// The text of each write whose override field is open.
+    editing: BTreeMap<usize, String>,
     /// The write whose override was refused, with why.
     override_error: Option<(usize, String)>,
+}
+
+/// What a file row of the plan was clicked for.
+enum RowAction {
+    /// Its Override button: opens or closes its field.
+    Toggle(usize),
+    /// Its field's Apply button.
+    Apply(usize),
+    /// Its Clear button: back to the planned target.
+    Clear(usize),
+}
+
+impl Preview {
+    fn new(fetched: Arc<Fetched>, labelled: Labelled) -> Self {
+        let Labelled { plan, labels, tree } = labelled;
+        Self {
+            fetched,
+            planned: plan.writes.clone(),
+            plan,
+            labels,
+            tree,
+            editing: BTreeMap::new(),
+            override_error: None,
+        }
+    }
+
+    /// The tree of the writes. Each file's name and Override button show where it goes on
+    /// hover; the button opens a field under it for a new target, and an overridden file shows
+    /// its target with a Clear button. Applies what was clicked and returns the folder the user
+    /// asked to open.
+    fn files_ui(&mut self, ui: &mut Ui, busy: bool) -> Option<PathBuf> {
+        let Preview {
+            fetched,
+            plan,
+            planned,
+            labels,
+            tree: WriteTree { tree, names },
+            editing,
+            override_error,
+        } = self;
+        let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
+        let hint = |index: usize, _: &str, _| {
+            (labels[index].badge())
+                .map(|(_, hint)| hint)
+                .unwrap_or_default()
+        };
+        let (error_color, muted) = (ui.visuals().error_fg_color, ui.visuals().weak_text_color());
+        let mut action = None;
+        let mut row = |ui: &mut Ui, index: usize, _: &str, slot: Slot<'_>| {
+            let (write, name) = (&plan.writes[index], &names[index]);
+            let target = write.target.display().to_string();
+            if let Slot::End(shown) = slot {
+                shown.clone().on_hover_text(&target);
+                // Small, so the row keeps the height of the batch confirm's.
+                let button = ui.add_enabled(!busy, egui::Button::new("Override").small());
+                let label = format!("Override {name}");
+                button.widget_info(|| WidgetInfo::labeled(Role::Button, !busy, &label));
+                if button.on_hover_text(&target).clicked() {
+                    action = Some(RowAction::Toggle(index));
+                }
+                return;
+            }
+            if write.target_file.is_none() {
+                ui.horizontal(|ui| {
+                    let text = format!("{target} (overridden for this restore)");
+                    theme::icon_label(ui, icons::ARROW_RIGHT, muted, text);
+                    let label = format!("Clear the override of {name}");
+                    if named_button(ui, !busy, "Clear", &label).clicked() {
+                        action = Some(RowAction::Clear(index));
+                    }
+                });
+            }
+            if let Some(text) = editing.get_mut(&index) {
+                ui.horizontal(|ui| {
+                    let label = ui.weak(format!("New target of {name}"));
+                    let field = TextEdit::singleline(text)
+                        .hint_text("an absolute path, for this restore only");
+                    ui.add(field).labelled_by(label.id);
+                    let label = format!("Apply the new target of {name}");
+                    if named_button(ui, !busy, "Apply", &label).clicked() {
+                        action = Some(RowAction::Apply(index));
+                    }
+                });
+            }
+            if let Some((_, error)) = (override_error.as_ref()).filter(|(i, _)| *i == index) {
+                theme::status(ui, icons::X_CIRCLE, error_color, error);
+            }
+        };
+        let clicked = ui.push_id(("restore_plan", &fetched.title), |ui| {
+            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut row)
+        });
+        // An action ends the field's error: a new try, a closed field or the planned target.
+        if let Some(RowAction::Toggle(index) | RowAction::Apply(index) | RowAction::Clear(index)) =
+            action
+            && override_error.as_ref().is_some_and(|(i, _)| *i == index)
+        {
+            *override_error = None;
+        }
+        let changed = match action {
+            Some(RowAction::Toggle(index)) => {
+                if editing.remove(&index).is_none() {
+                    editing.insert(index, String::new());
+                }
+                None
+            }
+            Some(RowAction::Apply(index)) => {
+                let target = PathBuf::from(editing.get(&index).map_or("", |text| text.trim()));
+                match plan.override_target(index, target) {
+                    Ok(()) => {
+                        editing.remove(&index);
+                        Some(index)
+                    }
+                    Err(err) => {
+                        *override_error = Some((index, err.to_string()));
+                        None
+                    }
+                }
+            }
+            Some(RowAction::Clear(index)) => {
+                plan.writes[index] = planned[index].clone();
+                Some(index)
+            }
+            None => None,
+        };
+        // One target is a stat and at most one hash, unlike the whole plan's in its job.
+        if let Some(index) = changed {
+            labels[index] = Label::of(&plan.writes[index], &fetched.listed);
+            tree.invalidate();
+        }
+        match clicked.inner {
+            Some(Clicked::Open(path)) => Some(path),
+            Some(Clicked::Toggle(..)) | None => None,
+        }
+    }
 }
 
 /// What a finished restore shows.
@@ -627,19 +822,13 @@ impl RestoreTab {
             plan,
         } = prepared;
         match plan {
-            Ok((plan, labels)) => {
+            Ok(labelled) => {
                 if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
                     crossbuild::apply_choices(config, &fetched.title, &choices);
                     state.save_config(ctx);
                 }
                 self.mapping = None;
-                self.preview = Some(Preview {
-                    overrides: vec![String::new(); plan.writes.len()],
-                    fetched,
-                    plan,
-                    labels,
-                    override_error: None,
-                });
+                self.preview = Some(Preview::new(fetched, labelled));
             }
             Err(PrepareError::NeedsMapping(entries)) => {
                 self.mapping = Some((fetched, Dialog::new(entries)));
@@ -983,7 +1172,7 @@ impl RestoreTab {
         }));
     }
 
-    fn preview_ui(&mut self, ui: &mut Ui, state: &State) {
+    fn preview_ui(&mut self, ui: &mut Ui, state: &mut State) {
         let busy = self.busy();
         let Some(preview) = &mut self.preview else {
             let mut choose = false;
@@ -1005,7 +1194,6 @@ impl RestoreTab {
         ui.add_space(16.0);
         ui.heading("Plan");
         let error_color = ui.visuals().error_fg_color;
-        let muted = ui.visuals().weak_text_color();
         warnings_ui(ui, &preview.plan);
         let compared: Vec<_> = (preview.labels.iter())
             .filter_map(|label| match label {
@@ -1014,10 +1202,16 @@ impl RestoreTab {
             })
             .collect();
         let writes = preview.plan.writes.len();
+        let overridden = (preview.plan.writes.iter())
+            .filter(|write| write.target_file.is_none())
+            .count();
         theme::row(
             ui,
             |ui| {
                 ui.label(format!("Files to write ({writes})"));
+                if overridden > 0 {
+                    ui.weak(format!("{} overridden", count(overridden, "file")));
+                }
             },
             |ui| batch::state_chips(ui, &compared),
         );
@@ -1032,64 +1226,7 @@ impl RestoreTab {
                 ui.weak(path);
             }
         }
-        let files = preview.fetched.listed.staged.root.join(FILES_DIR);
-        let mut overridden = None;
-        theme::group(ui, |ui| {
-            for (index, write) in preview.plan.writes.iter().enumerate() {
-                if index > 0 {
-                    theme::row_separator(ui);
-                }
-                let number = index + 1;
-                // `<Base>/<tail>` with `/` on every OS, as the snapshot stores it.
-                let source = write.source.strip_prefix(&files).unwrap_or(&write.source);
-                let source = (source.iter().map(|part| part.to_string_lossy()))
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let flag = match &write.target_file {
-                    None => " (overridden for this restore)",
-                    Some((Base::Absolute | Base::WinAbsolute, _)) => " (absolute path)",
-                    Some(_) => "",
-                };
-                ui.horizontal(|ui| {
-                    ui.label(source);
-                    let state = match &preview.labels[index] {
-                        Label::State(state) => Ok(*state),
-                        Label::WillFail(reason) | Label::Blocks(reason) => Err(reason.as_str()),
-                    };
-                    if let Some((badge, hint)) = batch::write_badge(state) {
-                        theme::labeled_mark(ui, badge.glyph(), badge.color(ui), &hint);
-                    }
-                });
-                let target = format!("{}{flag}", write.target.display());
-                theme::icon_label(ui, icons::ARROW_RIGHT, muted, target);
-                ui.horizontal(|ui| {
-                    let label = ui.weak(format!("Override target {number}"));
-                    let field = TextEdit::singleline(&mut preview.overrides[index])
-                        .hint_text("an absolute path, for this restore only");
-                    ui.add(field).labelled_by(label.id);
-                    let button = egui::Button::new(format!("Override {number}"));
-                    if ui.add_enabled(!busy, button).clicked() {
-                        overridden = Some(index);
-                    }
-                });
-                if let Some((_, error)) =
-                    (preview.override_error.as_ref()).filter(|(i, _)| *i == index)
-                {
-                    theme::status(ui, icons::X_CIRCLE, error_color, error);
-                }
-            }
-        });
-        if let Some(index) = overridden {
-            let target = PathBuf::from(preview.overrides[index].trim());
-            preview.override_error = (preview.plan.override_target(index, target))
-                .err()
-                .map(|err| (index, err.to_string()));
-            // One target is a stat and at most one hash, unlike the whole plan's in its job.
-            if preview.override_error.is_none() {
-                let write = &preview.plan.writes[index];
-                preview.labels[index] = Label::of(write, &preview.fetched.listed);
-            }
-        }
+        let opened = theme::group(ui, |ui| preview.files_ui(ui, busy));
         if let Some((export, ctx)) = &preview.plan.registry {
             ui.label(format!(
                 "Registry: {} keys into {}",
@@ -1099,19 +1236,18 @@ impl RestoreTab {
         }
         skipped_ui(ui, &preview.plan);
         // Typed text that is not the write's target would be silently ignored by the restore.
-        let unapplied =
-            (preview.overrides.iter().zip(&preview.plan.writes)).position(|(text, write)| {
-                !text.trim().is_empty() && Path::new(text.trim()) != write.target
-            });
+        let unapplied = (preview.editing.iter()).find_map(|(&index, text)| {
+            let text = text.trim();
+            (!text.is_empty() && Path::new(text) != preview.plan.writes[index].target)
+                .then_some(index)
+        });
         if let Some(index) = unapplied {
-            let number = index + 1;
+            let name = &preview.tree.names[index];
             theme::status(
                 ui,
                 icons::X_CIRCLE,
                 error_color,
-                format!(
-                    "Override target {number} is not applied: click Override {number} or clear it."
-                ),
+                format!("The new target of {name} is not applied: click Apply or clear it."),
             );
         }
         let blocked = !blocking.is_empty();
@@ -1131,6 +1267,12 @@ impl RestoreTab {
         }
         if retry {
             self.forget_plan();
+        }
+        if let Some(path) = opened
+            && let Err(err) = (state.env.open_folder)(&path)
+        {
+            let path = path.display();
+            state.notices.push(format!("Could not open {path}: {err}"));
         }
     }
 
