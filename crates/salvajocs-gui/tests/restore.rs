@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use common::{
     env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
-    run_until, run_until_ready, save_config, shows,
+    run_until, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -171,20 +171,6 @@ fn preview(harness: &mut Harness<'static, App>) {
     run_until(harness, "the plan", |h| {
         shows(h, "Files to write") || h.query_by_label("Choose folders…").is_some()
     });
-}
-
-/// Like `shows`, but `\` counts as `/`: on Windows a path joined from `/`-separated parts
-/// shows both separators.
-fn shows_path(harness: &Harness<'static, App>, text: &str) -> bool {
-    let want = text.replace('\\', "/");
-    let shown = |node: &AccessKitNode<'_>| {
-        let label = match node.role() {
-            Role::Label => node.value(),
-            _ => node.label(),
-        };
-        label.is_some_and(|label| label.replace('\\', "/").contains(&want))
-    };
-    harness.query_all(by().predicate(shown)).next().is_some()
 }
 
 fn disabled(harness: &Harness<'static, App>, label: &str) -> bool {

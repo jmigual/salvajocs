@@ -133,8 +133,11 @@ impl Details {
         };
         let here = |text: &dyn Fn(&LocalFile) -> String| local.map_or_else(|_| unknown(), text);
         let there = format!("Backup ({}, {})", snapshot.host, format_time(snapshot.time));
+        // A grid's text only wraps below a column width: a long path would otherwise widen the
+        // dialog past the window and push Close out of sight.
         form_grid("backup_file_facts")
             .num_columns(3)
+            .max_col_width(ui.available_width() / 2.0)
             .show(ui, |ui| {
                 row(ui, "", theme::semibold("This PC"), theme::semibold(there));
                 row(

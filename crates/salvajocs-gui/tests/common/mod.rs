@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use eframe::egui::accesskit::Role;
 use eframe::egui::{Key, Modifiers, Vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{AccessKitNode, Queryable, by};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::Environment;
@@ -186,6 +187,20 @@ pub fn harness_sized(env: Env, size: Vec2) -> Harness<'static, App> {
 /// Whether any node's label contains `text`, which is how these tests ask "is this on screen".
 pub fn shows(harness: &Harness<'static, App>, text: &str) -> bool {
     harness.query_all_by_label_contains(text).next().is_some()
+}
+
+/// Like `shows`, but `\` counts as `/`: on Windows a path joined from `/`-separated parts
+/// shows both separators.
+pub fn shows_path(harness: &Harness<'static, App>, text: &str) -> bool {
+    let want = text.replace('\\', "/");
+    let shown = |node: &AccessKitNode<'_>| {
+        let label = match node.role() {
+            Role::Label => node.value(),
+            _ => node.label(),
+        };
+        label.is_some_and(|label| label.replace('\\', "/").contains(&want))
+    };
+    harness.query_all(by().predicate(shown)).next().is_some()
 }
 
 /// Runs frames until `ready` holds, or fails saying what never happened.

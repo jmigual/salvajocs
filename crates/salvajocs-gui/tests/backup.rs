@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{
     env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
-    run_until, run_until_backed_up, run_until_ready, save_config, shows,
+    run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
@@ -1226,7 +1226,9 @@ fn alpha_changed(
     after: &[u8],
 ) -> (Harness<'static, App>, Env, [TempDir; 2], PathBuf) {
     let scratch = tempfile::tempdir().unwrap();
-    let prefix = make_prefix(scratch.path());
+    // As long as a path below the temp folder on Windows, which once pushed Close out of sight.
+    let long = "a folder whose name makes the path of the save wider than the details dialog";
+    let prefix = make_prefix(&scratch.path().join(long));
     let save = save_dir(&prefix, "Alpha").join("save.dat");
     fs::create_dir_all(save.parent().unwrap()).unwrap();
     fs::write(&save, before).unwrap();
@@ -1263,7 +1265,7 @@ fn details_show_that_only_line_endings_differ() {
     assert!(shows(&harness, "2 Windows (CRLF), 0 Linux (LF)"));
     assert!(shows(&harness, "0 Windows (CRLF), 2 Linux (LF)"));
     assert!(shows(&harness, "Backup ("));
-    assert!(shows(&harness, &save.display().to_string()));
+    assert!(shows_path(&harness, &save.display().to_string()));
     let local = "58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab";
     let backup = "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2";
     assert!(shows(&harness, local));
