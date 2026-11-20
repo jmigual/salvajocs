@@ -367,12 +367,14 @@ const LONG_TITLE: &str = "Librarian: Tidy Up the Archive and More";
 /// The Restore tab listing [`LONG_TITLE`] and Terraria.
 fn long_title(tmp: &TempDir) -> Harness<'static, App> {
     let games = [LONG_TITLE, "Terraria"].map(|title| {
-        let tail = format!("{title}/save.dat");
+        // The save folder drops the ':', which Windows refuses in a name.
+        let folder = title.replace(':', "");
+        let tail = format!("{folder}/save.dat");
         scan(
             tmp,
             title,
             &[(Base::WinAppData, &tail)],
-            &[(Base::WinAppData, title)],
+            &[(Base::WinAppData, &folder)],
         )
     });
     let (mut harness, _env) = open_tab(tmp, Vec::new(), &games);
