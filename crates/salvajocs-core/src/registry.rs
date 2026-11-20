@@ -81,6 +81,41 @@ pub struct RegistryExport {
     pub keys: BTreeMap<String, Vec<RegValue>>,
 }
 
+impl RegistryExport {
+    /// The keys with no ancestor key in the export, in map order: the declared keys as backed
+    /// up. Every key lies under exactly one root; of keys equal but for case, the first is it.
+    ///
+    /// Roots are disjoint, so [`Self::remove_subtree`] of one leaves the others whole, and a
+    /// restore of the rest replaces nothing below the removed root.
+    pub fn roots(&self) -> Vec<&str> {
+        let keys: Vec<&str> = self.keys.keys().map(String::as_str).collect();
+        let below_another = |at: usize, key: &str| {
+            (keys.iter().enumerate()).any(|(other_at, other)| {
+                other_at != at && is_under(key, other) && (other_at < at || !is_under(other, key))
+            })
+        };
+        (keys.iter().enumerate())
+            .filter(|&(at, key)| !below_another(at, key))
+            .map(|(_, key)| *key)
+            .collect()
+    }
+
+    /// Removes `root` and every key below it, matching whole `\` elements with case ignored, as
+    /// the restore's subtree replace does.
+    pub fn remove_subtree(&mut self, root: &str) {
+        self.keys.retain(|key, _| !is_under(key, root));
+    }
+}
+
+/// Whether the `\`-separated key `path` is `root` or below it, comparing whole elements
+/// case-insensitively.
+pub(crate) fn is_under(path: &str, root: &str) -> bool {
+    // Unicode lowercase approximates Wine's uppercase table; exotic names may differ.
+    let (path, root) = (path.to_lowercase(), root.to_lowercase());
+    path.strip_prefix(&root)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('\\'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +151,61 @@ mod tests {
             export
         );
         assert!(json.contains(r#""kind":"multi_sz""#));
+    }
+
+    /// An export of the given keys, each without values.
+    fn export_of(keys: &[&str]) -> RegistryExport {
+        let mut export = RegistryExport::default();
+        for key in keys {
+            export.keys.insert(format!("{HKCU}\\{key}"), Vec::new());
+        }
+        export
+    }
+
+    /// Nested keys, siblings sharing a text prefix and case variants, in and out of map order.
+    const KEYS: [&str; 7] = [
+        r"Software\Co",
+        r"Software\Co\Game",
+        r"Software\Com",
+        r"Software\co",
+        r"Software\Other\Deep",
+        r"software\other",
+        r"Software\Other\Deep\Er",
+    ];
+
+    #[test]
+    fn roots_are_the_keys_without_an_ancestor_in_the_export() {
+        let export = export_of(&KEYS);
+
+        let roots = export.roots();
+        let want = [r"Software\Co", r"Software\Com", r"software\other"];
+        let want: Vec<String> = want.iter().map(|key| format!("{HKCU}\\{key}")).collect();
+        assert_eq!(roots, want);
+        // Every key lies under exactly one root.
+        for key in export.keys.keys() {
+            let under = roots.iter().filter(|root| is_under(key, root)).count();
+            assert_eq!(under, 1, "{key}");
+        }
+    }
+
+    #[test]
+    fn remove_subtree_removes_a_root_and_everything_below_only() {
+        let mut export = export_of(&KEYS);
+
+        export.remove_subtree(&format!("{HKCU}\\Software\\Co"));
+
+        let left: Vec<&str> = export.keys.keys().map(String::as_str).collect();
+        let want = [
+            r"Software\Com",
+            r"Software\Other\Deep",
+            r"Software\Other\Deep\Er",
+            r"software\other",
+        ];
+        let want: Vec<String> = want.iter().map(|key| format!("{HKCU}\\{key}")).collect();
+        assert_eq!(left, want);
+        // A case variant of a root removes the same subtree.
+        export.remove_subtree(&format!("{HKCU}\\SOFTWARE\\OTHER"));
+        export.remove_subtree(&format!("{HKCU}\\Software\\Com"));
+        assert!(export.keys.is_empty(), "{export:?}");
     }
 }

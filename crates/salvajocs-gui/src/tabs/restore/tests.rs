@@ -617,13 +617,8 @@ fn a_running_restore_says_it_downloads_and_restores() {
 #[test]
 fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     let dir = tempfile::tempdir().unwrap();
-    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
-        preview: Some(preview(
-            fetched(storage),
-            RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
-        )),
-        ..RestoreTab::default()
-    });
+    // A plan with something ticked, which an empty plan lacks, so Restore files can enable.
+    let mut harness = registry_restore(dir.path(), || false);
     let job = Job::spawn(&harness.ctx.clone(), || {
         Err(RunError::WineserverRunning.into())
     });

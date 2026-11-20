@@ -23,6 +23,7 @@ use salvajocs_core::restore::{
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
+use salvajocs_core::selection::GameSettings;
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
@@ -284,31 +285,68 @@ impl Fetched {
         )
     }
 
-    /// `plan` with how each write compares with its target and the tree of its writes. Reads
-    /// the targets and which target folders exist, so it runs in a job.
+    /// `plan` with how each write compares with its target, the tree of its writes and its
+    /// registry roots. Reads the targets and which target folders exist, so it runs in a job.
     fn labelled(&self, plan: Result<RestorePlan, PrepareError>) -> Result<Labelled, PrepareError> {
         plan.map(|plan| {
             let labels = (plan.writes.iter())
                 .map(|write| Label::of(write, &self.listed))
                 .collect();
             let tree = WriteTree::new(&plan, &self.listed);
-            Labelled { plan, labels, tree }
+            let roots = Root::of(&plan);
+            Labelled {
+                plan,
+                labels,
+                tree,
+                roots,
+            }
         })
     }
 }
 
-/// A plan with how each write compares with its target, and its writes as a tree.
+/// A plan with how each write compares with its target, its writes as a tree and its registry
+/// roots.
 struct Labelled {
     plan: RestorePlan,
     labels: Vec<Label>,
     tree: WriteTree,
+    roots: Vec<Root>,
 }
 
-/// A plan's writes as a read-only tree keyed by where they land as planned, like the batch
-/// confirm's (ADR-0019). Its row positions are the write indices. An overridden write keeps its
+/// A registry root of a plan, the unit its registry is ticked by (ADR-0025), with how many
+/// exported keys it covers. Worked out once per plan: `RegistryExport::roots` compares every
+/// pair of keys.
+struct Root {
+    key: String,
+    keys: usize,
+}
+
+impl Root {
+    /// The registry roots of `plan`, in the export's order.
+    fn of(plan: &RestorePlan) -> Vec<Root> {
+        let Some((export, _)) = &plan.registry else {
+            return Vec::new();
+        };
+        (export.roots().into_iter())
+            .map(|root| {
+                let mut rest = export.clone();
+                rest.remove_subtree(root);
+                Root {
+                    key: root.to_owned(),
+                    keys: export.keys.len() - rest.keys.len(),
+                }
+            })
+            .collect()
+    }
+}
+
+/// A plan's writes as a tree keyed by where they land as planned, with a checkbox on each file
+/// and folder (ADR-0025). Its row positions are the write indices. An overridden write keeps its
 /// row, so it stays where the user is.
 struct WriteTree {
     tree: FileTree,
+    /// Each write's planned `<Base>/<tail>` key, which its checkbox ticks; an override keeps it.
+    keys: Vec<String>,
     /// What each write's controls are named after: its key, and its row number when another
     /// write lands on the same key, so screen readers tell them apart.
     names: Vec<String>,
@@ -336,10 +374,19 @@ impl WriteTree {
                 _ => format!("{} ({})", file.key, index + 1),
             })
             .collect();
+        let keys = files.iter().map(|file| file.key.clone()).collect();
         Self {
             tree: FileTree::new(files).existing_folders_only(),
+            keys,
             names,
         }
+    }
+
+    /// Whether `selection` ticks each write, by write index.
+    fn ticked(&self, selection: &GameSettings) -> Vec<bool> {
+        (self.keys.iter())
+            .map(|key| selection.path_included(key))
+            .collect()
     }
 }
 
@@ -409,6 +456,10 @@ struct Preview {
     /// How each write compares with its target.
     labels: Vec<Label>,
     tree: WriteTree,
+    roots: Vec<Root>,
+    /// What the restore writes: the files by planned key and the registry roots, all ticked at
+    /// first. Never saved; a new plan starts with a new one.
+    selection: GameSettings,
     /// The text of each write whose override field is open.
     editing: BTreeMap<usize, String>,
     /// The write whose override was refused, with why.
@@ -427,32 +478,41 @@ enum RowAction {
 
 impl Preview {
     fn new(fetched: Arc<Fetched>, labelled: Labelled) -> Self {
-        let Labelled { plan, labels, tree } = labelled;
+        let Labelled {
+            plan,
+            labels,
+            tree,
+            roots,
+        } = labelled;
         Self {
             fetched,
             planned: plan.writes.clone(),
             plan,
             labels,
             tree,
+            roots,
+            selection: GameSettings::default(),
             editing: BTreeMap::new(),
             override_error: None,
         }
     }
 
-    /// The tree of the writes. Each file's name and Override button show where it goes on
-    /// hover; the button opens a field under it for a new target, and an overridden file shows
-    /// its target with a Clear button. A file whose target differs also has a Details button.
-    /// Applies what was clicked and returns the folder the user asked to open and the write whose
-    /// details they asked for.
+    /// The tree of the writes, with a checkbox on each file and folder. Each file's name and
+    /// Override button show where it goes on hover; the button opens a field under it for a new
+    /// target, and an overridden file shows its target with a Clear button. A file whose target
+    /// differs also has a Details button. Applies what was clicked and returns the folder the
+    /// user asked to open and the write whose details they asked for.
     fn files_ui(&mut self, ui: &mut Ui, busy: bool) -> (Option<PathBuf>, Option<usize>) {
         let Preview {
             fetched,
             plan,
             planned,
             labels,
-            tree: WriteTree { tree, names },
+            tree: WriteTree { tree, names, .. },
+            selection,
             editing,
             override_error,
+            ..
         } = self;
         let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
         let hint = |index: usize, _: &str, _| {
@@ -511,8 +571,13 @@ impl Preview {
                 theme::status(ui, icons::X_CIRCLE, error_color, error);
             }
         };
+        let included = |key: &str| selection.path_included(key);
+        let mode = Mode::Select {
+            included: &included,
+            enabled: !busy,
+        };
         let clicked = ui.push_id(("restore_plan", &fetched.title), |ui| {
-            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut row)
+            tree.ui_with_rows(ui, mode, &badge, &hint, &mut row)
         });
         // An action ends the field's error: a new try, a closed field or the planned target.
         if let Some(RowAction::Toggle(index) | RowAction::Apply(index) | RowAction::Clear(index)) =
@@ -554,10 +619,93 @@ impl Preview {
         }
         let opened = match clicked.inner {
             Some(Clicked::Open(path)) => Some(path),
-            Some(Clicked::Toggle(..)) | None => None,
+            Some(Clicked::Toggle(key, included)) => {
+                selection.set_path(&key, included);
+                tree.invalidate();
+                None
+            }
+            None => None,
         };
         (opened, details)
     }
+
+    /// The registry line, counting the keys of the ticked roots, and a checkbox per root.
+    fn registry_ui(&mut self, ui: &mut Ui, busy: bool) {
+        let Some((_, ctx)) = &self.plan.registry else {
+            return;
+        };
+        let (name, hover) = name_context(ctx, self.fetched.prefix_origin.as_ref());
+        let keys = ticked_keys(&self.roots, &self.selection);
+        hover_label(ui, format!("Registry: {keys} keys into {name}"), hover);
+        roots_ui(ui, &self.roots, &mut self.selection, !busy);
+    }
+}
+
+/// `plan` with only what `selection` ticks (ADR-0025): the writes whose planned key (`keys`, by
+/// write index) is included, and the registry without the subtrees of the unticked `roots`, or
+/// none when no key is left. The restore backs up and writes this one plan, so nothing unticked
+/// is touched. A root is the unit: the restore replaces each exported key's whole subtree, so a
+/// lone subkey cannot stay out.
+fn ticked_plan(
+    plan: &RestorePlan,
+    keys: &[String],
+    roots: &[Root],
+    selection: &GameSettings,
+) -> RestorePlan {
+    let mut ticked = plan.clone();
+    let mut keys = keys.iter();
+    (ticked.writes).retain(|_| keys.next().is_some_and(|key| selection.path_included(key)));
+    if let Some((export, _)) = &mut ticked.registry {
+        for root in roots
+            .iter()
+            .filter(|root| !selection.registry_included(&root.key))
+        {
+            export.remove_subtree(&root.key);
+        }
+    }
+    // An empty export would still refuse the restore while a wineserver runs.
+    if (ticked.registry.as_ref()).is_some_and(|(export, _)| export.keys.is_empty()) {
+        ticked.registry = None;
+    }
+    ticked
+}
+
+/// How many exported keys lie under the `roots` that `selection` ticks.
+fn ticked_keys(roots: &[Root], selection: &GameSettings) -> usize {
+    (roots.iter())
+        .filter(|root| selection.registry_included(&root.key))
+        .map(|root| root.keys)
+        .sum()
+}
+
+/// Whether `selection` ticks one of `roots`.
+fn registry_ticked(roots: &[Root], selection: &GameSettings) -> bool {
+    (roots.iter()).any(|root| selection.registry_included(&root.key))
+}
+
+/// A checkbox per root, labelled with its key, as the Backup tab has per key.
+fn roots_ui(ui: &mut Ui, roots: &[Root], selection: &mut GameSettings, enabled: bool) {
+    for root in roots {
+        let mut included = selection.registry_included(&root.key);
+        let checkbox = egui::Checkbox::new(&mut included, &root.key);
+        if ui.add_enabled(enabled, checkbox).changed() {
+            selection.set_registry(&root.key, included);
+        }
+    }
+}
+
+/// Whether `plan` has neither a file to write nor a registry key, so nothing can be ticked.
+fn nothing_to_restore(plan: &RestorePlan) -> bool {
+    plan.writes.is_empty() && plan.registry.is_none()
+}
+
+/// The targets of the ticked writes (`ticked`, by write index) the safety backup cannot read,
+/// any of which keeps the whole restore from running.
+fn blocking(plan: &RestorePlan, labels: &[Label], ticked: &[bool]) -> Vec<String> {
+    (plan.writes.iter().zip(labels).zip(ticked))
+        .filter(|((_, label), ticked)| **ticked && matches!(label, Label::Blocks(_)))
+        .map(|((write, _), _)| write.target.display().to_string())
+        .collect()
 }
 
 /// What a finished restore shows.
@@ -1403,13 +1551,15 @@ impl RestoreTab {
         hover_label(ui, into, hover);
         let error_color = ui.visuals().error_fg_color;
         warnings_ui(ui, &preview.plan);
-        let compared: Vec<_> = (preview.labels.iter())
-            .filter_map(|label| match label {
-                Label::State(state) => Some(*state),
-                Label::WillFail(_) | Label::Blocks(_) => None,
+        let ticked = preview.tree.ticked(&preview.selection);
+        let compared: Vec<_> = (preview.labels.iter().zip(&ticked))
+            .filter_map(|(label, &ticked)| match label {
+                Label::State(state) if ticked => Some(*state),
+                Label::State(_) | Label::WillFail(_) | Label::Blocks(_) => None,
             })
             .collect();
-        let writes = preview.plan.writes.len();
+        let writes = ticked.iter().filter(|&&ticked| ticked).count();
+        let left_out = ticked.len() - writes;
         let overridden = (preview.plan.writes.iter())
             .filter(|write| write.target_file.is_none())
             .count();
@@ -1420,13 +1570,13 @@ impl RestoreTab {
                 if overridden > 0 {
                     ui.weak(format!("{} overridden", count(overridden, "file")));
                 }
+                if left_out > 0 {
+                    ui.weak(format!("{left_out} left out"));
+                }
             },
             |ui| batch::state_chips(ui, &compared),
         );
-        let blocking: Vec<_> = (preview.plan.writes.iter().zip(&preview.labels))
-            .filter(|(_, label)| matches!(label, Label::Blocks(_)))
-            .map(|(write, _)| write.target.display().to_string())
-            .collect();
+        let blocking = blocking(&preview.plan, &preview.labels, &ticked);
         if !blocking.is_empty() {
             let text = "Nothing will be restored: the safety backup cannot read these files:";
             theme::status(ui, icons::X_CIRCLE, error_color, text);
@@ -1434,7 +1584,11 @@ impl RestoreTab {
                 ui.weak(path);
             }
         }
-        let (opened, details) = theme::group(ui, |ui| preview.files_ui(ui, busy));
+        let (opened, details) = theme::group(ui, |ui| {
+            let clicked = preview.files_ui(ui, busy);
+            preview.registry_ui(ui, busy);
+            clicked
+        });
         if let Some(index) = details {
             let (fetched, write) = (&preview.fetched, &preview.plan.writes[index]);
             // The plan's own snapshot names the game, so a dropped list does not matter.
@@ -1446,11 +1600,6 @@ impl RestoreTab {
                 let local = write.target.clone();
                 self.details = Some(Details::start(ctx, storage, slug, key, local, backed_up));
             }
-        }
-        if let Some((export, ctx)) = &preview.plan.registry {
-            let (name, hover) = name_context(ctx, preview.fetched.prefix_origin.as_ref());
-            let text = format!("Registry: {} keys into {name}", export.keys.len());
-            hover_label(ui, text, hover);
         }
         skipped_ui(ui, &preview.plan);
         // Typed text that is not the write's target would be silently ignored by the restore.
@@ -1469,15 +1618,24 @@ impl RestoreTab {
             );
         }
         let blocked = !blocking.is_empty();
-        let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked;
+        let nothing = writes == 0 && !registry_ticked(&preview.roots, &preview.selection);
+        let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked && !nothing;
         let restoring = self.restoring.is_some();
+        let empty = nothing_to_restore(&preview.plan);
+        let has_registry = preview.plan.registry.is_some();
         let mut retry = false;
         let start = |ui: &mut Ui| {
             if restoring {
                 ui.weak("Downloading and restoring…");
             } else if blocked {
-                ui.weak("Make those files readable, then check again.");
+                ui.weak("Untick them, or make them readable and check again.");
                 retry |= ui.button("Try again").clicked();
+            } else if empty {
+                ui.weak("Nothing to restore.");
+            } else if nothing && has_registry {
+                ui.weak("Tick at least one file or registry key to restore.");
+            } else if nothing {
+                ui.weak("Tick at least one file to restore.");
             }
         };
         if theme::row(ui, start, |ui| restore_button(ui, ready)).clicked() {
@@ -1523,9 +1681,9 @@ impl RestoreTab {
         }
     }
 
-    /// Downloads the planned snapshot into its cleared work dir, then runs the plan behind a
-    /// safety backup staged in its own dir under the cache dir. A failed download writes
-    /// nothing, not even the safety backup.
+    /// Downloads the planned snapshot into its cleared work dir, then runs the ticked part of the
+    /// plan behind a safety backup staged in its own dir under the cache dir. A failed download
+    /// writes nothing, not even the safety backup.
     fn start_restore(&mut self, ctx: &egui::Context, state: &State) {
         let Some(preview) = &self.preview else {
             return;
@@ -1533,7 +1691,13 @@ impl RestoreTab {
         self.error = None;
         self.restored = None;
         self.batch.clear_result();
-        let (fetched, plan) = (preview.fetched.clone(), preview.plan.clone());
+        let plan = ticked_plan(
+            &preview.plan,
+            &preview.tree.keys,
+            &preview.roots,
+            &preview.selection,
+        );
+        let fetched = preview.fetched.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {

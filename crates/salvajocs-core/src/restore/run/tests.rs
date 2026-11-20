@@ -1565,6 +1565,39 @@ fn safety_backup_covers_planned_targets_in_user_picked_prefix() {
 }
 
 #[test]
+fn a_removed_registry_root_is_neither_replaced_nor_backed_up() {
+    const OTHER: &str = "HKEY_CURRENT_USER\\Software\\Other";
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let before = reg(&f.prefix, OTHER);
+    let mut export = foo_registry("new");
+    let value = RegValue::new("keep".into(), RegData::Sz("new".into()));
+    export.keys.insert(OTHER.into(), vec![value]);
+    export.keys.insert(format!("{OTHER}\\Sub"), Vec::new());
+    assert_eq!(export.roots(), [FOO, OTHER]);
+
+    export.remove_subtree(OTHER);
+    let plan = plan_of(Vec::new(), Some((export, f.ctx())));
+    let report = f.run(&plan, false).unwrap();
+
+    assert!(matches!(report.registry, Some(Ok(()))));
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("new"));
+    assert_eq!(
+        reg(&f.prefix, OTHER),
+        before,
+        "the removed root is left alone"
+    );
+    let dir = f.restored(created(&report));
+    let registry: RegistryExport =
+        serde_json::from_slice(&fs::read(dir.join(REGISTRY_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        registry,
+        foo_registry("old"),
+        "only the kept root is backed up"
+    );
+}
+
+#[test]
 fn safety_backup_meta_has_roots() {
     let mut f = fixture();
     write(&f.folders.app_data.join("Game/save.sav"), "old");

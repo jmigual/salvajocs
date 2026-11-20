@@ -21,7 +21,8 @@ walks through those steps and explains how to undo a restore. Back to the
    or a target to choose, the file list being read, or folders to choose (see
    [Cross-OS restore](cross-os-restore.md#the-mapping-dialog)). If reading fails, the error shows
    with **Try again**.
-5. Read the **Plan**. Fix anything you do not like (see "Overrides").
+5. Read the **Plan**. Untick what you do not want restored, and fix anything you do not like
+   (see "Overrides").
 6. Click **Restore files**. salvajocs downloads the backup, then restores it.
 
 ## Targets
@@ -74,19 +75,31 @@ The Plan shows:
   its base, such as `WinAppData/Game`. A file saved as a plain path goes under `Absolute`
   (`WinAbsolute` on Windows). Hover a file's name to read the full path it goes to on this
   machine. Folders start closed; click one to open it. A folder that already exists has a button
-  that opens it in the file manager. After a file's size, an icon says what restoring it does: a
-  plus in a circle when nothing is there yet, a pencil when the file there differs and will be
-  overwritten, a question mark when salvajocs cannot read the file there to compare it, and a
-  cross in a circle when salvajocs will not write it. Hover it to read why. An unchanged file has
-  no icon; it is written all the same. A folder's line counts the icons below it, and icons after
-  the heading count the files of each kind. When the safety backup cannot read a file at a
-  target, the plan says that nothing will be restored and lists those files, and **Restore
-  files** stays disabled. Make them readable and click **Try again**. A file with the pencil
+  that opens it in the file manager. Each file and folder has a checkbox, all ticked at first,
+  as on the [Backup](backup.md) tab: a folder's checkbox ticks or unticks everything below it,
+  and its line says how many of its files are ticked, as `1 of 2 files`. Only ticked files are
+  restored. A file you untick is not written and not in the safety backup, and the heading
+  counts it as left out. N in the heading counts the ticked files. After a file's size, an icon
+  says what restoring it does: a plus in a circle when nothing is there yet, a pencil when the
+  file there differs and will be overwritten, a question mark when salvajocs cannot read the
+  file there to compare it, and a cross in a circle when salvajocs will not write it. Hover it
+  to read why. An unchanged file has no icon; it is written all the same. A folder's line counts
+  the icons below it, and icons after the heading count the ticked files of each kind. When the
+  safety backup cannot read a ticked file at a target, the plan says that nothing will be
+  restored and lists those files, and **Restore files** stays disabled. Untick them to restore
+  the rest, or make them readable and click **Try again**. With nothing ticked, **Restore
+  files** stays disabled too, and a plan with nothing to restore says so. A file with the pencil
   also has a **Details** button, which shows what makes it differ: the backup's copy of the
   chosen snapshot against the file that would be overwritten, as in the
   [Backup tab](backup.md#what-differs-from-the-last-backup).
 - **Registry.** The number of registry keys and the prefix, named as on the "Into" line, or the
-  Windows registry they go into.
+  Windows registry they go into. Under it, a checkbox for each registry key as it was backed up,
+  ticked at first; a key backed up inside another shares that one's checkbox. The number counts
+  the keys of the ticked ones. A key you untick, with every key below it, is not replaced and not
+  in the safety backup. Each key comes with the keys below it, since the restore replaces a key's
+  whole subtree. In a restore of several games, another game that declares a key above it still
+  replaces it; that game's safety backup holds it. With every key unticked, the files restore
+  even while Wine runs (see below).
 - **Skipped (N).** Items that will not be restored, each with its reason.
 - A **Cross-build restore** warning when the plan maps folders from the other build. The
   other build may use a different save format.
@@ -116,7 +129,9 @@ heading counts the overridden files, so you see them while the folders are close
 sends a file back to its planned target. A path that does not fit is refused with an error. If
 you typed a path and did not click **Apply**, **Restore files** stays disabled and the tab tells
 you to apply or clear it. Clicking **Override** again closes the field and drops what you typed.
-A new plan, after you change the snapshot or where to restore, starts without overrides.
+An unticked file is not written, overridden or not; **Override**, **Apply** and **Clear** keep
+its tick. A new plan, after you change the snapshot or where to restore, starts without
+overrides and with everything ticked again.
 
 ## What happens when you click Restore files
 
@@ -136,8 +151,9 @@ A new plan, after you change the snapshot or where to restore, starts without ov
 The result lists each file as restored or failed, and the registry result.
 
 One thing blocks a restore: a restore that includes registry keys for a Wine prefix is refused
-while any `wineserver` is running, because Wine would overwrite the change. Close every Wine and
-Proton game and try again. Nothing is written in that case.
+while any `wineserver` is running, because Wine would overwrite the change. Nothing is written in
+that case. Close every Wine and Proton game and try again, or untick the registry keys to restore
+only the files.
 
 ## Restore several games
 
@@ -166,7 +182,8 @@ To restore more than one game in one go:
    left out; hover the icons to read the counts as text.
 
    Under it, a file tree lists every file the game writes, by the folder it goes into on this
-   machine, as in the [Backup](backup.md) tab but without checkboxes. A file has an icon after
+   machine, with a checkbox on each file and folder as in a single game's plan, and the
+   registry keys with theirs. Only what is ticked is restored. A file has an icon after
    its size: a plus in a circle when nothing is there yet, a pencil when the file there differs
    and will be overwritten, a question mark when salvajocs cannot read the file there to compare
    it, and a cross in a circle when salvajocs will not write it. Hover the icon to read
@@ -176,16 +193,21 @@ To restore more than one game in one go:
    before 0.6.0), as the files are when the plan is made. The plan downloads no backup. A
    folder's line counts the icons below it. A folder that already exists has a button that
    opens it in the file manager.
+
+   A game with nothing ticked says so and is not restored; tick something to bring it back. A
+   game whose plan has nothing to restore says so and is left out.
+   When the safety backup cannot read a ticked file of a game, the plan lists those files and
+   the game is not restored until you untick them; the rest of that game is then restored.
+   **Restore N games** counts the games that will be restored.
 5. Click **Restore N games**. salvajocs downloads every game's backup first, then restores the
    games one after another. A game whose backup cannot be downloaded writes nothing.
 
 Each game is restored as described above, with its own safety backup, and the next game goes on
 whatever happens to it. A game whose restore is refused writes nothing: for example, when its
 restore includes registry keys for a Wine prefix while a `wineserver` runs, or when its safety
-backup fails. The **Plan** already lists a game whose safety backup cannot read a file at the
-targets as one that will not be restored. The result shows `Restored N of M games`, then each
-game's lines. A game that was not refused counts as restored even if some of its files failed;
-those files are listed under it as failed.
+backup fails. The result shows `Restored N of M games`, then each game's lines. A game that was
+not refused counts as restored even if some of its files failed; those files are listed under it
+as failed.
 
 ## Undo
 
@@ -196,6 +218,7 @@ An undo has limits:
 
 - It puts back what the restore overwrote. Files and registry keys the restore created are not in
   the old state, so they stay.
+- Files and registry keys you unticked were not touched, so they are not in the safety backup.
 - A safety backup of a file that you redirected with **Override** is stored by its full path. Such
   files show up as skipped when you restore that snapshot through the normal flow.
 

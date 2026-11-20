@@ -2,31 +2,33 @@
 //! targets, a confirm of what each one writes, then `restore::run` per game, each behind its own
 //! safety backup (ADR-0005, ADR-0010). A game that fails does not stop the others.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use eframe::egui::{self, Role, Ui, WidgetInfo};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
 use salvajocs_core::manifest::Manifest;
-use salvajocs_core::restore::{self, GameBackups, Listed, PrepareError, RestorePlan, WriteState};
+use salvajocs_core::restore::{self, GameBackups, PrepareError, RestorePlan, WriteState};
 use salvajocs_core::scan::Environment;
+use salvajocs_core::selection::GameSettings;
 use salvajocs_core::storage::SnapshotInfo;
 
 use super::{
-    Fetched, RestoreTab, Restored, describe_run_error, hover_label, into_line, name_context,
-    own_dir, remove_dir, skipped_ui, snapshot_label, warnings_ui,
+    Fetched, Label, Labelled, RestoreTab, Restored, WriteTree, blocking, describe_run_error,
+    hover_label, into_line, name_context, nothing_to_restore, own_dir, registry_ticked, remove_dir,
+    roots_ui, skipped_ui, snapshot_label, ticked_keys, ticked_plan, warnings_ui,
 };
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
 use crate::tabs::mapping::{Dialog, DialogAction};
-use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
+use crate::tabs::tree::{Badge, Clicked, Mode};
 use crate::theme::{self, icons};
 
 /// A game of the batch ready to restore.
@@ -34,8 +36,35 @@ struct Planned {
     fetched: Arc<Fetched>,
     /// The fetched snapshot, as the picker shows it.
     snapshot: String,
-    plan: RestorePlan,
-    compared: Compared,
+    labelled: Labelled,
+    /// What the run restores of the game, all ticked at first; never saved (ADR-0025).
+    selection: GameSettings,
+}
+
+impl Planned {
+    /// The game planned as `labelled`, with everything ticked.
+    fn new(fetched: Arc<Fetched>, snapshot: String, labelled: Labelled) -> Self {
+        Self {
+            fetched,
+            snapshot,
+            labelled,
+            selection: GameSettings::default(),
+        }
+    }
+
+    /// Whether the run restores the game: something is ticked and no ticked write blocks its
+    /// safety backup.
+    fn runs(&self) -> bool {
+        let Labelled {
+            plan,
+            labels,
+            tree,
+            roots,
+        } = &self.labelled;
+        let ticked = tree.ticked(&self.selection);
+        (ticked.contains(&true) || registry_ticked(roots, &self.selection))
+            && blocking(plan, labels, &ticked).is_empty()
+    }
 }
 
 /// A game of the batch waiting for its turn in the mapping dialog (ADR-0011).
@@ -57,24 +86,12 @@ enum Outcome {
     Failed(String),
 }
 
-/// What each write of a plan does to its target, and the confirm's tree of them; see
-/// [`compare`].
-struct Compared {
-    /// What each of the plan's writes does to its target, or why it will fail.
-    states: Vec<Result<WriteState, String>>,
-    /// The writes by where they land, read-only.
-    tree: FileTree,
-    /// The badge of each file key of `tree` that has one, with the tooltip of its icon.
-    badges: HashMap<String, (Badge, String)>,
-}
-
 /// What a batch dialog's confirm job hands back.
 struct Mapped {
     /// The game's index in the batch.
     index: usize,
     choices: Vec<(SnapshotRoot, Choice)>,
-    /// The plan, with its [`Compared`] or why the game would write nothing.
-    plan: Result<(RestorePlan, Result<Compared, String>), PrepareError>,
+    plan: Result<Labelled, PrepareError>,
 }
 
 /// One ticked game of a batch.
@@ -318,20 +335,14 @@ impl RestoreTab {
             return;
         };
         match plan {
-            Ok((plan, compared)) => {
+            Ok(labelled) => {
                 if let Some(config) = &mut state.config {
                     crossbuild::apply_choices(config, &game.title, &choices);
                     state.save_config(ctx);
                 }
-                game.outcome = match compared {
-                    Ok(compared) => Outcome::Planned(Box::new(Planned {
-                        fetched: mapping.fetched.clone(),
-                        snapshot: mapping.snapshot.clone(),
-                        plan,
-                        compared,
-                    })),
-                    Err(reason) => Outcome::Failed(reason),
-                };
+                let (fetched, snapshot) = (mapping.fetched.clone(), mapping.snapshot.clone());
+                game.outcome =
+                    Outcome::Planned(Box::new(Planned::new(fetched, snapshot, labelled)));
             }
             Err(PrepareError::Unclassifiable { root, template }) => {
                 mapping.dialog.reject(&root, &template);
@@ -356,14 +367,10 @@ impl RestoreTab {
             Some(DialogAction::Confirm(choices)) if state.session.is_some() => {
                 let fetched = mapping.fetched.clone();
                 let job = Job::spawn(ctx, move || {
-                    let plan = fetched.prepare(&choices).map(|plan| {
-                        let compared = compare(&plan, &fetched.listed);
-                        (plan, compared)
-                    });
                     Ok(Mapped {
                         index,
+                        plan: fetched.labelled(fetched.prepare(&choices)),
                         choices,
-                        plan,
                     })
                 });
                 self.batch.mapping = Some((generation, job));
@@ -386,6 +393,7 @@ impl RestoreTab {
         if self.batch.waiting().is_some() {
             return;
         }
+        let busy = self.busy();
         let Some(games) = &mut self.batch.games else {
             return;
         };
@@ -398,8 +406,8 @@ impl RestoreTab {
             let title = &game.title;
             match &mut game.outcome {
                 Outcome::Planned(game) => {
-                    planned += 1;
-                    opened = planned_ui(ui, title, game).or(opened);
+                    opened = planned_ui(ui, title, game, !busy).or(opened);
+                    planned += usize::from(game.runs());
                 }
                 Outcome::Skipped => {
                     ui.weak(format!("{title}: skipped in the folder mapping dialog"));
@@ -435,18 +443,33 @@ impl RestoreTab {
         }
     }
 
-    /// Restores the planned games in one job: downloads every game's snapshot first, so no
-    /// download waits for the reindex after a safety backup (ADR-0003, ADR-0020), then runs
-    /// `restore::run` for each, behind its own safety backup staged under the cache dir. Then
-    /// the downloads are removed.
+    /// Restores the ticked part of each planned game that runs in one job: downloads every
+    /// game's snapshot first, so no download waits for the reindex after a safety backup
+    /// (ADR-0003, ADR-0020), then runs `restore::run` for each, behind its own safety backup
+    /// staged under the cache dir. Then the downloads are removed.
     fn start_batch_run(&mut self, ctx: &egui::Context, state: &State) {
         let Some(games) = self.batch.games.take() else {
             return;
         };
         let planned: Vec<(Arc<Fetched>, RestorePlan)> = (games.into_iter())
             .filter_map(|game| match game.outcome {
-                Outcome::Planned(planned) => Some((planned.fetched, planned.plan)),
-                Outcome::NeedsMapping(_) | Outcome::Skipped | Outcome::Failed(_) => None,
+                Outcome::Planned(planned) if planned.runs() => {
+                    let Planned {
+                        fetched,
+                        labelled,
+                        selection,
+                        ..
+                    } = *planned;
+                    let Labelled {
+                        plan, tree, roots, ..
+                    } = &labelled;
+                    let plan = ticked_plan(plan, &tree.keys, roots, &selection);
+                    Some((fetched, plan))
+                }
+                Outcome::Planned(_)
+                | Outcome::NeedsMapping(_)
+                | Outcome::Skipped
+                | Outcome::Failed(_) => None,
             })
             .collect();
         self.error = None;
@@ -550,7 +573,7 @@ impl RestoreTab {
 }
 
 /// Reads `snapshot` of `title`, to be downloaded into `work_dir`, and plans its restore into its
-/// default targets, then compares each write with its target.
+/// default targets, then labels each write as the single game's plan does.
 fn plan_game(
     title: String,
     snapshot: &SnapshotInfo,
@@ -579,16 +602,12 @@ fn plan_game(
         reason: defaults.reason,
         info,
     };
-    match fetched.prepare(&[]) {
-        Ok(plan) => match compare(&plan, &fetched.listed) {
-            Ok(compared) => Outcome::Planned(Box::new(Planned {
-                compared,
-                snapshot: snapshot_label(snapshot),
-                fetched: Arc::new(fetched),
-                plan,
-            })),
-            Err(reason) => Outcome::Failed(reason),
-        },
+    match fetched.labelled(fetched.prepare(&[])) {
+        Ok(labelled) => Outcome::Planned(Box::new(Planned::new(
+            Arc::new(fetched),
+            snapshot_label(snapshot),
+            labelled,
+        ))),
         Err(PrepareError::NeedsMapping(entries)) => Outcome::NeedsMapping(Box::new(Mapping {
             fetched: Arc::new(fetched),
             snapshot: snapshot_label(snapshot),
@@ -599,40 +618,6 @@ fn plan_game(
         )),
         Err(err) => Outcome::Failed(format!("the restore cannot be planned: {err}")),
     }
-}
-
-/// [`restore::compare_writes`] against `listed` with each error as the text the confirm shows,
-/// and the tree of the writes; `Err` when the restore of the game would write nothing. Reads the
-/// targets and which target folders exist, so it runs in a job.
-fn compare(plan: &RestorePlan, listed: &Listed) -> Result<Compared, String> {
-    let states =
-        restore::compare_writes(plan, listed).map_err(|err| format!("{:#}", anyhow!(err)))?;
-    let states: Vec<_> = (states.into_iter())
-        .map(|state| state.map_err(|err| format!("{:#}", anyhow!(err))))
-        .collect();
-    let mut badges = HashMap::new();
-    let rows: Vec<Row> = (plan.writes.iter().zip(&states))
-        .filter_map(|(write, state)| {
-            // Keyed where the file lands, so a cross-build restore shows this build's folders. A
-            // write without a key has no row: `restore::run` refuses to stage it.
-            let ((base, tail), _) = restore::staged_target(write)?;
-            let key = format!("{}/{tail}", base.dir_name());
-            if let Some(badge) = write_badge(state.as_ref().map_err(String::as_str).copied()) {
-                badges.insert(key.clone(), badge);
-            }
-            Some(Row {
-                key,
-                size: listed.source(write).map_or(0, |entry| entry.size),
-                real: Some(write.target.clone()),
-                removed: false,
-            })
-        })
-        .collect();
-    Ok(Compared {
-        states,
-        tree: FileTree::new(rows).existing_folders_only(),
-        badges,
-    })
 }
 
 /// The badge of a write in `state`, `Err` with why it will fail, and its tooltip; `None` for an
@@ -702,24 +687,31 @@ fn remove_stale(parent: &Path) {
     }
 }
 
-/// One planned game of the confirm: its snapshot with how many files are new, changed or
-/// unchanged, its targets, the writes that will fail, the tree of its files, the plan's
-/// warnings, registry and skipped items. Returns the folder the user asked to open.
-fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf> {
+/// One planned game of the confirm: its snapshot with how many ticked files are new, changed or
+/// unchanged, its targets, the ticked writes that will fail or block it, the tree of its files
+/// with a checkbox on each, the plan's warnings, the registry with a checkbox per root and the
+/// skipped items. `enabled` false greys the checkboxes. Returns the folder the user asked to open.
+fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) -> Option<PathBuf> {
+    let ticked = planned.labelled.tree.ticked(&planned.selection);
     let Planned {
         fetched,
         snapshot,
-        plan,
-        compared: Compared {
-            states,
-            tree,
-            badges,
-        },
+        labelled:
+            Labelled {
+                plan,
+                labels,
+                tree: WriteTree { tree, .. },
+                roots,
+            },
+        selection,
     } = planned;
     ui.add_space(8.0);
     theme::group(ui, |ui| {
-        let compared: Vec<_> = (states.iter())
-            .filter_map(|state| state.as_ref().ok().copied())
+        let compared: Vec<_> = (labels.iter().zip(&ticked))
+            .filter_map(|(label, &ticked)| match label {
+                Label::State(state) if ticked => Some(*state),
+                Label::State(_) | Label::WillFail(_) | Label::Blocks(_) => None,
+            })
             .collect();
         theme::row(
             ui,
@@ -732,30 +724,58 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
         let (into, hover) = into_line(&used, fetched.prefix_origin.as_ref(), fetched.reason);
         hover_label(ui, into, hover);
         let error_color = ui.visuals().error_fg_color;
-        for (write, state) in plan.writes.iter().zip(states) {
-            if let Err(reason) = state {
+        for ((write, label), _) in
+            (plan.writes.iter().zip(labels.iter()).zip(&ticked)).filter(|(_, ticked)| **ticked)
+        {
+            if let Label::WillFail(reason) = label {
                 let text = format!("{}: will fail: {reason}", write.target.display());
                 theme::status(ui, icons::X_CIRCLE, error_color, text);
             }
         }
-        let badge = |key: &str| badges.get(key).map(|&(badge, _)| badge);
-        let hint = |key: &str, _| {
-            badges
-                .get(key)
-                .map(|(_, hint)| hint.clone())
+        let blocking = blocking(plan, labels, &ticked);
+        if !blocking.is_empty() {
+            let text = "Nothing will be restored: the safety backup cannot read these files:";
+            theme::status(ui, icons::X_CIRCLE, error_color, text);
+            for path in &blocking {
+                ui.weak(path);
+            }
+            ui.weak("Untick them to restore the rest of this game.");
+        } else if nothing_to_restore(plan) {
+            ui.weak("Nothing to restore, so this game will not be restored.");
+        } else if !ticked.contains(&true) && !registry_ticked(roots, selection) {
+            ui.weak("Nothing ticked, so this game will not be restored.");
+        }
+        let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
+        let hint = |index: usize, _: &str, _| {
+            (labels[index].badge())
+                .map(|(_, hint)| hint)
                 .unwrap_or_default()
         };
-        let clicked = ui.push_id(title, |ui| tree.ui(ui, Mode::ReadOnly, &badge, &hint));
+        let included = |key: &str| selection.path_included(key);
+        let mode = Mode::Select {
+            included: &included,
+            enabled,
+        };
+        let clicked = ui.push_id(title, |ui| {
+            tree.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {})
+        });
         warnings_ui(ui, plan);
-        if let Some((export, ctx)) = &plan.registry {
+        if let Some((_, ctx)) = &plan.registry {
             let (name, hover) = name_context(ctx, fetched.prefix_origin.as_ref());
-            let text = format!("Registry: {} keys into {name}, replaced", export.keys.len());
+            let keys = ticked_keys(roots, selection);
+            let text = format!("Registry: {keys} keys into {name}, replaced");
             hover_label(ui, text, hover);
+            roots_ui(ui, roots, selection, enabled);
         }
         skipped_ui(ui, plan);
         match clicked.inner {
             Some(Clicked::Open(path)) => Some(path),
-            Some(Clicked::Toggle(..)) | None => None,
+            Some(Clicked::Toggle(key, included)) => {
+                selection.set_path(&key, included);
+                tree.invalidate();
+                None
+            }
+            None => None,
         }
     })
 }

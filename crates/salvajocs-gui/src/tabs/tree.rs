@@ -1,5 +1,5 @@
-//! A tree of a game's files, with a checkbox on every folder and file to choose what to back up,
-//! or read-only, and a badge on each file that differs from a backup (ADR-0018).
+//! A tree of a game's files, with a checkbox on every folder and file to choose what to back up
+//! or restore (ADR-0025), and a badge on each file that differs from a backup (ADR-0018).
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -82,8 +82,6 @@ pub(crate) enum Mode<'a> {
         included: &'a dyn Fn(&str) -> bool,
         enabled: bool,
     },
-    /// Names only: nothing can be toggled.
-    ReadOnly,
 }
 
 /// One file of the tree, from its [`Row`], with the last component of its key as `name`.
@@ -250,13 +248,13 @@ impl FileTree {
     }
 
     /// Forgets the cached counts. Call it whenever the set of included keys or the badges change,
-    /// such as after applying the toggle [`FileTree::ui`] returned.
+    /// such as after applying the toggle [`FileTree::ui_with_rows`] returned.
     pub(crate) fn invalidate(&mut self) {
         self.included = None;
     }
 
     /// How many present files `included` accepts and their size, from the cached counts.
-    /// `badge` must be the one [`FileTree::ui`] draws with.
+    /// `badge` must be the one [`FileTree::ui_with_rows`] draws with, by key.
     pub(crate) fn included(
         &mut self,
         included: &dyn Fn(&str) -> bool,
@@ -269,27 +267,12 @@ impl FileTree {
     }
 
     /// Draws the tree in `mode` and returns what was clicked this frame. `badge` gives a present
-    /// file's badge by key; removed files always have [`Badge::Removed`]. `hint` gives the
-    /// tooltip of a file's badge icon by key. The caller scopes the ids (`ui.push_id`) when it
-    /// draws several trees.
-    pub(crate) fn ui(
-        &mut self,
-        ui: &mut Ui,
-        mode: Mode<'_>,
-        badge: &dyn Fn(&str) -> Option<Badge>,
-        hint: &dyn Fn(&str, Badge) -> String,
-    ) -> Option<Clicked> {
-        let (badge, hint) = (
-            |_: usize, key: &str| badge(key),
-            |_: usize, key: &str, badge: Badge| hint(key, badge),
-        );
-        self.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {})
-    }
-
-    /// [`FileTree::ui`], with `badge` and `hint` taking a file's row position too, so rows that
-    /// share a key can differ, and calling `row` on each file row it draws: with the row's
+    /// file's badge by its row's position and key; removed files always have
+    /// [`Badge::Removed`]. `hint` gives the tooltip of a file's badge icon the same way, so rows
+    /// that share a key can differ. `row` is called on each file row drawn: with the row's
     /// position, its key and where on the row it draws. A row's position is its place among the
-    /// rows [`FileTree::new`] was given.
+    /// rows [`FileTree::new`] was given. The caller scopes the ids (`ui.push_id`) when it draws
+    /// several trees.
     pub(crate) fn ui_with_rows(
         &mut self,
         ui: &mut Ui,
@@ -303,11 +286,7 @@ impl FileTree {
             root,
             included: cache,
         } = self;
-        let all = |_: &str| true;
-        let included = match mode {
-            Mode::Select { included, .. } => included,
-            Mode::ReadOnly => &all,
-        };
+        let Mode::Select { included, .. } = mode;
         let drawing = Drawing {
             files,
             totals: totals(cache, files, included, badge),
@@ -400,7 +379,7 @@ fn badge_chips(ui: &mut Ui, totals: &Included) {
     theme::chips(ui, &chips, &label.join(", "));
 }
 
-/// What one call of [`FileTree::ui`] draws with.
+/// What one call of [`FileTree::ui_with_rows`] draws with.
 struct Drawing<'a> {
     files: &'a [File],
     totals: &'a [Included],
@@ -518,14 +497,6 @@ impl Drawing<'_> {
                     // Only removed files: the chips say how many.
                     Mode::Select { .. } => {
                         ui.label(weak_text(ui, &label));
-                    }
-                    Mode::ReadOnly => {
-                        ui.label(&label);
-                        ui.weak(format!(
-                            "{}, {}",
-                            count(totals.present, "file"),
-                            format_size(totals.size)
-                        ));
                     }
                 }
                 badge_chips(ui, &totals);

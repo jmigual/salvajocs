@@ -145,8 +145,6 @@ fn counts_are_kept_until_invalidated() {
 struct Fixture {
     tree: FileTree,
     included: BTreeSet<String>,
-    /// Draw with checkboxes, else read-only.
-    select: bool,
     enabled: bool,
     badges: Vec<(String, Badge)>,
     toggled: Option<(String, bool)>,
@@ -154,21 +152,19 @@ struct Fixture {
 }
 
 fn harness(keys: &[&str], included: &[&str], enabled: bool) -> Harness<'static, Fixture> {
-    harness_of(tree(keys), included, enabled, &[], true)
+    harness_of(tree(keys), included, enabled, &[])
 }
 
-/// A harness drawing `tree` with `badges` by key, with checkboxes when `select`.
+/// A harness drawing `tree` with `badges` by key.
 fn harness_of(
     tree: FileTree,
     included: &[&str],
     enabled: bool,
     badges: &[(&str, Badge)],
-    select: bool,
 ) -> Harness<'static, Fixture> {
     let fixture = Fixture {
         tree,
         included: included.iter().map(|key| (*key).to_owned()).collect(),
-        select,
         enabled,
         badges: (badges.iter())
             .map(|(key, badge)| ((*key).to_owned(), *badge))
@@ -181,29 +177,24 @@ fn harness_of(
             let Fixture {
                 tree,
                 included,
-                select,
                 enabled,
                 badges,
                 toggled,
                 opened,
             } = state;
             let included = |key: &str| included.contains(key);
-            let mode = if *select {
-                Mode::Select {
-                    included: &included,
-                    enabled: *enabled,
-                }
-            } else {
-                Mode::ReadOnly
+            let mode = Mode::Select {
+                included: &included,
+                enabled: *enabled,
             };
-            let badge = |key: &str| {
+            let badge = |_: usize, key: &str| {
                 (badges.iter())
                     .find(|(badged, _)| badged == key)
                     .map(|(_, badge)| *badge)
             };
             // The key and the badge, so tests see both reach the tooltip.
-            let hint = |key: &str, badge: Badge| format!("{key}: {badge:?}");
-            match tree.ui(ui, mode, &badge, &hint) {
+            let hint = |_: usize, key: &str, badge: Badge| format!("{key}: {badge:?}");
+            match tree.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {}) {
                 Some(Clicked::Toggle(key, on)) => *toggled = Some((key, on)),
                 Some(Clicked::Open(path)) => *opened = Some(path),
                 None => {}
@@ -464,7 +455,7 @@ fn a_chain_ending_in_a_file_is_merged_up_to_the_last_folder() {
 #[test]
 fn a_removed_row_has_no_checkbox_and_says_it_is_removed() {
     let tree = FileTree::new([row("Base/kept.sav"), removed("Base/gone.sav")]);
-    let mut harness = harness_of(tree, &["Base/kept.sav"], true, &[], true);
+    let mut harness = harness_of(tree, &["Base/kept.sav"], true, &[]);
     open_all(&mut harness);
 
     let gone = harness.get_by_label("gone.sav, removed");
@@ -484,7 +475,7 @@ fn a_removed_row_has_no_checkbox_and_says_it_is_removed() {
 #[test]
 fn a_folder_of_removed_files_has_no_checkbox_and_no_open_button() {
     let tree = FileTree::new([row("Base/kept.sav"), removed("Base/old/gone.sav")]);
-    let mut harness = harness_of(tree, &[], true, &[], true);
+    let mut harness = harness_of(tree, &[], true, &[]);
     open_all(&mut harness);
 
     let old = harness.get_by_label("old");
@@ -520,7 +511,7 @@ fn a_folder_opens_where_its_first_present_file_is() {
 #[test]
 fn a_chain_through_a_folder_of_removed_files_still_merges() {
     let tree = FileTree::new([removed("a/b/c/x")]);
-    let harness = harness_of(tree, &[], true, &[], true);
+    let harness = harness_of(tree, &[], true, &[]);
     assert_eq!(harness.query_all_by_label("a/b/c").count(), 1);
 }
 
@@ -538,7 +529,7 @@ fn badges_join_the_row_name_and_count_in_folder_headers() {
         ("Base/changed.sav", Badge::Changed),
         ("Base/locked.sav", Badge::Unknown),
     ];
-    let mut harness = harness_of(tree, &keys, true, &badges, true);
+    let mut harness = harness_of(tree, &keys, true, &badges);
     assert_eq!(harness.query_all_by_label("4 of 4 files, 40 B").count(), 1);
     let chips = "1 new, 1 changed, 1 removed, 1 could not be compared";
     assert_eq!(role(&harness, chips), Role::Image);
@@ -567,24 +558,17 @@ fn badges_join_the_row_name_and_count_in_folder_headers() {
 }
 
 #[test]
-fn a_read_only_tree_has_no_checkbox_and_toggles_nothing() {
+fn a_file_that_will_fail_is_counted_and_named_by_its_badge() {
     let keys = ["Base/dir/a.sav", "Base/dir/b.sav"];
     let badges = [
         ("Base/dir/a.sav", Badge::New),
         ("Base/dir/b.sav", Badge::WillFail),
     ];
-    let mut harness = harness_of(tree(&keys), &[], true, &badges, false);
-    assert_eq!(harness.query_all_by_label("2 files, 20 B").count(), 1);
+    let mut harness = harness_of(tree(&keys), &keys, true, &badges);
     assert_eq!(role(&harness, "1 new, 1 will fail"), Role::Image);
     open_all(&mut harness);
-    assert_eq!(harness.query_all_by_role(Role::CheckBox).count(), 0);
     assert_eq!(harness.query_all_by_label("b.sav, will fail").count(), 1);
     assert_eq!(role(&harness, "Base/dir/b.sav: WillFail"), Role::Image);
-
-    harness.get_by_label("a.sav, new").click();
-    harness.get_by_label("Base/dir").click();
-    harness.run();
-    assert_eq!(harness.state().toggled, None);
 }
 
 #[test]
@@ -623,7 +607,11 @@ fn the_row_slot_draws_on_and_under_each_open_file_row_with_its_row_position() {
                 |_: usize, _: &str| None,
                 |_: usize, _: &str, _| String::new(),
             );
-            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut row);
+            let mode = Mode::Select {
+                included: &|_| true,
+                enabled: true,
+            };
+            tree.ui_with_rows(ui, mode, &badge, &hint, &mut row);
         },
         tree(&["Base/b.sav", "Base/a.sav"]),
     );
@@ -651,7 +639,11 @@ fn rows_that_share_a_key_get_their_badges_by_position() {
         |ui, tree: &mut FileTree| {
             let badge = |at: usize, _: &str| Some([Badge::New, Badge::Changed][at]);
             let hint = |at: usize, key: &str, _| format!("{key} at {at}");
-            tree.ui_with_rows(ui, Mode::ReadOnly, &badge, &hint, &mut |_, _, _, _| {});
+            let mode = Mode::Select {
+                included: &|_| true,
+                enabled: true,
+            };
+            tree.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {});
         },
         tree(&["Base/a.sav", "Base/a.sav"]),
     );

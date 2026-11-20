@@ -15,7 +15,7 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{HKCU, RegData, RegValue, RegistryError, RegistryExport};
+use super::{HKCU, RegData, RegValue, RegistryError, RegistryExport, is_under};
 
 #[cfg(test)]
 mod tests;
@@ -179,14 +179,6 @@ pub(crate) fn hkcu_relative(key: &str) -> Result<&str, RegistryError> {
 
 fn full_key(relative: &str) -> String {
     format!("{HKCU}\\{relative}")
-}
-
-/// Whether `path` is `root` or below it, comparing whole elements case-insensitively.
-fn is_under(path: &str, root: &str) -> bool {
-    // Unicode lowercase approximates Wine's uppercase table; exotic names may differ.
-    let (path, root) = (path.to_lowercase(), root.to_lowercase());
-    path.strip_prefix(&root)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('\\'))
 }
 
 /// Mirror of wineserver's `parse_strW`: reads up to the unescaped `end` byte and returns the

@@ -655,7 +655,7 @@ fn a_big_plan_draws_only_its_folders_until_one_is_opened() {
     preview(&mut harness);
     let rows = |harness: &Harness<'static, App>| {
         let rows = (harness.query_all_by_label_contains("file0"))
-            .filter(|node| node.accesskit_node().role() == Role::Label)
+            .filter(|node| node.accesskit_node().role() == Role::CheckBox)
             .count();
         let buttons = harness.query_all_by_label_contains("Override ").count();
         (rows, buttons)
@@ -2166,7 +2166,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
 }
 
 #[test]
-fn batch_confirm_tree_labels_each_file_and_toggles_nothing() {
+fn batch_confirm_tree_labels_each_file_with_a_checkbox() {
     let tmp = tempfile::tempdir().unwrap();
     let tails = ["Alpha/new.dat", "Alpha/changed.dat", "Alpha/same.dat"];
     let (alpha, alpha_scan) = native(&tmp, "Alpha", &tails);
@@ -2194,8 +2194,10 @@ fn batch_confirm_tree_labels_each_file_and_toggles_nothing() {
         "same.dat",
         "save.dat, new",
     ] {
-        let role = harness.get_by_label(row).accesskit_node().role();
-        assert_eq!(role, Role::Label, "{row} is read-only");
+        let node = harness.get_by_label(row);
+        let node = node.accesskit_node();
+        assert_eq!(node.role(), Role::CheckBox, "{row}");
+        assert_eq!(node.toggled(), Some(Toggled::True), "{row} starts ticked");
     }
     for (icon, files) in [
         ("New: not on this PC yet", 2),
@@ -2209,13 +2211,6 @@ fn batch_confirm_tree_labels_each_file_and_toggles_nothing() {
                 .all(|node| node.accesskit_node().role() == Role::Image)
         );
     }
-    let checkboxes: Vec<String> = (harness.query_all(by().role(Role::CheckBox)))
-        .filter_map(|node| node.accesskit_node().label())
-        .collect();
-    assert!(
-        checkboxes.iter().all(|label| label.starts_with("Include ")),
-        "only the list's checkboxes: {checkboxes:?}"
-    );
     assert!(
         (harness.query_by_label("Show XdgData/Beta in the file manager")).is_none(),
         "Beta's folder does not exist yet"
@@ -2263,9 +2258,11 @@ fn batch_confirm_shows_a_write_that_will_fail_and_a_game_that_will_not_run() {
         .accesskit_node();
     assert_eq!(will_fail.role(), Role::Image);
     assert!(harness.query_by_label("save.dat, new").is_some());
+    assert!(shows(&harness, "the safety backup cannot read these files"));
+    assert!(shows_path(&harness, &locked.display().to_string()));
     assert!(shows(
         &harness,
-        "Beta: will not be restored: the safety backup cannot read"
+        "Untick them to restore the rest of this game."
     ));
     assert!(!disabled(&harness, "Restore 1 game"), "only Alpha runs");
 }
@@ -2454,4 +2451,457 @@ fn the_details_of_the_plan_read_the_chosen_older_snapshot() {
     // The older save's hash, not the newer one's.
     let hash = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
     assert!(shows(&harness, hash));
+}
+
+/// Whether the checkbox `label` is ticked.
+fn ticked(harness: &Harness<'static, App>, label: &str) -> bool {
+    let node = harness.get_by_label(label);
+    node.accesskit_node().toggled() == Some(Toggled::True)
+}
+
+/// The paths below the game's folder in the safety backup of `title`; `None` without one.
+fn safety_entries(tmp: &TempDir, title: &str) -> Option<Vec<String>> {
+    let safety = snapshots(tmp, "pre-restore");
+    let snapshot = safety.iter().find(|snapshot| snapshot.label == title)?;
+    let path = format!("/salvajocs/{}", salvajocs_core::slug::slug(title));
+    let entries = open_repo(tmp)
+        .snapshot_entries(&snapshot.id, &path)
+        .unwrap();
+    Some(entries.into_iter().map(|entry| entry.path).collect())
+}
+
+/// Alpha, a Windows build in a prefix with a long path, with `save.dat` and `slot2.dat` backed
+/// up; each of `existing` already holds `old` at its target. Planned, with its folder open.
+fn alpha_planned(tmp: &TempDir, existing: &[&str]) -> (Harness<'static, App>, PathBuf) {
+    let prefix = long_prefix(tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let snapshot = scan(
+        tmp,
+        "Alpha",
+        &[
+            (Base::WinAppData, "Alpha/save.dat"),
+            (Base::WinAppData, "Alpha/slot2.dat"),
+        ],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (mut harness, _env) = open_tab(tmp, vec![game], &[snapshot]);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    for name in existing {
+        put(&saves.join(name), "old");
+    }
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    (harness, saves)
+}
+
+#[test]
+fn an_unticked_file_is_neither_restored_nor_backed_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, saves) = alpha_planned(&tmp, &["slot2.dat"]);
+    assert!(ticked(&harness, "slot2.dat, changed"));
+
+    click(&mut harness, "slot2.dat, changed");
+    assert!(!ticked(&harness, "slot2.dat, changed"));
+    assert!(shows(&harness, "Files to write (1)"));
+    assert!(shows(&harness, "1 left out"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "Safety backup: none needed"));
+    assert!(snapshots(&tmp, "pre-restore").is_empty());
+    assert_eq!(fs::read_to_string(saves.join("slot2.dat")).unwrap(), "old");
+    let save = fs::read_to_string(saves.join("save.dat")).unwrap();
+    assert_eq!(save, "Alpha/save.dat");
+    let slot2 = saves.join("slot2.dat").display().to_string();
+    assert!(!shows_path(&harness, &slot2), "no result line for it");
+}
+
+#[test]
+fn the_safety_backup_holds_only_the_ticked_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, saves) = alpha_planned(&tmp, &["save.dat", "slot2.dat"]);
+
+    click(&mut harness, "slot2.dat, changed");
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    let entries = safety_entries(&tmp, "Alpha").expect("a safety backup");
+    assert!(
+        entries.iter().any(|path| path.ends_with("Alpha/save.dat")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("slot2.dat")),
+        "{entries:?}"
+    );
+    assert_eq!(fs::read_to_string(saves.join("slot2.dat")).unwrap(), "old");
+    let save = fs::read_to_string(saves.join("save.dat")).unwrap();
+    assert_eq!(save, "Alpha/save.dat");
+}
+
+#[test]
+fn a_folder_counts_its_ticked_files_and_restore_needs_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _saves) = alpha_planned(&tmp, &[]);
+    assert!(shows(&harness, "2 of 2 files"));
+
+    click(&mut harness, "slot2.dat, new");
+    assert!(shows(&harness, "1 of 2 files"));
+    assert!(!disabled(&harness, "Restore files"));
+
+    // A mixed folder ticks everything, the next click nothing.
+    click(&mut harness, "WinAppData/Alpha");
+    assert!(shows(&harness, "2 of 2 files"));
+    click(&mut harness, "WinAppData/Alpha");
+    assert!(shows(&harness, "0 of 2 files"));
+    assert!(disabled(&harness, "Restore files"));
+    assert!(shows(&harness, "Tick at least one file to restore."));
+
+    click(&mut harness, "WinAppData/Alpha");
+    assert!(shows(&harness, "2 of 2 files"));
+    assert!(!disabled(&harness, "Restore files"));
+    assert!(!shows(&harness, "Tick at least one"));
+}
+
+#[cfg(unix)]
+#[test]
+fn unticking_an_unreadable_target_lets_the_restore_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = long_prefix(&tmp);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    let locked = saves.join("save.dat");
+    put(&locked, "old");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let unlock = Unlock(locked.clone(), 0o644);
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let snapshot = scan(
+        &tmp,
+        "Alpha",
+        &[
+            (Base::WinAppData, "Alpha/save.dat"),
+            (Base::WinAppData, "Alpha/slot2.dat"),
+        ],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(shows(&harness, "Nothing will be restored"));
+    assert!(shows(&harness, "Untick them, or make them readable"));
+    assert!(disabled(&harness, "Restore files"));
+
+    click(&mut harness, "Open WinAppData/Alpha");
+    click(&mut harness, "save.dat, will fail");
+    assert!(!shows(&harness, "Nothing will be restored"));
+    assert!(!disabled(&harness, "Restore files"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+    drop(unlock);
+
+    assert_eq!(fs::read_to_string(&locked).unwrap(), "old");
+    let slot2 = fs::read_to_string(saves.join("slot2.dat")).unwrap();
+    assert_eq!(slot2, "Alpha/slot2.dat");
+}
+
+#[test]
+fn a_new_plan_ticks_every_file_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _saves) = alpha_planned(&tmp, &[]);
+    click(&mut harness, "slot2.dat, new");
+    assert!(shows(&harness, "1 left out"));
+
+    // Other targets plan again.
+    click(&mut harness, "Native Linux build");
+    preview(&mut harness);
+    if harness.query_by_label("Open WinAppData/Alpha").is_some() {
+        click(&mut harness, "Open WinAppData/Alpha");
+    }
+
+    assert!(ticked(&harness, "slot2.dat, new"));
+    assert!(ticked(&harness, "save.dat, new"));
+    assert!(!shows(&harness, "left out"));
+}
+
+#[test]
+fn an_unticked_overridden_file_stays_unticked_and_is_not_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, saves) = alpha_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere/slot2.dat");
+    click(&mut harness, "slot2.dat, new");
+
+    apply_override(&mut harness, ALPHA_SLOT2, &elsewhere);
+    assert!(!ticked(&harness, "slot2.dat, new"));
+    click(
+        &mut harness,
+        &format!("Clear the override of {ALPHA_SLOT2}"),
+    );
+    assert!(!ticked(&harness, "slot2.dat, new"));
+    apply_override(&mut harness, ALPHA_SLOT2, &elsewhere);
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(!elsewhere.exists());
+    assert!(!saves.join("slot2.dat").exists());
+    assert!(saves.join("save.dat").exists());
+}
+
+const REG_KEY: &str = r"HKEY_CURRENT_USER\Software\Co\Reg";
+const OTHER_KEY: &str = r"HKEY_CURRENT_USER\Software\Co\Other";
+
+/// A `user.reg` holding `Software\Co\Other` and `Software\Co\Reg`, whose values `v` are
+/// `<age>-other` and `<age>-reg`.
+fn co_user_reg(age: &str) -> String {
+    format!(
+        "WINE REGISTRY Version 2\n\n[Software\\\\Co\\\\Other] 1\n#time=0\n\"v\"=\"{age}-other\"\n\n\
+         [Software\\\\Co\\\\Reg] 1\n#time=0\n\"v\"=\"{age}-reg\"\n"
+    )
+}
+
+/// Reg, a Windows build in a prefix with a long path that declares the keys `Software\Co\Reg`
+/// and `Software\Co\Other`, backed up with a save and `new` values while the prefix holds both
+/// keys with `old` values; and Beta, a native game. `wineserver_running` answers the wineserver
+/// check. Returns the prefix.
+fn registry_games(
+    tmp: &TempDir,
+    wineserver_running: fn() -> bool,
+) -> (Harness<'static, App>, PathBuf) {
+    let prefix = long_prefix(tmp);
+    put(&prefix.join("user.reg"), &co_user_reg("old"));
+    let source = tmp.path().join("source-pfx");
+    put(&source.join("user.reg"), &co_user_reg("new"));
+    let mut reg = custom("Reg", &["<winAppData>/Reg"], Some(&prefix), Vec::new());
+    for key in ["Reg", "Other"] {
+        let key = format!("HKEY_CURRENT_USER/Software/Co/{key}");
+        reg.entry.registry.insert(key, RegistryRule::default());
+    }
+    let mut reg_scan = scan(
+        tmp,
+        "Reg",
+        &[(Base::WinAppData, "Reg/save.dat")],
+        &[(Base::WinAppData, "Reg")],
+    );
+    reg_scan.registry_keys = vec![REG_KEY.into(), OTHER_KEY.into()];
+    reg_scan.registry_source = Some(RegistrySource::WinePrefix(source));
+    let (beta, beta_scan) = native(tmp, "Beta", &["Beta/save.dat"]);
+    let games = vec![reg, beta];
+    let (harness, _env) = open_tab_with(tmp, games, &[reg_scan, beta_scan], &[], |env| {
+        env.wineserver_running = wineserver_running
+    });
+    (harness, prefix)
+}
+
+/// Where Reg's save goes in `prefix`.
+fn reg_save(prefix: &Path) -> PathBuf {
+    under(
+        prefix,
+        "drive_c/users/steamuser/AppData/Roaming/Reg/save.dat",
+    )
+}
+
+#[test]
+fn an_unticked_registry_key_is_neither_restored_nor_backed_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = registry_games(&tmp, || false);
+    select(&mut harness, "Reg");
+    preview(&mut harness);
+    assert!(shows(&harness, "Registry: 2 keys into"));
+    assert!(ticked(&harness, REG_KEY) && ticked(&harness, OTHER_KEY));
+
+    click(&mut harness, OTHER_KEY);
+    assert!(shows(&harness, "Registry: 1 keys into"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Reg"));
+
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    assert!(user_reg.contains("new-reg") && !user_reg.contains("old-reg"));
+    assert!(user_reg.contains("old-other") && !user_reg.contains("new-other"));
+    let safety = snapshots(&tmp, "pre-restore");
+    let path = format!(
+        "/salvajocs/{}/registry.json",
+        salvajocs_core::slug::slug("Reg")
+    );
+    let saved = open_repo(&tmp).read_file(&safety[0].id, &path).unwrap();
+    let saved = String::from_utf8(saved).unwrap();
+    assert!(saved.contains("old-reg"), "{saved}");
+    assert!(!saved.contains("Other"), "{saved}");
+}
+
+#[test]
+fn unticking_every_registry_key_restores_files_while_wine_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = registry_games(&tmp, || true);
+    select(&mut harness, "Reg");
+    preview(&mut harness);
+
+    click(&mut harness, REG_KEY);
+    click(&mut harness, OTHER_KEY);
+    assert!(shows(&harness, "Registry: 0 keys into"));
+    assert!(!disabled(&harness, "Restore files"));
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Reg"));
+
+    assert!(!shows(&harness, "Close the game and Wine first"));
+    let save = fs::read_to_string(reg_save(&prefix)).unwrap();
+    assert_eq!(save, "Reg/save.dat");
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    assert_eq!(user_reg, co_user_reg("old"));
+}
+
+#[test]
+fn batch_restores_only_the_ticked_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tails = ["Alpha/save.dat", "Alpha/slot2.dat"];
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &tails);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    for tail in tails {
+        put(&under(&xdg_data(&tmp), tail), "old");
+    }
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, "Open XdgData/Alpha");
+    click(&mut harness, "slot2.dat, changed");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    let read = |tail| fs::read_to_string(under(&xdg_data(&tmp), tail)).unwrap();
+    assert_eq!(read("Alpha/slot2.dat"), "old");
+    assert_eq!(read("Alpha/save.dat"), "Alpha/save.dat");
+    assert_eq!(read("Beta/save.dat"), "Beta/save.dat");
+    let entries = safety_entries(&tmp, "Alpha").expect("Alpha's safety backup");
+    assert!(
+        entries.iter().any(|path| path.ends_with("Alpha/save.dat")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("slot2.dat")),
+        "{entries:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_batch_game_restores_without_an_unticked_unreadable_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat", "Beta/slot2.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let locked = under(&xdg_data(&tmp), "Beta/save.dat");
+    put(&locked, "old");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let unlock = Unlock(locked.clone(), 0o644);
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    assert!(harness.query_by_label("Restore 1 game").is_some());
+    click(&mut harness, "Open XdgData/Beta");
+    click(&mut harness, "save.dat, will fail");
+    assert!(!shows(&harness, "Untick them to restore the rest"));
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    drop(unlock);
+
+    assert_eq!(fs::read_to_string(&locked).unwrap(), "old");
+    let slot2 = fs::read_to_string(under(&xdg_data(&tmp), "Beta/slot2.dat")).unwrap();
+    assert_eq!(slot2, "Beta/slot2.dat");
+    let none = safety_entries(&tmp, "Beta");
+    assert_eq!(none, None, "nothing it replaced existed");
+}
+
+#[test]
+fn a_batch_game_with_nothing_ticked_is_left_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let beta_save = under(&xdg_data(&tmp), "Beta/save.dat");
+    put(&beta_save, "old");
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, "XdgData/Beta");
+    assert!(shows(&harness, "Nothing ticked"));
+    assert!(!disabled(&harness, "Restore 1 game"));
+
+    click(&mut harness, "XdgData/Alpha");
+    assert!(disabled(&harness, "Restore 0 games"));
+    click(&mut harness, "XdgData/Alpha");
+    run_batch(&mut harness, "Restore 1 game", "Restored 1 of 1 game");
+
+    assert_eq!(fs::read_to_string(&beta_save).unwrap(), "old");
+    assert_eq!(safety_entries(&tmp, "Beta"), None);
+    let alpha_save = under(&xdg_data(&tmp), "Alpha/save.dat");
+    assert_eq!(fs::read_to_string(alpha_save).unwrap(), "Alpha/save.dat");
+}
+
+#[test]
+fn a_batch_game_without_its_registry_keys_restores_while_wine_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, prefix) = registry_games(&tmp, || true);
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, REG_KEY);
+    click(&mut harness, OTHER_KEY);
+    assert!(shows(&harness, "Registry: 0 keys into"));
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    assert!(!shows(&harness, "Close the game and Wine first"));
+    let save = fs::read_to_string(reg_save(&prefix)).unwrap();
+    assert_eq!(save, "Reg/save.dat");
+    let user_reg = fs::read_to_string(prefix.join("user.reg")).unwrap();
+    assert_eq!(user_reg, co_user_reg("old"));
+}
+
+/// Beta, a native game, and Stray, whose only backed-up file lies outside its declared folder,
+/// so its plan skips it and has nothing to restore.
+fn with_nothing_to_restore(tmp: &TempDir) -> Harness<'static, App> {
+    let (beta, beta_scan) = native(tmp, "Beta", &["Beta/save.dat"]);
+    let stray = custom("Stray", &["<xdgData>/Stray"], None, Vec::new());
+    let stray_scan = scan(
+        tmp,
+        "Stray",
+        &[(Base::XdgData, "Elsewhere/x.dat")],
+        &[(Base::XdgData, "Stray")],
+    );
+    open_tab(tmp, vec![beta, stray], &[beta_scan, stray_scan]).0
+}
+
+#[test]
+fn a_plan_with_nothing_to_restore_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = with_nothing_to_restore(&tmp);
+    select(&mut harness, "Stray");
+    preview(&mut harness);
+
+    assert!(shows(&harness, "Files to write (0)"));
+    assert!(shows(&harness, "Skipped (1)"));
+    assert!(shows(&harness, "Nothing to restore."));
+    assert!(!shows(&harness, "Tick at least one"));
+    assert!(disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn a_batch_game_with_nothing_to_restore_is_left_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = with_nothing_to_restore(&tmp);
+
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+
+    assert!(shows(&harness, "Nothing to restore, so this game"));
+    assert!(!shows(&harness, "Nothing ticked"));
+    assert!(!disabled(&harness, "Restore 1 game"));
 }

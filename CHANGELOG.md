@@ -14,6 +14,11 @@ All notable changes to salvajocs. The format follows
   a byte order mark (BOM), and for a text file the lines that differ (a last line without a line
   ending is marked), or that only the line endings, the BOM or both differ. A file over 10 MiB
   shows no lines until you click **Show anyway**.
+- In the restore plan, of one game or of several, a checkbox on each file, folder and registry
+  key chooses what is restored. Everything starts ticked. What you untick is neither written nor
+  in the safety backup. Unticking a file the safety backup cannot read lets the rest of the game
+  restore, and unticking every registry key lets the files restore while Wine runs. A new plan
+  ticks everything again.
 
 ### Changed
 
@@ -21,6 +26,8 @@ All notable changes to salvajocs. The format follows
   of each mapped file, and `changes::Baseline::backed_up` finds a file of the backup. The new
   `changes::details` module reads and compares one file; it uses the `similar` crate.
   `restore::Listed::backed_up` finds the snapshot's copy of a planned write.
+- `salvajocs-core`: `registry::RegistryExport::roots` lists the keys of an export that have no
+  ancestor key in it, and `remove_subtree` removes one with every key below it.
 - The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.
