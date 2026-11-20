@@ -44,7 +44,7 @@ Each game is one snapshot, tagged `salvajocs` and `game:<slug>`. The saved folde
 
 ```
 files/<Folder>/<path>    the save files
-salvajocs.json           where each folder came from
+salvajocs.json           where each folder came from, and the Wine prefix it was found in
 registry.json            registry keys, when the game has any
 ```
 

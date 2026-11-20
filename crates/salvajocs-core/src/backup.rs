@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::changes;
 
 use crate::layout::{
-    Base, FILES_DIR, FileHash, HASHES_FILE, HASHES_FORMAT, Hashes, META_FILE, REGISTRY_FILE,
+    FILES_DIR, FileHash, HASHES_FILE, HASHES_FORMAT, Hashes, META_FILE, REGISTRY_FILE,
     SNAPSHOT_FORMAT, SnapshotMeta, target_path,
 };
 #[cfg(windows)]
@@ -75,13 +75,14 @@ fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
 /// Syncs `stage_dir` with `game` and `registry` (ADR-0004): each found file is copied to
 /// `files/<Base>/<tail>` when its size or mtime differs, and gets the source's mtime. Staged
 /// files no longer found, or deleted since the scan, are removed with the directories they
-/// leave empty. `salvajocs.json`
+/// leave empty. `salvajocs.json`, which records `game.prefix_origin` (ADR-0023),
 /// and `registry.json` are written only when their bytes change; an empty `registry` means no
 /// `registry.json`.
 ///
 /// When `game.unreadable` is not empty nothing is removed, `registry.json` included, and the
-/// roots already in `salvajocs.json` are kept after the scan's: a read error must not drop
-/// saves from the next snapshot or from a restore. The found files are only read.
+/// roots already in `salvajocs.json` are kept after the scan's, as is its prefix when the scan
+/// found none: a read error must not drop saves from the next snapshot or from a restore. The
+/// found files are only read.
 ///
 /// Last, `hashes.json` lists the SHA-256 of every other staged file (ADR-0018), also written
 /// only when its bytes change; the list is returned. A copied file is hashed as it is copied;
@@ -128,18 +129,20 @@ pub fn stage(
 
     let meta_file = stage_dir.join(META_FILE);
     let mut roots = game.roots.clone();
-    if keep_all {
-        for root in staged_roots(&meta_file)? {
+    let mut prefix = game.prefix_origin.clone();
+    if keep_all && let Some(staged) = staged_meta(&meta_file)? {
+        for root in staged.roots {
             if !roots.contains(&root) {
                 roots.push(root);
             }
         }
+        prefix = prefix.or(staged.prefix);
     }
     let meta = SnapshotMeta {
         format: SNAPSHOT_FORMAT,
         title: game.title.clone(),
         roots,
-        prefix: None,
+        prefix,
     };
     write_if_changed(&meta_file, &json(&meta))?;
     let registry_file = stage_dir.join(REGISTRY_FILE);
@@ -255,19 +258,18 @@ fn remove_if_exists(path: &Path) -> Result<(), BackupError> {
     }
 }
 
-/// The roots of the staged `salvajocs.json`, none when there is none yet.
-fn staged_roots(meta_file: &Path) -> Result<Vec<(Base, String)>, BackupError> {
+/// The staged `salvajocs.json`, `None` when there is none yet.
+fn staged_meta(meta_file: &Path) -> Result<Option<SnapshotMeta>, BackupError> {
     let bytes = match fs::read(meta_file) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(io_error(meta_file)(err)),
     };
-    let meta: SnapshotMeta =
-        serde_json::from_slice(&bytes).map_err(|source| BackupError::Meta {
-            path: meta_file.to_path_buf(),
-            source,
-        })?;
-    Ok(meta.roots)
+    let meta = serde_json::from_slice(&bytes).map_err(|source| BackupError::Meta {
+        path: meta_file.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(meta))
 }
 
 fn json(value: &impl Serialize) -> Vec<u8> {

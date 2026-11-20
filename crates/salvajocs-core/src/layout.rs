@@ -657,6 +657,24 @@ pub enum PrefixOrigin {
     Home(String),
 }
 
+impl PrefixOrigin {
+    /// `Home` for the prefix at `path` below `home`; `None` when it is not below it, or a part
+    /// of the rest is not a plain UTF-8 component.
+    pub(crate) fn below_home(path: &Path, home: &Path) -> Option<Self> {
+        // Every path is below a home of `/`, which would record an absolute path.
+        if !(home.components()).any(|part| matches!(part, Component::Normal(_))) {
+            return None;
+        }
+        let parts = (path.strip_prefix(home).ok()?.components())
+            .map(|part| match part {
+                Component::Normal(part) => part.to_str().filter(|part| is_plain_component(part)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!parts.is_empty()).then(|| Self::Home(format!("<home>/{}", parts.join("/"))))
+    }
+}
+
 /// The `salvajocs.json` of a staged game (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]

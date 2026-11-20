@@ -128,6 +128,7 @@ pub fn default_targets(
                 .filter_map(|root| proton_prefix(root, steam_id?));
             let (mut launcher, _) = launcher_prefixes(manifest, config, env);
             let launcher = launcher.remove(title).unwrap_or_default();
+            let launcher = launcher.into_iter().map(|prefix| prefix.path.clone());
             let mut candidates = custom_prefix.into_iter().chain(proton).chain(launcher);
             let win = candidates.find_map(|prefix| {
                 let user = wine_user(&prefix).ok()?;
@@ -667,6 +668,7 @@ pub fn run(
         registry_keys: Vec::new(),
         registry_source: None,
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: Vec::new(),
     };
     for (write, check) in plan.writes.iter().zip(&checks) {

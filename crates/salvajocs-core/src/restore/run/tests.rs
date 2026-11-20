@@ -41,6 +41,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
         registry_keys: vec![],
         registry_source: None,
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: vec![],
     }
 }
@@ -1221,6 +1222,7 @@ fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (Listed, RestorePl
         registry_keys: vec![],
         registry_source: None,
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: vec![],
     };
     back_up(&mut f.storage, f.tmp.path(), &[game], &[]);

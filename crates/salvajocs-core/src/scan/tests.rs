@@ -296,6 +296,115 @@ fn ignored_launcher_prefix_is_not_scanned() {
     assert_eq!(report.games, []);
 }
 
+/// A prefix of `launcher` at `path`, which it names `name`, of the game titled `title`.
+fn named_prefix(
+    launcher: Launcher,
+    path: &Path,
+    title: Option<&str>,
+    name: &str,
+) -> LauncherPrefix {
+    let mut prefix = launcher_prefix(path, title);
+    prefix.launcher = launcher;
+    prefix.name = name.to_owned();
+    prefix
+}
+
+#[test]
+fn a_shared_bottle_is_recorded_by_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let bottle = make_prefix(&dir.path().join("Drive"));
+    write(&bottle.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(FOO).unwrap();
+    let bottles = named_prefix(Launcher::Bottles, &bottle, None, "Generic-Game");
+    let found = game(
+        &manifest,
+        &config(vec![], vec![]),
+        &launcher_env(vec![bottles]),
+    );
+    let origin = PrefixOrigin::Bottles("Generic-Game".into());
+    assert_eq!(found.prefix_origin, Some(origin));
+}
+
+#[test]
+fn heroics_shared_default_prefix_is_recorded_by_this_games_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = make_prefix(dir.path());
+    write(&shared.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(&format!("{FOO}Bar: {{}}\n")).unwrap();
+    let env = launcher_env(vec![
+        named_prefix(Launcher::Heroic, &shared, Some("Bar"), "BarApp"),
+        named_prefix(Launcher::Heroic, &shared, Some("Foo"), "FooApp"),
+    ]);
+    let found = game(&manifest, &config(vec![], vec![]), &env);
+    assert_eq!(
+        found.prefix_origin,
+        Some(PrefixOrigin::Heroic("FooApp".into()))
+    );
+}
+
+#[test]
+fn a_proton_prefix_is_recorded_by_its_app_id() {
+    let steam = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(&steam.path().join("steamapps/compatdata/620"));
+    write(&pfx.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(&format!("{FOO}  steam: {{id: 620}}\n")).unwrap();
+    let env = no_native_env(vec![steam.path().to_path_buf()]);
+    let found = game(&manifest, &config(vec![], vec![]), &env);
+    assert_eq!(found.prefix_origin, Some(PrefixOrigin::Proton(620)));
+}
+
+#[test]
+fn a_wine_prefix_root_below_home_is_recorded_from_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let pfx = make_prefix(&home.join("Games/wine"));
+    write(&pfx.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(FOO).unwrap();
+    let config = config(vec![wine_root(&pfx)], vec![]);
+    let found = game(&manifest, &config, &linux_env(&home));
+    let origin = PrefixOrigin::Home("<home>/Games/wine/pfx".into());
+    assert_eq!(found.prefix_origin, Some(origin));
+}
+
+#[test]
+fn a_prefix_outside_home_is_not_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let pfx = make_prefix(&dir.path().join("elsewhere"));
+    write(&pfx.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(FOO).unwrap();
+    let config = config(vec![wine_root(&pfx)], vec![]);
+    let found = game(&manifest, &config, &linux_env(&dir.path().join("home")));
+    assert_eq!(found.prefixes, [pfx]);
+    assert_eq!(found.prefix_origin, None);
+}
+
+#[test]
+fn a_native_game_records_no_prefix() {
+    let home = tempfile::tempdir().unwrap();
+    write(&home.path().join(".local/share/foo/save.dat"), "a");
+    let manifest = parse_yaml("Foo:\n  files:\n    <xdgData>/foo: {}\n").unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &linux_env(home.path()));
+    assert_eq!(found.prefix_origin, None);
+}
+
+#[test]
+fn an_ignored_bottle_used_as_a_wine_prefix_root_is_recorded_from_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let bottle = make_prefix(&home.join("Bottle"));
+    write(&bottle.join(FOO_SAVE), "foo");
+    let manifest = parse_yaml(FOO).unwrap();
+    let mut config = config(vec![wine_root(&bottle)], vec![]);
+    config.ignored_prefixes = vec![bottle.clone()];
+    let env = Environment {
+        launcher_prefixes: vec![named_prefix(Launcher::Bottles, &bottle, None, "Bottle")],
+        ..linux_env(&home)
+    };
+    let found = game(&manifest, &config, &env);
+    let origin = PrefixOrigin::Home("<home>/Bottle/pfx".into());
+    assert_eq!(found.prefix_origin, Some(origin));
+}
+
 #[test]
 fn progress_counts_every_game_with_the_custom_ones() {
     let manifest = parse_yaml("Bar: {}\nFoo: {}\n").unwrap();

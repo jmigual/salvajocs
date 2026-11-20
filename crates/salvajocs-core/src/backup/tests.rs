@@ -7,10 +7,10 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::changes::Mapper;
 use crate::config::{AppConfig, PasswordMode};
-use crate::layout::{Base, Context, LinuxFolders};
-use crate::manifest::{CustomGame, GameEntry, Integration, Manifest, Pair};
+use crate::layout::{Base, Context, LinuxFolders, PrefixOrigin, Root, RootKind};
+use crate::manifest::{CustomGame, GameEntry, Integration, Manifest, Pair, parse_yaml};
 use crate::registry::{HKCU, RegData, RegValue};
-use crate::scan::{Environment, FoundFile};
+use crate::scan::{Environment, FoundFile, scan};
 use crate::storage::{Compression, RepoLocation};
 
 /// Writes `contents` to `path`, creating its parent directories.
@@ -38,6 +38,7 @@ fn game(title: &str, files: Vec<FoundFile>) -> GameScan {
         registry_keys: vec![],
         registry_source: None,
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: vec![],
     }
 }
@@ -891,6 +892,113 @@ fn other_roots_with_the_same_files_are_not_the_same() {
 
     let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
     assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+}
+
+/// `game_with_save` of `title`, found in the bottle `bottle`.
+fn in_bottle(root: &Path, title: &str, bottle: &str) -> GameScan {
+    let mut game = game_with_save(root, title, "foo");
+    game.prefix_origin = Some(PrefixOrigin::Bottles(bottle.into()));
+    game
+}
+
+#[test]
+fn unchanged_game_from_the_same_prefix_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [in_bottle(tmp.path(), "Foo", "Generic-Game")];
+
+    let first = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
+    assert!(matches!(first, Stored::New(_)), "{first:?}");
+    let second = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
+    assert!(matches!(second, Stored::Unchanged { .. }), "{second:?}");
+}
+
+#[test]
+fn meta_gaining_a_prefix_backs_up_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    // Staged and stored by a version that records no prefix.
+    let old = [game_with_save(tmp.path(), "Foo", "foo")];
+    stored(&mut storage, tmp.path(), "stage", &old, Some(&mapper()));
+    let games = [in_bottle(tmp.path(), "Foo", "Generic-Game")];
+
+    let first = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
+    assert!(matches!(first, Stored::New(_)), "{first:?}");
+    let second = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
+    assert!(matches!(second, Stored::Unchanged { .. }), "{second:?}");
+}
+
+#[test]
+fn same_as_newest_needs_the_same_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let theirs = [in_bottle(tmp.path(), "Foo", "Generic-Game")];
+    let Stored::New(newest) = stored(&mut there, tmp.path(), "there", &theirs, Some(&mapper()))
+    else {
+        panic!("the first backup is written");
+    };
+
+    let same = stored(&mut here, tmp.path(), "here", &theirs, Some(&mapper()));
+    assert_eq!(same, Stored::SameAsNewest(newest));
+    let mine = [in_bottle(tmp.path(), "Foo", "Other")];
+    let other = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    assert!(matches!(other, Stored::New(_)), "{other:?}");
+}
+
+#[test]
+fn unreadable_keeps_the_staged_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stage_dir = tmp.path().join("stage");
+    let mut scan = in_bottle(tmp.path(), "Foo", "Generic-Game");
+    let prefix = scan.prefix_origin.clone();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+
+    // The prefix could not be read, so the scan found the game in none.
+    scan.prefix_origin = None;
+    scan.unreadable = vec![tmp.path().join("pfx")];
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(staged_meta(&stage_dir).prefix, prefix);
+
+    scan.unreadable.clear();
+    stage(&scan, &RegistryExport::default(), &stage_dir).unwrap();
+    assert_eq!(staged_meta(&stage_dir).prefix, None);
+}
+
+#[test]
+fn staged_meta_holds_no_home_path_or_user() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("zorglub");
+    let prefix = home.join("Games/wine-pfx");
+    let user_home = prefix.join("drive_c/users/zorglub");
+    write(&prefix.join("user.reg"), "WINE REGISTRY Version 2\n");
+    write(&user_home.join("AppData/Roaming/Foo/save.dat"), "foo");
+    let manifest = parse_yaml("Foo:\n  files:\n    <winAppData>/Foo: {}\n").unwrap();
+    let mut config = AppConfig::new("/repo".into(), PasswordMode::None);
+    config.roots = vec![Root {
+        path: prefix.clone(),
+        kind: RootKind::WinePrefix,
+    }];
+    let folders = LinuxFolders::new(
+        "zorglub".into(),
+        home.clone(),
+        home.join(".local/share"),
+        home.join(".config"),
+    );
+    let env = Environment {
+        native: Some(Context::Linux(folders)),
+        ..Environment::default()
+    };
+    let report = scan(&manifest, &config, &env, |_, _| {});
+    assert_eq!(report.problems, []);
+
+    let stage_dir = tmp.path().join("stage");
+    stage(&report.games[0], &RegistryExport::default(), &stage_dir).unwrap();
+    let text = fs::read_to_string(stage_dir.join(META_FILE)).unwrap();
+    assert!(text.contains("<home>/Games/wine-pfx"), "{text}");
+    assert!(!text.contains("zorglub"), "{text}");
+    let tmp_path = tmp.path().to_str().unwrap();
+    assert!(!text.contains(tmp_path), "{text}");
 }
 
 #[test]

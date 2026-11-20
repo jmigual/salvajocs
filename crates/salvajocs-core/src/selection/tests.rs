@@ -35,6 +35,7 @@ fn scan(files: Vec<FoundFile>) -> GameScan {
         registry_keys: vec![KEY.into()],
         registry_source: Some(RegistrySource::WinePrefix("/pfx".into())),
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: vec![],
     }
 }

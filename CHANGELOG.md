@@ -14,6 +14,10 @@ All notable changes to salvajocs. The format follows
   a known place here shows **Choose folders…**. It opens the restore's mapping dialog; the
   choices are saved with the game as after a restore, and the game is compared again.
 - The list of games on the Restore tab can be widened by dragging its right edge.
+- A backup of a game found in a Wine prefix records which prefix it was, by launcher and name
+  (Proton app id, Heroic app, Lutris game, Bottles bottle, or a folder in your home), without
+  paths of the machine. The first backup after updating makes one new snapshot of each such
+  game.
 
 ### Changed
 

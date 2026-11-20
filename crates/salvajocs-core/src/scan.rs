@@ -16,8 +16,8 @@ use crate::launcher::{GameIndex, LauncherPrefix};
 #[cfg(not(windows))]
 use crate::layout::LinuxFolders;
 use crate::layout::{
-    Base, Context, GameVars, Root, RootKind, WIN_LEADING, WinFolders, classify, expand,
-    glob_free_prefix, tail_of,
+    Base, Context, GameVars, PrefixOrigin, Root, RootKind, WIN_LEADING, WinFolders, classify,
+    expand, glob_free_prefix, tail_of,
 };
 use crate::manifest::{GameEntry, Manifest, Os, When, merge_custom};
 use crate::prefix::{PrefixError, proton_prefix, steam_roots, wine_user};
@@ -119,6 +119,9 @@ pub struct GameScan {
     /// The Wine prefixes the files below Windows folders were found in, in context order, then
     /// that of `registry_source`; without duplicates.
     pub prefixes: Vec<PathBuf>,
+    /// The first of `prefixes` as a snapshot records it, without a path of this machine
+    /// (ADR-0023); `None` without a prefix or when it cannot be described.
+    pub prefix_origin: Option<PrefixOrigin>,
     /// Paths that could not be read; `files` may be incomplete.
     pub unreadable: Vec<PathBuf>,
 }
@@ -353,9 +356,9 @@ struct Shared<'a> {
     /// `WinePrefix` roots, in configured order.
     wine_roots: Vec<PathBuf>,
     /// Launcher prefixes of one game, by title.
-    own_prefixes: HashMap<&'a str, Vec<PathBuf>>,
+    own_prefixes: HashMap<&'a str, Vec<&'a LauncherPrefix>>,
     /// Launcher prefixes of no known game, scanned for every game.
-    shared_prefixes: Vec<PathBuf>,
+    shared_prefixes: Vec<&'a LauncherPrefix>,
     cache: Cache,
 }
 
@@ -466,12 +469,13 @@ fn contexts(
         .filter(|root| root.kind == RootKind::Steam)
         .filter_map(|root| proton_prefix(&root.path, u64::from(steam_id?)));
     let own = shared.own_prefixes.get(title).into_iter().flatten();
+    let launcher_shared = shared.shared_prefixes.iter();
     let mut prefixes: Vec<PathBuf> = Vec::new();
     for prefix in proton
         .chain(wine_prefix.cloned())
-        .chain(own.cloned())
+        .chain(own.map(|prefix| prefix.path.clone()))
         .chain(shared.wine_roots.iter().cloned())
-        .chain(shared.shared_prefixes.iter().cloned())
+        .chain(launcher_shared.map(|prefix| prefix.path.clone()))
     {
         if !prefixes.contains(&prefix) {
             prefixes.push(prefix);
@@ -604,6 +608,13 @@ fn scan_game(
     {
         prefixes.push(prefix.clone());
     }
+    let prefix_origin = (prefixes.first()).and_then(|prefix| {
+        let own = shared
+            .own_prefixes
+            .get(title)
+            .map_or(&[][..], Vec::as_slice);
+        describe_prefix(prefix, own, &shared.shared_prefixes, shared.env)
+    });
     Some(GameScan {
         title: title.to_owned(),
         files,
@@ -611,8 +622,47 @@ fn scan_game(
         registry_keys,
         registry_source,
         prefixes,
+        prefix_origin,
         unreadable,
     })
+}
+
+/// How a snapshot records the prefix at `path` (ADR-0023): by a launcher entry of the game
+/// (`own`, so Heroic's shared default prefix names this game's app), else by a `shared` one,
+/// else as Proton's by its app id, else as a folder below the native home. `None` otherwise:
+/// no absolute path is ever recorded.
+pub(crate) fn describe_prefix(
+    path: &Path,
+    own: &[&LauncherPrefix],
+    shared: &[&LauncherPrefix],
+    env: &Environment,
+) -> Option<PrefixOrigin> {
+    let launcher = (own.iter().chain(shared))
+        .filter(|prefix| prefix.path == path)
+        .find_map(|prefix| prefix.origin());
+    let home = || match &env.native {
+        Some(Context::Linux(folders)) => PrefixOrigin::below_home(path, &folders.home),
+        _ => None,
+    };
+    launcher
+        .or_else(|| proton_id(path).map(PrefixOrigin::Proton))
+        .or_else(home)
+}
+
+/// The app id of a Proton prefix, `steamapps/compatdata/<id>/pfx` of any Steam library.
+fn proton_id(path: &Path) -> Option<u32> {
+    let mut parts = path
+        .components()
+        .rev()
+        .map(|part| part.as_os_str().to_str());
+    match (parts.next()?, parts.next()?, parts.next()?, parts.next()?) {
+        (Some("pfx"), Some(id), Some("compatdata"), Some("steamapps"))
+            if id.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            id.parse().ok()
+        }
+        _ => None,
+    }
 }
 
 /// The detected Steam roots followed by the config's roots, without duplicates.
@@ -633,15 +683,21 @@ pub(crate) fn roots(config: &AppConfig, env: &Environment) -> Vec<Root> {
     roots
 }
 
+/// A game's launcher prefixes by title, and the shared ones.
+pub(crate) type LauncherPrefixes<'a> = (
+    HashMap<&'a str, Vec<&'a LauncherPrefix>>,
+    Vec<&'a LauncherPrefix>,
+);
+
 /// The launcher prefixes of `env` that `config` does not ignore, split into those mapped to a
 /// game of `manifest`, by title, and the rest (ADR-0017).
 pub(crate) fn launcher_prefixes<'a>(
     manifest: &'a Manifest,
     config: &AppConfig,
-    env: &Environment,
-) -> (HashMap<&'a str, Vec<PathBuf>>, Vec<PathBuf>) {
+    env: &'a Environment,
+) -> LauncherPrefixes<'a> {
     let index = GameIndex::new(manifest);
-    let mut own: HashMap<&str, Vec<PathBuf>> = HashMap::new();
+    let mut own: HashMap<&str, Vec<&LauncherPrefix>> = HashMap::new();
     let mut rest = Vec::new();
     let used = env
         .launcher_prefixes
@@ -649,8 +705,8 @@ pub(crate) fn launcher_prefixes<'a>(
         .filter(|prefix| !config.ignored_prefixes.contains(&prefix.path));
     for prefix in used {
         match index.title(prefix) {
-            Some(title) => own.entry(title).or_default().push(prefix.path.clone()),
-            None => rest.push(prefix.path.clone()),
+            Some(title) => own.entry(title).or_default().push(prefix),
+            None => rest.push(prefix),
         }
     }
     (own, rest)

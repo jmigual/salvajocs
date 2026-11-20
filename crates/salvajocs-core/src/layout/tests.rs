@@ -771,3 +771,11 @@ fn a_hash_list_of_a_newer_format_is_not_read() {
     );
     assert_eq!(Hashes::from_json(b"not json"), None);
 }
+
+#[test]
+fn below_home_records_nothing_for_a_home_of_root() {
+    let pfx = Path::new("/games/wine");
+    assert_eq!(PrefixOrigin::below_home(pfx, Path::new("/")), None);
+    let home = PrefixOrigin::below_home(pfx, Path::new("/games"));
+    assert_eq!(home, Some(PrefixOrigin::Home("<home>/wine".into())));
+}

@@ -90,6 +90,7 @@ fn game(files: Vec<FoundFile>) -> GameScan {
         registry_keys: Vec::new(),
         registry_source: None,
         prefixes: Vec::new(),
+        prefix_origin: None,
         unreadable: Vec::new(),
     }
 }

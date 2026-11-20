@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::layout::PrefixOrigin;
 use crate::manifest::Manifest;
 use crate::prefix::{PrefixError, enclosing_prefix, validate_prefix};
 use crate::scan::{ProblemKind, ScanProblem};
@@ -67,6 +68,16 @@ impl LauncherPrefix {
             game,
             name: String::new(),
         }
+    }
+
+    /// How a snapshot names this prefix (ADR-0023); `None` without a name.
+    pub(crate) fn origin(&self) -> Option<PrefixOrigin> {
+        let name = Some(self.name.clone()).filter(|name| !name.is_empty())?;
+        Some(match self.launcher {
+            Launcher::Heroic => PrefixOrigin::Heroic(name),
+            Launcher::Lutris => PrefixOrigin::Lutris(name),
+            Launcher::Bottles => PrefixOrigin::Bottles(name),
+        })
     }
 }
 
