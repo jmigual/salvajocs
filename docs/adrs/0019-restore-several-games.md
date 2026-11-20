@@ -51,6 +51,8 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
   `changed` and `will fail`; unchanged files have none. A folder's open button shows only when
   the folder exists. A game that will not be restored is listed with its reason: no regular
   snapshot, a failed fetch or plan, an unreadable target, or skipped in the dialog.
+  Amended by ADR-0025: the tree ticks each file, folder and registry root, and an unreadable
+  target blocks the game only while it is ticked.
 - **Run: `restore::run` once per game**, in one job, in list order. Each game gets its own
   `pre-restore` safety backup and its own result. A game that fails, including a refused safety
   backup or a running wineserver for a restore of registry keys into a prefix, writes nothing

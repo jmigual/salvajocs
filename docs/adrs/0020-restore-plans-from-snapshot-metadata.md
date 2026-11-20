@@ -45,7 +45,8 @@ small file costs one ranged read of a data pack.
   `WriteState::Unknown`, shown as `could not be compared`, never unchanged. The hash is looked up
   by the snapshot-side key, so a cross-build write finds it. Its refusals stay: a symlinked
   target, a dir there, a source that is no regular file, and an unreadable target file that
-  fails the whole game. `changes::same_content` goes.
+  fails the whole game. Amended by ADR-0025: only while that write is ticked.
+  `changes::same_content` goes.
 - **Batch: download every game first, then run each.** Planning reads each game's listing
   into `restore-batch/<pid>/<index>` without creating it. The run job clears the batch dirs
   (ADR-0019's stale-dir rule moves here), downloads each planned game, then runs
@@ -68,6 +69,7 @@ small file costs one ranged read of a data pack.
   field per write drew about 15,000 widgets a frame for 3,000 files. A file's path shows on
   hover. Its **Override** button opens a path field under that row only; an overridden write
   keeps its row and shows its new target with **Clear**, which puts the planned write back.
+  Amended by ADR-0025: the tree ticks each file, folder and registry root to restore.
 
 ## Alternatives considered
 
