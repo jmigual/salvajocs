@@ -1416,3 +1416,35 @@ fn details_of_the_other_build_name_its_path_in_the_backup() {
     assert!(shows(&harness, "WinAppData/G/save.dat"));
     assert!(shows(&harness, "Home/G/save.dat"));
 }
+
+#[test]
+fn the_games_list_keeps_its_scroll_when_another_tab_is_shown() {
+    let scratch = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(scratch.path());
+    let names: Vec<String> = (0..40).map(|n| format!("Game {n:02}")).collect();
+    let games = names
+        .iter()
+        .map(|name| {
+            write_save(&prefix, name, "abc");
+            custom_game(name, false, &prefix)
+        })
+        .collect();
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "40 games found");
+
+    let (first, last) = (&names[0], &names[39]);
+    let top_of = |harness: &Harness<'static, App>, title: &str| {
+        harness.get_by_label(title).accesskit_node().raw_bounds()
+    };
+    harness.get_by_label(last).scroll_to_me();
+    run_settled(&mut harness);
+    let scrolled = top_of(&harness, last).unwrap().y0;
+
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+
+    assert_eq!(top_of(&harness, last).unwrap().y0, scrolled);
+    assert!(top_of(&harness, first).unwrap().y0 < 0.0);
+}

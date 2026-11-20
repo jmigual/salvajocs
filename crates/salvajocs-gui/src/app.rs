@@ -480,22 +480,27 @@ impl eframe::App for App {
         // No margin: the tabs center their own column, and side and bottom bars reach the edges.
         let adopted = egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).inner_margin(0))
-            .show(ui, |ui| match (&self.stage, self.tab) {
-                (Stage::ConfigUnreadable(_), _) => false,
-                (_, Tab::Backup) => {
-                    self.backup.ui(ui, &mut self.state, self.manifest.is_some());
-                    false
-                }
-                (_, Tab::Restore) => {
-                    self.restore
-                        .ui(ui, &mut self.state, self.manifest.is_some());
-                    false
-                }
-                (_, Tab::CustomGames) => {
-                    self.custom_games.ui(ui, &mut self.state);
-                    false
-                }
-                (_, Tab::Settings) => self.settings.ui(ui, &mut self.state),
+            .show(ui, |ui| {
+                // Each tab's pages get their own ids: the pages are scroll areas with ids from
+                // their position, so tabs sharing one id overwrote each other's scroll offset.
+                ui.push_id(self.tab, |ui| match (&self.stage, self.tab) {
+                    (Stage::ConfigUnreadable(_), _) => false,
+                    (_, Tab::Backup) => {
+                        self.backup.ui(ui, &mut self.state, self.manifest.is_some());
+                        false
+                    }
+                    (_, Tab::Restore) => {
+                        self.restore
+                            .ui(ui, &mut self.state, self.manifest.is_some());
+                        false
+                    }
+                    (_, Tab::CustomGames) => {
+                        self.custom_games.ui(ui, &mut self.state);
+                        false
+                    }
+                    (_, Tab::Settings) => self.settings.ui(ui, &mut self.state),
+                })
+                .inner
             })
             .inner;
         if adopted {

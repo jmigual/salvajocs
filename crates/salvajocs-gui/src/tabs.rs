@@ -65,7 +65,7 @@ pub mod settings;
 mod tree;
 
 /// Which tab is in front.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Tab {
     #[default]
     Backup,

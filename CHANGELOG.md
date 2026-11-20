@@ -23,6 +23,11 @@ All notable changes to salvajocs. The format follows
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.
 
+### Fixed
+
+- A tab keeps its scroll position when you show another tab and come back: the Backup tab's list
+  of games no longer jumps to the top.
+
 ## [0.7.0] - 2026-11-20
 
 ### Added
