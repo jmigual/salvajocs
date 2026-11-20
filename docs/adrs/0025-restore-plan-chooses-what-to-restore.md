@@ -24,19 +24,23 @@ is a flat map, and an export of a declared key `K` holds `K` and every key below
   draw in the Backup tab's select mode: a checkbox on every file and folder, tri-state folders
   with `N of M files`. Everything starts ticked. The batch has no game-level checkbox; the
   sidebar's tick is that.
-- **One checkbox per registry root.** A root is an export key with no ancestor key in the export:
-  the declared key as backed up. Unticking it leaves its whole subtree out. A single subkey cannot
-  be left out: its parent's subtree replace would delete it at the target without writing it
-  back. Roots are pairwise disjoint, so the other roots' replace never reaches into an unticked
-  one. `RegistryExport::roots` and `remove_subtree` in `salvajocs-core` compute them, with the
-  replace's whole-element, case-ignoring match. Nested declared keys share the outer root's box.
-  The GUI works the roots and their key counts out once per plan, not per frame.
+- **One checkbox per registry root** (amended by ADR-0026: one per key and subkey, and the
+  replace leaves what an unticked key owns alone). A root is an export key with no ancestor key
+  in the export: the declared key as backed up. Unticking it leaves its whole subtree out. A
+  single subkey cannot be left out: its parent's subtree replace would delete it at the target
+  without writing it back. Roots are pairwise disjoint, so the other roots' replace never reaches
+  into an unticked one. `RegistryExport::roots` and `remove_subtree` in `salvajocs-core` compute
+  them, with the replace's whole-element, case-ignoring match (replaced by `tree` and `select`,
+  ADR-0026). Nested declared keys share the outer root's box (amended by ADR-0026: each key has
+  its own). The GUI works the roots and their key counts out once per plan, not per frame.
 - **The GUI filters the plan.** The selection is an in-memory `selection::GameSettings` per plan,
-  keyed by each write's planned `<Base>/<tail>` key (not the overridden one) and by root key.
-  At Restore a clone of the plan keeps the ticked writes and drops the unticked roots' subtrees
-  (no registry at all when none is left). That one filtered plan goes to `restore::run`, which
-  backs up and writes it (ADR-0005), and to the result lines. An unticked item is neither written
-  nor in the safety backup.
+  keyed by each write's planned `<Base>/<tail>` key (not the overridden one) and by root key
+  (amended by ADR-0026: the registry ticks live in the plan's `KeyTree`). At Restore a clone of
+  the plan keeps the ticked writes and drops the unticked roots' subtrees, with no registry at
+  all when none is left (amended by ADR-0026: it writes the ticked keys and keeps the unticked
+  ones). That one filtered plan goes to `restore::run`, which backs up and writes it
+  (ADR-0005), and to the result lines. An unticked file or registry root is neither written nor
+  in the safety backup (an unticked subkey under a ticked key is in it, ADR-0026).
 - **Ticks reset with each plan.** A new snapshot, target, mapping confirm or Try again ticks
   everything again, as a new plan drops its overrides. Override, Apply and Clear keep the tick;
   an unticked overridden file is not written.
@@ -57,7 +61,8 @@ is a flat map, and an export of a declared key `K` holds `K` and every key below
 - **One registry checkbox per game:** the Backup tab has one per key, and the user asked for the
   same.
 - **One checkbox per flattened subkey:** unsafe, as a ticked parent's subtree replace deletes an
-  unticked child at the target.
+  unticked child at the target. Amended by ADR-0026, where the replace leaves what an unticked
+  key owns alone.
 - **Keeping ticks by key across plans:** a Linux ↔ prefix switch changes the keys' bases, so
   ticks would carry over partly.
 - **A core `RestorePlan::retain` API:** the plan's fields are public; filtering is the GUI's
@@ -73,10 +78,13 @@ is a flat map, and an export of a declared key `K` holds `K` and every key below
 
 ## Consequences
 
-- An undo of such a restore holds only the ticked items, which are all it replaced.
+- An undo of such a restore holds the ticked files and the subtrees of the ticked registry keys.
+  An unticked subkey under a ticked key is in it as it was before the restore, so an undo puts it
+  back as it was then (ADR-0026).
 - Unticking every registry root lets the files restore while a wineserver runs (ADR-0006 refuses
   only a registry restore into a prefix).
-- Nested declared keys (`Software\Co` and `Software\Co\Game`) show one checkbox, the outer one's.
+- Nested declared keys (`Software\Co` and `Software\Co\Game`) show one checkbox, the outer one's
+  (amended by ADR-0026: each key has its own).
 - Roots are per game: in a batch, unticking game B's root does not protect it when game A
   declares an ancestor key, as A's subtree replace still deletes it; A's safety backup holds it,
   so undoing A recovers it.

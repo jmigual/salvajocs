@@ -21,18 +21,19 @@ for Proton, which cannot restore to Windows.
   `{"kind":"other","data":{"code":<u32>,"bytes":[..]}}` and keeps types without a typed form (for
   example Unity's 8-byte `hex(4):` doubles). Key lookup is case-insensitive, on whole path
   elements. An export of key `K` holds `K` itself (possibly without values) and every existing
-  key below it; restore deletes the subtree of each key in the export, then writes them. The
-  HKCU root itself and paths with empty elements (`A\\B`, trailing `\`) are refused with a typed
-  error: there is no whole-HKCU restore in v1. JSON because `serde_json` is already needed for
-  the manifest cache.
+  key below it; restore deletes the subtree of each key in the export, except what a kept key
+  owns (ADR-0026), then writes them. The HKCU root itself and paths with empty elements (`A\\B`,
+  trailing `\`) are refused with a typed error: there is no whole-HKCU restore in v1. JSON
+  because `serde_json` is already needed for the manifest cache.
 - **Scope v1:** HKCU only. HKLM manifest keys are skipped with a warning (writing them needs admin
   on Windows).
 - **Windows:** `windows-registry` 0.6.1 reads and writes the subtree (`cfg(windows)` module).
   The exported root key keeps the caller's spelling and keys below it the registry's (Wine and
   Windows JSON may differ in root case; replace matches case-insensitively). Replace deletes
-  every subtree before writing, so it is not atomic; restore backs up the current state first
-  (plan step 15). Windows may append a NUL when writing an unterminated `REG_SZ`; the string
-  content is unchanged but the bytes are not exact.
+  every subtree before writing, so it is not atomic; with a kept key below an exported key, it
+  clears that key and removes only the subkeys the kept keys do not own (ADR-0026). Restore
+  backs up the current state first (plan step 15). Windows may append a NUL when writing an
+  unterminated `REG_SZ`; the string content is unchanged but the bytes are not exact.
   `winreg` 0.56 was rejected: its `RegType` is a closed enum and `get_raw_value` fails on type
   codes above 11, so `RegData::Other` could not round-trip. `windows-registry` 0.100 needs Rust
   1.95, above the workspace's 1.91, hence 0.6.1. Its `set_bytes` debug-asserts terminated data for
