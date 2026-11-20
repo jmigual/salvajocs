@@ -535,13 +535,18 @@ fn restore_tab() {
             pre_restore: false,
         },
     ];
-    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Hades", 760.0);
+    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Hades", 820.0);
 
     harness.get_by_label("Hollow Knight").click();
     run_until(&mut harness, "the default targets", |h| {
         shows(h, "Restore into:")
     });
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+    // The plan's folder open shows its files, each with its Override button.
+    harness
+        .get_by_label("Open XdgConfig/unity3d/Team Cherry/Hollow Knight")
+        .click();
+    run_settled(&mut harness);
     // The picker open shows the snapshots of every host and the safety backup.
     harness.get_by_label("Snapshot").click();
     capture(&mut harness, &dir, "restore");
