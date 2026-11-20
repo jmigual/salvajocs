@@ -235,6 +235,35 @@ impl RestorePlan {
     }
 }
 
+/// The targets a [`RestorePlan`] writes into, so the preview names only those.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Used {
+    /// Some write goes into a native Linux base (`Home`, `XdgData`, `XdgConfig`, `Absolute`).
+    pub linux: bool,
+    /// The Windows target that some write of a Windows base, or the registry, goes into.
+    pub win: Option<Context>,
+    /// Some write goes into the game's install folder (`GameDir`, `StoreRoot`).
+    pub install_dir: bool,
+}
+
+/// Which of `targets` the writes and registry of `plan` use, by each write's target-side base.
+/// An overridden write counts for no target.
+pub fn used_targets(plan: &RestorePlan, targets: &Targets) -> Used {
+    let bases = || {
+        (plan.writes.iter())
+            .filter_map(|write| write.target_file.as_ref())
+            .map(|(base, _)| *base)
+    };
+    let family = |family| bases().any(|base| crossbuild::base_family(base) == Some(family));
+    let win = family(Family::Windows) || plan.registry.is_some();
+    Used {
+        linux: family(Family::Linux),
+        win: targets.win.clone().filter(|_| win),
+        install_dir: bases().any(|base| crossbuild::base_family(base).is_none()),
+    }
+}
+
 fn components(path: &str) -> impl Iterator<Item = &str> {
     path.split('/').filter(|part| !part.is_empty())
 }

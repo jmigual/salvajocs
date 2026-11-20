@@ -41,6 +41,9 @@ All notable changes to salvajocs. The format follows
 - In the list of games on the Restore tab, game names are left-aligned next to their checkbox
   and cut with "…" when they do not fit, instead of centered and running past the edge, and
   the checkboxes show their outline.
+- The confirm of a restore of several games named native Linux as a target of a game whose files
+  and registry all go into a Wine prefix. It now names only the targets the restore writes into,
+  and the plan of a single game shows the same "Into …" line.
 
 ## [0.6.0] - 2026-11-19
 

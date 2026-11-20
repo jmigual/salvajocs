@@ -13,17 +13,14 @@ use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Role, Ui, WidgetInfo};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
-use salvajocs_core::layout::Context;
 use salvajocs_core::manifest::Manifest;
-use salvajocs_core::restore::{
-    self, GameBackups, Listed, PrepareError, RestorePlan, Targets, WriteState,
-};
+use salvajocs_core::restore::{self, GameBackups, Listed, PrepareError, RestorePlan, WriteState};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::SnapshotInfo;
 
 use super::{
-    Fetched, RestoreTab, Restored, describe_context, describe_run_error, own_dir, remove_dir,
-    skipped_ui, snapshot_label, warnings_ui,
+    Fetched, RestoreTab, Restored, describe_context, describe_run_error, describe_targets, own_dir,
+    remove_dir, skipped_ui, snapshot_label, warnings_ui,
 };
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
@@ -728,7 +725,8 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
             },
             |ui| state_chips(ui, &compared),
         );
-        ui.label(format!("Into {}", describe_targets(&fetched.targets)));
+        let used = restore::used_targets(plan, &fetched.targets);
+        ui.label(format!("Into {}", describe_targets(&used)));
         let error_color = ui.visuals().error_fg_color;
         for (write, state) in plan.writes.iter().zip(states) {
             if let Err(reason) = state {
@@ -758,19 +756,4 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned) -> Option<PathBuf
             Some(Clicked::Toggle(..)) | None => None,
         }
     })
-}
-
-/// Where a game's files go, as the confirm names it.
-fn describe_targets(targets: &Targets) -> String {
-    let linux = targets.linux.as_ref().map(|_| "native Linux".to_owned());
-    let win = targets.win.as_ref().map(|ctx| match ctx {
-        Context::WindowsNative(_) => "this Windows user's folders".to_owned(),
-        ctx => describe_context(ctx),
-    });
-    let parts: Vec<String> = linux.into_iter().chain(win).collect();
-    if parts.is_empty() {
-        "no folder on this machine".to_owned()
-    } else {
-        parts.join(" and ")
-    }
 }

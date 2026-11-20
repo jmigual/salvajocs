@@ -348,6 +348,19 @@ fn restore_preview_lists_writes_and_skips() {
     assert!(!shows(&harness, "Where should the saves"));
 }
 
+#[test]
+fn restore_plan_says_into_which_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    // Native Linux is ticked too, but no file of this Windows snapshot goes there.
+    let prefix = tmp.path().join("pfx").display().to_string();
+    assert!(shows_path(&harness, &format!("Into the prefix {prefix}")));
+    assert!(!shows(&harness, "native Linux and"));
+}
+
 /// The rect of the text drawn for `text` in the last frame and whether it was elided to "…".
 fn drawn_text(harness: &Harness<'static, App>, text: &str) -> Option<(Rect, bool)> {
     fn find(shape: &Shape, text: &str) -> Option<(Rect, bool)> {
@@ -1769,6 +1782,28 @@ fn batch_confirm_counts_new_changed_and_unchanged_files_and_writes_nothing() {
     assert!(!disabled(&harness, "Restore 1 game"), "the ticks stay");
     assert!(!saves.join("new.dat").exists());
     assert!(snapshots(&tmp, "pre-restore").is_empty());
+}
+
+#[test]
+fn batch_confirm_names_only_the_prefix_the_writes_use() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    // A custom prefix makes the default both native Linux and the prefix.
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    let snapshot = scan(
+        &tmp,
+        "Alpha",
+        &[(Base::WinAppData, "Alpha/save.dat")],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+
+    let into = format!("Into the prefix {}", prefix.display());
+    assert!(shows_path(&harness, &into));
+    assert!(!shows(&harness, "native Linux"));
 }
 
 #[test]

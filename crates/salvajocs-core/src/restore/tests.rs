@@ -194,6 +194,134 @@ fn mixed_snapshot_restores_both_families() {
     assert!(!plan.cross_build);
 }
 
+/// A prefix context with a `steamuser`; plain data, so it works on any host.
+fn prefix_ctx() -> Context {
+    let prefix = Path::new("/pfx");
+    Context::WinePrefix {
+        prefix: prefix.into(),
+        folders: WinFolders::for_prefix(prefix, "steamuser"),
+    }
+}
+
+#[test]
+fn used_targets_of_a_prefix_only_plan_leave_out_native_linux() {
+    let mut staged = staged(
+        &[(Base::WinAppData, "Game")],
+        &[(Base::WinAppData, "Game/a")],
+    );
+    staged.registry = Some(registry(&["Software\\Co\\Game"]));
+    let targets = Targets {
+        linux: Some(linux_folders()),
+        win: Some(prefix_ctx()),
+    };
+    let entry = declaring(&staged, &["HKEY_CURRENT_USER/Software/Co/Game"]);
+    let plan = plan(&staged, &targets, &vars(), Some(&entry), &[], &[]).unwrap();
+    let used = used_targets(&plan, &targets);
+    assert!(!used.linux);
+    assert_eq!(used.win, Some(prefix_ctx()));
+    assert!(!used.install_dir);
+}
+
+#[test]
+fn used_targets_of_a_registry_only_plan_name_the_prefix() {
+    let mut staged = staged(&[], &[]);
+    staged.registry = Some(registry(&["Software\\Co\\Game"]));
+    let targets = Targets {
+        linux: Some(linux_folders()),
+        win: Some(prefix_ctx()),
+    };
+    let entry = declaring(&staged, &["HKEY_CURRENT_USER/Software/Co/Game"]);
+    let plan = plan(&staged, &targets, &vars(), Some(&entry), &[], &[]).unwrap();
+    let used = used_targets(&plan, &targets);
+    assert!(!used.linux);
+    assert_eq!(used.win, Some(prefix_ctx()));
+}
+
+#[test]
+fn used_targets_of_a_mixed_plan_name_both() {
+    let staged = staged(
+        &[(Base::XdgData, "Game"), (Base::WinAppData, "Game")],
+        &[
+            (Base::XdgData, "Game/linux.sav"),
+            (Base::WinAppData, "Game/windows.sav"),
+        ],
+    );
+    let targets = Targets {
+        linux: Some(linux_folders()),
+        win: Some(prefix_ctx()),
+    };
+    let plan = plan(
+        &staged,
+        &targets,
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let used = used_targets(&plan, &targets);
+    assert!(used.linux);
+    assert_eq!(used.win, Some(prefix_ctx()));
+}
+
+#[test]
+fn used_targets_count_a_mapped_write_for_its_target_side() {
+    let staged = staged(
+        &[(Base::WinAppData, "Game")],
+        &[(Base::WinAppData, "Game/a")],
+    );
+    let pairs = [Pair {
+        linux: "<xdgData>/Game".into(),
+        windows: "<winAppData>/Game".into(),
+    }];
+    let game = info(Some(&entry_of(&staged)), &pairs, &[]);
+    let plan = prepare(&staged, &linux_only(), &vars(), &game, &[]).unwrap();
+    assert!(plan.cross_build);
+    let used = used_targets(&plan, &linux_only());
+    assert!(used.linux);
+    assert_eq!(used.win, None);
+}
+
+#[test]
+fn used_targets_count_game_dir_as_the_install_folder_and_skip_overrides() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("Install Dir")).unwrap();
+    let roots = other_root(root.path());
+    let vars = GameVars::new("Title", vec!["Install Dir".into()], &roots, None);
+    let staged = staged(
+        &[(Base::GameDir, "saves"), (Base::XdgData, "Game")],
+        &[
+            (Base::GameDir, "saves/a.sav"),
+            (Base::XdgData, "Game/b.sav"),
+        ],
+    );
+    let mut plan = plan(
+        &staged,
+        &linux_only(),
+        &vars,
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    let used = used_targets(&plan, &linux_only());
+    assert!(used.linux);
+    assert!(used.install_dir);
+    let linux_write = (plan.writes.iter())
+        .position(|write| {
+            write
+                .target_file
+                .as_ref()
+                .is_some_and(|(base, _)| *base == Base::XdgData)
+        })
+        .unwrap();
+    plan.override_target(linux_write, root.path().join("elsewhere"))
+        .unwrap();
+    let used = used_targets(&plan, &linux_only());
+    assert!(!used.linux, "an overridden write names no target");
+    assert!(used.install_dir);
+}
+
 fn other_root(path: &Path) -> [Root; 1] {
     [Root {
         path: path.into(),

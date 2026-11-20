@@ -18,7 +18,7 @@ use salvajocs_core::layout::{Context, GameVars, LinuxFolders, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
     self, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG, PrepareError, RestorePlan, RestoreReport,
-    RunError, SafetyBackup, SkippedItem, Targets, Write, WriteState,
+    RunError, SafetyBackup, SkippedItem, Targets, Used, Write, WriteState,
 };
 use salvajocs_core::retention::{self, Cleanup, DeleteError};
 use salvajocs_core::scan::Environment;
@@ -1193,6 +1193,8 @@ impl RestoreTab {
         };
         ui.add_space(16.0);
         ui.heading("Plan");
+        let used = restore::used_targets(&preview.plan, &preview.fetched.targets);
+        ui.label(format!("Into {}", describe_targets(&used)));
         let error_color = ui.visuals().error_fg_color;
         warnings_ui(ui, &preview.plan);
         let compared: Vec<_> = (preview.labels.iter())
@@ -1406,6 +1408,24 @@ fn describe_delete_error(err: &anyhow::Error) -> String {
         }
         None => format!("Nothing was removed: {err:#}"),
         Some(_) => format!("The delete failed: {err:#}"),
+    }
+}
+
+/// Where a plan's files and registry go, as the "Into …" line names it.
+fn describe_targets(used: &Used) -> String {
+    let linux = used.linux.then(|| "native Linux".to_owned());
+    let win = used.win.as_ref().map(|ctx| match ctx {
+        Context::WindowsNative(_) => "this Windows user's folders".to_owned(),
+        ctx => describe_context(ctx),
+    });
+    let install = used
+        .install_dir
+        .then(|| "the game's install folder".to_owned());
+    let parts: Vec<String> = linux.into_iter().chain(win).chain(install).collect();
+    if parts.is_empty() {
+        "no folder on this machine".to_owned()
+    } else {
+        parts.join(" and ")
     }
 }
 
