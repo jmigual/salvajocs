@@ -51,15 +51,21 @@ pub struct LauncherPrefix {
     pub path: PathBuf,
     /// The game run in the prefix; `None` when the launcher does not tie a prefix to one game.
     pub game: Option<LauncherGame>,
+    /// The launcher's own key for the prefix, the same on every machine: the Heroic app name,
+    /// the Lutris game slug or the bottle's directory name (ADR-0023). Empty when unknown, and
+    /// then never recorded or matched.
+    pub name: String,
 }
 
 impl LauncherPrefix {
-    /// The prefix at `path` that `launcher` uses, for `game` when it ties one to it.
+    /// The prefix at `path` that `launcher` uses, for `game` when it ties one to it, with an
+    /// empty `name`.
     pub fn new(launcher: Launcher, path: PathBuf, game: Option<LauncherGame>) -> Self {
         Self {
             launcher,
             path,
             game,
+            name: String::new(),
         }
     }
 }
@@ -255,7 +261,7 @@ impl Found {
             // stripped config may lack `wineVersion` too.
             let pfx = prefix.join("pfx");
             let game = info.map(|i| i.game.clone()).unwrap_or_default();
-            self.push(Launcher::Heroic, [prefix, pfx], Some(game));
+            self.push(Launcher::Heroic, app, [prefix, pfx], Some(game));
         }
     }
 
@@ -350,13 +356,14 @@ impl Found {
                     .as_deref()
                     .filter(|_| spec.service.as_deref() == Some(service))
             };
+            let slug = spec.game_slug.unwrap_or_else(|| file_slug(stem).to_owned());
             let game = LauncherGame {
                 gog_id: service_id("gog").and_then(|id| id.parse().ok()),
                 steam_id: service_id("steam").and_then(|id| id.parse().ok()),
                 title: spec.name,
-                lutris_slug: Some(spec.game_slug.unwrap_or_else(|| file_slug(stem).to_owned())),
+                lutris_slug: Some(slug.clone()),
             };
-            self.push(Launcher::Lutris, [prefix], Some(game));
+            self.push(Launcher::Lutris, &slug, [prefix], Some(game));
         }
     }
 
@@ -379,6 +386,10 @@ impl Found {
                     continue;
                 }
             }
+            // The bottle's name, not the last part of a placeholder's or `Custom_Path`'s target.
+            let name = (bottle.file_name().and_then(OsStr::to_str))
+                .unwrap_or_default()
+                .to_owned();
             let placeholder = self
                 .yaml::<BottlePlaceholder>(&bottle.join("placeholder.yml"))
                 .filter(|placeholder| Path::new(&placeholder.path).is_absolute());
@@ -394,14 +405,15 @@ impl Found {
                     _ => continue,
                 }
             };
-            self.push(Launcher::Bottles, [path], None);
+            self.push(Launcher::Bottles, &name, [path], None);
         }
     }
 
-    /// Keeps the first of `candidates` that is a valid prefix.
+    /// Keeps the first of `candidates` that is a valid prefix, named `name` by `launcher`.
     fn push(
         &mut self,
         launcher: Launcher,
+        name: &str,
         candidates: impl IntoIterator<Item = PathBuf>,
         game: Option<LauncherGame>,
     ) {
@@ -410,6 +422,7 @@ impl Found {
                 launcher,
                 path,
                 game,
+                name: name.to_owned(),
             });
         }
     }

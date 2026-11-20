@@ -582,6 +582,7 @@ fn with_launcher_prefix(mut env: Environment, path: &Path, title: &str) -> Envir
             title: Some(title.to_owned()),
             ..LauncherGame::default()
         }),
+        name: String::new(),
     });
     env
 }

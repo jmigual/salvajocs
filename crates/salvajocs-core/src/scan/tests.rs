@@ -181,6 +181,7 @@ fn launcher_prefix(path: &Path, title: Option<&str>) -> LauncherPrefix {
             title: Some(title.to_owned()),
             ..LauncherGame::default()
         }),
+        name: String::new(),
     }
 }
 

@@ -50,11 +50,17 @@ impl Home {
     }
 }
 
-fn found(launcher: Launcher, path: PathBuf, game: Option<LauncherGame>) -> LauncherPrefix {
+fn found(
+    launcher: Launcher,
+    name: &str,
+    path: PathBuf,
+    game: Option<LauncherGame>,
+) -> LauncherPrefix {
     LauncherPrefix {
         launcher,
         path,
         game,
+        name: name.to_owned(),
     }
 }
 
@@ -65,8 +71,8 @@ fn titled(title: &str) -> LauncherGame {
     }
 }
 
-fn heroic(path: PathBuf) -> LauncherPrefix {
-    found(Launcher::Heroic, path, Some(LauncherGame::default()))
+fn heroic(app: &str, path: PathBuf) -> LauncherPrefix {
+    found(Launcher::Heroic, app, path, Some(LauncherGame::default()))
 }
 
 const HEROIC: &str = ".config/heroic";
@@ -130,10 +136,24 @@ fn heroic_gog_app_name_is_gog_id() {
     assert_eq!(
         h.prefixes(),
         [
-            found(Launcher::Heroic, gog, Some(foo)),
-            found(Launcher::Heroic, epic, Some(titled("Bar"))),
+            found(Launcher::Heroic, "1207658924", gog, Some(foo)),
+            found(Launcher::Heroic, "12345", epic, Some(titled("Bar"))),
         ]
     );
+}
+
+#[test]
+fn heroic_epic_app_is_named_by_its_app_name() {
+    let h = Home::new();
+    let prefix = h.prefix("Games/Heroic/Prefixes/Fish");
+    heroic_config(&h, "Salmon", &display(&prefix), "wine");
+    h.write(
+        &format!("{HEROIC}/store_cache/legendary_library.json"),
+        r#"{"library": [{"app_name": "Salmon", "title": "Fish"}]}"#,
+    );
+    let found = h.prefixes();
+    assert_eq!(names(&found), ["Salmon"]);
+    assert_eq!(found[0].game.as_ref().unwrap().gog_id, None);
 }
 
 #[test]
@@ -158,8 +178,13 @@ fn heroic_legacy_gog_library_and_nile_library_titles() {
     assert_eq!(
         h.prefixes(),
         [
-            found(Launcher::Heroic, gog, Some(foo)),
-            found(Launcher::Heroic, amazon, Some(titled("Bar"))),
+            found(Launcher::Heroic, "1207658924", gog, Some(foo)),
+            found(
+                Launcher::Heroic,
+                "amzn1.adg.product.1",
+                amazon,
+                Some(titled("Bar"))
+            ),
         ]
     );
 }
@@ -169,7 +194,7 @@ fn heroic_proton_prefix_is_pfx() {
     let h = Home::new();
     let pfx = h.prefix("Games/Heroic/Prefixes/Foo/pfx");
     heroic_config(&h, "Foo", &display(pfx.parent().unwrap()), "proton");
-    assert_eq!(h.prefixes(), [heroic(pfx)]);
+    assert_eq!(h.prefixes(), [heroic("Foo", pfx)]);
 }
 
 #[test]
@@ -177,7 +202,7 @@ fn heroic_tilde_wine_prefix() {
     let h = Home::new();
     let prefix = h.prefix("Games/Foo");
     heroic_config(&h, "Foo", "~/Games/Foo", "wine");
-    assert_eq!(h.prefixes(), [heroic(prefix)]);
+    assert_eq!(h.prefixes(), [heroic("Foo", prefix)]);
 }
 
 #[test]
@@ -190,7 +215,7 @@ fn heroic_missing_wine_prefix_uses_config_json() {
         &format!("{HEROIC}/config.json"),
         r#"{"defaultSettings": {"winePrefix": "~/Prefixes/default"}}"#,
     );
-    assert_eq!(h.prefixes(), [heroic(prefix)]);
+    assert_eq!(h.prefixes(), [heroic("Foo", prefix)]);
 }
 
 #[test]
@@ -202,7 +227,7 @@ fn heroic_without_config_json_uses_shared_prefix() {
         &format!("{HEROIC}/legendaryConfig/legendary/installed.json"),
         r#"{"Foo": {"app_name": "Foo", "platform": "Windows"}}"#,
     );
-    assert_eq!(h.prefixes(), [heroic(prefix)]);
+    assert_eq!(h.prefixes(), [heroic("Foo", prefix)]);
 }
 
 #[test]
@@ -224,8 +249,8 @@ fn heroic_default_prefix_needs_a_windows_install() {
     assert_eq!(
         h.prefixes(),
         [
-            heroic(shared.clone()),
-            found(Launcher::Heroic, shared, Some(titled("Side"))),
+            heroic("Amazon", shared.clone()),
+            found(Launcher::Heroic, "Sideload", shared, Some(titled("Side"))),
         ]
     );
 }
@@ -255,7 +280,7 @@ fn heroic_empty_wine_prefix() {
         &format!("{HEROIC}/config.json"),
         r#"{"defaultSettings": {"winePrefix": ""}}"#,
     );
-    assert_eq!(h.prefixes(), [heroic(shared)]);
+    assert_eq!(h.prefixes(), [heroic("Stripped", shared)]);
 }
 
 #[test]
@@ -270,7 +295,7 @@ fn heroic_flatpak_dir() {
         r#"{"games": [{"app_name": "Foo", "title": "Foo Game"}]}"#,
     );
     let game = Some(titled("Foo Game"));
-    assert_eq!(h.prefixes(), [found(Launcher::Heroic, prefix, game)]);
+    assert_eq!(h.prefixes(), [found(Launcher::Heroic, "Foo", prefix, game)]);
 }
 
 #[test]
@@ -279,7 +304,7 @@ fn heroic_reads_only_json_games_configs() {
     let prefix = h.prefix("Games/Foo");
     heroic_config(&h, "Foo", &display(&prefix), "wine");
     h.write(&format!("{HEROIC}/GamesConfig/Foo-lastPlay.log"), "{");
-    assert_eq!(h.prefixes(), [heroic(prefix)]);
+    assert_eq!(h.prefixes(), [heroic("Foo", prefix)]);
 }
 
 #[test]
@@ -361,8 +386,8 @@ fn lutris_installer_yml_name_slug_service() {
     assert_eq!(
         h.prefixes(),
         [
-            found(Launcher::Lutris, steam, Some(bar)),
-            found(Launcher::Lutris, gog, Some(foo)),
+            found(Launcher::Lutris, "bar-game", steam, Some(bar)),
+            found(Launcher::Lutris, "foo", gog, Some(foo)),
         ]
     );
 }
@@ -386,7 +411,10 @@ fn lutris_manual_yml_stem_slug_and_exe_prefix() {
         lutris_slug: Some("foo-bar".to_owned()),
         ..LauncherGame::default()
     };
-    assert_eq!(h.prefixes(), [found(Launcher::Lutris, prefix, Some(game))]);
+    assert_eq!(
+        h.prefixes(),
+        [found(Launcher::Lutris, "foo-bar", prefix, Some(game))]
+    );
 }
 
 /// A hand-added Lutris game file for the prefix at `~/Games/foo`.
@@ -397,7 +425,21 @@ fn lutris_foo(prefix: PathBuf) -> LauncherPrefix {
         lutris_slug: Some("foo".to_owned()),
         ..LauncherGame::default()
     };
-    found(Launcher::Lutris, prefix, Some(game))
+    found(Launcher::Lutris, "foo", prefix, Some(game))
+}
+
+#[test]
+fn lutris_prefix_is_named_by_its_game_slug() {
+    let h = Home::new();
+    h.prefix("Games/bar");
+    h.prefix("Games/foo");
+    h.write(
+        ".config/lutris/games/bar-1700000001.yml",
+        "game_slug: bar-game\ngame:\n  prefix: ~/Games/bar\n",
+    );
+    // Without `game_slug`, the file stem without its install time.
+    h.write(".config/lutris/games/foo-1700000000.yml", LUTRIS_FOO);
+    assert_eq!(names(&h.prefixes()), ["bar-game", "foo"]);
 }
 
 #[test]
@@ -481,8 +523,8 @@ fn bottles_native_and_flatpak() {
     assert_eq!(
         h.prefixes(),
         [
-            found(Launcher::Bottles, native, None),
-            found(Launcher::Bottles, flatpak, None),
+            found(Launcher::Bottles, "Foo", native, None),
+            found(Launcher::Bottles, "Bar", flatpak, None),
         ]
     );
 }
@@ -506,10 +548,31 @@ fn bottles_placeholder_path() {
     assert_eq!(
         h.prefixes(),
         [
-            found(Launcher::Bottles, custom, None),
-            found(Launcher::Bottles, placed, None),
+            found(Launcher::Bottles, "Bar", custom, None),
+            found(Launcher::Bottles, "Foo", placed, None),
         ]
     );
+}
+
+fn names(prefixes: &[LauncherPrefix]) -> Vec<&str> {
+    prefixes.iter().map(|prefix| prefix.name.as_str()).collect()
+}
+
+#[test]
+fn bottles_are_named_by_their_directory() {
+    let h = Home::new();
+    h.prefix(".local/share/bottles/bottles/Plain");
+    let placed = h.prefix("Drive/Elsewhere");
+    let custom = h.prefix("Drive/Other");
+    h.write(
+        ".local/share/bottles/bottles/Generic-Game/placeholder.yml",
+        &format!("Path: {}\n", placed.display()),
+    );
+    h.write(
+        ".local/share/bottles/bottles/Mine/bottle.yml",
+        &format!("Path: {}\nCustom_Path: true\n", custom.display()),
+    );
+    assert_eq!(names(&h.prefixes()), ["Generic-Game", "Mine", "Plain"]);
 }
 
 #[test]
@@ -520,7 +583,10 @@ fn bottles_empty_placeholder_path_falls_back_to_the_bottle() {
         ".local/share/bottles/bottles/Foo/placeholder.yml",
         "Path:\n",
     );
-    assert_eq!(h.prefixes(), [found(Launcher::Bottles, bottle, None)]);
+    assert_eq!(
+        h.prefixes(),
+        [found(Launcher::Bottles, "Foo", bottle, None)]
+    );
 }
 
 #[test]
@@ -552,7 +618,10 @@ fn bottles_var_data_rewrite() {
         ".local/share/bottles/bottles/Foo/placeholder.yml",
         placeholder,
     );
-    assert_eq!(h.prefixes(), [found(Launcher::Bottles, prefix, None)]);
+    assert_eq!(
+        h.prefixes(),
+        [found(Launcher::Bottles, "Foo", prefix, None)]
+    );
 }
 
 #[test]
@@ -667,7 +736,7 @@ fn ids_game(ids: Ids) -> GameEntry {
 }
 
 fn mapped(manifest: &Manifest, game: LauncherGame) -> Option<&str> {
-    GameIndex::new(manifest).title(&found(Launcher::Heroic, PathBuf::new(), Some(game)))
+    GameIndex::new(manifest).title(&found(Launcher::Heroic, "", PathBuf::new(), Some(game)))
 }
 
 #[test]
@@ -788,6 +857,6 @@ fn an_unknown_game_is_not_mapped() {
 #[test]
 fn a_prefix_without_a_game_is_not_mapped() {
     let m = manifest(&[("Foo", GameEntry::default())]);
-    let bottle = found(Launcher::Bottles, PathBuf::new(), None);
+    let bottle = found(Launcher::Bottles, "", PathBuf::new(), None);
     assert_eq!(GameIndex::new(&m).title(&bottle), None);
 }
