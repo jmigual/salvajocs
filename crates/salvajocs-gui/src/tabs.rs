@@ -63,6 +63,8 @@ mod details;
 mod mapping;
 pub mod restore;
 pub mod settings;
+mod sort;
+mod space;
 mod tree;
 
 /// Which tab is in front.

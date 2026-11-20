@@ -65,6 +65,7 @@ fn state(dir: &Path) -> State {
     state.session = Some(Session {
         compression: storage.compression(),
         storage: Arc::new(Mutex::new(storage)),
+        space: Default::default(),
     });
     state
 }

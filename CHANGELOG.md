@@ -26,6 +26,10 @@ All notable changes to salvajocs. The format follows
 - An **About** section at the end of the Settings tab shows the version, the commit, the Rust
   compiler, the target, the build profile and the storage library version, with a link to the
   release notes and a **Copy** button for bug reports.
+- The Backup tab's games can be sorted by name, last backup, last backup size or the space all
+  of a game's backups use, with the **Sort by** row above the list and an arrow that reverses
+  the order. Each game shows its last backup, that backup's size and the space its backups use.
+  The choice is saved in the config.
 
 ### Changed
 

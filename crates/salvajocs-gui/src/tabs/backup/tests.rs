@@ -7,7 +7,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::BackupError;
 use salvajocs_core::changes::Mapped;
-use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::config::{AppConfig, PasswordMode, SortKey};
 use salvajocs_core::layout::{Base, Hashes};
 use salvajocs_core::manifest::Manifest;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
@@ -490,6 +490,7 @@ fn state(dir: &Path) -> State {
     state.session = Some(Session {
         compression: storage.compression(),
         storage: Arc::new(Mutex::new(storage)),
+        space: Default::default(),
     });
     state
 }
@@ -523,6 +524,43 @@ fn listing(titles: &[&str]) -> BackupTab {
         Vec::new(),
     ));
     tab
+}
+
+#[test]
+fn the_order_is_built_again_only_when_the_report_the_figures_or_the_sort_change() {
+    let mut tab = listing(&["B", "A"]);
+    let name = ListSort::default();
+    tab.sort_rows(name);
+    assert_eq!(tab.order, [1, 0]);
+    // A frame with nothing changed keeps the order it has.
+    tab.order = vec![9];
+    tab.sort_rows(name);
+    assert_eq!(tab.order, [9]);
+
+    let report = listing(&["C", "B", "A"]).report.unwrap();
+    tab.adopt(report);
+    tab.sort_rows(name);
+    assert_eq!(tab.order, [2, 1, 0]);
+
+    let newest = ListSort::new(SortKey::LastBackup, true);
+    tab.sort_rows(newest);
+    tab.order = vec![9];
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    state.session = None;
+    let backed_up = |title: &str, seconds| {
+        let tags = vec!["salvajocs".into(), format!("game:{}", slug(title))];
+        let time = std::time::UNIX_EPOCH + Duration::from_secs(seconds);
+        SnapshotInfo::new(title.into(), time, "pc".into(), title.into(), tags)
+    };
+    let figures = stats::by_game(&[backed_up("B", 2), backed_up("C", 1)]);
+    tab.adopt_stats(&egui::Context::default(), &state, figures);
+    tab.sort_rows(newest);
+    assert_eq!(
+        tab.order,
+        [1, 0, 2],
+        "newest first, the game without a backup last"
+    );
 }
 
 /// Steps until the tab's jobs, such as loading what to back up, are done.
@@ -849,6 +887,7 @@ fn each_repository_keeps_its_own_unsaved_choices() {
         let first = state.session.replace(Session {
             compression: storage.compression(),
             storage: Arc::new(Mutex::new(storage)),
+            space: Default::default(),
         });
         let config = state.config.as_mut().unwrap();
         let first_repository = std::mem::replace(&mut config.repository, other);
@@ -986,7 +1025,7 @@ fn a_new_scan_closes_the_open_details() {
     let stage = dir.path().join("stage");
     let games = std::slice::from_ref(&game);
     back_up(&storage, games, &stage, &mapper, |_| {}).unwrap();
-    let previews = preview(&storage, games, &mapper).unwrap();
+    let previews = preview(&storage, games, &mapper, |_| {}).unwrap();
     let Ok(Some(baseline)) = &previews[0] else {
         panic!("the game has a backup");
     };

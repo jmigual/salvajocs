@@ -15,7 +15,7 @@ use eframe::egui::accesskit::{Role, Toggled};
 use eframe::egui::{OutputCommand, ThemePreference};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption, ThemeChoice};
+use salvajocs_core::config::{AppConfig, ListSort, PasswordMode, RepoOption, SortKey, ThemeChoice};
 use salvajocs_core::layout::RootKind;
 use salvajocs_core::retention::{self, Retention, Unit};
 use salvajocs_core::secret::SecretKey;
@@ -798,6 +798,26 @@ fn applying_a_new_location_keeps_the_ignored_prefixes() {
 
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(saved.ignored_prefixes, config.ignored_prefixes);
+}
+
+#[test]
+fn applying_a_new_location_keeps_the_sorts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.backup_sort = ListSort::new(SortKey::SpaceUsed, true);
+    config.restore_sort = ListSort::new(SortKey::LastBackup, false);
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.backup_sort, config.backup_sort);
+    assert_eq!(saved.restore_sort, config.restore_sort);
 }
 
 #[test]

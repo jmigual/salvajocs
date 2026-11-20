@@ -16,13 +16,14 @@ use eframe::egui::{
 };
 use salvajocs_core::backup::{self, GameBackup, Stored};
 use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper, NoSkip};
-use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::config::{AppConfig, ListSort, PasswordMode};
 use salvajocs_core::crossbuild::{self, Confidence, MappingEntry, ResolveError};
 use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
+use salvajocs_core::stats::{self, BackupStats};
 use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
@@ -30,6 +31,8 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::status_bar;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
+use crate::tabs::sort::{self, Line};
+use crate::tabs::space::{Polled, Space};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
@@ -154,17 +157,20 @@ type Preview = Result<Option<Baseline>, String>;
 
 /// Lists each of `games`' newest backup and this machine's last one, and compares the found
 /// files with the newest (ADR-0018), through `mapper` when it is of the other build (ADR-0021).
-/// Locks the repository for one game at a time.
+/// Hands the repository's snapshots to `listed` before comparing. Locks the repository for one
+/// game at a time.
 fn preview(
     storage: &SharedStorage,
     games: &[GameScan],
     mapper: &Mapper,
+    listed: impl FnOnce(&[SnapshotInfo]),
 ) -> anyhow::Result<Vec<Preview>> {
     let (snapshots, host) = {
         let mut storage = lock_storage(storage)?;
         storage.reindex()?;
         (storage.snapshots("salvajocs")?, storage.hostname()?)
     };
+    listed(&snapshots);
     let previews = games.iter().map(|game| {
         preview_game(storage, game, &snapshots, &host, mapper).map_err(|err| format!("{err:#}"))
     });
@@ -691,6 +697,24 @@ pub struct BackupTab {
     compared_in: Option<SharedStorage>,
     /// The `Wine prefix: …` lines of each game of `report`, in its order.
     prefixes: Vec<Vec<String>>,
+    /// The slug of each game of `report`, in its order.
+    slugs: Vec<String>,
+    /// The backup figures of the repository's games by slug, from the last comparison's
+    /// listing; kept across scans so the order does not jump while a comparison runs. `None`
+    /// until a listing arrives (ADR-0027).
+    stats: Option<HashMap<String, BackupStats>>,
+    /// Where the running comparison puts the figures as soon as it has listed the snapshots.
+    listed_stats: Arc<Mutex<Option<HashMap<String, BackupStats>>>>,
+    /// Works out the space of each game's backups.
+    space: Option<Space>,
+    /// Counts the changes of `report` and of the figures, which the order is built from.
+    generation: u64,
+    /// The indices of `report.games` in the order shown.
+    order: Vec<usize>,
+    /// The sort and `generation` that `order` was built for.
+    sorted: Option<(ListSort, u64)>,
+    /// The line of figures under each game of `report`, in its order; `None` until drawn.
+    lines: Vec<Option<Line>>,
     /// What to back up of each game.
     choices: Choices,
     running: Option<Job<Backed>>,
@@ -792,12 +816,27 @@ impl BackupTab {
             self.previewing = None;
             self.details = None;
             self.previews = Vec::new();
+            self.stats = None;
+            self.space = None;
+            self.generation += 1;
             if let Some(report) = &self.report {
                 self.listed = (report.games.iter())
                     .map(|game| Listed::new(game, None))
                     .collect();
             }
             self.start_preview(ctx, state);
+        }
+        let listed_stats = lock(&self.listed_stats).take();
+        if let Some(stats) = listed_stats {
+            self.adopt_stats(ctx, state, stats);
+        }
+        if let Some(space) = &mut self.space {
+            match space.poll() {
+                Polled::Arrived => self.lines.fill(None),
+                // The order changes once, when every figure is in.
+                Polled::Finished => self.generation += 1,
+                Polled::Nothing => {}
+            }
         }
         if let Some(job) = &mut self.previewing
             && let Some(result) = job.take_result()
@@ -844,11 +883,59 @@ impl BackupTab {
         let (manifest, config) = (state.manifest_or_empty(), config.clone());
         let environment = state.env.environment.clone();
         self.compared_in = Some(storage.clone());
+        // A fresh slot, so a replaced job's listing never lands.
+        self.listed_stats = Arc::default();
+        let (listed_stats, waker) = (self.listed_stats.clone(), ctx.clone());
         self.previewing = Some(Job::spawn(ctx, move || {
             let environment = environment.unwrap_or_else(Environment::detect);
             let mapper = Mapper::new(&manifest, &config, &environment);
-            preview(&storage, &games, &mapper)
+            preview(&storage, &games, &mapper, |snapshots| {
+                *lock(&listed_stats) = Some(stats::by_game(snapshots));
+                waker.request_repaint();
+            })
         }));
+    }
+
+    /// Shows `stats`, the figures of the repository's games, and works out the space of the
+    /// report's games that the session has not yet.
+    fn adopt_stats(
+        &mut self,
+        ctx: &egui::Context,
+        state: &State,
+        stats: HashMap<String, BackupStats>,
+    ) {
+        if let Some(session) = &state.session {
+            let games = (self.slugs.iter())
+                .filter_map(|slug| Some(stats.get(slug)?.snapshot_ids.clone()))
+                .collect();
+            let space = Space::start(ctx, &session.storage, &session.space, games);
+            self.space = Some(space);
+        }
+        self.stats = Some(stats);
+        self.generation += 1;
+    }
+
+    /// Builds the order of the games by `sort`, and drops the lines of figures, when the sort,
+    /// the report or the figures changed since it was last built.
+    fn sort_rows(&mut self, sort: ListSort) {
+        if self.sorted == Some((sort, self.generation)) {
+            return;
+        }
+        let Some(report) = &self.report else {
+            return;
+        };
+        if let (Some(figures), Some(space)) = (&mut self.stats, &self.space) {
+            for game in figures.values_mut() {
+                game.space_used = space.get(&game.snapshot_ids).and_then(Result::ok);
+            }
+        }
+        let figures = self.stats.as_ref();
+        let rows: Vec<_> = (report.games.iter().zip(&self.slugs))
+            .map(|(game, slug)| (game.title.as_str(), figures.and_then(|f| f.get(slug))))
+            .collect();
+        self.order = stats::order(&rows, sort);
+        self.lines = vec![None; report.games.len()];
+        self.sorted = Some((sort, self.generation));
     }
 
     /// Shows `report`, with a file tree per game and no preview yet.
@@ -856,6 +943,8 @@ impl BackupTab {
         self.listed = (report.games.iter())
             .map(|game| Listed::new(game, None))
             .collect();
+        self.slugs = report.games.iter().map(|game| slug(&game.title)).collect();
+        self.generation += 1;
         self.previews = Vec::new();
         self.previewing = None;
         self.details = None;
@@ -980,8 +1069,10 @@ impl BackupTab {
     }
 
     /// The scan report: its problems, a header with the count and the selection buttons, and the
-    /// games as a boxed list.
+    /// games as a boxed list in the config's order, under the Sort by row.
     fn games_ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
+        let sort = (state.config.as_ref()).map_or(ListSort::default(), |c| c.backup_sort);
+        self.sort_rows(sort);
         let Some(report) = &self.report else {
             return;
         };
@@ -1053,17 +1144,20 @@ impl BackupTab {
             );
             return;
         }
+        let picked = sort::sort_ui(ui, "backup_sort", sort);
         let (choices, listed, prefixes) = (&self.choices, &mut self.listed, &self.prefixes);
-        let previews = &self.previews;
+        let (previews, order, lines) = (&self.previews, &self.order, &mut self.lines);
+        let (figures, space, slugs) = (&self.stats, &self.space, &self.slugs);
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().interact_size.y = 24.0;
-            let games = report.games.iter().zip(listed).zip(prefixes);
-            for (index, ((game, listed), prefixes)) in games.enumerate() {
-                if index > 0 {
+            for (position, &index) in order.iter().enumerate() {
+                if position > 0 {
                     theme::row_separator(ui);
                 }
+                let (game, listed) = (&report.games[index], &mut listed[index]);
+                let prefixes = &prefixes[index];
                 let (settings, error) = match choices.game(&game.title) {
                     Ok(settings) => (settings, None),
                     Err(error) => (Cow::Owned(GameSettings::default()), Some(error)),
@@ -1087,6 +1181,17 @@ impl BackupTab {
                 ui.scope(|ui| {
                     ui.visuals_mut().indent_has_left_vline = false;
                     ui.indent(&game.title, |ui| {
+                        // No line before the listing: "No backup" would be a guess.
+                        if let Some(figures) = figures {
+                            let line = lines[index].get_or_insert_with(|| {
+                                let stats = figures.get(&slugs[index]);
+                                let ids = stats.map(|stats| stats.snapshot_ids.as_slice());
+                                let space_used = space.as_ref().zip(ids);
+                                let space_used = space_used.and_then(|(space, ids)| space.get(ids));
+                                sort::backup_line(stats, space_used, sort.by)
+                            });
+                            line.ui(ui);
+                        }
                         if let Some(error) = error {
                             let color = ui.visuals().error_fg_color;
                             theme::status(
@@ -1125,6 +1230,10 @@ impl BackupTab {
                 });
             }
         });
+        if let (Some(picked), Some(config)) = (picked, &mut state.config) {
+            config.backup_sort = picked;
+            state.save_config(ui.ctx());
+        }
         for (index, change) in changes {
             self.choices
                 .change(ui.ctx(), state, &report.games[index].title, change);

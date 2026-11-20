@@ -57,6 +57,29 @@ game's checkbox says whether it is backed up at all. New games start selected. *
 A game found in a Wine or Proton prefix shows it as `Wine prefix: <folder>`, one line per prefix
 its files or registry keys came from.
 
+### Sort and backup sizes
+
+Once the comparison below has listed the backups, each game shows a line such as
+`Last backup 2026-11-19 14:02 UTC, 980.0 KiB. All backups use 3.1 MiB.`:
+
+- The last backup is the newest one from any machine, not counting the safety backups a restore
+  makes. Its size is that of its files before compression; it also counts the few small files
+  salvajocs adds, so it can read a little larger than the files found here.
+- All backups use is the space the game's backups take in the repository, compressed, safety
+  backups included. A file two backups share counts once. Data that another game's backups also
+  use counts for both games, so the figures of all games can add up to more than the repository
+  holds. Data a removed backup left behind until the next cleanup is not counted.
+- `…` means the space is still being worked out, and `size unknown` a backup made by a tool that
+  does not record its size. A game without a backup says `No backup.`, or how much space its
+  safety backups use.
+
+The **Sort by** row above the list orders the games by **Name**, **Last backup**, **Last backup
+size** or **Space used**; hover an item to read what it means. The arrow button next to it
+reverses the order and says the current one, such as **Largest first**. Picking a key starts in
+its natural order: names A to Z, times newest first, sizes largest first. Games without the
+value, such as one without a backup, stay at the end either way. The figure the list is sorted
+by is drawn brighter on each line. The choice is saved.
+
 Open the line to see the game's files as a tree of folders, each with a checkbox, and its registry
 keys under **Registry**:
 

@@ -37,6 +37,8 @@ pub mod icons {
     pub const LOCK_SIMPLE: &str = "\u{E308}";
     pub const LOCK_SIMPLE_OPEN: &str = "\u{E30A}";
     pub const ARROW_RIGHT: &str = "\u{E06C}";
+    pub const ARROW_UP: &str = "\u{E08E}";
+    pub const ARROW_DOWN: &str = "\u{E03E}";
     pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
     pub const ARROW_CIRCLE_UP: &str = "\u{E030}";
     pub const MINUS: &str = "\u{E32A}";

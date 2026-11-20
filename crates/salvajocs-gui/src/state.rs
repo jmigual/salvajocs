@@ -1,5 +1,6 @@
 //! What every screen shares: the config, the open repository and the notices to show.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use eframe::egui;
@@ -23,12 +24,18 @@ pub fn lock_storage(storage: &SharedStorage) -> anyhow::Result<MutexGuard<'_, St
         .map_err(|_| anyhow::anyhow!("the repository lock is poisoned; restart the app"))
 }
 
+/// The space each game's backups use, by the game's sorted snapshot ids: a value stays right as
+/// long as that exact set of snapshots does (ADR-0027).
+pub type SpaceCache = Arc<Mutex<HashMap<Vec<String>, u64>>>;
+
 /// An open repository and what the screens show about it without locking it.
 pub struct Session {
     /// The repository itself.
     pub storage: SharedStorage,
     /// Its compression as last read.
     pub compression: Compression,
+    /// The space used of the games computed so far in this repository.
+    pub space: SpaceCache,
 }
 
 /// Keyring entries of a repository location the app no longer uses (ADR-0009).
@@ -105,8 +112,8 @@ impl State {
     }
 
     /// Makes a repository the user just connected the current one and saves the config. Roots,
-    /// custom games, the update setting, the theme and the ignored prefixes come from the current
-    /// config, which may have changed since the form was built.
+    /// custom games, the update setting, the theme, the sorts and the ignored prefixes come from
+    /// the current config, which may have changed since the form was built.
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -119,12 +126,15 @@ impl State {
             config.custom_games = old.custom_games.clone();
             config.check_updates = old.check_updates;
             config.theme = old.theme;
+            config.backup_sort = old.backup_sort;
+            config.restore_sort = old.restore_sort;
             config.ignored_prefixes = old.ignored_prefixes.clone();
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }
         self.session = Some(Session {
             compression: storage.compression(),
             storage: Arc::new(Mutex::new(*storage)),
+            space: SpaceCache::default(),
         });
         self.config = Some(config);
         self.credentials = credentials;

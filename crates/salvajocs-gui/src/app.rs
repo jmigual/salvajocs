@@ -322,6 +322,7 @@ impl App {
                     self.state.session = Some(Session {
                         compression: storage.compression(),
                         storage: Arc::new(std::sync::Mutex::new(*storage)),
+                        space: Default::default(),
                     });
                     self.settings.reset();
                     Stage::Ready

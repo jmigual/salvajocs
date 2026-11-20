@@ -5,7 +5,7 @@ SIL Open Font License 1.1 (see OFL.txt):
     sha256 5a455d1cfa099b601ab70751bb9673e8fe1854dc4500c80e1a220d0d75e31745
 
 salvajocs-icons.ttf is a subset of the Phosphor Icons regular font (MIT, see
-Phosphor-LICENSE.txt), holding the 29 icons picked for the app. It draws 22 of them, the ones in
+Phosphor-LICENSE.txt), holding the 31 icons picked for the app. It draws 24 of them, the ones in
 theme::icons; the others are spare:
 
     https://raw.githubusercontent.com/phosphor-icons/web/v2.1.2/src/regular/Phosphor.ttf
@@ -22,13 +22,14 @@ Codepoints, as named in phosphor-icons/web:
     E030 arrow-circle-up      E40C shield-check              E308 lock-simple
     E30A lock-simple-open     E32A minus                     E45E square
     E1CA copy                 E4F6 x                         E3D6 plus-circle
-    E32C minus-circle         E3E8 question
+    E32C minus-circle         E3E8 question                  E08E arrow-up
+    E03E arrow-down
 
 Regenerate with:
 
     pip install fonttools
     pyftsubset Phosphor.ttf \
-        --unicodes=E248,E1A0,E26E,E272,E30C,E256,E3D4,E4A6,E3B4,E4E0,E4F8,E184,E21C,EB02,E692,E06C,E5DE,E030,E40C,E308,E30A,EAD4,E32A,E45E,E1CA,E4F6,E3D6,E32C,E3E8 \
+        --unicodes=E248,E1A0,E26E,E272,E30C,E256,E3D4,E4A6,E3B4,E4E0,E4F8,E184,E21C,EB02,E692,E06C,E5DE,E030,E40C,E308,E30A,EAD4,E32A,E45E,E1CA,E4F6,E3D6,E32C,E3E8,E08E,E03E \
         --no-hinting --desubroutinize --layout-features='' \
         --output-file=salvajocs-icons.ttf
 

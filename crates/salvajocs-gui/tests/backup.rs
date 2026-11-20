@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use common::{
-    env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
-    run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
+    env, harness, init_repo, init_repo_with, local_config, record_opened, replace_text, repo_dir,
+    run_settled, run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
-use salvajocs_core::config::AppConfig;
+use salvajocs_core::config::{AppConfig, ListSort, SortKey};
 use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
@@ -27,7 +27,7 @@ use salvajocs_core::retention::{self, Retention};
 use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::selection::{Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
-use salvajocs_core::storage::{RepoLocation, Storage};
+use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -1466,4 +1466,146 @@ fn the_games_list_keeps_its_scroll_when_another_tab_is_shown() {
 
     assert_eq!(top_of(&harness, last).unwrap().y0, scrolled);
     assert!(top_of(&harness, first).unwrap().y0 < 0.0);
+}
+
+/// The titles among `titles`, top to bottom as their checkboxes show.
+fn shown_order<'a>(harness: &Harness<'static, App>, titles: &[&'a str]) -> Vec<&'a str> {
+    let mut titles = titles.to_vec();
+    let top = |title: &str| {
+        let node = harness.get_by_role_and_label(Role::CheckBox, title);
+        node.rect().min.y
+    };
+    titles.sort_by(|a, b| top(a).total_cmp(&top(b)));
+    titles
+}
+
+/// Picks `key` in the Sort by dropdown.
+fn sort_by(harness: &mut Harness<'static, App>, key: &str) {
+    harness
+        .get_by_role_and_label(Role::ComboBox, "Sort by")
+        .click();
+    run_settled(harness);
+    harness.get_by_label(key).click();
+    run_settled(harness);
+}
+
+/// Runs frames until `count` games show the space their backups use, worked out.
+fn run_until_space_shown(harness: &mut Harness<'static, App>, count: usize) {
+    run_until(harness, "the space used", |h| {
+        h.query_all_by_label_contains("All backups use").count() == count
+            && !shows(h, "All backups use …")
+    });
+    run_settled(harness);
+}
+
+#[test]
+fn sort_by_space_used_puts_the_largest_first_and_the_unbacked_last() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    // Uncompressed, so the bigger save takes more space.
+    init_repo_with(&repository, "", Compression::Off);
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "Alpha", "abc");
+    write_save(&prefix, "Beta", &"x".repeat(64 * 1024));
+    write_save(&prefix, "Gamma", "g");
+    let games = ["Alpha", "Beta", "Gamma"].map(|name| custom_game(name, false, &prefix));
+    let (mut harness, _env) = open_app(&tmp, &repository, Vec::new(), games.into(), true);
+    scan(&mut harness, "3 games found");
+    click(&mut harness, "Gamma");
+    harness.get_by_label("Back up 2 games").click();
+    run_until_backed_up(&mut harness, "Beta: backed up");
+    run_until_space_shown(&mut harness, 2);
+    let titles = ["Alpha", "Beta", "Gamma"];
+    assert_eq!(shown_order(&harness, &titles), titles, "by name");
+
+    sort_by(&mut harness, "Space used");
+    assert_eq!(shown_order(&harness, &titles), ["Beta", "Alpha", "Gamma"]);
+    // A checkbox acts on its own game, not on the game at its place in the scan.
+    click(&mut harness, "Alpha");
+    assert!(!checked(&harness, "Alpha"));
+    assert!(checked(&harness, "Beta"));
+    assert!(shows(&harness, "Back up 1 game"));
+
+    harness.get_by_label("Largest first").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Smallest first"));
+    assert_eq!(shown_order(&harness, &titles), ["Alpha", "Beta", "Gamma"]);
+}
+
+#[test]
+fn sort_is_saved_and_restored() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    let titles = ["Alpha", "Beta"];
+    assert_eq!(shown_order(&harness, &titles), titles);
+
+    harness.get_by_label("A to Z").click();
+    run_settled(&mut harness);
+    assert_eq!(shown_order(&harness, &titles), ["Beta", "Alpha"]);
+    // The config is written in the background, which asks for no frames while it runs.
+    let config_dir = env.config_dir.clone();
+    run_until(&mut harness, "the sort to be saved", move |_| {
+        let saved = AppConfig::load(&config_dir).ok().flatten();
+        saved.is_some_and(|saved| saved.backup_sort == ListSort::new(SortKey::Name, true))
+    });
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.restore_sort, ListSort::default());
+    drop(harness);
+
+    let mut harness = common::harness(env);
+    run_until_ready(&mut harness);
+    run_settled(&mut harness);
+    scan(&mut harness, "2 games found");
+    assert!(shows(&harness, "Z to A"));
+    assert_eq!(shown_order(&harness, &titles), ["Beta", "Alpha"]);
+}
+
+#[test]
+fn details_and_folders_act_on_their_own_game_in_a_sorted_list() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = alpha_beta(&scratch);
+    let (mut harness, opened, _tmp) = open_tab_recording(games);
+    scan(&mut harness, "2 games found");
+    harness.get_by_label("Back up 2 games").click();
+    run_until_backed_up(&mut harness, "Beta: backed up");
+    write_save(&prefix, "Beta", "changed");
+    scan(&mut harness, "2 games found");
+    run_until_compared(&mut harness);
+    // Z to A puts Beta, the second game of the scan, first.
+    click(&mut harness, "A to Z");
+    assert_eq!(shown_order(&harness, &["Alpha", "Beta"]), ["Beta", "Alpha"]);
+
+    click(&mut harness, "1 file, 7 B");
+    click(&mut harness, "Show WinAppData/Beta in the file manager");
+    let beta = prefix.join("drive_c/users/steamuser/AppData/Roaming/Beta");
+    assert_eq!(*opened.lock().unwrap(), std::slice::from_ref(&beta));
+    click(&mut harness, "Open WinAppData/Beta");
+    harness.get_by_label("Details of save.dat").click();
+    run_until(&mut harness, "the details", |h| shows(h, "Backup ("));
+    assert!(shows_path(
+        &harness,
+        &beta.join("save.dat").display().to_string()
+    ));
+}
+
+#[test]
+fn game_line_shows_last_backup_and_space_used() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    run_until_compared(&mut harness);
+    assert_eq!(harness.query_all_by_label("No backup.").count(), 2);
+
+    click(&mut harness, "Beta");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    run_until_space_shown(&mut harness, 1);
+    let line = harness.get_by_label_contains("All backups use");
+    // A label's text is its value.
+    let text = line.accesskit_node().value().unwrap_or_default();
+    assert!(text.starts_with("Last backup 20"), "{text}");
+    assert_eq!(harness.query_all_by_label("No backup.").count(), 1);
 }
