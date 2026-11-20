@@ -737,7 +737,7 @@ impl BackupTab {
             self.results_ui(ui);
         });
         self.mapping_ui(ui.ctx(), state);
-        if (self.details.as_ref()).is_some_and(|details| details.ui(ui.ctx())) {
+        if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
     }

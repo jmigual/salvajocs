@@ -123,10 +123,11 @@ at the start of a file) left out; a copy with a BOM says so. When that leaves no
 says that only the line endings, the BOM or both differ. A last line without a line ending is
 marked `(no newline at end)`.
 A copy is text when it is valid UTF-8 without a NUL byte. When a copy is not text, or either copy
-is larger than 1 MiB, no lines are shown, and nothing is downloaded from the repository for a
-file that large. A long diff shows its first 1000 lines. The backup's copy is read when you click
-the button, so the repository must be reachable; if it is not, the dialog says it could not read
-the backup.
+is larger than 10 MiB, no lines are shown, and nothing is downloaded from the repository for a
+file that large, until you click **Show anyway**, which reads both copies without that limit. A
+file that is not text still shows no lines. A long diff shows its first 1000 lines. The backup's
+copy is read when you click the button, so the repository must be reachable; if it is not, the
+dialog says it could not read the backup.
 
 The comparison leaves out the registry keys and the list of save folders, so a game shown as
 unchanged is still backed up when only those changed.

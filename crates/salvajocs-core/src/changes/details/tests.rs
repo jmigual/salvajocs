@@ -50,7 +50,12 @@ fn backed_up(bytes: &[u8], listed: bool) -> BackedUp {
 fn compare(local: &[u8], backup: &[u8], listed: bool) -> FileDetails {
     let tmp = tempfile::tempdir().unwrap();
     let path = write(tmp.path(), "save.dat", local, at(20));
-    details(&path, &backed_up(backup, listed), Some(backup))
+    details(
+        &path,
+        &backed_up(backup, listed),
+        Some(backup),
+        Some(TEXT_CAP),
+    )
 }
 
 fn ends(crlf: usize, lf: usize) -> Option<LineEndings> {
@@ -239,6 +244,9 @@ fn nul_or_invalid_utf8_is_not_text() {
     assert_eq!(compare(b"\xff\xfe", b"abc", true).content, Content::NotText);
 }
 
+/// A cap small enough to cross without a large file.
+const CAP: u64 = 16;
+
 #[test]
 fn over_the_cap_reads_nothing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -250,27 +258,85 @@ fn over_the_cap_reads_nothing() {
     let small = write(tmp.path(), "small", b"abc", at(1));
     let mut copy = backed_up(b"abc", true);
     // No such file in the repository: reading it would be an error.
-    assert!(read_backed_up(&mut storage, "game", &copy, &small).is_err());
+    assert!(read_backed_up(&mut storage, "game", &copy, &small, Some(CAP)).is_err());
 
     // Each of these would be that error too, if anything were read.
     let mut nothing_read = |copy: &BackedUp, local: &Path| {
-        read_backed_up(&mut storage, "game", copy, local)
+        read_backed_up(&mut storage, "game", copy, local, Some(CAP))
             .unwrap()
             .is_none()
     };
-    copy.size = TEXT_CAP + 1;
+    copy.size = CAP + 1;
     assert!(nothing_read(&copy, &small));
-    let big = write(tmp.path(), "big", &vec![b'x'; TEXT_CAP as usize + 1], at(1));
+    let big = write(tmp.path(), "big", &vec![b'x'; CAP as usize + 1], at(1));
     let copy = backed_up(b"abc", true);
     assert!(nothing_read(&copy, &big));
     assert!(nothing_read(&copy, &tmp.path().join("gone")));
 
-    let found = details(&big, &copy, None);
+    let found = details(&big, &copy, None, Some(CAP));
     assert_eq!(found.content, Content::TooLarge);
     let local = found.local.unwrap();
-    assert_eq!(local.size, TEXT_CAP + 1);
+    assert_eq!(local.size, CAP + 1);
     assert_eq!(local.line_endings, None);
     assert_eq!(found.backup.sha256, BackupHash::List(sha256_bytes(b"abc")));
+}
+
+#[test]
+fn without_a_cap_a_large_file_is_read_and_diffed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let location = RepoLocation::new(
+        tmp.path().join("repo").to_str().unwrap().into(),
+        BTreeMap::new(),
+    );
+    let mut storage = Storage::init(&location, "", Compression::Default).unwrap();
+    let stage = tmp.path().join("stage");
+    let saved = "line one is long enough to cross the cap\nline two\n";
+    let content = stage.join("files/Home/G/save.dat");
+    fs::create_dir_all(content.parent().unwrap()).unwrap();
+    fs::write(&content, saved).unwrap();
+    fs::write(stage.join("salvajocs.json"), "{}").unwrap();
+    let tags = ["salvajocs", "game:game"];
+    let id = storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game");
+    let snapshot = id.unwrap().unwrap();
+    let mut copy = backed_up(saved.as_bytes(), true);
+    copy.snapshot = snapshot;
+    let local = write(
+        tmp.path(),
+        "save.dat",
+        b"line one is long enough to cross the cap\n2\n",
+        at(20),
+    );
+
+    let capped = read_backed_up(&mut storage, "game", &copy, &local, Some(CAP)).unwrap();
+    assert_eq!(capped, None);
+    assert_eq!(
+        details(&local, &copy, None, Some(CAP)).content,
+        Content::TooLarge
+    );
+
+    let bytes = read_backed_up(&mut storage, "game", &copy, &local, None).unwrap();
+    assert_eq!(bytes.as_deref(), Some(saved.as_bytes()));
+    let found = details(&local, &copy, bytes.as_deref(), None);
+    let Content::Diff(hunks) = found.content else {
+        panic!("{:?}", found.content);
+    };
+    let removed: Vec<_> = (hunks.iter().flat_map(|hunk| &hunk.lines))
+        .filter(|line| line.kind == LineKind::Removed)
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(removed, ["line two"]);
+}
+
+#[test]
+fn without_a_cap_a_large_binary_file_is_still_not_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let local = write(tmp.path(), "save.dat", &vec![0; CAP as usize + 1], at(20));
+    let backup = vec![1; CAP as usize + 1];
+
+    let found = details(&local, &backed_up(&backup, true), Some(&backup), None);
+
+    assert_eq!(found.content, Content::NotText);
+    assert_eq!(found.local.unwrap().size, CAP + 1);
 }
 
 #[test]
@@ -303,7 +369,7 @@ fn the_backup_hash_comes_from_content_without_a_list() {
 
     let tmp = tempfile::tempdir().unwrap();
     let path = write(tmp.path(), "save.dat", b"a\n", at(20));
-    let unread = details(&path, &backed_up(b"b\n", false), None);
+    let unread = details(&path, &backed_up(b"b\n", false), None, Some(TEXT_CAP));
     assert_eq!(unread.backup.sha256, BackupHash::Unknown);
     assert_eq!(unread.backup.sha256.hex(), None);
     assert_eq!(unread.content, Content::TooLarge);
@@ -312,7 +378,8 @@ fn the_backup_hash_comes_from_content_without_a_list() {
 #[test]
 fn an_unreadable_local_file_is_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
-    let found = details(&tmp.path().join("gone"), &backed_up(b"a", true), Some(b"a"));
+    let gone = tmp.path().join("gone");
+    let found = details(&gone, &backed_up(b"a", true), Some(b"a"), Some(TEXT_CAP));
 
     assert!(found.local.is_err());
     assert_eq!(found.content, Content::Unavailable);
@@ -362,8 +429,8 @@ fn a_backed_up_file_changed_since_gives_the_list_hash_the_node_mtime_and_the_dif
     );
 
     let copy = baseline.backed_up("Home/saves/save.dat").unwrap();
-    let bytes = read_backed_up(&mut storage, &slug, &copy, &local).unwrap();
-    let found = details(&local, &copy, bytes.as_deref());
+    let bytes = read_backed_up(&mut storage, &slug, &copy, &local, Some(TEXT_CAP)).unwrap();
+    let found = details(&local, &copy, bytes.as_deref(), Some(TEXT_CAP));
 
     assert_eq!(
         found.backup.sha256,

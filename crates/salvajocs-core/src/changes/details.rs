@@ -13,9 +13,10 @@ use crate::backup::{sha256_bytes, sha256_file};
 use crate::layout::FILES_DIR;
 use crate::storage::{Storage, StorageError};
 
-/// The largest file, in bytes, that is read to look for text. A copy over it is hashed (this
-/// PC's) or listed (the backup's), never downloaded, and gets no diff.
-pub const TEXT_CAP: u64 = 1 << 20;
+/// The largest file, in bytes, that is read to look for text unless the caller lifts the cap
+/// (see [`details`]). A copy over it is hashed (this PC's) or listed (the backup's), never
+/// downloaded, and gets no diff.
+pub const TEXT_CAP: u64 = 10 << 20;
 
 /// Lines of context around each changed hunk.
 const CONTEXT: usize = 3;
@@ -145,7 +146,7 @@ pub enum Content {
     Diff(Vec<Hunk>),
     /// A copy is not text: not valid UTF-8, or it holds a NUL byte.
     NotText,
-    /// A copy is over [`TEXT_CAP`], so nothing was compared.
+    /// A copy is over the cap, so nothing was compared.
     TooLarge,
     /// This PC's copy could not be read.
     Unavailable,
@@ -164,8 +165,8 @@ pub struct FileDetails {
 }
 
 /// The content of `backed_up` in the repository, to hand to [`details`]. Nothing is downloaded,
-/// and `None` is returned, when either copy is over [`TEXT_CAP`] or the file at `local` cannot be
-/// statted. `slug` is the game's.
+/// and `None` is returned, when either copy is over `cap` bytes (`None`: no cap, as [`TEXT_CAP`]
+/// is the usual one) or the file at `local` cannot be statted. `slug` is the game's.
 ///
 /// # Errors
 /// The repository error when the file cannot be read from it.
@@ -174,9 +175,11 @@ pub fn read_backed_up(
     slug: &str,
     backed_up: &BackedUp,
     local: &Path,
+    cap: Option<u64>,
 ) -> Result<Option<Vec<u8>>, StorageError> {
-    let local_fits = fs::metadata(local).is_ok_and(|meta| meta.len() <= TEXT_CAP);
-    if backed_up.size > TEXT_CAP || !local_fits {
+    let fits = |size: u64| cap.is_none_or(|cap| size <= cap);
+    let local_fits = fs::metadata(local).is_ok_and(|meta| fits(meta.len()));
+    if !fits(backed_up.size) || !local_fits {
         return Ok(None);
     }
     let path = format!("/salvajocs/{slug}/{FILES_DIR}/{}", backed_up.path);
@@ -184,8 +187,14 @@ pub fn read_backed_up(
 }
 
 /// How this PC's file at `local` differs from `backed_up`, whose content `backup` is as
-/// [`read_backed_up`] gave it: `None` when it was not read. Reads and hashes `local`.
-pub fn details(local: &Path, backed_up: &BackedUp, backup: Option<&[u8]>) -> FileDetails {
+/// [`read_backed_up`] gave it: `None` when it was not read. Reads and hashes `local`, keeping its
+/// bytes only within `cap`, the cap `backup` was read with.
+pub fn details(
+    local: &Path,
+    backed_up: &BackedUp,
+    backup: Option<&[u8]>,
+    cap: Option<u64>,
+) -> FileDetails {
     let backup_text = backup.and_then(text);
     let backup_hash = match (&backed_up.sha256, backup) {
         (Some(list), _) => BackupHash::List(list.clone()),
@@ -199,7 +208,7 @@ pub fn details(local: &Path, backed_up: &BackedUp, backup: Option<&[u8]>) -> Fil
         line_endings: backup_text.map(line_endings),
         bom: backup_text.is_some_and(has_bom),
     };
-    let (mut file, local_bytes) = match read_local(local) {
+    let (mut file, local_bytes) = match read_local(local, cap) {
         Ok(read) => read,
         Err(err) => {
             return FileDetails {
@@ -227,15 +236,15 @@ pub fn details(local: &Path, backed_up: &BackedUp, backup: Option<&[u8]>) -> Fil
 }
 
 /// The file at `path` as this PC has it, without line endings, and its bytes when they are
-/// within [`TEXT_CAP`].
-fn read_local(path: &Path) -> io::Result<(LocalFile, Option<Vec<u8>>)> {
+/// within `cap`.
+fn read_local(path: &Path, cap: Option<u64>) -> io::Result<(LocalFile, Option<Vec<u8>>)> {
     let meta = fs::metadata(path)?;
     let modified = meta.modified().ok();
     let mut bytes = Vec::new();
-    File::open(path)?
-        .take(TEXT_CAP + 1)
-        .read_to_end(&mut bytes)?;
-    let (size, sha256, bytes) = if bytes.len() as u64 > TEXT_CAP {
+    // One byte past the cap tells a file over it from one that fills it.
+    let limit = cap.map_or(u64::MAX, |cap| cap.saturating_add(1));
+    File::open(path)?.take(limit).read_to_end(&mut bytes)?;
+    let (size, sha256, bytes) = if cap.is_some_and(|cap| bytes.len() as u64 > cap) {
         (meta.len(), sha256_file(path)?, None)
     } else {
         (bytes.len() as u64, sha256_bytes(&bytes), Some(bytes))

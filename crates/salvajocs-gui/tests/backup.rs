@@ -1317,6 +1317,25 @@ fn a_long_diff_stops_at_a_thousand_lines_and_counts_the_rest() {
 }
 
 #[test]
+fn a_file_over_the_cap_is_shown_on_request() {
+    // 16 characters a line, a little over 10 MiB in all, with one line different.
+    let before = "0123456789abcdef\n".repeat(620_000);
+    let mut after = before.clone();
+    after.replace_range(17 * 310_000..17 * 310_000 + 16, "changed_line_xyz");
+    let (mut harness, _env, _dirs, _save) = alpha_changed(before.as_bytes(), after.as_bytes());
+
+    open_details(&mut harness, "Show anyway");
+    assert!(shows(&harness, "Not shown: a copy is over"));
+    assert!(!shows(&harness, "+ changed_line_xyz"));
+
+    click(&mut harness, "Show anyway");
+    run_until(&mut harness, "the diff", |h| shows(h, "+ changed_line_xyz"));
+    assert!(shows(&harness, "− 0123456789abcdef"));
+    assert!(!shows(&harness, "Show anyway"));
+    assert!(!shows(&harness, "Not shown: a copy is over"));
+}
+
+#[test]
 fn a_missing_final_newline_shows_in_the_details() {
     let (mut harness, _env, _dirs, _save) = alpha_changed(b"a\nb\n", b"a\nb");
 

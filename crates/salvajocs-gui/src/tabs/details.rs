@@ -29,6 +29,9 @@ pub(crate) struct Details {
     name: String,
     /// The file's `<Base>/<tail>` key on this PC.
     key: String,
+    storage: SharedStorage,
+    /// The game's slug, to find its files in the repository.
+    slug: String,
     local: PathBuf,
     backed_up: BackedUp,
     /// Reads the backup's copy and compares; it only reads, so it is not counted as busy.
@@ -40,7 +43,8 @@ pub(crate) struct Details {
 impl Details {
     /// Starts reading the backup's copy `backed_up` of the file `key` (its `<Base>/<tail>` key on
     /// this PC) of the game `slug` and comparing it with this PC's file at `local`, holding the
-    /// repository's lock only for the read.
+    /// repository's lock only for the read. A copy over [`TEXT_CAP`] is not read until the user
+    /// asks for it.
     pub(crate) fn start(
         ctx: &egui::Context,
         storage: &SharedStorage,
@@ -50,23 +54,36 @@ impl Details {
         backed_up: BackedUp,
     ) -> Self {
         let name = key.rsplit('/').next().unwrap_or_default().to_owned();
-        let storage = storage.clone();
-        let (path, copy) = (local.clone(), backed_up.clone());
-        let job = Job::spawn(ctx, move || {
-            let bytes = {
-                let mut storage = lock_storage(&storage)?;
-                details::read_backed_up(&mut storage, &slug, &copy, &path)?
-            };
-            Ok(details::details(&path, &copy, bytes.as_deref()))
-        });
-        Details {
+        let mut details = Details {
             name,
             key,
+            storage: storage.clone(),
+            slug,
             local,
             backed_up,
-            job: Some(job),
+            job: None,
             result: None,
-        }
+        };
+        details.read(ctx, Some(TEXT_CAP));
+        details
+    }
+
+    /// Starts the job that reads and compares the two copies, within `cap` bytes each.
+    fn read(&mut self, ctx: &egui::Context, cap: Option<u64>) {
+        let storage = self.storage.clone();
+        let (slug, path, copy) = (
+            self.slug.clone(),
+            self.local.clone(),
+            self.backed_up.clone(),
+        );
+        self.result = None;
+        self.job = Some(Job::spawn(ctx, move || {
+            let bytes = {
+                let mut storage = lock_storage(&storage)?;
+                details::read_backed_up(&mut storage, &slug, &copy, &path, cap)?
+            };
+            Ok(details::details(&path, &copy, bytes.as_deref(), cap))
+        }));
     }
 
     /// Takes the job's result once it is there.
@@ -79,9 +96,10 @@ impl Details {
         }
     }
 
-    /// Draws the dialog; returns whether it was closed.
-    pub(crate) fn ui(&self, ctx: &egui::Context) -> bool {
-        let mut closed = false;
+    /// Draws the dialog; returns whether it was closed. **Show anyway** reads the copies again
+    /// without the size cap.
+    pub(crate) fn ui(&mut self, ctx: &egui::Context) -> bool {
+        let (mut closed, mut anyway) = (false, false);
         theme::modal(ctx, "backup_file_details", 720.0, |ui| {
             ui.heading(&self.name);
             ui.weak(&self.key);
@@ -97,15 +115,19 @@ impl Details {
                     let text = format!("Could not read the backup: {error}");
                     theme::status(ui, icons::X_CIRCLE, color, text);
                 }
-                Some(Ok(found)) => self.found_ui(ui, found),
+                Some(Ok(found)) => self.found_ui(ui, found, &mut anyway),
             }
             theme::row_end(ui, |ui| closed |= ui.button("Close details").clicked());
         });
+        if anyway {
+            self.read(ctx, None);
+        }
         closed
     }
 
-    /// The two copies' facts, then how their content compares.
-    fn found_ui(&self, ui: &mut Ui, found: &FileDetails) {
+    /// The two copies' facts, then how their content compares; `anyway` is set when the
+    /// **Show anyway** button of a copy over the cap is clicked.
+    fn found_ui(&self, ui: &mut Ui, found: &FileDetails, anyway: &mut bool) {
         let (snapshot, backup) = (&self.backed_up.snapshot, &found.backup);
         let local = found.local.as_ref();
         let unknown = || "unknown".to_owned();
@@ -168,7 +190,7 @@ impl Details {
             }
         }
         ui.add_space(8.0);
-        content_ui(ui, found);
+        content_ui(ui, found, anyway);
     }
 }
 
@@ -192,8 +214,9 @@ fn hash_ui(ui: &mut Ui, side: &str, hash: &str, source: Option<&str>) {
     });
 }
 
-/// What the content comparison found: a sentence, or the changed lines.
-fn content_ui(ui: &mut Ui, found: &FileDetails) {
+/// What the content comparison found: a sentence, or the changed lines. `anyway` is set by the
+/// button that lifts the size cap.
+fn content_ui(ui: &mut Ui, found: &FileDetails, anyway: &mut bool) {
     match &found.content {
         Content::Same if matches!(found.backup.sha256, BackupHash::Content(_)) => {
             ui.label(
@@ -222,8 +245,11 @@ fn content_ui(ui: &mut Ui, found: &FileDetails) {
             ui.weak("Not shown: not text.");
         }
         Content::TooLarge => {
-            let text = format!("Not shown: a copy is over {}.", format_size(TEXT_CAP));
-            ui.weak(text);
+            ui.horizontal(|ui| {
+                let text = format!("Not shown: a copy is over {}.", format_size(TEXT_CAP));
+                ui.weak(text);
+                *anyway |= ui.button("Show anyway").clicked();
+            });
         }
         // This PC's copy could not be read; the facts above say why.
         _ => {}

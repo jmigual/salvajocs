@@ -35,9 +35,11 @@ reads no file content: ADR-0018 rejected downloading every compared file.
   between runs.
 - **One download, on click.** `read_backed_up` reads the one file through `Storage::read_file`
   while the job holds the repository lock, only when the backup's copy and this PC's copy are
-  both at most 1 MiB. Over that, nothing is downloaded and the dialog says no diff is shown.
-  Hashing and the diff run after the lock is released. The job only reads, so it is not counted as
-  busy, as the preview.
+  both at most 10 MiB. Over that, nothing is downloaded and the dialog says no diff is shown,
+  with a **Show anyway** button that runs the same job without the cap (the 1 s diff timeout, the
+  1000 drawn lines and the text check stay). `read_backed_up` and `details` take the cap as an
+  `Option<u64>`, `None` for no cap. Hashing and the diff run after the lock is released. The job
+  only reads, so it is not counted as busy, as the preview.
 - **Finding the file.** `Baseline::backed_up(key)` finds the backup's entry with the lookup
   `compare_game` uses (exact key, else the first case-folded one below Windows-family bases),
   now one helper. `Mapped.sources` records each re-keyed file's own snapshot key, so a mapped
@@ -55,7 +57,8 @@ reads no file content: ADR-0018 rejected downloading every compared file.
 - **A diff library written here:** a correct, fast line diff is non-trivial; `similar` has no
   dependencies.
 - **Download every changed file with the preview:** ADR-0018 rejected reading every compared file.
-- **No size cap:** a click on a large binary would download and diff it all.
+- **No size cap:** a click on a large binary would download and diff it all; hence the cap and
+  the button that lifts it for one file.
 
 ## Consequences
 
@@ -65,3 +68,6 @@ reads no file content: ADR-0018 rejected downloading every compared file.
 - The 1 s timeout makes the shown diff nondeterministic for large, very different texts; tests
   use small ones.
 - `Mapped::new` takes `sources`: a minor-version break of `salvajocs-core`.
+- Closing the dialog during a **Show anyway** read does not cancel it: the detached job goes on
+  downloading and diffing the uncapped file under the repository lock until it ends. Cancelling
+  is out of scope.

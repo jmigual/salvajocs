@@ -12,7 +12,8 @@ All notable changes to salvajocs. The format follows
   **Details** button. It shows the size, modification time and SHA-256 of this PC's copy and of
   the backup's, how many lines of each end in CRLF, in LF and in a bare CR, whether it starts with
   a byte order mark (BOM), and for a text file the lines that differ (a last line without a line
-  ending is marked), or that only the line endings, the BOM or both differ.
+  ending is marked), or that only the line endings, the BOM or both differ. A file over 10 MiB
+  shows no lines until you click **Show anyway**.
 
 ### Changed
 
