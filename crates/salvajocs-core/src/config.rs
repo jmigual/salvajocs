@@ -111,6 +111,71 @@ impl ThemeChoice {
     }
 }
 
+/// What a list of games is sorted by (ADR-0027).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SortKey {
+    /// The game's title, in byte order.
+    #[default]
+    Name,
+    /// The time of the game's last backup.
+    LastBackup,
+    /// The size of the files in the game's last backup.
+    LastBackupSize,
+    /// The space all of the game's backups use in the repository.
+    SpaceUsed,
+}
+
+impl SortKey {
+    /// Every key, in the order a sort control lists them.
+    pub const ALL: &[SortKey] = &[
+        SortKey::Name,
+        SortKey::LastBackup,
+        SortKey::LastBackupSize,
+        SortKey::SpaceUsed,
+    ];
+
+    /// The key's natural direction: names A to Z, sizes largest first, times newest first.
+    pub fn descending_by_default(self) -> bool {
+        self != SortKey::Name
+    }
+}
+
+/// How a list of games is sorted. A value this version cannot read loads as the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ListSort {
+    /// The key the list is sorted by.
+    #[serde(default)]
+    pub by: SortKey,
+    /// Whether the order is the reverse of ascending.
+    #[serde(default)]
+    pub descending: bool,
+}
+
+impl ListSort {
+    /// The sort by `by`, descending when `descending`.
+    pub fn new(by: SortKey, descending: bool) -> Self {
+        Self { by, descending }
+    }
+
+    /// Whether this is the default, name A to Z, which the config file leaves out.
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A sort that does not parse, such as a key a newer version added, reads as the default, so
+/// the rest of the config still loads.
+fn lenient_sort<'de, D>(deserializer: D) -> Result<ListSort, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 /// A kind of repository backend the picker offers (ADR-0009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
@@ -233,6 +298,20 @@ pub struct AppConfig {
     /// The color theme: the system's, or always light or dark.
     #[serde(default, skip_serializing_if = "ThemeChoice::is_system")]
     pub theme: ThemeChoice,
+    /// How the Backup tab sorts its games (ADR-0027).
+    #[serde(
+        default,
+        deserialize_with = "lenient_sort",
+        skip_serializing_if = "ListSort::is_default"
+    )]
+    pub backup_sort: ListSort,
+    /// How the Restore tab sorts its games (ADR-0027).
+    #[serde(
+        default,
+        deserialize_with = "lenient_sort",
+        skip_serializing_if = "ListSort::is_default"
+    )]
+    pub restore_sort: ListSort,
 }
 
 fn default_true() -> bool {
@@ -246,8 +325,8 @@ pub fn default_dir() -> Option<PathBuf> {
 
 impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
-    /// reads from the file: no options, roots or custom games, update checks on and the system
-    /// theme.
+    /// reads from the file: no options, roots or custom games, update checks on, the system
+    /// theme and both lists sorted by name.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -258,6 +337,8 @@ impl AppConfig {
             check_updates: default_true(),
             ignored_prefixes: Vec::new(),
             theme: ThemeChoice::System,
+            backup_sort: ListSort::default(),
+            restore_sort: ListSort::default(),
         }
     }
 

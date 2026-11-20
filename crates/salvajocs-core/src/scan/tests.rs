@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::*;
-use crate::config::{PasswordMode, ThemeChoice};
+use crate::config::{ListSort, PasswordMode, ThemeChoice};
 use crate::launcher::{Launcher, LauncherGame};
 use crate::layout::{LinuxFolders, glob_pattern};
 use crate::manifest::{CustomFile, CustomGame, Integration, parse_yaml};
@@ -33,6 +33,8 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         check_updates: true,
         ignored_prefixes: Vec::new(),
         theme: ThemeChoice::System,
+        backup_sort: ListSort::default(),
+        restore_sort: ListSort::default(),
     }
 }
 

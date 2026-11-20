@@ -37,6 +37,8 @@ fn sample() -> AppConfig {
         check_updates: false,
         ignored_prefixes: vec!["/prefixes/foo".into()],
         theme: ThemeChoice::Dark,
+        backup_sort: ListSort::default(),
+        restore_sort: ListSort::default(),
     }
 }
 
@@ -504,6 +506,63 @@ fn theme_defaults_to_system_reads_by_name_and_is_not_written_for_system() {
     assert_eq!(config.theme, ThemeChoice::Dark);
     config.save(tmp.path()).unwrap();
     assert!(fs::read_to_string(&file).unwrap().contains("theme: dark"));
+}
+
+#[test]
+fn sort_defaults_to_name_and_is_not_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    fs::write(&file, "repository: /backups\npassword: none\n").unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.backup_sort, ListSort::new(SortKey::Name, false));
+    assert_eq!(config.restore_sort, ListSort::new(SortKey::Name, false));
+
+    config.save(tmp.path()).unwrap();
+    assert!(!fs::read_to_string(&file).unwrap().contains("sort"));
+}
+
+#[test]
+fn sort_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = AppConfig::new("/backups".into(), PasswordMode::None);
+    config.backup_sort = ListSort::new(SortKey::SpaceUsed, true);
+    config.restore_sort = ListSort::new(SortKey::LastBackup, false);
+    config.save(tmp.path()).unwrap();
+
+    let yaml = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+    assert!(yaml.contains("space_used"), "{yaml}");
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn unknown_sort_value_reads_as_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\n\
+         backup_sort: { by: play_time, descending: true }\nrestore_sort: 3\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.repository, "/backups");
+    assert_eq!(config.backup_sort, ListSort::default());
+    assert_eq!(config.restore_sort, ListSort::default());
+}
+
+#[test]
+fn a_valid_sort_next_to_an_invalid_one_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\n\
+         backup_sort: { by: play_time }\n\
+         restore_sort: { by: last_backup_size, descending: true }\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.backup_sort, ListSort::default());
+    let kept = ListSort::new(SortKey::LastBackupSize, true);
+    assert_eq!(config.restore_sort, kept);
 }
 
 #[test]

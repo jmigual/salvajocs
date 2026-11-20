@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{PasswordMode, RepoOption, ThemeChoice};
+use crate::config::{ListSort, PasswordMode, RepoOption, ThemeChoice};
 
 const GAME: &str = "Game, with comma: ünï";
 
@@ -20,6 +20,8 @@ fn config(repository: &str, options: &[(&str, &str, bool)]) -> AppConfig {
         check_updates: false,
         ignored_prefixes: Vec::new(),
         theme: ThemeChoice::System,
+        backup_sort: ListSort::default(),
+        restore_sort: ListSort::default(),
     }
 }
 

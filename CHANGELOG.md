@@ -40,6 +40,8 @@ All notable changes to salvajocs. The format follows
   are (a breaking change), and refuse a key both written and kept with the new
   `RegistryError::KeptAndWritten`. `restore::RestorePlan::registry_kept` carries the kept keys
   to `restore::run`.
+- `salvajocs-core`: `config::AppConfig` has `backup_sort` and `restore_sort`, a
+  `config::ListSort` each.
 - The docs say how to reach an SFTP server from Windows: use an rclone remote of type `sftp`.
 - The restic guide lists `hashes.json`, the settings snapshots and how salvajocs removes old
   backups.

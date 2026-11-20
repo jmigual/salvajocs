@@ -1,7 +1,7 @@
 use std::fs;
 
 use super::*;
-use crate::config::{PasswordMode, ThemeChoice};
+use crate::config::{ListSort, PasswordMode, ThemeChoice};
 use crate::layout::{Root, RootKind};
 use crate::manifest::{CustomFile, RegistryRule, When};
 
@@ -66,6 +66,8 @@ fn config() -> AppConfig {
         check_updates: true,
         ignored_prefixes: Vec::new(),
         theme: ThemeChoice::System,
+        backup_sort: ListSort::default(),
+        restore_sort: ListSort::default(),
     }
 }
 

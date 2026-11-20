@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::backup::{Stored, backup_games};
-use crate::config::{AppConfig, PasswordMode, ThemeChoice};
+use crate::config::{AppConfig, ListSort, PasswordMode, ThemeChoice};
 use crate::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use crate::layout::{
     GameVars, LinuxFolders, PrefixOrigin, Root, RootKind, SnapshotMeta, WinFolders,
@@ -2402,6 +2402,8 @@ fn config(roots: Vec<Root>) -> AppConfig {
         check_updates: true,
         ignored_prefixes: Vec::new(),
         theme: ThemeChoice::System,
+        backup_sort: ListSort::default(),
+        restore_sort: ListSort::default(),
     }
 }
 
