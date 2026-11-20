@@ -232,6 +232,12 @@ impl Updater {
         self.ready = Some(appimage);
     }
 
+    /// Makes `appimage` replaced by the new release, so **Restart now** is offered.
+    pub(crate) fn set_replaced(&mut self, appimage: PathBuf) {
+        self.appimage = Some(appimage);
+        self.replaced = true;
+    }
+
     /// Offers `release` as if the check found it.
     pub(crate) fn offer(&mut self, release: Release, installed: bool) {
         self.release = Some(release);

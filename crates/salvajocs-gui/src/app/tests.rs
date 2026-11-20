@@ -235,11 +235,13 @@ fn the_backup_tab_finishes_its_jobs_while_another_tab_is_shown() {
     });
 }
 
-/// Checks the bars of an app in the smallest window, after `setup` changed its updater: the
-/// window buttons stay where they are without an update, and no text of the bottom bar overlaps
-/// another or leaves the window. `setup` may return what keeps its update state alive.
+/// Checks the bars of an app in the smallest window, after a scan put **Back up** in the bottom
+/// bar and `setup` changed the app: the window buttons stay where they are without an update, the
+/// bottom bar shows every item of `shown`, and none of its items overlaps another or leaves the
+/// bar's margins. `setup` may return what keeps its state alive.
 fn assert_bar_fits_after(
-    setup: impl FnOnce(&mut Updater, &egui::Context) -> Option<std::sync::mpsc::Sender<()>>,
+    shown: &[&str],
+    setup: impl FnOnce(&mut App, &egui::Context) -> Option<std::sync::mpsc::Sender<()>>,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let [width, height] = crate::MIN_WINDOW_SIZE;
@@ -260,9 +262,15 @@ fn assert_bar_fits_after(
         ["Minimize", "Maximize", "Close"].map(|label| harness.get_by_label(label).rect())
     };
     let resting = buttons(&harness);
+    // An update ready while no job runs installs; this keeps it off the count other tests check.
+    harness.state_mut().state.env.run_installer = |_| Ok(());
+    harness.get_by_label("Scan for games").click();
+    step_until(&mut harness, "the scan", |app| {
+        app.backup.has_bar(&app.state) && !app.busy()
+    });
 
     let ctx = harness.ctx.clone();
-    let _held = setup(&mut harness.state_mut().updater, &ctx);
+    let _held = setup(harness.state_mut(), &ctx);
     for _ in 0..3 {
         harness.step();
     }
@@ -272,7 +280,11 @@ fn assert_bar_fits_after(
         "Update available",
         "Downloading",
         "Update ready",
+        "Restart now",
+        "Restarts",
+        "Backed up",
         "Manifest",
+        "Back up",
     ]
     .into_iter()
     .flat_map(|label| {
@@ -282,14 +294,19 @@ fn assert_bar_fits_after(
             .collect::<Vec<_>>()
     })
     .collect();
-    assert!(
-        items.iter().any(|(label, _)| *label == "Update available"),
-        "the notice is shown"
-    );
+    for label in ["Update available", "Back up"].iter().chain(shown) {
+        assert!(
+            items.iter().any(|(item, _)| item == label),
+            "{label} is shown"
+        );
+    }
     for (label, rect) in &items {
         assert!(
-            window.contains_rect(*rect) && rect.top() > window.center().y,
-            "{label} is in the bottom bar: {rect:?}"
+            rect.left() >= window.left() + 16.0
+                && rect.right() <= window.right() - 16.0
+                && rect.bottom() <= window.bottom()
+                && rect.top() > window.center().y,
+            "{label} is in the bottom bar's margins: {rect:?}"
         );
     }
     items.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
@@ -313,18 +330,37 @@ fn release() -> Release {
 
 #[test]
 fn the_bar_fits_while_an_update_downloads() {
-    assert_bar_fits_after(|updater, ctx| {
-        updater.offer(release(), true);
-        Some(updater.hold_download(ctx))
+    assert_bar_fits_after(&["Downloading"], |app, ctx| {
+        app.updater.offer(release(), true);
+        Some(app.updater.hold_download(ctx))
     });
 }
 
 #[test]
 fn the_bar_fits_while_a_downloaded_update_waits() {
-    assert_bar_fits_after(|updater, _| {
-        updater.offer(release(), true);
-        updater.set_ready(PathBuf::from("setup.exe"));
+    assert_bar_fits_after(&[], |app, _| {
+        app.updater.offer(release(), true);
+        app.updater.set_ready(PathBuf::from("setup.exe"));
         None
+    });
+}
+
+#[test]
+fn the_bar_fits_with_restart_now() {
+    assert_bar_fits_after(&["Restart now"], |app, _| {
+        app.updater.offer(release(), true);
+        app.updater
+            .set_replaced(PathBuf::from("salvajocs.AppImage"));
+        None
+    });
+}
+
+#[test]
+fn a_running_backup_keeps_its_progress_beside_a_waiting_update() {
+    assert_bar_fits_after(&["Backed up", "Update ready"], |app, ctx| {
+        app.updater.offer(release(), true);
+        app.updater.set_ready(PathBuf::from("setup.exe"));
+        Some(app.backup.hold_backup(ctx))
     });
 }
 

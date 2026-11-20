@@ -138,6 +138,10 @@ it after that backup. The checkboxes stay greyed out until the repository is ope
 are loaded from it. If a game's choices cannot be read, for example because a newer salvajocs
 wrote them, the tab says so and backs up all of that game.
 
+After a scan, the bar along the bottom of the window shows the repository, with a lock that says
+whether it is encrypted, and **Back up N games** at its right end. During a backup the bar shows
+its progress in place of the repository.
+
 Click **Back up N games**. The tab saves your changed choices to the repository and reads every
 game's choices again, so a choice another machine saved since counts. It then scans again, so a
 save written since the last scan is included, backs up the games one by one, then removes old

@@ -489,6 +489,16 @@ fn is_disabled(harness: &Harness<'_, (BackupTab, State)>, label: &str) -> bool {
     harness.get_by_label(label).accesskit_node().is_disabled()
 }
 
+/// Draws the tab and its part of the bottom bar, as the app does.
+fn with_bar(ui: &mut Ui, tab: &mut BackupTab, state: &mut State, manifest_loading: bool) {
+    let has_bar = tab.has_bar(state);
+    let bar = status_bar::reserve(ui, has_bar);
+    tab.ui(ui, state, manifest_loading);
+    if has_bar {
+        tab.bar_ui(ui, bar, state, manifest_loading, |_| {}, |_| {});
+    }
+}
+
 /// A tab listing a game of one file for each of `titles`.
 fn listing(titles: &[&str]) -> BackupTab {
     let mut tab = BackupTab::default();
@@ -522,7 +532,7 @@ fn settle(harness: &mut Harness<'_, (BackupTab, State)>) {
 fn scan_and_backup_wait_while_a_backup_runs() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
-        |ui, (tab, state)| tab.ui(ui, state, false),
+        |ui, (tab, state)| with_bar(ui, tab, state, false),
         (listing(&["Game"]), state(dir.path())),
     );
     settle(&mut harness);
@@ -602,7 +612,7 @@ fn a_running_scan_shows_a_bar_of_the_games_checked() {
 fn a_backup_shows_the_games_its_scan_checked() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
-        |ui, (tab, state)| tab.ui(ui, state, false),
+        |ui, (tab, state)| with_bar(ui, tab, state, false),
         (listing(&["Game"]), state(dir.path())),
     );
     settle(&mut harness);
@@ -624,7 +634,7 @@ fn a_backup_shows_the_games_its_scan_checked() {
 fn before_a_scan_the_only_action_is_one_enabled_scan() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
-        |ui, (tab, state)| tab.ui(ui, state, false),
+        |ui, (tab, state)| with_bar(ui, tab, state, false),
         (BackupTab::default(), state(dir.path())),
     );
     harness.step();
@@ -732,9 +742,9 @@ fn choices_wait_for_the_repository_to_open() {
     assert!(!is_disabled(&harness, "Deselect all"));
 }
 
-/// The save bar marks the repository encrypted exactly when it has a password.
+/// The bottom bar marks the repository encrypted exactly when it has a password.
 #[test]
-fn the_save_bar_says_whether_the_repository_is_encrypted() {
+fn the_bottom_bar_says_whether_the_repository_is_encrypted() {
     for (password, shown, hidden) in [
         (PasswordMode::None, "Not encrypted", "Encrypted"),
         (PasswordMode::Keyring, "Encrypted", "Not encrypted"),
@@ -747,7 +757,10 @@ fn the_save_bar_says_whether_the_repository_is_encrypted() {
         let dir = tempfile::tempdir().unwrap();
         let mut state = state(dir.path());
         state.config.as_mut().unwrap().password = password;
-        let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
+        let mut harness = theme::harness(
+            |ui, (tab, state)| with_bar(ui, tab, state, false),
+            (tab, state),
+        );
         harness.step();
         assert!(harness.query_by_label(shown).is_some(), "{password:?}");
         assert!(harness.query_by_label(hidden).is_none(), "{password:?}");
@@ -758,7 +771,7 @@ fn the_save_bar_says_whether_the_repository_is_encrypted() {
 fn back_up_waits_while_what_to_back_up_loads() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
-        |ui, (tab, state)| tab.ui(ui, state, false),
+        |ui, (tab, state)| with_bar(ui, tab, state, false),
         (listing(&["Game"]), state(dir.path())),
     );
     settle(&mut harness);
@@ -779,7 +792,7 @@ fn back_up_waits_while_what_to_back_up_loads() {
 fn back_up_clicked_during_a_pending_write_starts_after_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
-        |ui, (tab, state)| tab.ui(ui, state, false),
+        |ui, (tab, state)| with_bar(ui, tab, state, false),
         (listing(&["Game"]), state(dir.path())),
     );
     settle(&mut harness);

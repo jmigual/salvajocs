@@ -1,5 +1,6 @@
 //! The bars the app draws: the title bar in place of the OS one, with the window buttons, moving
-//! and resizing, and the bottom bar with the manifest status and the update notice.
+//! and resizing, and the bottom bar with the manifest status and the update notice, and on the
+//! Backup tab the repository and the backup button.
 
 mod common;
 
@@ -554,7 +555,13 @@ fn top_bar_labels() -> impl Iterator<Item = &'static str> {
 }
 
 /// The labels of the bottom bar's items.
-const BOTTOM_BAR: [&str; 4] = ["Update available", "Update now", "Release page", "Manifest"];
+const BOTTOM_BAR: [&str; 5] = [
+    "Update available",
+    "Update now",
+    "Release page",
+    "Manifest",
+    "Back up",
+];
 
 /// Checks that `items`, on one row, do not overlap.
 fn assert_apart(mut items: Vec<(&'static str, Rect)>) {
@@ -685,4 +692,115 @@ fn dropped_notice_stays_the_label_of_the_release_page_link() {
         "the notice's text is dropped"
     );
     harness.get_by_label("Release page, Update available: v99.0.0");
+}
+
+/// Like [`ready_with_update`] for an installed app, after a scan that found no games, so the
+/// Backup tab adds the repository and **Back up 0 games** to the bottom bar.
+fn scanned_with_update(size: Vec2) -> (tempfile::TempDir, Harness<'static, App>) {
+    let (tmp, mut harness) = ready_with_update(size, true);
+    harness.get_by_label("Scan for games").click();
+    run_until(&mut harness, "the scan", |h| shows(h, "0 games found"));
+    common::run_settled(&mut harness);
+    (tmp, harness)
+}
+
+#[test]
+fn the_backup_tab_has_one_bottom_bar_with_the_repository_and_back_up() {
+    let (tmp, mut harness) = scanned_with_update(Vec2::new(1000.0, 1400.0));
+    let window = harness.ctx.viewport_rect();
+    let repository = repo_dir(&tmp);
+    let row = [
+        "Manifest",
+        &repository,
+        "Update available",
+        "Update now",
+        "Back up 0 games",
+    ];
+    let rects: Vec<Rect> = (row.iter())
+        .map(|label| harness.get_by_label_contains(label).rect())
+        .collect();
+    let back_up = rects[4];
+    for (label, rect) in row.iter().zip(&rects) {
+        assert!(
+            (rect.center().y - back_up.center().y).abs() < 1.0,
+            "{label} is on the row of Back up: {rect:?}"
+        );
+    }
+    for (pair, labels) in rects.windows(2).zip(row.windows(2)) {
+        assert!(
+            pair[0].right() <= pair[1].left(),
+            "{} is left of {}",
+            labels[0],
+            labels[1]
+        );
+    }
+    assert!(back_up.right() <= window.right() - 16.0 && back_up.bottom() <= window.bottom());
+    assert_eq!(harness.query_all_by_label_contains("Back up").count(), 1);
+    let order: Vec<String> = harness
+        .query_all_by(|node| node.label().is_some())
+        .filter_map(|node| node.accesskit_node().label())
+        .collect();
+    let at = |label: &str| order.iter().position(|l| l.contains(label)).unwrap();
+    assert!(
+        at("Scan for games") < at("Back up 0 games"),
+        "the page comes first: {order:?}"
+    );
+
+    let backup_gap = window.bottom() - back_up.center().y;
+    harness.state_mut().set_tab(Tab::Restore);
+    common::run_settled(&mut harness);
+    assert!(harness.query_by_label_contains("Back up").is_none());
+    let manifest = harness.get_by_label_contains("Manifest").rect();
+    assert!(
+        window.bottom() - manifest.center().y < backup_gap,
+        "the other tabs' bar is thinner: {manifest:?}"
+    );
+}
+
+#[test]
+fn the_bottom_bar_changes_height_without_a_frame_out_of_place() {
+    let (_tmp, mut harness) = scanned_with_update(Vec2::new(1000.0, 1400.0));
+    let manifest = |h: &Harness<'static, App>| h.get_by_label_contains("Manifest").rect();
+    for tab in [Tab::Restore, Tab::Backup] {
+        harness.state_mut().set_tab(tab);
+        harness.step();
+        let first = manifest(&harness);
+        common::run_settled(&mut harness);
+        assert_eq!(first, manifest(&harness), "on the first frame of {tab:?}");
+    }
+}
+
+#[test]
+fn back_up_stays_in_a_narrow_bottom_bar() {
+    let (_wide_tmp, wide) = scanned_with_update(Vec2::new(1400.0, 480.0));
+    let width = |h: &Harness<'static, App>, label| {
+        (h.query_by_label_contains(label)).map_or(0.0, |node| node.rect().width())
+    };
+    // The smallest window, and narrower, as a zoomed UI or a large text scale makes it in effect;
+    // a bar narrower than its two buttons cannot hold them.
+    let (_tmp, smallest) = scanned_with_update(Vec2::new(MIN_WINDOW_SIZE[0], 480.0));
+    let (_narrow_tmp, narrow) = scanned_with_update(Vec2::new(400.0, 480.0));
+    for harness in [&smallest, &narrow] {
+        assert_bottom_bar_fits(harness);
+        assert_eq!(
+            width(harness, "Back up 0 games"),
+            width(&wide, "Back up 0 games"),
+            "Back up keeps its width"
+        );
+    }
+    assert!(
+        width(&narrow, "Update available") < width(&wide, "Update available"),
+        "the notice gives way"
+    );
+
+    // Without an update the button fits a bar narrower than the window can be.
+    let (_bare_tmp, mut bare) = ready_sized(Vec2::new(300.0, 480.0));
+    bare.get_by_label("Scan for games").click();
+    run_until(&mut bare, "the scan", |h| shows(h, "0 games found"));
+    common::run_settled(&mut bare);
+    assert_bottom_bar_fits(&bare);
+    assert_eq!(
+        width(&bare, "Back up 0 games"),
+        width(&wide, "Back up 0 games")
+    );
 }

@@ -20,7 +20,8 @@ All notable changes to salvajocs. The format follows
 - On the Backup tab, a file shown as changed by modified time only, because its backup has no
   list of hashes (made by 0.5.0 or older), says so in its tooltip.
 - The manifest status and the update notice moved from the top bar to a thinner bar along the
-  bottom of the window.
+  bottom of the window. On the Backup tab this bar also holds the repository and **Back up N
+  games**, in place of the tab's own bar.
 - When a game's newest backup is from the other build (native Linux or Windows), the Backup tab
   matches its folders to this machine's as a restore would and compares the files in their
   matched places, instead of showing every file as removed and new. Folders with no known place

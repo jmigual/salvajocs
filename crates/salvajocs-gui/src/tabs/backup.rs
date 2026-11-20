@@ -27,6 +27,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::status_bar;
 use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row};
 use crate::tabs::{count, format_size, format_time};
@@ -711,11 +712,6 @@ impl BackupTab {
     /// `manifest_loading` is whether the manifest job is still running.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State, manifest_loading: bool) {
         self.poll(ui.ctx(), state);
-        // Before the page, so the bar takes its height from the bottom first. It waits for a scan
-        // report, so the empty state has one call to action.
-        if state.config.is_some() && self.report.is_some() {
-            self.save_bar_ui(ui, state, manifest_loading);
-        }
         theme::page(ui, |ui| {
             if state.config.is_none() {
                 ui.label("Choose a repository first.");
@@ -1162,37 +1158,24 @@ impl BackupTab {
         }
     }
 
-    /// The bar along the bottom: where backups go and the backup button, or while a backup runs,
-    /// the autosave mark and its progress.
-    fn save_bar_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
-        let visuals = ui.visuals();
-        let frame = egui::Frame::new()
-            .fill(visuals.window_fill)
-            .inner_margin(egui::Margin::symmetric(0, 12));
-        let bar = egui::Panel::bottom("save_bar")
-            .frame(frame)
-            .resizable(false)
-            .show(ui, |ui| {
-                theme::column(ui, |ui| self.save_bar_contents(ui, state, manifest_loading));
-            });
-        let progress = lock(&self.progress);
-        let (checked, games) = *lock(&self.checked);
-        // While the backup's scan runs, the rule shows the scan.
-        let (done, total) = if checked < games {
-            (checked, games)
-        } else {
-            (progress.done.len(), progress.total)
-        };
-        if self.running.is_some() && total > 0 {
-            let done = done as f32 / total as f32;
-            let rect = bar.response.rect;
-            let rule = Rect::from_min_size(rect.left_top(), Vec2::new(rect.width() * done, 3.0));
-            ui.painter()
-                .rect_filled(rule, 0.0, theme::palette(ui).accent);
-        }
+    /// Whether the tab adds the repository and the backup button to the bottom bar. It waits for
+    /// a scan report, so the empty state has one call to action.
+    pub(crate) fn has_bar(&self, state: &State) -> bool {
+        state.config.is_some() && self.report.is_some()
     }
 
-    fn save_bar_contents(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool) {
+    /// Draws the bottom bar in `bar`, the room [`status_bar::reserve`] took, with the app's
+    /// `start` and `end`: then where backups go, or while a backup runs its progress, on the left,
+    /// and the backup button last on the right. Call it after the page, when [`Self::has_bar`].
+    pub(crate) fn bar_ui(
+        &mut self,
+        ui: &mut Ui,
+        bar: Rect,
+        state: &State,
+        manifest_loading: bool,
+        start: impl FnOnce(&mut Ui),
+        mut end: impl FnMut(&mut Ui),
+    ) {
         let selected = self.chosen();
         // A pending file write does not hold the button back: the click waits for it.
         let ready = state.session.is_some()
@@ -1203,14 +1186,52 @@ impl BackupTab {
             && self.running.is_none()
             && !self.backup_requested;
         let label = format!("Back up {}", count(selected, "game"));
-        let back_up = theme::row(
+        let button = |ui: &mut Ui| theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label);
+        let back_up = status_bar::show(
             ui,
-            |ui| self.save_bar_status(ui, state),
-            |ui| theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label),
+            bar,
+            |ui| {
+                let status =
+                    |ui: &mut Ui| status_bar::status_text(ui, |ui| self.bar_status(ui, state));
+                // A running backup's progress goes first, so the manifest status gives way to it.
+                if self.running.is_some() {
+                    status(ui);
+                    start(ui);
+                } else {
+                    start(ui);
+                    status(ui);
+                }
+            },
+            |ui| {
+                // `end` gets what the button leaves, so its text gives way and the button stays.
+                let width = theme::natural_width(ui, |ui| {
+                    button(ui);
+                });
+                let room = ui.available_width() - width - ui.spacing().item_spacing.x;
+                ui.scope(|ui| {
+                    ui.set_max_width(room.max(0.0));
+                    end(ui);
+                });
+                button(ui)
+            },
         );
         if back_up.clicked() {
             self.backup_requested = true;
             self.start_requested(ui.ctx(), state);
+        }
+        let progress = lock(&self.progress);
+        let (checked, games) = *lock(&self.checked);
+        // While the backup's scan runs, the rule shows the scan.
+        let (done, total) = if checked < games {
+            (checked, games)
+        } else {
+            (progress.done.len(), progress.total)
+        };
+        if self.running.is_some() && total > 0 {
+            let done = done as f32 / total as f32;
+            let rule = Rect::from_min_size(bar.left_top(), Vec2::new(bar.width() * done, 3.0));
+            ui.painter()
+                .rect_filled(rule, 0.0, theme::palette(ui).accent);
         }
     }
 
@@ -1223,9 +1244,9 @@ impl BackupTab {
         }
     }
 
-    /// The left of the save bar: the repository and whether it is encrypted, or the running
-    /// backup's progress.
-    fn save_bar_status(&self, ui: &mut Ui, state: &State) {
+    /// The tab's part of the bottom bar's left: the repository and whether it is encrypted, or the
+    /// running backup's progress.
+    fn bar_status(&self, ui: &mut Ui, state: &State) {
         let muted = ui.visuals().weak_text_color();
         if self.running.is_some() {
             autosave_mark(ui);

@@ -473,7 +473,9 @@ impl eframe::App for App {
             self.status_ui(ui);
         });
 
-        let status_row = status_bar::reserve(ui);
+        // Decided once a frame: the tab's poll may bring a scan report before the bar is drawn.
+        let backup_bar = self.tab == Tab::Backup && self.backup.has_bar(&self.state);
+        let bottom = status_bar::reserve(ui, backup_bar);
 
         // No margin: the tabs center their own column, and side and bottom bars reach the edges.
         let adopted = egui::CentralPanel::default()
@@ -504,26 +506,27 @@ impl eframe::App for App {
         // The dialog of these stages covers the bar, so it shows the notice instead.
         let dialog_open = matches!(self.stage, Stage::FirstRun(_) | Stage::Prompt(_));
         let (updater, state, loading) = (&mut self.updater, &self.state, self.manifest.is_some());
-        status_bar::show(
-            ui,
-            status_row,
-            |ui| {
-                status_bar::status_text(ui, |ui| {
-                    match (&state.manifest, loading) {
-                        (Some(manifest), _) => {
-                            ui.weak(format!("Manifest: {} games", manifest.games.len()))
-                        }
-                        (None, true) => ui.weak("Manifest: loading"),
-                        (None, false) => ui.weak("Manifest: not available"),
-                    };
-                });
-            },
-            |ui| {
-                if !dialog_open {
-                    updater.ui(ui, state);
-                }
-            },
-        );
+        let start = |ui: &mut Ui| {
+            status_bar::status_text(ui, |ui| {
+                match (&state.manifest, loading) {
+                    (Some(manifest), _) => {
+                        ui.weak(format!("Manifest: {} games", manifest.games.len()))
+                    }
+                    (None, true) => ui.weak("Manifest: loading"),
+                    (None, false) => ui.weak("Manifest: not available"),
+                };
+            });
+        };
+        let end = |ui: &mut Ui| {
+            if !dialog_open {
+                updater.ui(ui, state);
+            }
+        };
+        if backup_bar {
+            self.backup.bar_ui(ui, bottom, state, loading, start, end);
+        } else {
+            status_bar::show(ui, bottom, start, end);
+        }
         self.advance(ui);
         // After the tabs, so a job their input just started counts for a close in the same frame.
         self.guard_close(&ctx);
