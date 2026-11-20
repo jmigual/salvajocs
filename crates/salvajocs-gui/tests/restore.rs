@@ -10,8 +10,9 @@ use common::{
     env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
     run_until, run_until_ready, save_config, shows,
 };
-use eframe::egui::Key;
 use eframe::egui::accesskit::{Role, Toggled};
+use eframe::egui::epaint::Shape;
+use eframe::egui::{Key, Pos2, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
@@ -319,6 +320,106 @@ fn restore_preview_lists_writes_and_skips() {
     ));
     assert!(!shows(&harness, "Cross-build restore"));
     assert!(!shows(&harness, "Where should the saves"));
+}
+
+/// The rect of the text drawn for `text` in the last frame and whether it was elided to "…".
+fn drawn_text(harness: &Harness<'static, App>, text: &str) -> Option<(Rect, bool)> {
+    fn find(shape: &Shape, text: &str) -> Option<(Rect, bool)> {
+        match shape {
+            Shape::Text(drawn) if drawn.galley.text() == text => {
+                Some((drawn.visual_bounding_rect(), drawn.galley.elided))
+            }
+            Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, text)),
+            _ => None,
+        }
+    }
+    (harness.output().shapes.iter()).find_map(|clipped| find(&clipped.shape, text))
+}
+
+const LONG_TITLE: &str = "Librarian: Tidy Up the Archive and More";
+
+/// The Restore tab listing [`LONG_TITLE`] and Terraria.
+fn long_title(tmp: &TempDir) -> Harness<'static, App> {
+    let games = [LONG_TITLE, "Terraria"].map(|title| {
+        let tail = format!("{title}/save.dat");
+        scan(
+            tmp,
+            title,
+            &[(Base::WinAppData, &tail)],
+            &[(Base::WinAppData, title)],
+        )
+    });
+    let (mut harness, _env) = open_tab(tmp, Vec::new(), &games);
+    run_settled(&mut harness);
+    harness
+}
+
+#[test]
+fn restore_sidebar_truncates_a_long_title_after_its_checkbox() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = long_title(&tmp);
+
+    let sidebar = harness.get_by_label("Load backups").rect();
+    let checkbox = harness
+        .get_by_label(&format!("Include {LONG_TITLE}"))
+        .rect();
+    let row = harness.get_by_label(LONG_TITLE).rect();
+    assert!(
+        row.left() >= checkbox.right(),
+        "the title starts after its checkbox"
+    );
+    assert!(
+        row.right() <= sidebar.right() + 0.5,
+        "the row stays in the sidebar"
+    );
+    let (long, elided) = drawn_text(&harness, LONG_TITLE).expect("the title is drawn");
+    assert!(elided, "the long title is cut short");
+    assert!(
+        long.right() <= sidebar.right(),
+        "the text stays in the sidebar"
+    );
+    let (short, elided) = drawn_text(&harness, "Terraria").expect("the short title is drawn");
+    assert!(!elided);
+    let gap = short.left() - harness.get_by_label("Terraria").rect().left();
+    assert!(gap < 16.0, "a short title is left-aligned: {gap}");
+    assert!(
+        (long.left() - row.left() - gap).abs() < 2.0,
+        "the long and the short title start at the same offset"
+    );
+
+    harness.get_by_label(LONG_TITLE).hover();
+    run_until(&mut harness, "the full title on hover", |h| {
+        h.query_all_by_label(LONG_TITLE).count() > 1
+    });
+}
+
+#[test]
+fn restore_sidebar_widens_by_dragging_its_edge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = long_title(&tmp);
+
+    let before = harness.get_by_label("Load backups").rect();
+    // The panel's edge lies past the sidebar's 12 px inner margin.
+    let edge = Pos2::new(before.right() + 12.0, before.center().y + 200.0);
+    let target = edge + Vec2::new(900.0, 0.0);
+    harness.hover_at(edge);
+    harness.step();
+    harness.drag_at(edge);
+    harness.step();
+    harness.hover_at(target);
+    harness.step();
+    harness.drop_at(target);
+    run_settled(&mut harness);
+
+    let after = harness.get_by_label("Load backups").rect();
+    assert!(after.width() > before.width() + 100.0, "the sidebar widens");
+    // Dragged far past the cap, the sidebar leaves the plan its 600 px of the 1000 px window.
+    assert!(
+        after.right() + 12.0 <= 1000.0 - 600.0,
+        "the sidebar stops at its cap"
+    );
+    let (_, elided) = drawn_text(&harness, LONG_TITLE).expect("the title is drawn");
+    assert!(!elided, "the whole title shows in the wider sidebar");
 }
 
 #[test]

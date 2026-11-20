@@ -34,6 +34,12 @@ mod batch;
 
 use batch::Batch;
 
+/// The width of the games sidebar at rest, and the least it can be dragged to.
+const SIDEBAR_WIDTH: f32 = 240.0;
+
+/// The width the plan beside the games sidebar keeps, which the sidebar cannot be dragged into.
+const PLAN_WIDTH: f32 = 600.0;
+
 /// A UTC time as `YYYY-MM-DD HH:MM UTC`.
 fn format_time(time: SystemTime) -> String {
     let secs = time
@@ -387,9 +393,12 @@ impl RestoreTab {
             });
         } else {
             let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(12);
+            // The sidebar never takes the room the plan's rows need.
+            let widest = (ui.available_width() - PLAN_WIDTH).max(SIDEBAR_WIDTH);
             egui::Panel::left("restore_games")
-                .exact_size(240.0)
-                .resizable(false)
+                .default_size(SIDEBAR_WIDTH)
+                .size_range(SIDEBAR_WIDTH..=widest)
+                .resizable(true)
                 .frame(frame)
                 .show(ui, |ui| {
                     ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state));
@@ -702,16 +711,24 @@ impl RestoreTab {
         self.select_all_ui(ui);
         let mut chosen = None;
         theme::group(ui, |ui| {
-            theme::pill_list(ui);
             for game in &self.games {
                 ui.horizontal(|ui| {
                     batch::include_ui(ui, &mut self.checked, game);
                     let selected = self.selected.as_ref() == Some(&game.slug);
-                    let row = egui::Button::selectable(selected, &game.title)
-                        .min_size(Vec2::new(ui.available_width(), 0.0));
-                    if ui.add(row).clicked() && !selected {
-                        chosen = Some(game.clone());
-                    }
+                    // The pill list drops the outline of the buttons, which the checkbox keeps.
+                    ui.scope(|ui| {
+                        theme::pill_list(ui);
+                        // The grow atom left-aligns the title in the row, which the title
+                        // truncates to.
+                        let title = (game.title.as_str(), egui::Atom::grow());
+                        let row = egui::Button::selectable(selected, title)
+                            .truncate()
+                            .min_size(Vec2::new(ui.available_width(), 0.0));
+                        let row = ui.add(row).on_hover_text(&game.title);
+                        if row.clicked() && !selected {
+                            chosen = Some(game.clone());
+                        }
+                    });
                 });
             }
         });

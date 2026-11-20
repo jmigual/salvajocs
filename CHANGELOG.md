@@ -13,6 +13,7 @@ All notable changes to salvajocs. The format follows
 - On the Backup tab, a game whose newest backup is from the other build and has folders without
   a known place here shows **Choose folders…**. It opens the restore's mapping dialog; the
   choices are saved with the game as after a restore, and the game is compared again.
+- The list of games on the Restore tab can be widened by dragging its right edge.
 
 ### Changed
 
@@ -29,6 +30,12 @@ All notable changes to salvajocs. The format follows
   `same_as_newest: bool`; `None` turns the skip against the newest backup off, as `false` did.
   `changes::baseline` is replaced by `changes::Mapper::baseline`, which returns a
   `changes::Baseline`.
+
+### Fixed
+
+- In the list of games on the Restore tab, game names are left-aligned next to their checkbox
+  and cut with "…" when they do not fit, instead of centered and running past the edge, and
+  the checkboxes show their outline.
 
 ## [0.6.0] - 2026-11-19
 

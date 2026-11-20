@@ -115,7 +115,8 @@ Proton game and try again. Nothing is written in that case.
 To restore more than one game in one go:
 
 1. Tick the checkbox before each game in the list, or click **Select all**. A game whose only
-   backups are `pre-restore` ones cannot be ticked.
+   backups are `pre-restore` ones cannot be ticked. Drag the right edge of the list to widen it;
+   a name that is cut off shows in full when you hover it.
 2. Click **Restore N games**. Each ticked game uses its newest backup that is not a `pre-restore`
    one, and the targets salvajocs fills in for it (see "Targets"). To choose another snapshot or
    target, or to override a file, restore that game on its own.
