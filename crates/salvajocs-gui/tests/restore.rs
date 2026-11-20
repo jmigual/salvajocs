@@ -66,7 +66,9 @@ fn scan(tmp: &TempDir, title: &str, files: &[(Base, &str)], roots: &[(Base, &str
     let files = files
         .iter()
         .map(|&(base, tail)| {
-            let real = tmp.path().join("src").join(title).join(tail);
+            // Real titles hold characters Windows refuses in a folder name, such as ':'.
+            let folder: String = title.chars().filter(|c| c.is_alphanumeric()).collect();
+            let real = tmp.path().join("src").join(folder).join(tail);
             fs::create_dir_all(real.parent().unwrap()).unwrap();
             fs::write(&real, tail).unwrap();
             let modified = fs::metadata(&real).unwrap().modified().ok();
