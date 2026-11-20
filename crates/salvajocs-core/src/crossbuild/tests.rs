@@ -22,6 +22,7 @@ fn meta(roots: Vec<SnapshotRoot>) -> SnapshotMeta {
         format: layout::SNAPSHOT_FORMAT,
         title: "Game".into(),
         roots,
+        prefix: None,
     }
 }
 

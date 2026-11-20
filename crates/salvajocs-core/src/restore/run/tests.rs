@@ -132,6 +132,7 @@ fn crafted_stage(stage: PathBuf) -> PathBuf {
         format: crate::layout::SNAPSHOT_FORMAT,
         title: "Foo".into(),
         roots: vec![],
+        prefix: None,
     };
     write(
         &stage.join(META_FILE),
@@ -198,6 +199,7 @@ fn crafted_game_stage(stage: PathBuf) -> PathBuf {
         format: crate::layout::SNAPSHOT_FORMAT,
         title: "Foo".into(),
         roots: vec![(Base::WinAppData, "Game".into())],
+        prefix: None,
     };
     write(
         &stage.join(META_FILE),
@@ -724,6 +726,7 @@ fn a_saved_pair_wins_a_tie_with_a_row_pair() {
             format: layout::SNAPSHOT_FORMAT,
             title: "Foo".into(),
             roots: vec![(Base::XdgData, "Foo".into())],
+            prefix: None,
         },
         files: vec![(Base::XdgData, "Foo/a.sav".into())],
         registry: None,

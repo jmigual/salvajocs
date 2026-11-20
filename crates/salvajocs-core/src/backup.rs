@@ -139,6 +139,7 @@ pub fn stage(
         format: SNAPSHOT_FORMAT,
         title: game.title.clone(),
         roots,
+        prefix: None,
     };
     write_if_changed(&meta_file, &json(&meta))?;
     let registry_file = stage_dir.join(REGISTRY_FILE);

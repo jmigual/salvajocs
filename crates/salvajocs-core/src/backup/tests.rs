@@ -125,6 +125,7 @@ fn stage_layout() {
             format: SNAPSHOT_FORMAT,
             title: scan.title.clone(),
             roots: scan.roots.clone(),
+            prefix: None,
         }
     );
     let staged_registry: RegistryExport =

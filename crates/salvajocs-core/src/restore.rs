@@ -459,6 +459,7 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
         format: layout::SNAPSHOT_FORMAT,
         title: String::new(),
         roots: declared.iter().map(|d| d.prefix.clone()).collect(),
+        prefix: None,
     };
     for family in [Family::Linux, Family::Windows] {
         let engine = crossbuild::propose(&meta, None, &[], &[], family)

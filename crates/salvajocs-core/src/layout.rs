@@ -639,6 +639,24 @@ pub fn target_path(base_dir: &Path, tail: &str, case_insensitive: bool) -> Optio
     Some(path)
 }
 
+/// Which Wine prefix a game's saves came from, described without any path of the machine, so
+/// another machine can find its own copy (ADR-0023).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum PrefixOrigin {
+    /// Proton's `steamapps/compatdata/<id>/pfx` of a Steam library, by app id.
+    Proton(u32),
+    /// A Heroic prefix, by the app name of `GamesConfig/<app>.json`.
+    Heroic(String),
+    /// A Lutris prefix, by the game slug.
+    Lutris(String),
+    /// A Bottles bottle, by its directory name in `bottles/bottles`.
+    Bottles(String),
+    /// A prefix below the home folder, as `<home>/<rest>`, `/`-separated.
+    Home(String),
+}
+
 /// The `salvajocs.json` of a staged game (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -649,17 +667,36 @@ pub struct SnapshotMeta {
     pub title: String,
     /// The glob-free prefix of each template that produced files, as `(base, rest)`.
     pub roots: Vec<(Base, String)>,
+    /// The prefix the Windows-folder files came from; `None` when not from a prefix, or when it
+    /// is a kind this version does not know (ADR-0023).
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prefix: Option<PrefixOrigin>,
 }
 
 impl SnapshotMeta {
-    /// The meta of format `format` for `title` with its `roots`.
+    /// The meta of format `format` for `title` with its `roots`, without a prefix.
     pub fn new(format: u32, title: String, roots: Vec<(Base, String)>) -> Self {
         Self {
             format,
             title,
             roots,
+            prefix: None,
         }
     }
+}
+
+/// A prefix that does not parse reads as none, so a kind from a newer version keeps the
+/// snapshot's roots readable.
+fn lenient<'de, D>(deserializer: D) -> Result<Option<PrefixOrigin>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// The `hashes.json` of a staged game: the SHA-256 of every other file in it (ADR-0018).

@@ -19,6 +19,7 @@ fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
             format: SNAPSHOT_FORMAT,
             title: "Game".into(),
             roots: owned(roots),
+            prefix: None,
         },
         files: owned(files),
         registry: None,

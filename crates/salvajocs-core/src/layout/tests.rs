@@ -493,6 +493,7 @@ fn snapshot_meta_round_trips_and_names_bases() {
         format: SNAPSHOT_FORMAT,
         title: "Game".into(),
         roots: vec![(Base::XdgConfig, "unity3d/Co/Game".into())],
+        prefix: None,
     };
     let json = serde_json::to_string(&meta).unwrap();
     assert_eq!(
@@ -505,6 +506,86 @@ fn snapshot_meta_round_trips_and_names_bases() {
         "\"WinLocalAppDataLow\""
     );
     assert_eq!(Base::WinLocalAppDataLow.dir_name(), "WinLocalAppDataLow");
+}
+
+fn game_meta() -> SnapshotMeta {
+    SnapshotMeta::new(
+        SNAPSHOT_FORMAT,
+        "Game".into(),
+        vec![(Base::WinAppData, "Game".into())],
+    )
+}
+
+#[test]
+fn snapshot_meta_parses_without_a_prefix() {
+    // As 0.6.0 writes it.
+    let json = r#"{"format":1,"title":"Game","roots":[["WinAppData","Game"]]}"#;
+    assert_eq!(
+        serde_json::from_str::<SnapshotMeta>(json).unwrap(),
+        game_meta()
+    );
+}
+
+#[test]
+fn snapshot_meta_without_prefix_serializes_as_before() {
+    // `backup::stage` writes pretty JSON, and a byte change makes a new snapshot.
+    let bytes = serde_json::to_vec_pretty(&game_meta()).unwrap();
+    let before = "{\n  \"format\": 1,\n  \"title\": \"Game\",\n  \"roots\": [\n    [\n      \
+                  \"WinAppData\",\n      \"Game\"\n    ]\n  ]\n}";
+    assert_eq!(String::from_utf8(bytes).unwrap(), before);
+}
+
+#[test]
+fn snapshot_meta_unknown_prefix_kind_reads_as_none() {
+    let json = r#"{"format":1,"title":"Game","roots":[["WinAppData","Game"]],
+        "prefix":{"crossover":"Bottle"}}"#;
+    assert_eq!(
+        serde_json::from_str::<SnapshotMeta>(json).unwrap(),
+        game_meta()
+    );
+}
+
+#[test]
+fn snapshot_meta_malformed_prefix_reads_as_none() {
+    for prefix in [
+        r#"{"proton":"620"}"#,
+        r#"{"bottles":5}"#,
+        r#""bottles""#,
+        "null",
+    ] {
+        let json = format!(
+            r#"{{"format":1,"title":"Game","roots":[["WinAppData","Game"]],"prefix":{prefix}}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<SnapshotMeta>(&json).unwrap(),
+            game_meta(),
+            "{prefix}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_meta_prefix_round_trips_each_kind() {
+    let kinds = [
+        (PrefixOrigin::Proton(620), r#"{"proton":620}"#),
+        (PrefixOrigin::Heroic("Fish".into()), r#"{"heroic":"Fish"}"#),
+        (PrefixOrigin::Lutris("game".into()), r#"{"lutris":"game"}"#),
+        (
+            PrefixOrigin::Bottles("Generic-Game".into()),
+            r#"{"bottles":"Generic-Game"}"#,
+        ),
+        (
+            PrefixOrigin::Home("<home>/Games/wine".into()),
+            r#"{"home":"<home>/Games/wine"}"#,
+        ),
+    ];
+    for (origin, text) in kinds {
+        let mut meta = game_meta();
+        meta.prefix = Some(origin);
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.ends_with(&format!(r#","prefix":{text}}}"#)), "{json}");
+        assert_eq!(serde_json::from_str::<SnapshotMeta>(&json).unwrap(), meta);
+    }
 }
 
 #[cfg(windows)]
