@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-20: custom games are stored in the repository and shared by every PC;
+`config.yaml` keeps this PC's copy (ADR-0028).
 
 ## Context
 
@@ -86,8 +88,9 @@ dependency yet; once added, the two builds unify.
     are unchanged.
   - Rejected: a hand-written per-component `read_dir` walk. It would reimplement `*`/`**`/`?`
     matching that `glob` already does.
-- **Custom games** (stored in config, ADR-0009; the `CustomGame`, `Integration` and `Pair` types
-  live in `core::manifest`) reuse the same entry type, plus:
+- **Custom games** (stored in the repository since ADR-0028, with a copy in config, ADR-0009;
+  the `CustomGame`, `Integration` and `Pair` types live in `core::manifest`) reuse the same entry
+  type, plus:
   - `integration: override | extend`: `override` replaces the manifest entry of the same title;
     `extend` appends its files and keys.
   - `wine_prefix` (ADR-0007).

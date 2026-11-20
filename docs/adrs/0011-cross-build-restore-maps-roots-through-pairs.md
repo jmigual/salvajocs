@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-20: saved pairs and skips go to the repository with the custom game
+(ADR-0028).
 
 ## Context
 
@@ -118,8 +120,9 @@ Engine layouts, from primary sources:
     `NeedsMapping` with every root of the game. The known roots are shown prefilled and
     editable; the unknown ones must be chosen or skipped.
   - On confirm, all of that game's roots are written to its `pairs`, or to its `skips` for a
-    skipped root (creating an `extend` custom game if needed). The next restore of that game
-    needs no dialog. Pairs and skips stay editable in the Custom games tab.
+    skipped root (creating an `extend` custom game if needed), and saved to the repository on
+    the game's newest copy (ADR-0028). The next restore of that game needs no dialog. Pairs and
+    skips stay editable in the Custom games tab.
   - Rows are per root. The user asked "where to restore each file"; a single file can still be
     redirected in the plan preview (per-file override, ADR-0005). That override is not saved as
     a pair.

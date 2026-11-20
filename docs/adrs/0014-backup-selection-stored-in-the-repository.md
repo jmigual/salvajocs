@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-18
+**Amended:** 2026-11-20: the `settings:` tag prefix is reserved for game selections and the
+retention policy; other settings snapshots, such as custom games, use another prefix (ADR-0028).
 
 ## Context
 
@@ -31,7 +33,9 @@ everything the restore would overwrite.
   covers everything.
 - **Storage:** one settings snapshot per game, `as_path = /salvajocs-settings/<slug>` holding
   `settings.json`, tags `salvajocs-settings` and `settings:<slug>`, label = title. Without the
-  `salvajocs` or `game:` tags it stays out of the restore list (ADR-0010).
+  `salvajocs` or `game:` tags it stays out of the restore list (ADR-0010). Since 0.4.0
+  `load_all` reads every `settings:` tag but `settings:retention` as a game, so another kind of
+  settings snapshot must not use the `settings:` prefix (ADR-0028).
   - `load_all`: reindex, one snapshot list, the newest per `settings:<slug>`, one file read
     each.
   - `save`: reindex, read the game's newest settings, replay this machine's changes on them,

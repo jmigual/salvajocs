@@ -51,7 +51,7 @@ other way round.
 | Compression | zstd, chosen when the repository is created: off, a preset (levels 1, 3, 9, 19) or a custom level 1 to 22 or -7 to -1. Changeable in Settings. |
 | Encryption password | Optional. Kept in the OS keyring (Secret Service on Linux, Credential Manager on Windows) or asked once per session. |
 | Backup | One snapshot per game, deduplicated by the repository. A game that did not change adds no snapshot. |
-| Restore | Preview of every file and registry key first, per-file target override, a safety backup of what would be overwritten, undo. |
+| Restore | Preview of every file and registry key first, with a checkbox on each to restore only some, per-file target override, a safety backup of what would be overwritten, undo. |
 | Cross-OS | Files are stored under named folders, not absolute paths, and the Windows user name is never stored. A Proton save restores on Windows and the other way round. Games with a native Linux build and a Windows build map through saved pairs, engine rules (Unity, Godot), the manifest, or a dialog. Choices are remembered. |
 | Custom games | Add a game, extend or override its manifest entry, set its Wine prefix, edit pairs and skipped folders. |
 
@@ -169,7 +169,8 @@ for what was tested.
   custom game.
 - Steam library folders on other drives are not read from Steam's configuration. Add them in
   Settings. Non-Steam shortcuts are not matched.
-- A restore that includes registry keys for a Wine prefix is refused while any `wineserver` runs.
+- A restore that includes registry keys for a Wine prefix is refused while any `wineserver` runs,
+  unless you untick every registry key.
 - Unity `PlayerPrefs` are detected but not converted between the registry and the Linux file.
   Engine rules exist for Unity and Godot only.
 - There is no scheduled or automatic backup.

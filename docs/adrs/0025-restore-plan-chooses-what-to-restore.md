@@ -82,11 +82,11 @@ is a flat map, and an export of a declared key `K` holds `K` and every key below
   An unticked subkey under a ticked key is in it as it was before the restore, so an undo puts it
   back as it was then (ADR-0026).
 - Unticking every registry root lets the files restore while a wineserver runs (ADR-0006 refuses
-  only a registry restore into a prefix).
+  only a registry restore into a prefix; amended by ADR-0026: per key).
 - Nested declared keys (`Software\Co` and `Software\Co\Game`) show one checkbox, the outer one's
   (amended by ADR-0026: each key has its own).
 - Roots are per game: in a batch, unticking game B's root does not protect it when game A
   declares an ancestor key, as A's subtree replace still deletes it; A's safety backup holds it,
-  so undoing A recovers it.
+  so undoing A recovers it (amended by ADR-0026: per key).
 - Writes that land on one key share a checkbox; the later one would overwrite the earlier
   anyway.

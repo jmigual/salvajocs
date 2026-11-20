@@ -5,7 +5,8 @@
 **Amended:** 2026-11-17: named backend fields and rclone remotes replace the bare option
 list; compression is a dropdown. 2026-11-19: a login the server refuses has its own probe
 result, `LoginRefused`. 2026-11-19: a `theme` setting. 2026-11-20: the `backup_sort` and
-`restore_sort` of the game lists (ADR-0027).
+`restore_sort` of the game lists (ADR-0027). 2026-11-20: `custom_games` is this PC's copy of the
+repository's custom games, with `custom_games_repository` (ADR-0028).
 
 ## Context
 
@@ -30,7 +31,10 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   - `repository_options`: a list of `{ key, value | secret: true }`;
   - `password: none | keyring | ask`;
   - `roots`;
-  - `custom_games`;
+  - `custom_games`: this PC's copy of the repository's custom games plus each game's
+    `wine_prefix` (ADR-0028);
+  - `custom_games_repository`: the key (`secret_scope`) of the repository that copy mirrors,
+    left out when unset (ADR-0028);
   - `ignored_prefixes`: launcher prefixes left out of scans and restores (ADR-0017);
   - `theme: system | light | dark`, left out when `system`;
   - `backup_sort` and `restore_sort`: `{ by: name | last_backup | last_backup_size |
