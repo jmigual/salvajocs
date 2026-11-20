@@ -114,3 +114,5 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
   each host's newest (ADR-0015); once the other machine backs up something newer, (B) is false
   here and the next backup stores this machine's own state.
 - A game shown as unchanged can still be backed up when only its registry keys or roots changed.
+  Amended by ADR-0023: or when only the Wine prefix recorded in `salvajocs.json` changed, as on
+  the first backup after that field was added.

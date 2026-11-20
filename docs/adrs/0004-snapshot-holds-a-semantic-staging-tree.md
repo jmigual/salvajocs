@@ -59,6 +59,8 @@ machine and OS.
 - `SnapshotMeta.roots` lists, for each template that produced files, its glob-free prefix as
   `(Base, rest)`, for example `(XdgConfig, "unity3d/Co/Game")`. A cross-build restore
   (ADR-0011) maps these roots. Everything else only needs `files/`.
+  Amended by ADR-0023: `SnapshotMeta.prefix` describes the Wine prefix the files came from,
+  without a path; omitted when there is none.
 - Found files are deduplicated by real path, since two templates can match the same file.
 - The tail is the matched real path with the resolved base prefix removed. Tails keep the case
   they had on disk.

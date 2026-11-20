@@ -54,6 +54,8 @@ configured roots (research.md §2).
   - Linux host: `linux` = `LinuxFolders`. `win` = the game's own prefix when it exists: the
     custom game's `wine_prefix`, else Proton `compatdata/<steam.id>`, else its launcher
     prefix (ADR-0017).
+    Amended by ADR-0023: then the prefix the snapshot names, then the one prefix that holds
+    the snapshot's Windows save folders.
   - On a Linux host the user always picks the build: native Linux (`linux` set, `win` unset)
     or Windows in a prefix (`win` set, `linux` unset), whatever bases the snapshot has; a
     mixed snapshot may keep both. `default_targets` supplies the default. A leftover Proton

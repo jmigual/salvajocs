@@ -49,6 +49,8 @@ A prefix used for every game costs one more glob pass of the whole manifest per 
 - **Restore default** (`restore::default_targets`, ADR-0005): the custom `wine_prefix`, else its
   Proton prefix, else the game's launcher prefix, as in the scan: a Steam app id is stronger
   evidence than a title match.
+  Amended by ADR-0023: then the prefix the snapshot names, by launcher and name, then the one
+  prefix that holds its save folders.
 - **Switching a prefix off:** `config.yaml` gains `ignored_prefixes: [path]` (serde default,
   omitted when empty). It drops only the launcher entry: an ignored path is not scanned as a
   launcher prefix and is never a launcher default target, but the same path as a `WinePrefix`
