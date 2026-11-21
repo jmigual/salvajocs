@@ -53,7 +53,7 @@ other way round.
 | Backup | One snapshot per game, deduplicated by the repository. A game that did not change adds no snapshot. |
 | Restore | Preview of every file and registry key first, with a checkbox on each to restore only some, per-file target override, a safety backup of what would be overwritten, undo. |
 | Cross-OS | Files are stored under named folders, not absolute paths, and the Windows user name is never stored. A Proton save restores on Windows and the other way round. Games with a native Linux build and a Windows build map through saved pairs, engine rules (Unity, Godot), the manifest, or a dialog. Choices are remembered. |
-| Custom games | Add a game, extend or override its manifest entry, set its Wine prefix, edit pairs and skipped folders. Stored in the repository, so every PC that uses it has the same ones. |
+| Custom games | Add a game, extend or override its manifest entry, set its Wine prefix, edit pairs and skipped folders. Saved to the repository with each Back up, so every PC that uses it has the same ones. |
 
 ## Screenshots
 
@@ -178,8 +178,8 @@ for what was tested.
 - `opendal:sftp` is not available in Windows builds. Use an rclone remote of type `sftp`. See
   [Troubleshooting](docs/guide/troubleshooting.md#sftp-is-missing-on-windows).
 - Undo restores what the restore overwrote. Files or keys it created stay.
-- Custom games can be changed only while the repository is open. salvajocs 0.7 and older do not
-  read the ones stored in the repository.
+- Changes to custom games and to the Old backups rules reach other PCs only after a Back up on
+  this PC. salvajocs 0.7 and older do not read the custom games stored in the repository.
 
 ## Documentation
 

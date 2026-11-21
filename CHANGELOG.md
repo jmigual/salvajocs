@@ -6,6 +6,35 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Only **Back up** writes custom games and the Old backups rules to the repository. Opening the
+  app, a Settings switch and the new **Read repository** button in the Custom games tab only read
+  them, and the tab no longer reads each time it is shown. **Save game**, **Remove**, a rename,
+  a mapping dialog's choices and a tick of an Old backups rule change this PC only; a game not
+  backed up yet is marked so, and the rules say "Saved to the repository with the next Back up.",
+  with a **Discard this PC's changes** button. Custom games can be edited without the
+  repository.
+- Back up first checks the repository: a custom game or the rules changed here and, since then,
+  on another PC are asked about in a "Changed on another PC" dialog that shows both versions;
+  **Cancel** writes nothing. A failed save of a custom game or the rules keeps it on this PC for
+  the next Back up, and a failed save of the rules removes no old backup. With no game ticked,
+  Back up saves only these changes.
+- The first open of a repository keeps every custom game of this PC, and asks at Back up about a
+  game the repository holds otherwise or removed, instead of using the repository's version.
+  `config-before-custom-games.yaml` is no longer written.
+- The config writes the custom games marker as `custom_games_read_from` and still reads
+  `custom_games_repository`, so salvajocs 0.8.0 never mirrors over games not backed up yet. It
+  gains `custom_games_unsent` and `retention_unsent`, the changes waiting for a Back up.
+- `salvajocs-core`: `custom_games::sync`, `custom_games::Synced`, `custom_games::save_choices`,
+  `config::BEFORE_CUSTOM_GAMES_FILE` and `AppConfig::keep_before_custom_games` are removed;
+  `custom_games::merge` takes the unsent changes, and `custom_games::Merged` has `new_unsent`
+  and `complete` instead of `upload`, `replaced` and `removed` (a breaking change). The new
+  `custom_games::Unsent`, `Conflict`, `conflicts`, `Sent`, `send` and `after_send` find the
+  conflicts and save the unsent games, and `retention::Unsent` holds unsent rules. `AppConfig`
+  has `custom_games_unsent` and `retention_unsent`. `custom_games::save` no longer returns
+  `Changed` when the repository already holds the new copy.
+
 ## [0.8.0] - 2026-11-20
 
 ### Added

@@ -16,8 +16,10 @@ clicking **Apply** removes them from the keyring.
 
 Click **Apply** to connect to a different repository. salvajocs checks it the same way as on
 first run, and asks before it creates a new one, with the compression to use. The tabs then show
-the new repository. Your custom games go along: the new repository gets the ones it does not have
-yet ([Custom games](custom-games.md#other-pcs-and-older-versions)).
+the new repository. Your custom games go along, with the changes this PC did not back up yet; the
+new repository gets them at the next Back up
+([Custom games](custom-games.md#other-pcs-and-older-versions)). Connecting writes no setting to
+either repository.
 
 Keyring entries belong to one repository and its non-secret options. After you switch to another
 repository, the tab offers **Delete entries** to remove the old ones, or **Keep entries**.
@@ -49,11 +51,16 @@ Old backups are removed after the next backup. Their disk space comes back at a 
 least a day later.
 
 The rules are stored in the repository, so every machine that uses it shares them. The section is
-disabled until the repository is open and its rules are loaded. Changes are saved at once; a typed
-number is saved when you press Enter or leave the field. If the repository holds rules this
-version cannot read, for example from a newer salvajocs, the section says so, stays disabled and
-nothing is removed. If the repository could not be reached, click **Retry**. The rules are read
-again each time you open the tab, so changes made on another computer show up.
+disabled until the repository is open and its rules are loaded. A change stays on this PC, with
+"Saved to the repository with the next Back up.", until the next
+[Back up](backup.md#custom-games-and-rules) saves it; a typed number counts when you press Enter
+or leave the field. Until then the section shows this PC's rules. If another computer changed the
+rules since, Back up asks which to keep. **Discard this PC's changes** drops this PC's rules and
+shows the repository's again. If the repository holds rules this version cannot read, for example
+from a newer salvajocs, the section says so, stays disabled and nothing is removed; this PC's
+changed rules are then never saved, so discard them. If the repository could not be reached,
+click **Retry**. The rules are read again each time you open
+the tab, so changes made on another computer show up.
 
 ## Roots
 
@@ -134,5 +141,6 @@ opens the changelog at the tag of this version.
 All settings except the compression level, the old-backup rules and the custom games are in
 `config.yaml`, listed in [Installation](installation.md#where-salvajocs-keeps-its-files). The
 compression level, the old-backup rules and the custom games are in the repository, with a copy
-of the custom games and their Wine prefixes in `config.yaml`; passwords and secret options are in
-the keyring or asked each session.
+of the custom games and their Wine prefixes in `config.yaml`. Changes to the custom games and the
+old-backup rules wait in `config.yaml` until the next Back up saves them to the repository.
+Passwords and secret options are in the keyring or asked each session.

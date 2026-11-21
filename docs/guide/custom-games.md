@@ -9,9 +9,10 @@ store the choices of a [cross-build restore](cross-os-restore.md). Back to the
 
 The tab lists your custom games. Each line says how the game relates to the manifest: a custom
 game, a game that extends the manifest entry, or one that overrides it. **Edit** and **Remove**
-change the list. **Add game** opens the form. Changes are saved to the repository at once, so
-every PC that uses the repository has the same custom games. The **Wine prefix** stays on this
-PC: each PC sets its own.
+change the list. **Add game** opens the form. Changes stay on this PC until the next
+[Back up](backup.md#custom-games-and-rules), which saves them to the repository, so every PC that
+uses it has the same custom games. **Read repository** reads the changes other PCs saved. The
+**Wine prefix** stays on this PC: each PC sets its own.
 
 ## The form
 
@@ -130,38 +131,50 @@ you tick **Skip**.
 
 ## Saving
 
-**Save game** checks the form, then saves the game to the repository; the form stays open with
-"Saving…" until it is done. It reports an error for an empty or taken name, a mapping or skipped
-folder that is not a path template, and a game that changed while the form was open, also on
-another PC: click **Reload** to see the game as it is now, then make your change again. If the
-repository cannot be reached, the form keeps what you entered and **Save game** tries again.
+**Save game** checks the form, then saves the game on this PC and closes the form. It reports an
+error for an empty or taken name, a mapping or skipped folder that is not a path template, and a
+game that changed while the form was open, for example by **Read repository** or a restore
+mapping: click **Reload** to see the game as it is now, then make your change again.
 
-A change made on another PC shows here when this PC opens the repository, and each time you open
-the Custom games tab. Renaming a game saves the new name, then removes the old one; if the second
-step fails, both names are listed and you can remove the one you do not want.
+A game changed here shows "Not backed up yet" until a Back up saves it to the repository. A
+removed game is listed as "Removed here; other PCs keep them until the next Back up: …".
+Renaming a game is saved as the new name and the removal of the old one; if the repository cannot
+take the new name, the old one is not removed either, and the next Back up tries both again.
+Changing only the Wine prefix leaves nothing to back up, as it is never stored.
 
-Without the repository (it is missing, or could not be opened), the tab lists the custom games as
-this PC last saw them, read-only: "Open the repository to change custom games". The Backup tab
-still scans them.
+The repository is read when this PC opens it, after you connect another repository in Settings,
+and when you click **Read repository**. A read never replaces a game you changed here and did not
+back up yet. Without the repository (it is missing, or could not be opened) you can still add,
+edit and remove custom games; they wait for the next Back up. The Backup tab scans them too.
 
 A game saved by a newer salvajocs shows "Written by a newer salvajocs" and cannot be edited or
 removed here. A game that cannot be read from the repository shows why. Either way this PC keeps
 its own copy of it, if it has one, and backs it up as before.
 
+## Changed on another PC
+
+When a game you changed here was also changed on another PC since, Back up asks before it saves
+anything: the dialog "Changed on another PC" shows **This PC**'s version and **The
+repository**'s side by side, with a line that only one of them has in bold. Pick **Keep this
+PC's** or **Keep the repository's** for each game, then **Back up**. Keeping the repository's
+version puts it on this PC, with this PC's Wine prefix, or removes the game here when the other PC
+removed it. **Cancel** stops the Back up, and nothing is written.
+
 ## Other PCs and older versions
 
-The first time a PC opens a repository with this version, its custom games go into the
-repository: a game the repository does not have yet is added. When the repository already has a
-game of the same name with other contents, the repository's version is used, and a message names
-the game. When the repository says a game of that name was removed on another PC, it is removed
-here too, and a message says how many games were removed and names them. Before salvajocs
-changes or removes such a game on this PC, it keeps a copy of the config as
-`config-before-custom-games.yaml` in the config folder (once), so you can look up the old
-definition. The same happens after you connect another repository in Settings: this PC's custom
-games go along to the new repository, which keeps its own version of the games it already has.
+The first time a PC opens a repository with this version, it keeps all its custom games. A game
+the repository already has with the same contents is left as it is. Any other game is marked
+"Not backed up yet": the next Back up adds a game the repository does not have, and asks about a
+game the repository holds with other contents or says was removed on another PC. The same
+happens after you connect another repository in Settings: this PC's custom games, and the
+changes it did not back up yet, go along to the new repository.
 
-salvajocs 0.7 and older do not read custom games from the repository. A PC with such a version
-keeps using its own list, and does not see games added on other PCs until it is updated.
+salvajocs 0.8.0 saved custom games to the repository at once and may have left a copy of the
+config as `config-before-custom-games.yaml` in the config folder; this version no longer writes
+it. A PC still on 0.8.0 keeps saving its changes at once, and the next Back up here asks about
+any of those games this PC changed too. salvajocs 0.7 and older do not read custom games from
+the repository. A PC with such a version keeps using its own list, and does not see games added
+on other PCs until it is updated.
 
 ## Games from salvajocs 0.3
 

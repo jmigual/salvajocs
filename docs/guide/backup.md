@@ -203,6 +203,21 @@ backups (see [What is stored](#what-is-stored)). It shows the result per game un
 The repository removes duplicate data, so repeated backups of a large save that changed little
 cost little space.
 
+### Custom games and rules
+
+Changes to your [custom games](custom-games.md) and to the
+[Old backups](settings.md#old-backups) rules stay on this PC until a Back up. When there are
+some, the bar and its button show even before the first scan. Back up first checks the repository
+("Checking the repository"), then saves them ("Saving the custom games and rules to the
+repository") before your choices, the scan and the games, and shows **Saved N custom games to the
+repository** and **Saved the Old backups rules**. With no game ticked, the button reads **Back
+up** and saves only these changes: nothing is scanned, backed up or removed.
+
+If another PC changed one of them since this PC's change started, the dialog "Changed on another
+PC" asks which version to keep ([Custom games](custom-games.md#changed-on-another-pc)). **Cancel**
+stops the Back up, and nothing is written. A change that cannot be saved stays on this PC, the
+results say why, and the next Back up tries it again.
+
 ## What is stored
 
 Each game gets its own snapshot, tagged `salvajocs` and `game:<slug>`, with the game's title as its
@@ -217,9 +232,11 @@ After each backup, even one where a game failed, salvajocs removes the old backu
 [Old backups](settings.md#old-backups) rules let go, never the ones this backup just made, and
 shows **Removed N old backups**. With no rule set, snapshots accumulate, and deduplication keeps
 the size small. If the rules cannot be read, or the repository is append-only, nothing is removed
-and a warning says so. If the cleanup stops partway, **Cleanup did not finish** says why, and
-**Removed N old backups** counts those that are gone, even if it stopped while removing them;
-this backup's snapshots are stored all the same.
+and a warning says so. If this PC's changed rules could not be saved, nothing is removed either,
+since the rules in the repository may keep fewer backups: "The Old backups rules were not saved,
+so no old backup was removed". If the cleanup stops partway, **Cleanup did not finish** says
+why, and **Removed N old backups** counts those that are gone, even if it stopped while removing
+them; this backup's snapshots are stored all the same.
 
 A server that makes the repository append-only by itself, such as `rest-server --append-only`,
 does not mark the repository as append-only, so salvajocs cannot tell. The cleanup then fails

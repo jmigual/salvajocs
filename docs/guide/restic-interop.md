@@ -89,8 +89,9 @@ does not show them.
   `/salvajocs-settings/custom-games/<slug>`, file `custom-game.json`. A removed game keeps one
   small snapshot that says it was removed.
 
-salvajocs writes a new snapshot when a backup saves your choices for a game, when you change the
-Old backups rules, and when you save or remove a custom game. It then forgets the older ones. If
+salvajocs writes these snapshots only during a Back up: when it saves your choices for a game,
+your changed Old backups rules, or a custom game you saved or removed. It then forgets the older
+ones. If
 you remove the newest one with restic, you lose that setting: salvajocs then backs up every file
 of the game, or keeps every backup. For a custom game, removing its newest snapshot drops the
 game, or brings back the version before it when that one was not forgotten, as in an
