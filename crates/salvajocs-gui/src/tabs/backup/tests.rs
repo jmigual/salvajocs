@@ -1579,3 +1579,37 @@ fn a_repository_switched_during_the_backup_keeps_the_changes_unsent() {
     assert_eq!(config.custom_games_unsent, unsent);
     assert!(stored_game(&dir.path().join("first"), "Mine").is_some());
 }
+
+#[test]
+fn an_edit_made_during_the_backup_stays_unsent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let mine = custom("Mine", "Mine");
+    let config = state.config.as_mut().unwrap();
+    config.custom_games = vec![mine.clone()];
+    config.custom_games_unsent = vec![custom_games::Unsent::new("Mine".into(), None)];
+    let mut harness = no_games_found(state);
+    let ctx = harness.ctx.clone();
+
+    let storage = harness.state().1.session.as_ref().unwrap().storage.clone();
+    let held = storage.lock().unwrap();
+    let (tab, state) = harness.state_mut();
+    tab.start_backup(&ctx, state);
+    let edited = custom("Mine", "Edited");
+    let edit = crate::state::Edit {
+        based_on: Some(mine.clone()),
+        game: Some(edited.clone()),
+    };
+    state.edit_custom_game(&ctx, edit);
+    drop(held);
+    step_until(&mut harness, "the backup", backed_up);
+    settle(&mut harness);
+
+    // The backup sent the game as it was when it started.
+    let sent = custom_games::Stored::Game(Box::new(mine.clone()));
+    assert_eq!(stored_game(dir.path(), "Mine"), Some(sent));
+    let config = harness.state().1.config.as_ref().unwrap();
+    assert_eq!(config.custom_games, [edited]);
+    let rebased = custom_games::Unsent::new("Mine".into(), Some(mine));
+    assert_eq!(config.custom_games_unsent, [rebased]);
+}

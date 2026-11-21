@@ -6,15 +6,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::{
-    env, harness, harness_sized, init_repo, local_config, replace_text, repo_dir, run_settled,
-    run_until, run_until_ready, save_config, shows,
+    back_up_unsent, env, harness, harness_sized, init_repo, local_config, replace_text, repo_dir,
+    run_settled, run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::{Key, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use rustic_backend::BackendOptions;
 use rustic_core::{ConfigOptions, Credentials, Repository, RepositoryOptions};
-use salvajocs_core::config::{AppConfig, BEFORE_CUSTOM_GAMES_FILE};
+use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice};
 use salvajocs_core::custom_games::{self, Stored};
 use salvajocs_core::layout::Base;
@@ -86,7 +86,7 @@ fn start(
     let mut harness = harness(env);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::CustomGames);
-    // The status bar's spinner keeps the frames coming until the custom games are synced.
+    // The status bar's spinner keeps the frames coming until the custom games are read.
     run_settled(&mut harness);
     harness
 }
@@ -156,9 +156,9 @@ fn set_append_only(tmp: &TempDir) {
 }
 
 /// Waits until the saved config marks its custom games as this repository's.
-fn run_until_synced(harness: &mut Harness<'static, App>, env: &Env) {
+fn run_until_read(harness: &mut Harness<'static, App>, env: &Env) {
     let config_dir = env.config_dir.clone();
-    run_until(harness, "the custom games to be synced", move |_| {
+    run_until(harness, "the custom games to be read", move |_| {
         AppConfig::load(&config_dir)
             .ok()
             .flatten()
@@ -510,6 +510,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     let game = kept_rules_game();
     let other = dialog_game("Other");
     let (mut harness, env, tmp) = open_tab(vec![game.clone(), other.clone()], &[]);
+    back_up(&mut harness, "Saved 2 custom games to the repository");
 
     first(&harness, "Edit").click();
     run_settled(&mut harness);
@@ -529,6 +530,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     renamed.pairs = Vec::new();
     renamed.skips = Vec::new();
     assert_eq!(saved, [renamed.clone(), other.clone()]);
+    back_up(&mut harness, "Saved 2 custom games to the repository");
     // The repository marks the old name as removed, so another PC lists only the new one.
     let repository = in_repository(&tmp);
     assert_eq!(repository["Game"], Stored::Removed);
@@ -605,7 +607,7 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     harness.get_by_label("Remove").click();
     run_settled(&mut harness);
     run_until_saved(&mut harness, &env, |games| games.is_empty());
-    assert!(!shows(&harness, "Manifest Game"));
+    assert!(!shows(&harness, "Manifest Game ("));
 }
 
 #[test]
@@ -685,9 +687,12 @@ fn custom_games_added_on_another_pc_show_after_the_repository_opens() {
 }
 
 #[test]
-fn custom_games_save_writes_the_game_to_the_repository() {
+fn custom_games_save_stays_on_this_pc_until_back_up() {
     let (mut harness, env, tmp) = open_tab(Vec::new(), &[]);
-    assert!(shows(&harness, "Changes are saved to the repository"));
+    assert!(shows(
+        &harness,
+        "Changes stay on this PC until the next Back up"
+    ));
 
     harness.get_by_label("Add game").click();
     run_settled(&mut harness);
@@ -700,16 +705,22 @@ fn custom_games_save_writes_the_game_to_the_repository() {
 
     let saved = run_until_saved(&mut harness, &env, |games| games.len() == 1);
     assert!(!shows(&harness, "Save game"), "the form closes once saved");
+    assert!(shows(&harness, "Not backed up yet"));
+    assert!(in_repository(&tmp).is_empty());
+
+    back_up(&mut harness, "Saved 1 custom game to the repository");
     assert_eq!(
         in_repository(&tmp),
         BTreeMap::from([("My Game".to_owned(), shared(&saved[0]))])
     );
+    assert!(!shows(&harness, "Not backed up yet"));
 }
 
 #[test]
 fn custom_games_remove_on_one_pc_removes_it_on_the_other() {
     let (mut first, first_env, tmp) = open_tab(vec![dialog_game("Shared")], &[]);
-    run_until_synced(&mut first, &first_env);
+    run_until_read(&mut first, &first_env);
+    back_up(&mut first, "Saved 1 custom game to the repository");
     let other = tempfile::tempdir().unwrap();
     let mut second = start(env(&other), &repo_dir(&tmp), Vec::new(), &[]);
     assert!(shows(&second, "Shared (custom game)"));
@@ -718,25 +729,30 @@ fn custom_games_remove_on_one_pc_removes_it_on_the_other() {
     run_until(&mut first, "the removal", |h| {
         !shows(h, "Shared (custom game)")
     });
+    assert!(shows(
+        &first,
+        "Removed here; other PCs keep them until the next Back up: Shared"
+    ));
+    assert!(matches!(in_repository(&tmp)["Shared"], Stored::Game(_)));
+    back_up(&mut first, "Saved 1 custom game to the repository");
     assert_eq!(in_repository(&tmp)["Shared"], Stored::Removed);
+    assert!(!shows(&first, "Removed here"));
 
-    // The other PC loads the games again each time its tab is shown.
-    second.state_mut().set_tab(Tab::Backup);
-    run_settled(&mut second);
-    second.state_mut().set_tab(Tab::CustomGames);
+    // The other PC reads the games again when asked.
+    second.get_by_label("Read repository").click();
     run_until(&mut second, "the removal on the other PC", |h| {
         shows(h, "No custom games.")
     });
 }
 
 #[test]
-fn custom_games_first_open_uploads_this_pcs_games_once() {
+fn custom_games_first_open_writes_nothing_and_back_up_uploads_them_once() {
     let (mut first, env, tmp) = open_tab(vec![dialog_game("Mine")], &[]);
-    run_until_synced(&mut first, &env);
-    assert!(shows(
-        &first,
-        "Saved 1 of this PC's custom games to the repository"
-    ));
+    run_until_read(&mut first, &env);
+    assert!(settings_snapshots(&tmp).is_empty());
+    assert!(shows(&first, "Not backed up yet"));
+
+    back_up(&mut first, "Saved 1 custom game to the repository");
     assert_eq!(
         in_repository(&tmp),
         BTreeMap::from([("Mine".to_owned(), shared(&dialog_game("Mine")))])
@@ -744,74 +760,99 @@ fn custom_games_first_open_uploads_this_pcs_games_once() {
     let written = settings_snapshots(&tmp);
     drop(first);
 
-    // The next start mirrors the repository: nothing to upload.
+    // The next start mirrors the repository: nothing is unsent.
     let mut again = harness(env.clone());
     run_until_ready(&mut again);
+    again.state_mut().set_tab(Tab::CustomGames);
     run_settled(&mut again);
-    assert!(!shows(&again, "Saved 1 of this PC's custom games"));
+    assert!(shows(&again, "Mine (custom game)"));
+    assert!(!shows(&again, "Not backed up yet"));
     assert_eq!(settings_snapshots(&tmp), written);
 }
 
-#[test]
-fn custom_games_first_open_keeps_the_repository_version_and_names_the_game() {
+/// Starts this PC with `mine` on a repository where another PC holds `theirs` (`None`: a game
+/// it removed) of the same name, presses Back up and waits for the question.
+fn first_open_with_another_version(
+    mine: &CustomGame,
+    theirs: Option<&CustomGame>,
+) -> (Harness<'static, App>, Env, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
     let repository = repo_dir(&tmp);
     init_repo(&repository);
-    let mut theirs = dialog_game("Shared");
-    theirs.integration = Integration::Override;
-    save_elsewhere(&tmp, "Shared", None, Some(&theirs));
-    let mut mine = dialog_game("Shared");
-    mine.wine_prefix = Some(tmp.path().join("prefix"));
-
+    let base = dialog_game(&mine.name);
+    save_elsewhere(&tmp, &mine.name, None, Some(theirs.unwrap_or(&base)));
+    if theirs.is_none() {
+        save_elsewhere(&tmp, &mine.name, Some(&base), None);
+    }
     let mut harness = start(env.clone(), &repository, vec![mine.clone()], &[]);
+    run_until_read(&mut harness, &env);
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(
+        config.custom_games,
+        std::slice::from_ref(mine),
+        "this PC keeps its version"
+    );
+    assert!(shows(&harness, "Not backed up yet"));
 
-    let saved = run_until_saved(&mut harness, &env, |games| {
-        games
-            .first()
-            .is_some_and(|game| game.integration == Integration::Override)
+    harness.state_mut().set_tab(Tab::Backup);
+    run_until(&mut harness, "Back up to be enabled", |h| {
+        h.query_by_label("Back up")
+            .is_some_and(|button| !button.accesskit_node().is_disabled())
     });
-    let mut expected = theirs.clone();
-    expected.wine_prefix = mine.wine_prefix.clone();
-    assert_eq!(saved, [expected]);
-    assert!(shows(
-        &harness,
-        "This PC's copy of Shared differed from the repository's; the repository's is used."
-    ));
-    assert_eq!(in_repository(&tmp)["Shared"], shared(&theirs));
-    // The config from before keeps this PC's old definition.
-    let copy = tmp.path().join("copy");
-    std::fs::create_dir_all(&copy).unwrap();
-    let before = env.config_dir.join(BEFORE_CUSTOM_GAMES_FILE);
-    std::fs::copy(before, copy.join("config.yaml")).unwrap();
-    let before = AppConfig::load(&copy).unwrap().unwrap();
-    assert_eq!(before.custom_games, [mine]);
+    harness.get_by_label("Back up").click();
+    run_until(&mut harness, "the question", |h| {
+        shows(h, "Changed on another PC")
+    });
+    (harness, env, tmp)
+}
+
+/// Clicks the dialog's own Back up, the enabled one, and waits for the backup to end.
+fn answer_and_back_up(harness: &mut Harness<'static, App>, keep: &str) {
+    harness.get_by_label(keep).click();
+    run_settled(harness);
+    let button = harness
+        .query_all_by_label("Back up")
+        .find(|node| !node.accesskit_node().is_disabled())
+        .unwrap();
+    button.click();
+    run_until(harness, "the backup", |h| {
+        !shows(h, "Changed on another PC") && !shows(h, "Saving the custom games")
+    });
+    run_settled(harness);
 }
 
 #[test]
-fn custom_games_first_open_removes_a_game_removed_elsewhere_and_says_so() {
-    let tmp = tempfile::tempdir().unwrap();
-    let env = env(&tmp);
-    let repository = repo_dir(&tmp);
-    init_repo(&repository);
-    let gone = dialog_game("Gone");
-    save_elsewhere(&tmp, "Gone", None, Some(&gone));
-    save_elsewhere(&tmp, "Gone", Some(&gone), None);
+fn custom_games_first_open_keeps_this_pcs_version_and_back_up_asks() {
+    let mut theirs = dialog_game("Shared");
+    theirs.integration = Integration::Override;
+    let mut mine = dialog_game("Shared");
+    mine.wine_prefix = Some("/prefixes/shared".into());
+    let (mut harness, env, tmp) = first_open_with_another_version(&mine, Some(&theirs));
+    assert!(shows(&harness, "Integration: overrides the manifest entry"));
+    assert!(shows(&harness, "Integration: extends the manifest entry"));
 
-    let mut harness = start(env.clone(), &repository, vec![gone.clone()], &[]);
+    answer_and_back_up(&mut harness, "Keep this PC's");
+    assert_eq!(in_repository(&tmp)["Shared"], shared(&mine));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(config.custom_games, [mine]);
+    assert!(config.custom_games_unsent.is_empty());
+}
 
-    assert!(run_until_saved(&mut harness, &env, |games| games.is_empty()).is_empty());
-    assert!(shows(
-        &harness,
-        "Removed 1 of this PC's custom games that were removed on another PC: Gone."
-    ));
-    // The config from before keeps this PC's old definition.
-    let copy = tmp.path().join("copy");
-    std::fs::create_dir_all(&copy).unwrap();
-    let before = env.config_dir.join(BEFORE_CUSTOM_GAMES_FILE);
-    std::fs::copy(before, copy.join("config.yaml")).unwrap();
-    let before = AppConfig::load(&copy).unwrap().unwrap();
-    assert_eq!(before.custom_games, [gone]);
+#[test]
+fn custom_games_first_open_keeps_a_game_removed_elsewhere_and_back_up_asks() {
+    let mut mine = dialog_game("Gone");
+    mine.wine_prefix = Some("/prefixes/gone".into());
+    let (mut harness, env, tmp) = first_open_with_another_version(&mine, None);
+    assert!(shows(&harness, "Removed"));
+    let written = settings_snapshots(&tmp);
+
+    answer_and_back_up(&mut harness, "Keep the repository's");
+    assert_eq!(in_repository(&tmp)["Gone"], Stored::Removed);
+    assert_eq!(settings_snapshots(&tmp), written);
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert!(config.custom_games.is_empty());
+    assert!(config.custom_games_unsent.is_empty());
 }
 
 #[test]
@@ -827,6 +868,7 @@ fn custom_games_wine_prefix_stays_on_this_pc() {
 
     let saved = run_until_saved(&mut harness, &env, |games| games.len() == 1);
     assert_eq!(saved[0].wine_prefix.as_deref(), Some(prefix.as_path()));
+    back_up(&mut harness, "Saved 1 custom game to the repository");
     assert_eq!(in_repository(&tmp)["Prefixed"], shared(&saved[0]));
 
     // Another PC gets the game without this PC's prefix.
@@ -836,8 +878,7 @@ fn custom_games_wine_prefix_stays_on_this_pc() {
     let theirs = run_until_saved(&mut second, &other_env, |games| games.len() == 1);
     assert_eq!(theirs[0].wine_prefix, None);
 
-    // A new prefix alone is saved on this PC only.
-    let written = settings_snapshots(&tmp);
+    // A new prefix alone stays on this PC: nothing is left to save.
     let moved = tmp.path().join("prefixes").join("moved");
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
@@ -847,7 +888,7 @@ fn custom_games_wine_prefix_stays_on_this_pc() {
     run_until_saved(&mut harness, &env, |games| {
         games[0].wine_prefix.as_deref() == Some(moved.as_path())
     });
-    assert_eq!(settings_snapshots(&tmp), written);
+    assert!(!shows(&harness, "Not backed up yet"));
 }
 
 /// A Wine prefix in `dir` holding a save of the game `name` below `AppData/Roaming/<name>`, and
@@ -872,23 +913,34 @@ fn game_in_prefix(dir: &Path, name: &str) -> CustomGame {
 }
 
 #[test]
-fn custom_games_without_a_repository_are_listed_read_only_and_scanned() {
+fn custom_games_without_a_repository_can_be_edited_and_are_scanned() {
     let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
     let game = game_in_prefix(tmp.path(), "Offline");
     // No repository at the configured location.
-    let mut harness = start(env(&tmp), &repo_dir(&tmp), vec![game], &[]);
+    let mut harness = start(env.clone(), &repo_dir(&tmp), vec![game], &[]);
     run_until(&mut harness, "the missing repository", |h| {
         shows(h, "No repository at")
     });
 
     assert!(shows(&harness, "Offline (custom game)"));
-    assert!(shows(
-        &harness,
-        "Open the repository to change custom games."
-    ));
     for button in ["Add game", "Edit", "Remove"] {
-        assert!(disabled(&harness, button), "{button}");
+        assert!(!disabled(&harness, button), "{button}");
     }
+    assert!(disabled(&harness, "Read repository"));
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "Added offline");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    run_until(&mut harness, "the unsent change to be saved", |_| {
+        AppConfig::load(&env.config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.custom_games_unsent.len() == 1)
+    });
+    assert!(shows(&harness, "Not backed up yet"));
 
     harness.state_mut().set_tab(Tab::Backup);
     run_settled(&mut harness);
@@ -897,23 +949,24 @@ fn custom_games_without_a_repository_are_listed_read_only_and_scanned() {
 }
 
 #[test]
-fn custom_games_edit_changed_on_another_pc_asks_to_reload() {
+fn custom_games_form_opened_before_a_read_asks_to_reload() {
     let game = dialog_game("Game");
     let (mut harness, env, tmp) = open_tab(vec![game.clone()], &[]);
-    run_until_synced(&mut harness, &env);
+    back_up(&mut harness, "Saved 1 custom game to the repository");
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
 
-    // Another PC changes the game while the form is open.
+    // Another PC changes the game, and this PC reads it while the form is open.
     let mut theirs = game.clone();
     theirs.skips = vec!["<xdgData>/Theirs".into()];
     save_elsewhere(&tmp, "Game", Some(&game), Some(&theirs));
+    harness.get_by_label("Read repository").click();
+    run_settled(&mut harness);
     replace_text(&mut harness, "Windows 1", "<winLocalAppData>/Foo");
     harness.get_by_label("Save game").click();
     run_until(&mut harness, "the conflict", |h| {
         shows(h, "This game changed since the form was opened")
     });
-    assert_eq!(in_repository(&tmp)["Game"], shared(&theirs));
 
     harness.get_by_label("Reload").click();
     run_settled(&mut harness);
@@ -929,7 +982,41 @@ fn custom_games_edit_changed_on_another_pc_asks_to_reload() {
         games[0].pairs == [pair("<xdgData>/Foo", "<winLocalAppData>/Foo")]
     });
     assert_eq!(saved[0].skips, ["<xdgData>/Theirs"]);
+    // Based on the version read, so Back up saves it without asking.
+    back_up(&mut harness, "Saved 1 custom game to the repository");
     assert_eq!(in_repository(&tmp)["Game"], shared(&saved[0]));
+}
+
+#[test]
+fn custom_games_read_repository_keeps_a_game_not_backed_up_yet() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let base = dialog_game("Game");
+    save_elsewhere(&tmp, "Game", None, Some(&base));
+    let mut mine = base.clone();
+    mine.skips = vec!["<xdgData>/Mine".into()];
+    let mut config = local_config(&repository);
+    config.custom_games = vec![mine.clone()];
+    config.custom_games_repository = Some(config.secret_scope());
+    config.custom_games_unsent = vec![custom_games::Unsent::new("Game".into(), Some(base.clone()))];
+    save_config(&env, &config);
+    let mut harness = harness(env.clone());
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+
+    let mut theirs = base.clone();
+    theirs.skips = vec!["<xdgData>/Theirs".into()];
+    save_elsewhere(&tmp, "Game", Some(&base), Some(&theirs));
+    harness.get_by_label("Read repository").click();
+    run_settled(&mut harness);
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.custom_games, [mine]);
+    assert_eq!(saved.custom_games_unsent, config.custom_games_unsent);
+    assert!(shows(&harness, "Not backed up yet"));
 }
 
 #[test]
@@ -966,89 +1053,144 @@ fn custom_games_written_by_a_newer_version_cannot_be_changed() {
 }
 
 #[test]
-fn custom_games_rename_that_cannot_remove_the_old_name_lists_both() {
+fn custom_games_rename_whose_new_name_is_not_saved_keeps_the_old_one() {
     let (mut harness, env, tmp) = open_tab(vec![dialog_game("Old")], &[]);
-    run_until_synced(&mut harness, &env);
-    block_upload(&env, "Old");
+    back_up(&mut harness, "Saved 1 custom game to the repository");
+    block_upload(&env, "New");
 
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
     replace_text(&mut harness, "Name", "New");
     harness.get_by_label("Save game").click();
-    run_until(&mut harness, "the rename to stop halfway", |h| {
-        shows(h, "Both are listed")
-    });
+    run_settled(&mut harness);
+    back_up(&mut harness, "New was not saved to the repository");
 
-    let saved = run_until_saved(&mut harness, &env, |games| games.len() == 2);
-    let names: Vec<&str> = saved.iter().map(|game| game.name.as_str()).collect();
-    assert_eq!(names, ["Old", "New"]);
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Old was not removed from the repository"));
     let repository = in_repository(&tmp);
     assert!(matches!(repository["Old"], Stored::Game(_)));
-    assert!(matches!(repository["New"], Stored::Game(_)));
-}
-
-#[test]
-fn custom_games_edit_of_a_game_whose_upload_failed_saves_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let env = env(&tmp);
-    let repository = repo_dir(&tmp);
-    init_repo(&repository);
-    let blocked = block_upload(&env, "Lacking");
-    let mut harness = start(env.clone(), &repository, vec![dialog_game("Lacking")], &[]);
-    assert!(shows(
-        &harness,
-        "Could not save the custom game Lacking to the repository"
-    ));
-    std::fs::remove_dir_all(blocked).unwrap();
-
-    harness.get_by_label("Edit").click();
-    run_settled(&mut harness);
-    replace_text(&mut harness, "Windows 1", "<winLocalAppData>/Foo");
-    harness.get_by_label("Save game").click();
-    run_settled(&mut harness);
-
-    let saved = run_until_saved(&mut harness, &env, |games| {
-        games
-            .first()
-            .is_some_and(|game| game.pairs == [pair("<xdgData>/Foo", "<winLocalAppData>/Foo")])
-    });
-    assert_eq!(in_repository(&tmp)["Lacking"], shared(&saved[0]));
-}
-
-#[test]
-fn custom_games_remove_of_a_game_whose_upload_failed_removes_it_here() {
-    let tmp = tempfile::tempdir().unwrap();
-    let env = env(&tmp);
-    let repository = repo_dir(&tmp);
-    init_repo(&repository);
-    block_upload(&env, "Lacking");
-    let mut harness = start(env.clone(), &repository, vec![dialog_game("Lacking")], &[]);
-    assert!(shows(
-        &harness,
-        "Could not save the custom game Lacking to the repository"
-    ));
-
-    harness.get_by_label("Remove").click();
-    assert!(run_until_saved(&mut harness, &env, |games| games.is_empty()).is_empty());
-    run_settled(&mut harness);
-    assert!(!shows(&harness, "changed on another PC"));
-    assert!(in_repository(&tmp).is_empty());
+    assert!(!repository.contains_key("New"));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    let names: Vec<&str> = (config.custom_games_unsent.iter())
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(names, ["Old", "New"], "both stay unsent");
 }
 
 #[test]
 fn custom_games_remove_in_an_append_only_repository_says_the_old_copy_stays() {
-    let (mut harness, env, tmp) = open_tab(vec![dialog_game("Gone")], &[]);
-    run_until_synced(&mut harness, &env);
+    let (mut harness, _env, tmp) = open_tab(vec![dialog_game("Gone")], &[]);
+    back_up(&mut harness, "Saved 1 custom game to the repository");
     set_append_only(&tmp);
 
     harness.get_by_label("Remove").click();
-    run_until(&mut harness, "the removal", |h| {
-        shows(
-            h,
-            "The custom game Gone was saved, but its older copies could not be removed",
-        )
-    });
-    assert!(run_until_saved(&mut harness, &env, |games| games.is_empty()).is_empty());
+    run_settled(&mut harness);
+    back_up(
+        &mut harness,
+        "The custom game Gone was saved, but its older copies could not be removed",
+    );
     assert_eq!(in_repository(&tmp)["Gone"], Stored::Removed);
     assert_eq!(settings_snapshots(&tmp).len(), 2, "the old copy stays");
+}
+
+/// [`back_up_unsent`], then back to the Custom games tab.
+fn back_up(harness: &mut Harness<'static, App>, result: &str) {
+    back_up_unsent(harness, result);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(harness);
+}
+
+#[test]
+fn custom_games_only_back_up_writes_them_to_the_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_elsewhere(&tmp, "Theirs", None, Some(&dialog_game("Theirs")));
+    let written = settings_snapshots(&tmp);
+    let unchanged = |harness: &Harness<'static, App>, after: &str| {
+        assert!(shows(harness, "Mine (custom game)"), "{after}");
+        assert_eq!(settings_snapshots(&tmp), written, "after {after}");
+    };
+
+    // This PC's game from before 0.8 meets another PC's in the repository.
+    let mut harness = start(env.clone(), &repository, vec![dialog_game("Mine")], &[]);
+    assert!(shows(&harness, "Theirs (custom game)"));
+    unchanged(&harness, "the open");
+
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    unchanged(&harness, "the tab was shown again");
+
+    harness.get_by_label("Read repository").click();
+    run_settled(&mut harness);
+    unchanged(&harness, "Read repository");
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "Added");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Added (custom game)"));
+    unchanged(&harness, "Save game");
+
+    // The rows are Mine, Theirs and Added.
+    harness.query_all_by_label("Remove").nth(1).unwrap().click();
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Theirs (custom game)"));
+    unchanged(&harness, "Remove");
+
+    harness.query_all_by_label("Edit").nth(1).unwrap().click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "Renamed");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Renamed (custom game)"));
+    unchanged(&harness, "the rename");
+    assert!(shows(&harness, "Not backed up yet"));
+    // Added never reached the repository, so only Theirs is waiting to be removed there.
+    let removed = "Removed here; other PCs keep them until the next Back up: ";
+    assert!(shows(&harness, &format!("{removed}Theirs")));
+    assert!(!shows(&harness, "Theirs, Added"));
+
+    back_up(&mut harness, "Saved 3 custom games to the repository");
+    let stored = in_repository(&tmp);
+    assert_eq!(stored["Mine"], shared(&dialog_game("Mine")));
+    assert_eq!(stored["Theirs"], Stored::Removed);
+    assert!(matches!(stored["Renamed"], Stored::Game(_)));
+    assert!(!stored.contains_key("Added"), "renamed before the Back up");
+    assert!(!shows(&harness, "Not backed up yet"));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert!(config.custom_games_unsent.is_empty());
+}
+
+#[test]
+fn custom_games_a_mirror_keeps_a_game_the_repository_never_got() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    // A config of salvajocs 0.8.0, marked as mirroring this repository, with a game it lacks.
+    let mut config = local_config(&repository);
+    config.custom_games = vec![dialog_game("Lost")];
+    config.custom_games_repository = Some(config.secret_scope());
+    save_config(&env, &config);
+    let file = env.config_dir.join("config.yaml");
+    let yaml = std::fs::read_to_string(&file).unwrap();
+    assert!(yaml.contains("custom_games_read_from"));
+    let old = yaml.replace("custom_games_read_from", "custom_games_repository");
+    std::fs::write(&file, old).unwrap();
+
+    let mut harness = harness(env.clone());
+    run_until_ready(&mut harness);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Lost (custom game)"));
+    assert!(shows(&harness, "Not backed up yet"));
+
+    back_up(&mut harness, "Saved 1 custom game to the repository");
+    assert_eq!(in_repository(&tmp)["Lost"], shared(&dialog_game("Lost")));
 }

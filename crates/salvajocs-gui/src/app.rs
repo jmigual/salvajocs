@@ -190,6 +190,10 @@ impl App {
         if self.backup.take_removed() {
             self.restore.drop_listing();
         }
+        if self.backup.take_rules_changed() {
+            self.settings.reload_rules();
+        }
+        self.settings.set_backing_up(self.backup.backing_up());
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
         // A restore adds safety backups and a delete removes backups, which the comparison and
@@ -329,7 +333,7 @@ impl App {
                         storage: Arc::new(std::sync::Mutex::new(*storage)),
                         space: Default::default(),
                     });
-                    self.state.sync_custom_games(&ctx);
+                    self.state.read_custom_games(&ctx);
                     self.settings.reset();
                     Stage::Ready
                 }
@@ -527,7 +531,7 @@ impl eframe::App for App {
                     (None, true) => ui.weak("Manifest: loading"),
                     (None, false) => ui.weak("Manifest: not available"),
                 };
-                if state.custom_games.syncing() {
+                if state.custom_games.reading() {
                     ui.spinner();
                     ui.weak("Loading custom games");
                 }

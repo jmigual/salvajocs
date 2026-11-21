@@ -1,14 +1,17 @@
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
 use super::*;
 use crate::env::{Env, MemorySecrets};
-use crate::state::Session;
+use crate::state::{Session, SharedStorage};
 
 const KEEP_LAST: &str = "Keep the last";
 
@@ -27,11 +30,12 @@ fn harness(dir: &Path) -> SectionHarness {
     harness_on(state(dir))
 }
 
-/// The section drawn from `state`. Building the harness draws the first frame, which starts the
-/// load.
+/// The section drawn from `state`, whose jobs are polled as the app does. Building the harness
+/// draws the first frame, which starts the load.
 fn harness_on(state: State) -> SectionHarness {
     theme::harness(
         |ui, (section, state, shown): &mut (RetentionSection, State, bool)| {
+            state.poll(ui.ctx());
             if *shown {
                 section.ui(ui, state);
             }
@@ -67,6 +71,8 @@ fn state(dir: &Path) -> State {
         storage: Arc::new(Mutex::new(storage)),
         space: Default::default(),
     });
+    let repository = location(dir).repository;
+    state.config = Some(AppConfig::new(repository, PasswordMode::None));
     state
 }
 
@@ -126,85 +132,75 @@ fn controls_stay_disabled_while_the_policy_loads() {
     drop(held);
     step_until(&mut harness, "the policy to load", editable);
     assert!(!keeps_last(&harness));
-    assert!(!harness.state().0.busy());
+    assert_eq!(unsent(&harness), None);
     assert!(stored(dir.path()).is_off());
 }
 
-#[test]
-fn busy_until_the_last_queued_save_ends_even_with_the_tab_hidden() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut harness = harness(dir.path());
-    step_until(&mut harness, "the policy to load", editable);
-    let storage = storage(&harness.state().1);
-    let held = storage.lock().unwrap();
+fn unsent(harness: &SectionHarness) -> Option<retention::Unsent> {
+    harness.state().1.config.as_ref().unwrap().retention_unsent
+}
 
-    harness
-        .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
-        .click();
-    harness.step();
-    assert!(harness.state().0.busy());
-    // The job takes the first policy off the queue on its own thread; edit again only once it
-    // has, or the edit would replace the first policy instead of queueing behind it.
-    step_until(&mut harness, "the first save to start", |h| {
-        lock(&h.state().0.saves).next.is_none()
-    });
+fn keep_last(n: u32) -> Retention {
+    let mut policy = Retention::default();
+    policy.keep_last = NonZeroU32::new(n);
+    policy
+}
+
+#[test]
+fn an_edit_stays_on_this_pc_based_on_the_loaded_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let mut other = Storage::open(&location(dir.path()), "").unwrap();
+    retention::save(&mut other, &keep_last(5), &dir.path().join("stage")).unwrap();
+    let mut harness = harness_on(state);
+    step_until(&mut harness, "the policy to load", editable);
+    assert!(keeps_last(&harness));
+
     harness
         .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
         .set_value_accesskit(7.0);
     harness.step();
-    // The first save waits for the repository, so the second is queued behind it.
-    assert_eq!(
-        lock(&harness.state().0.saves)
-            .next
-            .and_then(|policy| policy.keep_last)
-            .map(NonZeroU32::get),
-        Some(7)
-    );
-
-    harness.state_mut().2 = false;
-    drop(held);
-    step_until(&mut harness, "the saves to end", |h| !h.state().0.busy());
-    assert_eq!(stored(dir.path()).keep_last.map(NonZeroU32::get), Some(7));
-}
-
-#[test]
-fn a_reset_keeps_a_running_save_busy() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut harness = harness(dir.path());
-    step_until(&mut harness, "the policy to load", editable);
-    let storage = storage(&harness.state().1);
-    let held = storage.lock().unwrap();
     harness
-        .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
-        .click();
+        .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
+        .set_value_accesskit(8.0);
     harness.step();
-
-    harness.state_mut().0.reset();
-    assert!(harness.state().0.busy());
-    drop(held);
-    // `busy` turns false when the job ends; `previous` is pruned by the next frame's poll.
-    step_until(&mut harness, "the save to end and be dropped", |h| {
-        !h.state().0.busy() && h.state().0.previous.is_empty()
+    // The earliest base wins.
+    let expected = retention::Unsent::new(keep_last(8), keep_last(5));
+    assert_eq!(unsent(&harness), Some(expected));
+    assert_eq!(
+        stored(dir.path()),
+        keep_last(5),
+        "the repository is unchanged"
+    );
+    assert!(
+        harness
+            .query_by_label("Saved to the repository with the next Back up.")
+            .is_some()
+    );
+    let config_dir = dir.path().join("config");
+    step_until(&mut harness, "the config to be saved", |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.retention_unsent == Some(expected))
     });
-    assert!(stored(dir.path()).keep_last.is_some());
 }
 
 #[test]
-fn a_panicking_save_is_no_longer_running() {
-    let saves = Arc::new(Mutex::new(Saves {
-        running: true,
-        ..Saves::default()
-    }));
-    let shared = saves.clone();
-    let panicked = std::thread::spawn(move || {
-        let _guard = PanicGuard(&shared);
-        panic!("a failing save");
-    })
-    .join();
-    assert!(panicked.is_err());
-    let saves = lock(&saves);
-    assert!(!saves.running);
-    assert!(saves.error.is_some());
+fn the_unsent_rules_show_over_the_loaded_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let unsent = retention::Unsent::new(keep_last(3), Retention::default());
+    state.config.as_mut().unwrap().retention_unsent = Some(unsent);
+    let mut harness = harness_on(state);
+    step_until(&mut harness, "the policy to load", editable);
+    assert!(keeps_last(&harness));
+    let shown = harness
+        .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
+        .accesskit_node()
+        .numeric_value();
+    assert_eq!(shown, Some(3.0));
+    assert!(stored(dir.path()).is_off());
 }
 
 #[test]
@@ -248,4 +244,60 @@ fn showing_the_tab_again_reloads_the_policy() {
     step_until(&mut harness, "the new policy", |h| {
         editable(h) && keeps_last(h)
     });
+}
+
+#[test]
+fn unsent_rules_over_a_newer_versions_can_be_discarded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    // Rules a newer salvajocs stored, which this PC's can never overwrite.
+    let staged = dir.path().join("newer");
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::write(staged.join("retention.json"), r#"{ "format": 2 }"#).unwrap();
+    let tags = ["salvajocs-settings", "settings:retention"];
+    let mut other = Storage::open(&location(dir.path()), "").unwrap();
+    let written = other.backup_dir(&staged, "/salvajocs-settings/retention", &tags, "Rules");
+    written.unwrap().unwrap();
+    let changed = retention::Unsent::new(keep_last(3), Retention::default());
+    state.config.as_mut().unwrap().retention_unsent = Some(changed);
+    let mut harness = harness_on(state);
+    step_until(&mut harness, "the load to fail", |h| {
+        h.query_by_label_contains("could not be read").is_some()
+    });
+    assert!(!editable(&harness));
+
+    harness.get_by_label("Discard this PC's changes").click();
+    harness.step();
+    assert_eq!(unsent(&harness), None);
+    harness.step();
+    assert!(
+        harness
+            .query_by_label("Discard this PC's changes")
+            .is_none()
+    );
+}
+
+#[test]
+fn discarding_shows_the_loaded_rules_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let changed = retention::Unsent::new(keep_last(3), Retention::default());
+    state.config.as_mut().unwrap().retention_unsent = Some(changed);
+    let mut harness = harness_on(state);
+    step_until(&mut harness, "the policy to load", editable);
+    assert!(keeps_last(&harness));
+
+    // Not while a Back up may be sending these rules.
+    harness.state_mut().0.backing_up = true;
+    harness.step();
+    let button = harness.get_by_label("Discard this PC's changes");
+    assert!(button.accesskit_node().is_disabled());
+    harness.state_mut().0.backing_up = false;
+    harness.step();
+
+    harness.get_by_label("Discard this PC's changes").click();
+    harness.step();
+    harness.step();
+    assert!(!keeps_last(&harness), "the repository keeps every backup");
+    assert_eq!(unsent(&harness), None);
 }

@@ -92,22 +92,29 @@ impl SettingsTab {
         self.retention.reset();
     }
 
-    /// Whether a repository change, compression change, retention save, keyring cleanup or
-    /// folder picker runs.
+    /// Reads the Old backups rules from the repository again, keeping every other edit.
+    pub fn reload_rules(&mut self) {
+        self.retention.reset();
+    }
+
+    /// Tells the Old backups section whether a Back up checks, asks, waits to start or runs, so
+    /// this PC's rules are not discarded while it may send them.
+    pub(crate) fn set_backing_up(&mut self, backing_up: bool) {
+        self.retention.backing_up = backing_up;
+    }
+
+    /// Whether a repository change, compression change, keyring cleanup or folder picker runs.
     pub(crate) fn busy(&self) -> bool {
         self.connect.as_ref().is_some_and(Connect::busy)
             || self.compression_job.is_some()
-            || self.retention.busy()
             || self.cleanup.is_some()
             || self.root_picker.is_some()
     }
 
-    /// Whether a repository creation, compression change or retention save runs, which closing
-    /// the app would cut short.
+    /// Whether a repository creation or compression change runs, which closing the app would
+    /// cut short.
     pub(crate) fn writing(&mut self) -> bool {
-        self.connect.as_mut().is_some_and(Connect::finishing)
-            || self.compression_job.is_some()
-            || self.retention.busy()
+        self.connect.as_mut().is_some_and(Connect::finishing) || self.compression_job.is_some()
     }
 
     /// Collects the finished compression change, folder picker and keyring cleanup. The app

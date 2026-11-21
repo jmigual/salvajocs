@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Response, RichText, Role, TextEdit, Ui, Vec2, WidgetInfo};
 use salvajocs_core::config::ListSort;
-use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
+use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
 use salvajocs_core::layout::{Context, GameVars, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
@@ -1085,9 +1085,8 @@ impl RestoreTab {
         } = prepared;
         match plan {
             Ok(labelled) => {
-                if let (false, Some(config)) = (choices.is_empty(), &mut state.config) {
-                    crossbuild::apply_choices(&mut config.custom_games, &fetched.title, &choices);
-                    state.save_mapping_choices(ctx, fetched.title.clone(), choices);
+                if !choices.is_empty() {
+                    state.apply_mapping_choices(ctx, &fetched.title, &choices);
                 }
                 self.mapping = None;
                 self.preview = Some(Preview::new(fetched, labelled));

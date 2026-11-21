@@ -753,6 +753,9 @@ pub struct BackupTab {
     cleared: Option<Weak<Mutex<Storage>>>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
+    /// A backup saved this PC's rules, or the question about them was answered, since
+    /// [`BackupTab::take_rules_changed`] last ran.
+    rules_changed: bool,
     /// The open mapping dialog: the game's title and the roots it shows.
     mapping: Option<(String, Vec<MappingEntry>, Dialog)>,
     /// The open details of a changed file; it only reads, so it is not counted as busy.
@@ -839,6 +842,7 @@ impl BackupTab {
                     let sent = !shared.games.is_empty() || shared.rules.is_some();
                     if sent && is_session(&source, state) {
                         state.custom_games_sent(ctx, &shared.games, shared.rules);
+                        self.rules_changed |= shared.rules.is_some();
                     }
                     self.shared = shared;
                 }
@@ -941,6 +945,13 @@ impl BackupTab {
         std::mem::take(&mut self.removed)
     }
 
+    /// Whether a finished backup saved this PC's Old backups rules, or the question about them
+    /// was answered, since the last call, so the rules shown in Settings are read again and the
+    /// next edit starts from them.
+    pub(crate) fn take_rules_changed(&mut self) -> bool {
+        std::mem::take(&mut self.rules_changed)
+    }
+
     /// Compares the shown report with the last backups when the repository is open, through
     /// the config's folder pairs for a backup of the other build. Replacing the job drops the
     /// comparison of an older report. Does nothing before the first scan.
@@ -1039,6 +1050,15 @@ impl BackupTab {
             || self.asking.is_some()
             || self.cleared.is_some()
             || self.choices.busy()
+    }
+
+    /// Whether a Back up was asked for and has not ended: its check, question, wait or job.
+    pub(crate) fn backing_up(&self) -> bool {
+        self.backup_requested
+            || self.checking.is_some()
+            || self.asking.is_some()
+            || self.cleared.is_some()
+            || self.running.is_some()
     }
 
     /// Whether a backup runs, which closing the app would cut short.
@@ -1392,6 +1412,7 @@ impl BackupTab {
             Some(Answer::BackUp) => {
                 if let Some(asking) = self.asking.take() {
                     self.cleared = Some(asking.source.clone());
+                    self.rules_changed |= asking.rules.is_some();
                     asking.apply(config);
                 }
                 state.save_config(ctx);
@@ -1414,10 +1435,7 @@ impl BackupTab {
         match action {
             Some(DialogAction::Confirm(choices)) => match crossbuild::resolve(entries, &choices) {
                 Ok(_) => {
-                    if let Some(config) = &mut state.config {
-                        crossbuild::apply_choices(&mut config.custom_games, title, &choices);
-                        state.save_mapping_choices(ctx, title.clone(), choices);
-                    }
+                    state.apply_mapping_choices(ctx, title, &choices);
                     self.mapping = None;
                     self.start_preview(ctx, state);
                 }

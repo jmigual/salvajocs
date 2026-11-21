@@ -12,13 +12,14 @@ use std::time::{Duration, Instant};
 use eframe::egui::accesskit::Role;
 use eframe::egui::{Key, Modifiers, Vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::{AccessKitNode, Queryable, by};
+use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::config::{AppConfig, PasswordMode};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::secret::{SecretError, SecretKey};
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
+use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
 
@@ -229,6 +230,24 @@ pub fn run_until_backed_up(harness: &mut Harness<'static, App>, result: &str) {
     run_until(harness, "the backup to finish", |h| {
         shows(h, result) && !shows(h, "Backed up ") && !shows(h, "Removing old backups")
     });
+}
+
+/// Presses Back up on the Backup tab before any scan, so only this PC's unsent custom games and
+/// rules are saved (ADR-0029), and waits until it ends showing `result`.
+pub fn back_up_unsent(harness: &mut Harness<'static, App>, result: &str) {
+    harness.state_mut().set_tab(Tab::Backup);
+    // The button waits for what to back up to load.
+    run_until(harness, "Back up to be enabled", |h| {
+        h.query_by_label("Back up")
+            .is_some_and(|button| !button.accesskit_node().is_disabled())
+    });
+    harness.get_by_label("Back up").click();
+    run_until(harness, "the backup", |h| {
+        shows(h, result)
+            && !shows(h, "Checking the repository")
+            && !shows(h, "Saving the custom games")
+    });
+    run_settled(harness);
 }
 
 /// Runs frames until the screen stops asking to be redrawn.

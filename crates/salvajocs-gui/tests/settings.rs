@@ -7,9 +7,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use common::{
-    MemorySecrets, env, env_with, harness, init_repo, init_repo_with, local_config, other_repo_dir,
-    refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled, run_until,
-    run_until_ready, save_config, shows,
+    MemorySecrets, back_up_unsent, env, env_with, harness, init_repo, init_repo_with, local_config,
+    other_repo_dir, refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled,
+    run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use eframe::egui::{OutputCommand, ThemePreference};
@@ -21,7 +21,6 @@ use salvajocs_core::layout::RootKind;
 use salvajocs_core::manifest::{CustomGame, GameEntry, Integration};
 use salvajocs_core::retention::{self, Retention, Unit};
 use salvajocs_core::secret::SecretKey;
-use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 use salvajocs_gui::env::SecretStore;
 use salvajocs_gui::tabs::Tab;
@@ -803,8 +802,15 @@ fn applying_a_new_location_keeps_the_ignored_prefixes() {
     assert_eq!(saved.ignored_prefixes, config.ignored_prefixes);
 }
 
+/// The settings snapshots of the repository at `repository`.
+fn settings_snapshots(repository: &str) -> usize {
+    let location = RepoLocation::new(repository.to_owned(), Default::default());
+    let storage = Storage::open(&location, "").unwrap();
+    storage.snapshots("salvajocs-settings").unwrap().len()
+}
+
 #[test]
-fn settings_new_repository_gets_this_pcs_custom_games() {
+fn settings_new_repository_gets_this_pcs_custom_games_at_back_up() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
     let repository = repo_dir(&tmp);
@@ -824,20 +830,23 @@ fn settings_new_repository_gets_this_pcs_custom_games() {
     run_until_saved(&mut harness, &env, |config| {
         config.custom_games_repository == Some(config.secret_scope())
     });
-
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(saved.custom_games, [game.clone()], "the prefix stays");
+    assert_eq!(saved.custom_games_unsent.len(), 1, "the change goes along");
+    // Neither repository holds a setting before the Back up.
+    assert_eq!(settings_snapshots(&repository), 0);
+    assert_eq!(settings_snapshots(&other), 0);
+
+    back_up_unsent(&mut harness, "Saved 1 custom game to the repository");
     let mut stored = game;
     stored.wine_prefix = None;
-    // Both repositories hold the game: the old one keeps its snapshot.
-    for repository in [repository, other] {
-        let location = RepoLocation::new(repository, Default::default());
-        let listed = custom_games::load_all(&mut Storage::open(&location, "").unwrap()).unwrap();
-        assert!(
-            matches!(&listed["Mine"], Ok(Stored::Game(game)) if **game == stored),
-            "{listed:?}"
-        );
-    }
+    let location = RepoLocation::new(other, Default::default());
+    let listed = custom_games::load_all(&mut Storage::open(&location, "").unwrap()).unwrap();
+    assert!(
+        matches!(&listed["Mine"], Ok(Stored::Game(game)) if **game == stored),
+        "{listed:?}"
+    );
+    assert_eq!(settings_snapshots(&repository), 0);
 }
 
 /// Applies the existing repository `repository` from the Settings form and waits until the app
@@ -850,7 +859,7 @@ fn apply_existing_location(harness: &mut Harness<'static, App>, env: &Env, repos
 }
 
 #[test]
-fn switching_back_after_a_failed_upload_keeps_the_other_repositorys_games() {
+fn unsent_custom_games_survive_a_switch_and_back() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
     let first = repo_dir(&tmp);
@@ -873,29 +882,29 @@ fn switching_back_after_a_failed_upload_keeps_the_other_repositorys_games() {
         config.custom_games_repository == Some(config.secret_scope())
     });
 
-    // A directory where Mine's file is staged makes its upload to the second repository fail.
-    let dir = env.cache_dir.join("stage").join("settings");
-    let staged = dir
-        .join("custom-games")
-        .join(slug("Mine"))
-        .join("custom-game.json");
-    std::fs::remove_file(&staged).unwrap();
-    std::fs::create_dir_all(&staged).unwrap();
     apply_existing_location(&mut harness, &env, &second);
     run_until_saved(&mut harness, &env, |config| config.custom_games.len() == 2);
-    assert!(shows(&harness, "Could not save the custom game Mine"));
+    let unsent = |config: &AppConfig| -> Vec<String> {
+        (config.custom_games_unsent.iter())
+            .map(|entry| entry.name.clone())
+            .collect()
+    };
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
-    assert_eq!(
-        saved.custom_games_repository, None,
-        "the next sync migrates"
-    );
+    assert_eq!(saved.custom_games, [mine.clone(), theirs.clone()]);
+    assert_eq!(unsent(&saved), ["Mine"]);
 
     apply_existing_location(&mut harness, &env, &first);
     run_until_saved(&mut harness, &env, |config| {
         config.custom_games_repository == Some(config.secret_scope())
+            && config.custom_games_unsent.len() == 2
     });
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(saved.custom_games, [mine, theirs.clone()]);
+    assert_eq!(unsent(&saved), ["Mine", "Theirs"]);
+    assert_eq!(settings_snapshots(&first), 0);
+    assert_eq!(settings_snapshots(&second), 1);
+
+    back_up_unsent(&mut harness, "Saved 2 custom games to the repository");
     let listed = custom_games::load_all(&mut open(&first)).unwrap();
     assert!(
         matches!(&listed["Theirs"], Ok(Stored::Game(game)) if **game == theirs),
@@ -1185,6 +1194,22 @@ fn location(repository: &str) -> RepoLocation {
     RepoLocation::new(repository.to_string(), Default::default())
 }
 
+/// Waits until this PC's unsent policy satisfies `ready`; saving the config is a background job.
+fn run_until_unsent(
+    harness: &mut Harness<'static, App>,
+    env: &Env,
+    ready: impl Fn(&Retention) -> bool,
+) {
+    let config_dir = env.config_dir.clone();
+    run_until(harness, "the policy to be kept", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .and_then(|config| config.retention_unsent)
+            .is_some_and(|unsent| ready(&unsent.policy))
+    });
+}
+
 /// Waits until the repository holds a policy satisfying `ready`; saving is a background job.
 fn run_until_policy(
     harness: &mut Harness<'static, App>,
@@ -1238,32 +1263,118 @@ fn old_backups_are_disabled_before_the_repository_opens() {
 }
 
 #[test]
-fn ticking_keep_last_saves_the_policy_in_the_repository() {
+fn ticking_keep_last_saves_the_policy_in_the_repository_at_back_up() {
     let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
     let repository = repo_dir(&tmp);
     init_repo(&repository);
-    let mut harness = open_retention(env(&tmp), &repository);
+    let mut harness = open_retention(env.clone(), &repository);
     assert!(shows(&harness, "All backups are kept"));
 
     harness
         .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
         .click();
-    run_until_policy(&mut harness, &repository, |policy| {
+    run_until_unsent(&mut harness, &env, |policy| {
         policy.keep_last.is_some() && policy.keep_within.is_none()
     });
     assert!(!shows(&harness, "All backups are kept"));
+    assert!(shows(
+        &harness,
+        "Saved to the repository with the next Back up."
+    ));
+    assert_eq!(
+        settings_snapshots(&repository),
+        0,
+        "the repository is unchanged"
+    );
+
+    back_up_unsent(&mut harness, "Saved the Old backups rules");
+    run_until_policy(&mut harness, &repository, |policy| {
+        policy.keep_last.is_some() && policy.keep_within.is_none()
+    });
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.retention_unsent, None);
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
+    assert!(!shows(
+        &harness,
+        "Saved to the repository with the next Back up."
+    ));
+}
+
+#[test]
+fn keeping_the_repositorys_rules_drops_this_pcs_and_shows_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut stored = Retention::default();
+    stored.keep_last = NonZeroU32::new(5);
+    let mut storage = Storage::open(&location(&repository), "").unwrap();
+    retention::save(&mut storage, &stored, &tmp.path().join("stage")).unwrap();
+    let mut config = local_config(&repository);
+    let mut mine = Retention::default();
+    mine.keep_last = NonZeroU32::new(3);
+    config.retention_unsent = Some(retention::Unsent::new(mine, Retention::default()));
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+    let shown = |h: &Harness<'static, App>, n: &str| {
+        h.query_by_role_and_label(Role::SpinButton, KEEP_LAST)
+            .and_then(|spin| spin.value())
+            .as_deref()
+            == Some(n)
+    };
+    run_until(&mut harness, "this PC's rules", |h| shown(h, "3"));
+    let written = settings_snapshots(&repository);
+
+    harness.state_mut().set_tab(Tab::Backup);
+    run_until(&mut harness, "Back up to be enabled", |h| {
+        h.query_by_label("Back up")
+            .is_some_and(|button| !button.accesskit_node().is_disabled())
+    });
+    harness.get_by_label("Back up").click();
+    run_until(&mut harness, "the question", |h| {
+        shows(h, "Changed on another PC")
+    });
+    harness.get_by_label("Keep the repository's").click();
+    run_settled(&mut harness);
+    let button = harness
+        .query_all_by_label("Back up")
+        .find(|node| !node.accesskit_node().is_disabled())
+        .unwrap();
+    button.click();
+    run_until(&mut harness, "the answer", |h| {
+        !shows(h, "Changed on another PC")
+    });
+    run_settled(&mut harness);
+
+    assert_eq!(
+        settings_snapshots(&repository),
+        written,
+        "nothing was written"
+    );
+    run_until_saved(&mut harness, &env, |config| {
+        config.retention_unsent.is_none()
+    });
+    harness.state_mut().set_tab(Tab::Settings);
+    run_until(&mut harness, "the repository's rules", |h| shown(h, "5"));
+    assert!(!shows(
+        &harness,
+        "Saved to the repository with the next Back up."
+    ));
 }
 
 #[test]
 fn changing_the_unit_saves_it() {
     let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
     let repository = repo_dir(&tmp);
     init_repo(&repository);
-    let mut harness = open_retention(env(&tmp), &repository);
+    let mut harness = open_retention(env.clone(), &repository);
     harness
         .get_by_role_and_label(Role::CheckBox, KEEP_WITHIN)
         .click();
-    run_until_policy(&mut harness, &repository, |policy| {
+    run_until_unsent(&mut harness, &env, |policy| {
         policy
             .keep_within
             .is_some_and(|within| within.unit == Unit::Months)
@@ -1274,7 +1385,7 @@ fn changing_the_unit_saves_it() {
         .click();
     run_settled(&mut harness);
     harness.get_by_label("weeks").click();
-    run_until_policy(&mut harness, &repository, |policy| {
+    run_until_unsent(&mut harness, &env, |policy| {
         policy
             .keep_within
             .is_some_and(|within| within.unit == Unit::Weeks)
@@ -1284,9 +1395,10 @@ fn changing_the_unit_saves_it() {
 #[test]
 fn keep_last_is_never_below_one() {
     let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
     let repository = repo_dir(&tmp);
     init_repo(&repository);
-    let mut harness = open_retention(env(&tmp), &repository);
+    let mut harness = open_retention(env.clone(), &repository);
     harness
         .get_by_role_and_label(Role::CheckBox, KEEP_LAST)
         .click();
@@ -1295,7 +1407,7 @@ fn keep_last_is_never_below_one() {
     harness
         .get_by_role_and_label(Role::SpinButton, KEEP_LAST)
         .set_value_accesskit(0.0);
-    run_until_policy(&mut harness, &repository, |policy| {
+    run_until_unsent(&mut harness, &env, |policy| {
         policy.keep_last.is_some_and(|n| n.get() == 1)
     });
     assert_eq!(

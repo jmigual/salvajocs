@@ -2,7 +2,6 @@ use std::num::NonZeroU32;
 use std::time::SystemTime;
 
 use super::*;
-use crate::layout::Base;
 use crate::manifest::{InstallDir, RegistryRule};
 use crate::retention::{self, DeleteError, Retention};
 use crate::storage::{Compression, RepoLocation};
@@ -335,7 +334,6 @@ fn newer_format_is_neither_loaded_nor_saved() {
     for result in [
         save(&mut storage, GAME, None, Some(&game(GAME)), &f.stage),
         save(&mut storage, GAME, None, None, &f.stage),
-        save_choices(&mut storage, GAME, None, &[choice()], &f.stage),
     ] {
         assert!(matches!(result, Err(CustomGameError::NewerFormat(2))));
     }
@@ -378,71 +376,6 @@ fn an_unknown_top_level_field_survives_a_rewrite() {
     assert!(json.get("skips").is_none());
 }
 
-fn choice() -> (SnapshotRoot, Choice) {
-    (
-        (Base::XdgData, "mapped".into()),
-        Choice::Template("<winAppData>/Mapped".into()),
-    )
-}
-
-#[test]
-fn choices_are_saved_on_the_newest_copy() {
-    let (f, mut storage) = Fixture::new();
-    f.save(&mut storage, GAME, None, Some(&game(GAME))).unwrap();
-    // Another PC adds a row after this one last loaded.
-    let mut theirs = game(GAME);
-    theirs
-        .files
-        .push(row("<xdgData>/theirs", "<winAppData>/Theirs"));
-    f.save(&mut f.open(), GAME, Some(&game(GAME)), Some(&theirs));
-
-    let saved = save_choices(&mut storage, GAME, None, &[choice()], &f.stage).unwrap();
-    let mut expected = theirs.clone();
-    expected.pairs.push(Pair {
-        linux: "<xdgData>/mapped".into(),
-        windows: "<winAppData>/Mapped".into(),
-    });
-    assert_eq!(saved.game.as_ref(), Some(&expected));
-    assert!(saved.written.is_some());
-    assert_eq!(
-        loaded(&mut f.open())[GAME],
-        Stored::Game(Box::new(expected))
-    );
-
-    // The same choice again changes nothing.
-    let again = save_choices(&mut storage, GAME, None, &[choice()], &f.stage).unwrap();
-    assert!(again.written.is_none());
-}
-
-#[test]
-fn choices_for_a_game_the_repository_lacks_make_an_extend_game() {
-    let (f, mut storage) = Fixture::new();
-    let saved = save_choices(&mut storage, GAME, None, &[choice()], &f.stage).unwrap();
-    let game = saved.game.unwrap();
-    assert_eq!(game.integration, Integration::Extend);
-    assert_eq!(loaded(&mut storage)[GAME], Stored::Game(Box::new(game)));
-}
-
-#[test]
-fn choices_for_a_local_game_the_repository_lacks_keep_its_definition() {
-    // A local game whose upload failed: the repository has no snapshot of it at all.
-    let (f, mut storage) = Fixture::new();
-    let mut local = with_prefix(game(GAME), "/prefixes/game");
-    local.integration = Integration::Override;
-    let saved = save_choices(&mut storage, GAME, Some(&local), &[choice()], &f.stage).unwrap();
-    let mut expected = vec![game(GAME)];
-    expected[0].integration = Integration::Override;
-    crossbuild::apply_choices(&mut expected, GAME, &[choice()]);
-    assert_ne!(
-        expected[0].pairs,
-        game(GAME).pairs,
-        "the choice adds a pair"
-    );
-    let game = saved.game.unwrap();
-    assert_eq!(game, expected[0]);
-    assert_eq!(loaded(&mut storage)[GAME], Stored::Game(Box::new(game)));
-}
-
 fn listed(
     entries: Vec<(&str, Result<Stored, CustomGameError>)>,
 ) -> BTreeMap<String, Result<Stored, CustomGameError>> {
@@ -455,194 +388,122 @@ fn names(games: &[CustomGame]) -> Vec<&str> {
     games.iter().map(|game| game.name.as_str()).collect()
 }
 
+fn stored(game: CustomGame) -> Result<Stored, CustomGameError> {
+    Ok(Stored::Game(Box::new(game)))
+}
+
 #[test]
 fn merge_keeps_the_local_order_and_appends_new_games_by_name() {
     let local = [game("B"), game("A")];
     let mut changed = game("A");
     changed.skips.clear();
     let listed = listed(vec![
-        ("D", Ok(Stored::Game(Box::new(game("D"))))),
-        ("A", Ok(Stored::Game(Box::new(changed.clone())))),
-        ("C", Ok(Stored::Game(Box::new(game("C"))))),
-        ("B", Ok(Stored::Game(Box::new(game("B"))))),
+        ("D", stored(game("D"))),
+        ("A", stored(changed.clone())),
+        ("C", stored(game("C"))),
+        ("B", stored(game("B"))),
     ]);
-    let merged = merge(&local, &listed, true);
+    let merged = merge(&local, &[], &listed, true);
     assert_eq!(names(&merged.games), ["B", "A", "C", "D"]);
     assert_eq!(merged.games[1], changed);
-    assert!(merged.upload.is_empty());
-    assert!(
-        merged.replaced.is_empty(),
-        "a mirror reports no replaced games"
-    );
+    assert!(merged.new_unsent.is_empty());
+    assert!(merged.complete);
 }
 
 #[test]
-fn merge_keeps_each_local_wine_prefix_by_name() {
-    let local = [with_prefix(game("A"), "/prefixes/a")];
+fn a_mirror_takes_the_repositorys_games_with_each_local_wine_prefix() {
+    let local = [
+        with_prefix(game("A"), "/prefixes/a"),
+        game("Removed"),
+        game("Unknown"),
+        game("Unreadable"),
+    ];
     let mut theirs = game("A");
     theirs.skips.clear();
-    let merged = merge(
-        &local,
-        &listed(vec![("A", Ok(Stored::Game(Box::new(theirs.clone()))))]),
-        true,
+    let listed = listed(vec![
+        ("A", stored(theirs.clone())),
+        ("Removed", Ok(Stored::Removed)),
+        ("Unreadable", Err(CustomGameError::NewerFormat(2))),
+    ]);
+    let merged = merge(&local, &[], &listed, true);
+    assert_eq!(
+        merged.games,
+        [
+            with_prefix(theirs, "/prefixes/a"),
+            game("Unknown"),
+            game("Unreadable")
+        ]
     );
-    assert_eq!(merged.games, [with_prefix(theirs, "/prefixes/a")]);
+    // A game the repository has no snapshot of is kept, to be sent as new.
+    assert_eq!(merged.new_unsent, [Unsent::new("Unknown".into(), None)]);
+    assert!(merged.complete);
 }
 
 #[test]
-fn merge_drops_removed_games_in_both_modes() {
-    let local = [with_prefix(game("A"), "/prefixes/a"), game("B")];
-    let listed = listed(vec![("A", Ok(Stored::Removed))]);
-    let mirrored = merge(&local, &listed, true);
-    assert_eq!(names(&mirrored.games), Vec::<&str>::new());
-    assert!(
-        mirrored.removed.is_empty(),
-        "a mirror reports no removed games"
+fn a_merge_leaves_every_unsent_game_as_this_pc_has_it() {
+    let mut mine = game("Edited");
+    mine.skips.clear();
+    let local = [mine.clone(), game("Added")];
+    let unsent = [
+        Unsent::new("Edited".into(), Some(game("Edited"))),
+        Unsent::new("Added".into(), None),
+        Unsent::new("Removed".into(), Some(game("Removed"))),
+    ];
+    let mut theirs = game("Edited");
+    theirs.files.clear();
+    let listed = listed(vec![
+        ("Edited", stored(theirs)),
+        ("Removed", stored(game("Removed"))),
+    ]);
+    for mirrors in [true, false] {
+        let merged = merge(&local, &unsent, &listed, mirrors);
+        assert_eq!(merged.games, local, "the removal is not added back");
+        assert!(merged.new_unsent.is_empty());
+    }
+}
+
+#[test]
+fn a_migration_keeps_every_local_game_and_marks_those_the_repository_differs_on() {
+    let local = [
+        with_prefix(game("Equal"), "/prefixes/equal"),
+        game("Lacking"),
+        game("Other"),
+        game("Removed"),
+    ];
+    let mut other = game("Other");
+    other.integration = Integration::Override;
+    let listed = listed(vec![
+        ("Equal", stored(game("Equal"))),
+        ("Other", stored(other)),
+        ("Removed", Ok(Stored::Removed)),
+        ("Theirs", stored(game("Theirs"))),
+    ]);
+    let merged = merge(&local, &[], &listed, false);
+    assert_eq!(
+        names(&merged.games),
+        ["Equal", "Lacking", "Other", "Removed", "Theirs"]
     );
-    let migrated = merge(&local, &listed, false);
-    assert_eq!(names(&migrated.games), ["B"]);
-    assert_eq!(migrated.upload, ["B"]);
-    assert_eq!(migrated.removed, ["A"]);
-}
-
-#[test]
-fn merge_drops_unknown_games_when_mirroring_and_uploads_them_when_migrating() {
-    let local = [game("Local"), game("Both")];
-    let listed = listed(vec![("Both", Ok(Stored::Game(Box::new(game("Both")))))]);
-    assert_eq!(names(&merge(&local, &listed, true).games), ["Both"]);
-
-    let migrated = merge(&local, &listed, false);
-    assert_eq!(names(&migrated.games), ["Local", "Both"]);
-    assert_eq!(migrated.upload, ["Local"]);
-    assert!(
-        migrated.replaced.is_empty(),
-        "equal copies are not replaced"
+    assert_eq!(merged.games[..4], local);
+    assert_eq!(
+        merged.new_unsent,
+        ["Lacking", "Other", "Removed"].map(|name| Unsent::new(name.into(), Some(game(name))))
     );
+    assert!(merged.complete);
 }
 
 #[test]
-fn merge_takes_the_repository_version_when_migrating_and_names_the_game() {
-    let local = [with_prefix(game("A"), "/prefixes/a")];
-    let mut repository = game("A");
-    repository.integration = Integration::Override;
-    let listed = listed(vec![("A", Ok(Stored::Game(Box::new(repository.clone()))))]);
-    let migrated = merge(&local, &listed, false);
-    assert_eq!(migrated.games, [with_prefix(repository, "/prefixes/a")]);
-    assert_eq!(migrated.replaced, ["A"]);
-    assert!(migrated.upload.is_empty());
-}
-
-#[test]
-fn merge_keeps_the_local_copy_of_an_unreadable_game() {
+fn a_migration_that_meets_an_unreadable_copy_is_incomplete() {
     let local = [game("A")];
     let listed = listed(vec![
         ("A", Err(CustomGameError::NewerFormat(2))),
         ("B", Err(CustomGameError::NotWritten)),
     ]);
-    for mirrors in [true, false] {
-        let merged = merge(&local, &listed, mirrors);
-        assert_eq!(merged.games, local);
-        assert!(merged.upload.is_empty());
-    }
-}
-
-#[test]
-fn sync_uploads_this_pcs_games_once_and_the_repository_wins_a_conflict() {
-    let (f, mut storage) = Fixture::new();
-    let mut theirs = game("Shared");
-    theirs.integration = Integration::Override;
-    f.save(&mut f.open(), "Shared", None, Some(&theirs));
-    f.save(&mut f.open(), "Theirs", None, Some(&game("Theirs")));
-
-    let local = [
-        with_prefix(game("Shared"), "/prefixes/shared"),
-        game("Mine"),
-    ];
-    let synced = sync(&mut storage, &local, false, &f.stage).unwrap();
-    assert_eq!(synced.uploaded, ["Mine"]);
-    assert_eq!(synced.replaced, ["Shared"]);
-    assert!(synced.failed.is_empty());
-    assert!(synced.complete);
-    assert!(synced.unreadable.is_empty());
-    assert_eq!(
-        synced.games,
-        [
-            with_prefix(theirs.clone(), "/prefixes/shared"),
-            game("Mine"),
-            game("Theirs"),
-        ]
-    );
-    assert_eq!(
-        loaded(&mut f.open())["Shared"],
-        Stored::Game(Box::new(theirs))
-    );
-
-    let before = ids(&storage);
-    let again = sync(&mut storage, &synced.games, true, &f.stage).unwrap();
-    assert!(again.uploaded.is_empty());
-    assert_eq!(again.games, synced.games);
-    assert_eq!(ids(&storage), before);
-}
-
-#[test]
-fn sync_reports_a_local_game_the_repository_removed_when_migrating() {
-    let (f, mut storage) = Fixture::new();
-    let mut other = f.open();
-    f.save(&mut other, "Gone", None, Some(&game("Gone")));
-    f.save(&mut other, "Gone", Some(&game("Gone")), None);
-    let before = ids(&storage);
-
-    let local = [with_prefix(game("Gone"), "/prefixes/gone"), game("Kept")];
-    let synced = sync(&mut storage, &local, false, &f.stage).unwrap();
-    assert_eq!(synced.removed, ["Gone"]);
-    assert_eq!(synced.games, [game("Kept")]);
-    assert_eq!(synced.uploaded, ["Kept"]);
-    assert_eq!(loaded(&mut f.open())["Gone"], Stored::Removed);
-    assert_eq!(
-        ids(&storage).len(),
-        before.len() + 1,
-        "only Kept was written"
-    );
-}
-
-#[test]
-fn sync_reports_unreadable_games() {
-    let (f, mut storage) = Fixture::new();
-    f.write_raw(&mut storage, GAME, r#"{ "format": 2 }"#);
-    let synced = sync(&mut storage, &[game(GAME)], true, &f.stage).unwrap();
-    assert_eq!(synced.games, [game(GAME)]);
-    assert!(matches!(
-        synced.unreadable[GAME],
-        CustomGameError::NewerFormat(2)
-    ));
-    assert!(synced.complete, "a mirror stays a mirror");
-
-    // Migrating, the local copy of an unreadable game was never compared with the repository's.
-    let synced = sync(&mut storage, &[game(GAME)], false, &f.stage).unwrap();
-    assert_eq!(synced.games, [game(GAME)]);
-    assert!(!synced.complete);
+    let merged = merge(&local, &[], &listed, false);
+    assert_eq!(merged.games, local);
+    assert!(merged.new_unsent.is_empty());
+    assert!(!merged.complete);
     // An unreadable game this PC lacks leaves nothing to compare.
-    let synced = sync(&mut storage, &[], false, &f.stage).unwrap();
-    assert!(synced.complete);
-}
-
-#[test]
-fn sync_with_a_failed_upload_is_incomplete() {
-    let (f, mut storage) = Fixture::new();
-    // A directory where the game's file is staged makes its upload fail.
-    let blocked = (f.stage.join("settings").join(STAGE_DIR))
-        .join(slug("Blocked"))
-        .join(GAME_FILE);
-    fs::create_dir_all(&blocked).unwrap();
-    let local = [game("Blocked"), game("Mine")];
-    let synced = sync(&mut storage, &local, false, &f.stage).unwrap();
-    assert_eq!(synced.uploaded, ["Mine"]);
-    assert!(matches!(
-        synced.failed.as_slice(),
-        [(name, CustomGameError::Io { .. })] if name == "Blocked"
-    ));
-    assert!(!synced.complete);
-    assert_eq!(synced.games, local, "the game that failed stays");
+    assert!(merge(&[], &[], &listed, false).complete);
 }
 
 #[test]

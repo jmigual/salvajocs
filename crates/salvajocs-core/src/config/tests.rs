@@ -662,23 +662,6 @@ fn unsent_rules_that_do_not_parse_read_as_none() {
 }
 
 #[test]
-fn the_config_before_custom_games_is_copied_once() {
-    let tmp = tempfile::tempdir().unwrap();
-    let copy = tmp.path().join(BEFORE_CUSTOM_GAMES_FILE);
-    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
-    assert!(!copy.exists(), "no config, no copy");
-
-    let mut config = sample();
-    config.save(tmp.path()).unwrap();
-    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
-    config.custom_games.clear();
-    config.save(tmp.path()).unwrap();
-    AppConfig::keep_before_custom_games(tmp.path()).unwrap();
-    let copied: AppConfig = serde_saphyr::from_str(&fs::read_to_string(&copy).unwrap()).unwrap();
-    assert_eq!(copied, sample());
-}
-
-#[test]
 fn unknown_fields_are_accepted() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(

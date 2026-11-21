@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use eframe::egui::{self, Role, Ui, WidgetInfo};
 use salvajocs_core::config::AppConfig;
-use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
+use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
 use salvajocs_core::manifest::Manifest;
 use salvajocs_core::restore::{self, GameBackups, PrepareError, RestorePlan, WriteState};
 use salvajocs_core::scan::Environment;
@@ -336,10 +336,7 @@ impl RestoreTab {
         };
         match plan {
             Ok(labelled) => {
-                if let Some(config) = &mut state.config {
-                    crossbuild::apply_choices(&mut config.custom_games, &game.title, &choices);
-                    state.save_mapping_choices(ctx, game.title.clone(), choices);
-                }
+                state.apply_mapping_choices(ctx, &game.title, &choices);
                 let (fetched, snapshot) = (mapping.fetched.clone(), mapping.snapshot.clone());
                 game.outcome =
                     Outcome::Planned(Box::new(Planned::new(fetched, snapshot, labelled)));

@@ -24,9 +24,6 @@ use services::{OPENDAL_SERVICES, opendal_reads_key};
 
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";
-/// The copy of the config file taken before the repository's custom games first replaced one of
-/// this PC's (ADR-0028).
-pub const BEFORE_CUSTOM_GAMES_FILE: &str = "config-before-custom-games.yaml";
 
 /// Errors from reading, writing and resolving the config.
 #[derive(Debug, thiserror::Error)]
@@ -407,20 +404,6 @@ impl AppConfig {
         file.sync_all()?;
         fs::rename(&tmp, dir.join(CONFIG_FILE))?;
         Ok(())
-    }
-
-    /// Copies `dir/config.yaml` to [`BEFORE_CUSTOM_GAMES_FILE`] in `dir`, unless that copy
-    /// exists, so the custom games it held before the repository's replaced them can be
-    /// recovered by hand (ADR-0028). A missing config file copies nothing.
-    pub fn keep_before_custom_games(dir: &Path) -> io::Result<()> {
-        let copy = dir.join(BEFORE_CUSTOM_GAMES_FILE);
-        if copy.try_exists()? {
-            return Ok(());
-        }
-        match fs::copy(dir.join(CONFIG_FILE), copy) {
-            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-            _ => Ok(()),
-        }
     }
 
     /// The keyring scope of this repository: JSON of the repository string and its sorted

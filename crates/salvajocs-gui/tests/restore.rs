@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    env, harness, init_repo, local_config, record_opened, replace_text, repo_dir, run_settled,
-    run_until, run_until_ready, save_config, shows, shows_path,
+    back_up_unsent, env, harness, init_repo, local_config, record_opened, replace_text, repo_dir,
+    run_settled, run_until, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -1500,9 +1500,11 @@ fn restore_dialog_confirm_saves_all_roots_as_pairs() {
 }
 
 #[test]
-fn restore_mapping_choice_is_saved_to_the_repository() {
+fn restore_mapping_choice_and_restore_write_no_settings_until_back_up() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, env) = mix(&tmp);
+    let settings = || open_repo(&tmp).snapshots("salvajocs-settings").unwrap();
+    assert!(settings().is_empty(), "the open writes nothing");
     replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
     harness.get_by_label("Use these folders").click();
     run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
@@ -1510,76 +1512,24 @@ fn restore_mapping_choice_is_saved_to_the_repository() {
     let games = run_until_saved(&mut harness, &env, |games| {
         games.iter().any(|game| !game.pairs.is_empty())
     });
+    assert!(settings().is_empty(), "the choice stays on this PC");
+    // The safety backup of a file the restore replaces sends nothing either.
+    let target = under(&home(&tmp), ".local/share/Mix/a.sav");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "old").unwrap();
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Mix"));
+    assert!(settings().is_empty(), "the restore writes no settings");
+    assert!(!snapshots(&tmp, "pre-restore").is_empty());
+
+    back_up_unsent(&mut harness, "Saved 1 custom game to the repository");
     // Another PC reads the same mapping from the repository (ADR-0028).
     let stored = custom_games::load_all(&mut open_repo(&tmp)).unwrap();
     let Ok(Stored::Game(game)) = &stored["Mix"] else {
         panic!("Mix is not in the repository: {stored:?}");
     };
     assert_eq!(game.pairs, games[0].pairs);
-}
-
-#[test]
-fn restore_mapping_choice_for_a_game_whose_upload_failed_keeps_its_definition() {
-    let tmp = tempfile::tempdir().unwrap();
-    let files = [
-        "<winLocalAppDataLow>/Co/Mix",
-        "<winAppData>/Mix",
-        "<xdgData>/Mix",
-        "<xdgConfig>/MixCfg",
-    ];
-    let game = custom("Mix", &files, None, Vec::new());
-    let snapshot = scan(
-        &tmp,
-        "Mix",
-        &[
-            (Base::WinLocalAppDataLow, "Co/Mix/b.sav"),
-            (Base::WinAppData, "Mix/a.sav"),
-        ],
-        &[
-            (Base::WinLocalAppDataLow, "Co/Mix"),
-            (Base::WinAppData, "Mix"),
-        ],
-    );
-    // A directory where Mix's file is staged makes its first upload fail.
-    let mut blocked = None;
-    let (mut harness, env) = open_tab_with(&tmp, vec![game.clone()], &[snapshot], &[], |env| {
-        let dir = env
-            .cache_dir
-            .join("stage")
-            .join("settings")
-            .join("custom-games");
-        let staged = dir
-            .join(salvajocs_core::slug::slug("Mix"))
-            .join("custom-game.json");
-        fs::create_dir_all(&staged).unwrap();
-        blocked = Some(staged);
-    });
-    run_until(&mut harness, "the failed upload", |h| {
-        shows(h, "Could not save the custom game Mix")
-    });
-    fs::remove_dir_all(blocked.unwrap()).unwrap();
-    // The notice names Mix too, so the list may not be there yet.
-    run_until(&mut harness, "the list", |h| {
-        h.query_all_by_label("Mix").next().is_some()
-    });
-    select(&mut harness, "Mix");
-    preview(&mut harness);
-    click(&mut harness, "Choose folders…");
-    replace_text(&mut harness, "Target 2", "<xdgData>/Mix");
-    harness.get_by_label("Use these folders").click();
-    run_until(&mut harness, "the plan", |h| shows(h, "Files to write (2)"));
-
-    let games = run_until_saved(&mut harness, &env, |games| {
-        games.iter().any(|game| !game.pairs.is_empty())
-    });
-    // The choices go on this PC's definition, which the repository then holds.
-    assert_eq!(games[0].integration, Integration::Override);
-    assert_eq!(games[0].entry, game.entry);
-    let stored = custom_games::load_all(&mut open_repo(&tmp)).unwrap();
-    assert!(
-        matches!(&stored["Mix"], Ok(Stored::Game(stored)) if **stored == games[0]),
-        "{stored:?}"
-    );
 }
 
 #[test]

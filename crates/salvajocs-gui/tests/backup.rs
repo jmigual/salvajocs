@@ -127,9 +127,9 @@ fn start_app(
     save_config(&env, &config);
     let mut harness = harness(env.clone());
     run_until_ready(&mut harness);
-    // The custom games' first sync rewrites the config once (ADR-0028).
+    // The custom games' first read rewrites the config once (ADR-0028).
     let config_dir = env.config_dir.clone();
-    run_until(&mut harness, "the custom games to be synced", move |_| {
+    run_until(&mut harness, "the custom games to be read", move |_| {
         AppConfig::load(&config_dir)
             .ok()
             .flatten()

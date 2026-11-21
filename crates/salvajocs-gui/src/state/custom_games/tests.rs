@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -5,7 +6,7 @@ use salvajocs_core::config::PasswordMode;
 use salvajocs_core::layout::Base;
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{GameEntry, Integration};
-use salvajocs_core::storage::{Compression, RepoLocation};
+use salvajocs_core::storage::{Compression, RepoLocation, Storage};
 
 use super::*;
 use crate::env::{Env, MemorySecrets};
@@ -21,31 +22,12 @@ fn game(name: &str, prefix: Option<&str>) -> CustomGame {
 fn a_put_replaces_the_named_game_in_place_or_appends() {
     let mut games = vec![game("A", Some("/a")), game("B", None)];
     // A rename takes the old game's place.
-    apply(
-        &mut games,
-        Update::Put {
-            at: "A".into(),
-            game: Box::new(game("Renamed", Some("/form"))),
-            keep_prefix: false,
-        },
-    );
-    // The repository's copy keeps this PC's prefix.
-    apply(
-        &mut games,
-        Update::Put {
-            at: "Renamed".into(),
-            game: Box::new(game("Renamed", None)),
-            keep_prefix: true,
-        },
-    );
-    apply(
-        &mut games,
-        Update::Put {
-            at: "C".into(),
-            game: Box::new(game("C", None)),
-            keep_prefix: true,
-        },
-    );
+    let put = |at: &str, game: CustomGame| Update::Put {
+        at: at.into(),
+        game: Box::new(game),
+    };
+    apply(&mut games, put("A", game("Renamed", Some("/form"))));
+    apply(&mut games, put("C", game("C", None)));
     assert_eq!(
         games,
         [
@@ -87,7 +69,9 @@ fn state(dir: &Path) -> State {
         storage: Arc::new(Mutex::new(storage)),
         space: Default::default(),
     });
-    state.config = Some(AppConfig::new(repository, PasswordMode::Ask));
+    let mut config = AppConfig::new(repository, PasswordMode::Ask);
+    config.custom_games_repository = Some(config.secret_scope());
+    state.config = Some(config);
     state
 }
 
@@ -100,76 +84,127 @@ fn poll_until_idle(state: &mut State, ctx: &egui::Context) {
     }
 }
 
+fn config(state: &State) -> &AppConfig {
+    state.config.as_ref().unwrap()
+}
+
+/// Saves `game` to the repository of `state` as another PC would.
+fn save_elsewhere(state: &State, dir: &Path, game: &CustomGame) {
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let mut storage = storage.lock().unwrap();
+    let stage = dir.join("elsewhere");
+    custom_games::save(&mut storage, &game.name, None, Some(game), &stage).unwrap();
+}
+
 #[test]
-fn only_saves_and_syncs_that_upload_count_as_writing() {
+fn edits_mark_the_names_they_change_with_the_earliest_base() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = egui::Context::default();
     let mut state = state(tmp.path());
-    let storage = state.session.as_ref().unwrap().storage.clone();
-    let config = state.config.as_mut().unwrap();
-    config.custom_games_repository = Some(config.secret_scope());
+    let old = game("Old", Some("/old"));
+    state.config.as_mut().unwrap().custom_games = vec![old.clone()];
 
-    // Holding the repository keeps each job waiting for it.
-    let parked = storage.lock().unwrap();
-    state.sync_custom_games(&ctx);
-    assert!(state.busy());
-    assert!(!state.writing(), "a sync of a mirror only reads");
-    let edit = Edit {
-        based_on: None,
-        game: Some(game("New", None)),
+    // The Wine prefix alone is never stored, so it leaves nothing unsent.
+    let moved = game("Old", Some("/moved"));
+    let edit = |based_on: &CustomGame, game: Option<CustomGame>| Edit {
+        based_on: Some(based_on.clone()),
+        game,
     };
-    state.edit_custom_game(&ctx, edit);
-    assert!(state.writing(), "a save waits");
-    drop(parked);
-    poll_until_idle(&mut state, &ctx);
+    state.edit_custom_game(&ctx, edit(&old, Some(moved.clone())));
+    assert_eq!(config(&state).custom_games, std::slice::from_ref(&moved));
+    assert!(config(&state).custom_games_unsent.is_empty());
 
-    state.config.as_mut().unwrap().custom_games_repository = None;
-    let parked = storage.lock().unwrap();
-    state.sync_custom_games(&ctx);
-    assert!(state.writing(), "a sync that migrates uploads");
-    drop(parked);
-    poll_until_idle(&mut state, &ctx);
-}
+    let mut renamed = moved.clone();
+    renamed.name = "New".into();
+    state.edit_custom_game(&ctx, edit(&moved, Some(renamed.clone())));
+    let mut edited = renamed.clone();
+    edited.integration = Integration::Override;
+    state.edit_custom_game(&ctx, edit(&renamed, Some(edited.clone())));
+    assert_eq!(config(&state).custom_games, [edited.clone()]);
+    assert_eq!(
+        config(&state).custom_games_unsent,
+        [
+            Unsent::new("Old".into(), Some(moved)),
+            Unsent::new("New".into(), None)
+        ]
+    );
 
-/// The notices left once the job that `queue` starts ends, another repository connected meanwhile.
-fn connect_another_meanwhile(queue: impl FnOnce(&mut State, &egui::Context)) -> Vec<String> {
-    let tmp = tempfile::tempdir().unwrap();
-    let ctx = egui::Context::default();
-    let mut state = state(tmp.path());
-    let storage = state.session.as_ref().unwrap().storage.clone();
-    let parked = storage.lock().unwrap();
-    queue(&mut state, &ctx);
-    assert!(state.custom_games.saving());
-    state.config.as_mut().unwrap().repository = tmp.path().join("other").to_str().unwrap().into();
-    drop(parked);
+    state.edit_custom_game(&ctx, edit(&edited, None));
+    assert!(config(&state).custom_games.is_empty());
+    assert_eq!(config(&state).custom_games_unsent.len(), 2);
     poll_until_idle(&mut state, &ctx);
-    state.notices
+    let saved = AppConfig::load(&tmp.path().join("config"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.custom_games_unsent,
+        config(&state).custom_games_unsent
+    );
 }
 
 #[test]
-fn a_remove_or_choices_for_a_repository_no_longer_used_say_they_were_not_applied() {
-    let notices = connect_another_meanwhile(|state, ctx| {
-        let edit = Edit {
-            based_on: Some(game("Gone", None)),
-            game: None,
-        };
-        state.edit_custom_game(ctx, edit);
-    });
-    assert!(
-        matches!(notices.as_slice(), [notice] if notice.starts_with("Gone was not removed here")),
-        "{notices:?}"
+fn mapping_choices_mark_the_game_only_when_they_change_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    let choice = (
+        (Base::XdgData, "Foo".to_owned()),
+        Choice::Template("<winAppData>/Foo".to_owned()),
     );
+    state.apply_mapping_choices(&ctx, "Mapped", std::slice::from_ref(&choice));
+    assert_eq!(config(&state).custom_games.len(), 1);
+    let marked = [Unsent::new("Mapped".into(), None)];
+    assert_eq!(config(&state).custom_games_unsent, marked);
 
-    let notices = connect_another_meanwhile(|state, ctx| {
-        let choice = (
-            (Base::XdgData, "Foo".to_owned()),
-            Choice::Template("<winAppData>/Foo".to_owned()),
-        );
-        state.save_mapping_choices(ctx, "Mapped".into(), vec![choice]);
-    });
-    let said = |notice: &String| notice.starts_with("The folder choices for Mapped");
+    state.config.as_mut().unwrap().custom_games_unsent.clear();
+    state.apply_mapping_choices(&ctx, "Mapped", &[choice]);
     assert!(
-        matches!(notices.as_slice(), [notice] if said(notice)),
-        "{notices:?}"
+        config(&state).custom_games_unsent.is_empty(),
+        "the same choice"
     );
+    poll_until_idle(&mut state, &ctx);
+}
+
+#[test]
+fn an_edit_made_while_a_read_runs_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    save_elsewhere(&state, tmp.path(), &game("Theirs", None));
+    let storage = state.session.as_ref().unwrap().storage.clone();
+
+    let parked = storage.lock().unwrap();
+    state.read_custom_games(&ctx);
+    let added = Edit {
+        based_on: None,
+        game: Some(game("Mine", None)),
+    };
+    state.edit_custom_game(&ctx, added);
+    drop(parked);
+    poll_until_idle(&mut state, &ctx);
+
+    assert_eq!(
+        config(&state).custom_games,
+        [game("Mine", None), game("Theirs", None)]
+    );
+}
+
+#[test]
+fn a_read_that_started_before_a_back_up_ended_is_read_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+
+    state.read_custom_games(&ctx);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while (state.custom_games.reading.as_mut()).is_some_and(|reading| reading.job.is_running()) {
+        assert!(Instant::now() < deadline, "the read never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // A Back up saves a game after the read listed the repository, and ends before it is taken.
+    save_elsewhere(&state, tmp.path(), &game("Sent", None));
+    state.custom_games_sent(&ctx, &[], None);
+    poll_until_idle(&mut state, &ctx);
+
+    assert_eq!(config(&state).custom_games, [game("Sent", None)]);
 }

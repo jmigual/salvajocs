@@ -16,7 +16,7 @@ use crate::startup::Credentials;
 
 mod custom_games;
 
-pub use custom_games::{CustomGameJobs, Edit, EditError};
+pub use custom_games::{CustomGameJobs, Edit};
 
 /// The open repository, shared with the jobs that work on it.
 pub type SharedStorage = Arc<Mutex<Storage>>;
@@ -87,7 +87,7 @@ pub struct State {
     pub stale: Option<StaleCredentials>,
     /// Messages for the banner, until dismissed.
     pub notices: Vec<String>,
-    /// The sync and saves of the custom games in the repository (ADR-0028).
+    /// The reads of the custom games in the repository (ADR-0028, ADR-0029).
     pub custom_games: CustomGameJobs,
     saving: Option<Job<()>>,
     save_again: bool,
@@ -121,8 +121,8 @@ impl State {
     /// Makes a repository the user just connected the current one and saves the config. Roots,
     /// custom games and their unsent changes, the unsent Old backups rules, the update setting,
     /// the theme, the sorts and the ignored prefixes come from the current config, which may
-    /// have changed since the form was built. Then syncs the custom games, so this PC's go to a
-    /// repository that lacks them (ADR-0028).
+    /// have changed since the form was built. Then reads the custom games of the new
+    /// repository, which writes nothing to it (ADR-0029).
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -152,7 +152,7 @@ impl State {
         self.credentials = credentials;
         self.notices.extend(warnings);
         self.save_config(ctx);
-        self.sync_custom_games(ctx);
+        self.read_custom_games(ctx);
     }
 
     /// Writes the config in the background. A save already running is followed by another, so
@@ -182,15 +182,14 @@ impl State {
         }));
     }
 
-    /// Whether a config save, a keyring write or a custom games job is running.
+    /// Whether a config save, a keyring write or a custom games read is running.
     pub(crate) fn busy(&self) -> bool {
         self.saving.is_some() || self.remembering.is_some() || self.custom_games.busy()
     }
 
-    /// Whether a config save, a keyring write or a custom games job that writes
-    /// ([`CustomGameJobs::writing`]) is running.
+    /// Whether a config save or a keyring write is running.
     pub(crate) fn writing(&self) -> bool {
-        self.saving.is_some() || self.remembering.is_some() || self.custom_games.writing()
+        self.saving.is_some() || self.remembering.is_some()
     }
 
     /// Collects finished background work, reporting failures.

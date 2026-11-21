@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::crossbuild::{self, Choice, SnapshotRoot};
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair};
 use crate::selection::forget_listed;
 use crate::slug::slug;
@@ -248,31 +247,6 @@ pub fn save(
         return Err(CustomGameError::Changed(newest.map(Box::new)));
     }
     write(storage, name, new, &read, stage_root)
-}
-
-/// Saves the restore mapping `choices` of the game `title` ([`crossbuild::apply_choices`]) on
-/// the repository's newest copy of it, so another PC's newer rows are kept. When the repository
-/// has no snapshot of it at all (its upload failed), they go on `local`, this PC's copy; a game
-/// neither has, or the repository removed, becomes an `Extend` game. Writes and forgets as
-/// [`save`] does.
-///
-/// # Errors
-/// As [`save`], but never [`CustomGameError::Changed`].
-pub fn save_choices(
-    storage: &mut Storage,
-    title: &str,
-    local: Option<&CustomGame>,
-    choices: &[(SnapshotRoot, Choice)],
-    stage_root: &Path,
-) -> Result<Saved, CustomGameError> {
-    storage.reindex()?;
-    let read = read_newest(storage, title)?;
-    let mut games: Vec<CustomGame> = match read.file {
-        None => local.map(shared).into_iter().collect(),
-        Some(_) => read.game()?.into_iter().collect(),
-    };
-    crossbuild::apply_choices(&mut games, title, choices);
-    write(storage, title, games.first(), &read, stage_root)
 }
 
 /// A game's newest snapshot as read for a save, with the ids of all its snapshots listed then,
@@ -544,46 +518,60 @@ pub fn after_send(
 pub struct Merged {
     /// The new local copy: the local order, then the repository's other games by name.
     pub games: Vec<CustomGame>,
-    /// Local games the repository has no snapshot of, to upload; only when migrating.
-    pub upload: Vec<String>,
-    /// Local games whose copy differed from the repository's, which replaced it; only when
-    /// migrating.
-    pub replaced: Vec<String>,
-    /// Local games dropped because the repository removed them; only when migrating.
-    pub removed: Vec<String>,
+    /// Local games a migration keeps that the repository lacks or holds otherwise, as unsent
+    /// changes based on this PC's copy, so Back up saves them or asks.
+    pub new_unsent: Vec<Unsent>,
+    /// Whether every local game was compared with the repository's copy, so the copy may be
+    /// marked as mirroring it; a migration that met an unreadable copy is not.
+    pub complete: bool,
 }
 
-/// Merges the repository's custom games `listed` ([`load_all`]) into this PC's `local` copy.
-/// Each local game in order takes the repository's shared fields and keeps its Wine prefix; a
-/// removed one is dropped; an unreadable one stays as it is. Then the repository's games the
-/// copy lacks are appended by name. A local game the repository has no snapshot of is dropped
-/// when `mirrors` (the copy mirrors this repository), else it is kept and listed to upload.
+/// Merges the repository's custom games `listed` ([`load_all`]) into this PC's `local` copy
+/// (ADR-0029). A name with an entry in `unsent` stays as this PC has it, a removal included.
+/// When `mirrors` (the copy mirrors this repository), each other local game takes the
+/// repository's shared fields and keeps its Wine prefix; a removed one is dropped; an unreadable
+/// one stays, and so does one the repository has no snapshot of, as a new game to send, so a
+/// copy wrongly marked as mirroring loses nothing. Otherwise (a migration) each local
+/// game stays: one equal to the repository's copy as it is, any other as a new unsent change.
+/// Then the repository's games the copy and `unsent` lack are appended by name.
 pub fn merge(
     local: &[CustomGame],
+    unsent: &[Unsent],
     listed: &BTreeMap<String, Result<Stored, CustomGameError>>,
     mirrors: bool,
 ) -> Merged {
-    let mut merged = Merged::default();
+    let is_unsent = |name: &str| unsent.iter().any(|entry| entry.name == name);
+    let mut merged = Merged {
+        complete: true,
+        ..Merged::default()
+    };
     for game in local {
-        match listed.get(&game.name) {
-            Some(Ok(Stored::Game(stored))) => {
-                if !mirrors && shared(game) != **stored {
-                    merged.replaced.push(game.name.clone());
-                }
-                merged.games.push(CustomGame {
-                    wine_prefix: game.wine_prefix.clone(),
-                    ..(**stored).clone()
-                });
+        let stored = listed.get(&game.name);
+        if is_unsent(&game.name) {
+            merged.games.push(game.clone());
+            continue;
+        }
+        match stored {
+            Some(Ok(Stored::Game(stored))) if mirrors => merged.games.push(CustomGame {
+                wine_prefix: game.wine_prefix.clone(),
+                ..(**stored).clone()
+            }),
+            Some(Ok(Stored::Removed)) if mirrors => {}
+            None if mirrors => {
+                merged.new_unsent.push(Unsent::new(game.name.clone(), None));
+                merged.games.push(game.clone());
             }
-            Some(Ok(Stored::Removed)) => {
-                if !mirrors {
-                    merged.removed.push(game.name.clone());
-                }
+            Some(Ok(Stored::Game(stored))) if shared(game) == **stored => {
+                merged.games.push(game.clone());
             }
-            Some(Err(_)) => merged.games.push(game.clone()),
-            None if mirrors => {}
-            None => {
-                merged.upload.push(game.name.clone());
+            Some(Err(_)) => {
+                // Migrating, the local copy was never compared with the repository's.
+                merged.complete &= mirrors;
+                merged.games.push(game.clone());
+            }
+            Some(Ok(_)) | None => {
+                let entry = Unsent::new(game.name.clone(), Some(game.clone()));
+                merged.new_unsent.push(entry);
                 merged.games.push(game.clone());
             }
         }
@@ -591,82 +579,12 @@ pub fn merge(
     for (name, stored) in listed {
         if let Ok(Stored::Game(stored)) = stored
             && !local.iter().any(|game| game.name == *name)
+            && !is_unsent(name)
         {
             merged.games.push((**stored).clone());
         }
     }
     merged
-}
-
-/// What a [`sync`] found and did.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct Synced {
-    /// This PC's new copy of the custom games ([`Merged::games`]).
-    pub games: Vec<CustomGame>,
-    /// Local games uploaded to the repository.
-    pub uploaded: Vec<String>,
-    /// Local games the repository's version replaced ([`Merged::replaced`]).
-    pub replaced: Vec<String>,
-    /// Local games dropped because the repository removed them ([`Merged::removed`]).
-    pub removed: Vec<String>,
-    /// Local games that could not be uploaded, with why; they stay in `games`.
-    pub failed: Vec<(String, CustomGameError)>,
-    /// Whether the copy may be marked as mirroring the repository: no upload failed and, when
-    /// migrating, no local game's repository copy was unreadable. Until then a mirror sync would
-    /// drop or replace those games without the migration's notices.
-    pub complete: bool,
-    /// Games whose newest snapshot cannot be used, by name.
-    pub unreadable: BTreeMap<String, CustomGameError>,
-    /// Uploaded games whose older snapshots could not be forgotten.
-    pub forget_errors: Vec<(String, StorageError)>,
-}
-
-/// Loads the repository's custom games, [`merge`]s them into `local` and uploads the local
-/// games the merge lists, staged below `stage_root`.
-///
-/// # Errors
-/// The repository error when the custom games cannot be listed; an upload's error is in
-/// [`Synced::failed`].
-pub fn sync(
-    storage: &mut Storage,
-    local: &[CustomGame],
-    mirrors: bool,
-    stage_root: &Path,
-) -> Result<Synced, StorageError> {
-    let listed = load_all(storage)?;
-    let merged = merge(local, &listed, mirrors);
-    let kept_unreadable =
-        !mirrors && (local.iter()).any(|game| matches!(listed.get(&game.name), Some(Err(_))));
-    let mut synced = Synced {
-        games: merged.games,
-        uploaded: Vec::new(),
-        replaced: merged.replaced,
-        removed: merged.removed,
-        failed: Vec::new(),
-        complete: false,
-        unreadable: (listed.into_iter())
-            .filter_map(|(name, stored)| Some((name, stored.err()?)))
-            .collect(),
-        forget_errors: Vec::new(),
-    };
-    for game in local
-        .iter()
-        .filter(|game| merged.upload.contains(&game.name))
-    {
-        let name = game.name.clone();
-        match save(storage, &name, None, Some(game), stage_root) {
-            Ok(saved) => {
-                if let Some(err) = saved.forget_error {
-                    synced.forget_errors.push((name.clone(), err));
-                }
-                synced.uploaded.push(name);
-            }
-            Err(err) => synced.failed.push((name, err)),
-        }
-    }
-    synced.complete = synced.failed.is_empty() && !kept_unreadable;
-    Ok(synced)
 }
 
 #[cfg(test)]

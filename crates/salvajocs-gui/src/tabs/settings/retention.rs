@@ -1,14 +1,13 @@
-//! The "Old backups" section of the Settings tab: the repository's retention policy (ADR-0015).
+//! The "Old backups" section of the Settings tab: the repository's retention policy (ADR-0015),
+//! changed here until a Back up saves it (ADR-0029).
 
 use std::num::NonZeroU32;
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use eframe::egui::{self, DragValue, Response, Ui};
 use salvajocs_core::retention::{self, Retention, RetentionError, Unit, Within};
 
 use crate::job::Job;
-use crate::state::{SharedStorage, State, lock_storage};
+use crate::state::{State, lock_storage};
 use crate::theme::{self, icons};
 
 /// The units offered for the age rule, in order.
@@ -59,20 +58,6 @@ impl Form {
     }
 }
 
-/// Saves shared with the job that runs them. The job saves `next` until there is none, so the
-/// latest edit reaches the repository even when the tab is no longer drawn.
-#[derive(Default)]
-struct Saves {
-    /// The latest edited policy, not yet saved.
-    next: Option<Retention>,
-    /// Whether a job is saving; set and cleared under the lock, so no edit is left behind.
-    running: bool,
-    /// Why the last save failed.
-    error: Option<String>,
-    /// Problems to show in the banner.
-    warnings: Vec<String>,
-}
-
 /// Why the policy could not be loaded.
 struct LoadError {
     message: String,
@@ -81,32 +66,25 @@ struct LoadError {
     retry: bool,
 }
 
-/// The state of the "Old backups" section.
+/// The state of the "Old backups" section. An edit stays on this PC until the next Back up
+/// saves it (ADR-0029).
 #[derive(Default)]
 pub(super) struct RetentionSection {
-    /// The policy as loaded and edited since; `None` until loaded.
+    /// The policy shown and edited since: this PC's unsent one, else the loaded one; `None`
+    /// until loaded.
     form: Option<Result<Form, LoadError>>,
+    /// The repository's policy as last loaded, the base of a change that starts now.
+    loaded: Retention,
     loading: Option<Job<Retention>>,
-    saves: Arc<Mutex<Saves>>,
-    /// The saves of repositories the app used before, until their jobs end.
-    previous: Vec<Arc<Mutex<Saves>>>,
     /// The pass the section was last drawn in, to tell when the tab is shown again.
     drawn: u64,
+    /// A Back up checks, asks, waits to start or runs, so it may be sending this PC's rules.
+    pub(super) backing_up: bool,
 }
 
 impl RetentionSection {
-    /// Whether a save runs, also one for a repository the app no longer uses.
-    pub(super) fn busy(&self) -> bool {
-        lock(&self.saves).running || self.previous.iter().any(|saves| lock(saves).running)
-    }
-
-    /// Forgets the policy, so the section loads it from the repository that is now open. Saves
-    /// still running go on, for the repository they started on.
+    /// Forgets the policy, so the section loads it from the repository that is now open.
     pub(super) fn reset(&mut self) {
-        let saves = std::mem::take(&mut self.saves);
-        if lock(&saves).running {
-            self.previous.push(saves);
-        }
         self.form = None;
         self.loading = None;
     }
@@ -123,15 +101,9 @@ impl RetentionSection {
         self.drawn = pass;
         if state.session.is_none() {
             ui.label("The repository is not open.");
-        } else if self.loading.is_none() {
-            let idle = {
-                let saves = lock(&self.saves);
-                !saves.running && saves.next.is_none()
-            };
+        } else if self.loading.is_none() && (self.form.is_none() || shown_again) {
             // Another machine may have changed the policy while the tab was hidden.
-            if self.form.is_none() || (shown_again && idle) {
-                self.load(ui.ctx(), state);
-            }
+            self.load(ui.ctx(), state);
         }
         let editable = matches!(self.form, Some(Ok(_))) && self.loading.is_none();
         let mut form = match &self.form {
@@ -144,11 +116,26 @@ impl RetentionSection {
         if editable {
             self.form = Some(Ok(form));
             if commit {
-                self.save(ui.ctx(), state, form.policy());
+                self.change(ui.ctx(), state, form.policy());
             }
         }
         if matches!(self.form, Some(Ok(_))) && form.policy().is_off() {
             ui.label("All backups are kept.");
+        }
+        if state
+            .config
+            .as_ref()
+            .is_some_and(|c| c.retention_unsent.is_some())
+        {
+            ui.horizontal(|ui| {
+                ui.weak("Saved to the repository with the next Back up.");
+                // Also the way out when the repository's rules cannot be read or overwritten.
+                let discard = egui::Button::new("Discard this PC's changes");
+                // A discard during a Back up could clear rules it is sending.
+                if ui.add_enabled(!self.backing_up, discard).clicked() {
+                    self.discard(ui.ctx(), state);
+                }
+            });
         }
         ui.weak(
             "A backup is only made when a game's files changed. A backup is kept if any rule \
@@ -169,20 +156,21 @@ impl RetentionSection {
                 self.form = None;
             }
         }
-        if let Some(error) = &lock(&self.saves).error {
-            theme::status(ui, icons::X_CIRCLE, color, error);
-        }
     }
 
-    /// Collects a finished load and the saves' warnings, and drops the previous repositories'
-    /// saves once they end, reporting their failures in the banner.
-    fn poll(&mut self, state: &mut State) {
+    /// Collects a finished load: the form shows this PC's unsent policy over the loaded one.
+    fn poll(&mut self, state: &State) {
         if let Some(job) = &mut self.loading
             && let Some(result) = job.take_result()
         {
             self.loading = None;
-            self.form = Some(result.map(Form::new).map_err(|err| {
-                match err.downcast_ref::<RetentionError>() {
+            let unsent = state.config.as_ref().and_then(|c| c.retention_unsent);
+            self.form = Some(match result {
+                Ok(policy) => {
+                    self.loaded = policy;
+                    Ok(Form::new(unsent.map_or(policy, |unsent| unsent.policy)))
+                }
+                Err(err) => Err(match err.downcast_ref::<RetentionError>() {
                     Some(RetentionError::NewerFormat(_) | RetentionError::Parse(_)) => LoadError {
                         message: format!(
                             "This repository's cleanup rules could not be read; nothing is removed ({err:#})"
@@ -193,16 +181,9 @@ impl RetentionSection {
                         message: format!("Could not load the cleanup rules: {err:#}"),
                         retry: true,
                     },
-                }
-            }));
+                }),
+            });
         }
-        state.notices.append(&mut lock(&self.saves).warnings);
-        self.previous.retain(|saves| {
-            let mut saves = lock(saves);
-            state.notices.append(&mut saves.warnings);
-            state.notices.extend(saves.error.take());
-            saves.running
-        });
     }
 
     fn load(&mut self, ctx: &egui::Context, state: &State) {
@@ -215,75 +196,26 @@ impl RetentionSection {
         }));
     }
 
-    /// Saves `policy` in the background. A save already running saves it next, so the
-    /// repository ends up with the latest policy.
-    fn save(&self, ctx: &egui::Context, state: &State, policy: Retention) {
-        let Some(session) = &state.session else {
-            return;
-        };
-        let mut saves = lock(&self.saves);
-        saves.next = Some(policy);
-        if saves.running {
-            return;
+    /// Drops this PC's unsent rules and shows the repository's again. Writes only the config.
+    fn discard(&mut self, ctx: &egui::Context, state: &mut State) {
+        if let Some(config) = &mut state.config {
+            config.retention_unsent = None;
+            state.save_config(ctx);
         }
-        saves.running = true;
-        let (storage, shared) = (session.storage.clone(), self.saves.clone());
-        let stage_root = state.env.cache_dir.join("stage");
-        // The job ends by itself and reports through `saves`, so its handle is not kept.
-        drop(Job::spawn(ctx, move || {
-            save_queued(&storage, &shared, &stage_root);
-            Ok(())
-        }));
-    }
-}
-
-fn lock(saves: &Mutex<Saves>) -> MutexGuard<'_, Saves> {
-    // Nothing panics while holding the lock, so its data is consistent.
-    saves.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Clears [`Saves::running`] when a save job panics, so later edits start a new one.
-struct PanicGuard<'a>(&'a Mutex<Saves>);
-
-impl Drop for PanicGuard<'_> {
-    fn drop(&mut self) {
-        // Only on a panic: a job that ended normally cleared it under the lock, and a new job
-        // may have set it since.
-        if std::thread::panicking() {
-            let mut saves = lock(self.0);
-            saves.running = false;
-            saves.error =
-                Some("Could not save the cleanup rules: the save stopped unexpectedly.".to_owned());
+        if let Some(Ok(_)) = self.form {
+            self.form = Some(Ok(Form::new(self.loaded)));
         }
     }
-}
 
-/// Saves the queued policy until none is left, recording each outcome in `saves`.
-fn save_queued(storage: &SharedStorage, saves: &Mutex<Saves>, stage_root: &Path) {
-    let _guard = PanicGuard(saves);
-    loop {
-        let policy = {
-            let mut saves = lock(saves);
-            let Some(policy) = saves.next.take() else {
-                saves.running = false;
-                return;
-            };
-            policy
+    /// Keeps `policy` as this PC's unsent rules, based on the loaded ones unless a change is
+    /// already unsent: the earliest base wins. Writes only the config.
+    fn change(&self, ctx: &egui::Context, state: &mut State, policy: Retention) {
+        let Some(config) = &mut state.config else {
+            return;
         };
-        let result = lock_storage(storage)
-            .and_then(|mut storage| Ok(retention::save(&mut storage, &policy, stage_root)?));
-        let mut saves = lock(saves);
-        match result {
-            Ok(saved) => {
-                saves.error = None;
-                if let Some(err) = saved.forget_error {
-                    saves.warnings.push(format!(
-                        "The cleanup rules were saved, but the older copies could not be removed: {err}"
-                    ));
-                }
-            }
-            Err(err) => saves.error = Some(format!("Could not save the cleanup rules: {err:#}")),
-        }
+        let based_on = (config.retention_unsent).map_or(self.loaded, |unsent| unsent.based_on);
+        config.retention_unsent = Some(retention::Unsent::new(policy, based_on));
+        state.save_config(ctx);
     }
 }
 

@@ -18,7 +18,7 @@ use salvajocs_core::scan::Environment;
 
 use crate::env::Env;
 use crate::job::Job;
-use crate::state::{Edit, EditError, State};
+use crate::state::{Edit, State};
 use crate::theme::{self, icons};
 use crate::widgets::{guide_url, labelled_edit, named_button};
 
@@ -115,9 +115,6 @@ enum FormError {
     /// another PC.
     #[error("This game changed since the form was opened; reload it to see the new values")]
     Changed,
-    /// The repository did not save the game; the sentence says why.
-    #[error("{0}")]
-    Repository(String),
 }
 
 /// One editable Linux/Windows pair; both fields empty means the row is unused.
@@ -656,8 +653,8 @@ impl Form {
         text_rows(ui, &mut self.skips, skip, idle, |_| None);
     }
 
-    /// Draws the form. **Save game** is enabled only when `can_save` and every row is valid.
-    fn ui(&mut self, ui: &mut Ui, can_save: bool) -> Option<Action> {
+    /// Draws the form. **Save game** is enabled only when every row is valid.
+    fn ui(&mut self, ui: &mut Ui) -> Option<Action> {
         self.poll_browse();
         ui.heading(if self.index.is_some() {
             "Edit custom game"
@@ -697,7 +694,7 @@ impl Form {
             error_line(ui, error.to_string());
         }
         let mut action = browse.map(Action::Browse);
-        let valid = can_save && self.rows_valid();
+        let valid = self.rows_valid();
         theme::row_end(ui, |ui| {
             if self.error == Some(FormError::Changed) && ui.button("Reload").clicked() {
                 action = Some(Action::Reload);
@@ -717,46 +714,25 @@ impl Form {
 #[derive(Default)]
 pub struct CustomGamesTab {
     form: Option<Form>,
-    /// The pass the tab was last drawn in, to tell when it is shown again.
-    drawn: u64,
 }
 
 impl CustomGamesTab {
-    /// Draws the tab. Saving or removing a game saves it to the repository, then the config
-    /// (ADR-0028); each time the tab is shown, the games are loaded from the repository again.
+    /// Draws the tab. Saving or removing a game changes this PC's copy only; the next Back up
+    /// saves it to the repository, and **Read repository** reads the other PCs' changes
+    /// (ADR-0029).
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
         let ctx = ui.ctx().clone();
-        let pass = ctx.cumulative_pass_nr();
-        let shown_again = pass > self.drawn + 1;
-        self.drawn = pass;
-        // Another PC may have changed the games while the tab was hidden.
-        if shown_again && state.session.is_some() && !state.custom_games.busy() {
-            state.sync_custom_games(&ctx);
-        }
-        if let Some(outcome) = state.custom_games.take_edited() {
-            match (outcome, &mut self.form) {
-                (Ok(()), _) => self.form = None,
-                (Err(error), Some(form)) => {
-                    form.error = Some(match error {
-                        EditError::Changed => FormError::Changed,
-                        EditError::Failed(message) => FormError::Repository(message),
-                    });
-                }
-                (Err(_), None) => {}
-            }
-        }
-        let mut edit = None;
+        let (mut edit, mut read) = (None, false);
         theme::page(ui, |ui| {
             let manifest = state.manifest.as_ref();
             let env = &state.env;
             let jobs = &state.custom_games;
             let online = state.session.is_some();
-            let saving = jobs.saving();
             let Some(config) = &state.config else {
                 ui.label("Choose a repository first.");
                 return;
             };
-            // A sync or a save may have moved or dropped other games.
+            // A read may have moved or dropped other games.
             if let Some(form) = &mut self.form
                 && let Some(snapshot) = &form.snapshot
                 && let Some(index) =
@@ -764,6 +740,7 @@ impl CustomGamesTab {
             {
                 form.index = Some(index);
             }
+            let unsent = |name: &str| (config.custom_games_unsent.iter()).any(|e| e.name == name);
             let (mut open, mut remove) = (None, None);
             if config.custom_games.is_empty() {
                 ui.weak(
@@ -780,11 +757,14 @@ impl CustomGamesTab {
                             manifest.is_some_and(|m| m.games.contains_key(&game.name));
                         let relation = relation(game, in_manifest);
                         let unreadable = jobs.unreadable(&game.name);
-                        let changeable = online && !saving && unreadable.is_none();
+                        let changeable = unreadable.is_none();
                         theme::row(
                             ui,
                             |ui| {
                                 ui.label(format!("{} ({relation})", game.name));
+                                if unsent(&game.name) {
+                                    ui.weak("Not backed up yet");
+                                }
                             },
                             |ui| {
                                 // One form at a time, so opening another cannot drop unsaved
@@ -810,20 +790,22 @@ impl CustomGamesTab {
                     error_line(ui, format!("{name}: {why}"));
                 }
             }
-            if online {
-                ui.weak(
-                    "Changes are saved to the repository, so every PC that uses it has the same \
-                     custom games. The Wine prefix stays on this PC.",
-                );
-            } else {
-                ui.label("Open the repository to change custom games.");
+            // A game added here and removed before a Back up never reached other PCs.
+            let removed: Vec<&str> = (config.custom_games_unsent.iter())
+                .filter(|entry| entry.based_on.is_some())
+                .map(|entry| entry.name.as_str())
+                .filter(|name| !config.custom_games.iter().any(|game| game.name == *name))
+                .collect();
+            if !removed.is_empty() {
+                ui.weak(format!(
+                    "Removed here; other PCs keep them until the next Back up: {}",
+                    removed.join(", ")
+                ));
             }
-            if saving {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Saving…");
-                });
-            }
+            ui.weak(
+                "Changes stay on this PC until the next Back up, which saves them to the \
+                 repository for your other PCs. The Wine prefix stays on this PC.",
+            );
             if let Some(index) = open {
                 self.form = Some(Form::edit(index, &config.custom_games[index]));
             }
@@ -836,23 +818,31 @@ impl CustomGamesTab {
                     game: None,
                 });
             }
-            let can_add = self.form.is_none() && online;
-            if ui
-                .add_enabled(can_add, egui::Button::new("Add game"))
-                .clicked()
-            {
-                self.form = Some(Form::new());
-            }
+            ui.horizontal(|ui| {
+                let can_add = self.form.is_none();
+                if ui
+                    .add_enabled(can_add, egui::Button::new("Add game"))
+                    .clicked()
+                {
+                    self.form = Some(Form::new());
+                }
+                let can_read = online && !jobs.busy();
+                let button = egui::Button::new("Read repository");
+                let button = ui.add_enabled(can_read, button);
+                read = button
+                    .on_hover_text("Read the custom games other PCs saved to the repository")
+                    .clicked();
+            });
             if let Some(form) = &mut self.form {
                 ui.add_space(16.0);
-                match form.ui(ui, online && !saving) {
+                match form.ui(ui) {
                     Some(Action::Save) => match form.build(&config.custom_games) {
                         Ok(game) => {
-                            form.error = None;
                             edit = Some(Edit {
                                 based_on: form.snapshot.clone(),
                                 game: Some(game),
                             });
+                            self.form = None;
                         }
                         Err(error) => form.error = Some(error),
                     },
@@ -871,6 +861,9 @@ impl CustomGamesTab {
         });
         if let Some(edit) = edit {
             state.edit_custom_game(&ctx, edit);
+        }
+        if read {
+            state.read_custom_games(&ctx);
         }
     }
 }
