@@ -39,6 +39,30 @@ impl Retention {
     }
 }
 
+/// Rules changed on this PC and not yet saved to the repository (ADR-0029).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Unsent {
+    /// The rules to save with the next Back up.
+    pub policy: Retention,
+    /// The rules this PC had loaded when the change started.
+    pub based_on: Retention,
+}
+
+impl Unsent {
+    /// `policy`, changed from `based_on`.
+    pub fn new(policy: Retention, based_on: Retention) -> Self {
+        Self { policy, based_on }
+    }
+
+    /// Whether the repository's rules `stored` changed elsewhere since: they are neither the
+    /// base nor the rules this PC saves.
+    pub fn conflicts(&self, stored: &Retention) -> bool {
+        *stored != self.based_on && *stored != self.policy
+    }
+}
+
 /// A span of time counted back from now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

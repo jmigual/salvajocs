@@ -40,6 +40,8 @@ fn sample() -> AppConfig {
         backup_sort: ListSort::default(),
         restore_sort: ListSort::default(),
         custom_games_repository: None,
+        custom_games_unsent: Vec::new(),
+        retention_unsent: None,
     }
 }
 
@@ -590,13 +592,73 @@ fn custom_games_repository_is_left_out_until_set_and_round_trips() {
     fs::write(&file, "repository: /backups\npassword: none\n").unwrap();
     let mut config = AppConfig::load(tmp.path()).unwrap().unwrap();
     assert_eq!(config.custom_games_repository, None);
+    assert!(config.custom_games_unsent.is_empty());
+    assert_eq!(config.retention_unsent, None);
     config.save(tmp.path()).unwrap();
     let yaml = fs::read_to_string(&file).unwrap();
-    assert!(!yaml.contains("custom_games_repository"), "{yaml}");
+    for field in [
+        "custom_games_read_from",
+        "custom_games_unsent",
+        "retention_unsent",
+    ] {
+        assert!(!yaml.contains(field), "{yaml}");
+    }
 
     config.custom_games_repository = Some(config.secret_scope());
     config.save(tmp.path()).unwrap();
+    let yaml = fs::read_to_string(&file).unwrap();
+    assert!(yaml.contains("custom_games_read_from"), "{yaml}");
+    assert!(!yaml.contains("custom_games_repository"), "{yaml}");
     assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn the_marker_of_salvajocs_0_8_0_is_still_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\ncustom_games_repository: key\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.custom_games_repository.as_deref(), Some("key"));
+    assert!(config.custom_games_unsent.is_empty());
+    assert_eq!(config.retention_unsent, None);
+}
+
+#[test]
+fn unsent_changes_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = sample();
+    let base = config.custom_games[0].clone();
+    config.custom_games_unsent = vec![
+        crate::custom_games::Unsent::new("Homebrew".into(), Some(base)),
+        crate::custom_games::Unsent::new("Added".into(), None),
+    ];
+    let policy = crate::retention::Retention {
+        keep_last: std::num::NonZeroU32::new(10),
+        ..Default::default()
+    };
+    let off = crate::retention::Retention::default();
+    config.retention_unsent = Some(crate::retention::Unsent::new(policy, off));
+    config.save(tmp.path()).unwrap();
+    let yaml = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+    assert!(yaml.contains("based_on: {}"), "{yaml}");
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn unsent_rules_that_do_not_parse_read_as_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_FILE),
+        "repository: /backups\npassword: none\n\
+         retention_unsent: { policy: { keep_last: 3, keep_forever: true }, based_on: {} }\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.repository, "/backups");
+    assert_eq!(config.retention_unsent, None);
 }
 
 #[test]

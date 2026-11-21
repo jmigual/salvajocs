@@ -119,9 +119,10 @@ impl State {
     }
 
     /// Makes a repository the user just connected the current one and saves the config. Roots,
-    /// custom games, the update setting, the theme, the sorts and the ignored prefixes come from
-    /// the current config, which may have changed since the form was built. Then syncs the custom
-    /// games, so this PC's go to a repository that lacks them (ADR-0028).
+    /// custom games and their unsent changes, the unsent Old backups rules, the update setting,
+    /// the theme, the sorts and the ignored prefixes come from the current config, which may
+    /// have changed since the form was built. Then syncs the custom games, so this PC's go to a
+    /// repository that lacks them (ADR-0028).
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -133,6 +134,8 @@ impl State {
             config.roots = old.roots.clone();
             config.custom_games = old.custom_games.clone();
             config.custom_games_repository = old.custom_games_repository.clone();
+            config.custom_games_unsent = old.custom_games_unsent.clone();
+            config.retention_unsent = old.retention_unsent;
             config.check_updates = old.check_updates;
             config.theme = old.theme;
             config.backup_sort = old.backup_sort;

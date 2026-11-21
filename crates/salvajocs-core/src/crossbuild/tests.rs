@@ -69,6 +69,8 @@ fn config() -> AppConfig {
         backup_sort: ListSort::default(),
         restore_sort: ListSort::default(),
         custom_games_repository: None,
+        custom_games_unsent: Vec::new(),
+        retention_unsent: None,
     }
 }
 

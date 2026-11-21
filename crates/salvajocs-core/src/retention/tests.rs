@@ -599,3 +599,15 @@ fn files_below(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     files
 }
+
+#[test]
+fn unsent_rules_conflict_only_with_rules_changed_elsewhere() {
+    let unsent = Unsent::new(keep_last(10), Retention::default());
+    assert!(!unsent.conflicts(&Retention::default()), "the base");
+    assert!(
+        !unsent.conflicts(&keep_last(10)),
+        "the same change elsewhere"
+    );
+    assert!(unsent.conflicts(&keep_last(3)));
+    assert!(unsent.conflicts(&keep_days(7)));
+}

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::SystemTime;
 
 use eframe::egui::emath::Rot2;
@@ -18,13 +18,14 @@ use salvajocs_core::backup::{self, GameBackup, Stored};
 use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper, NoSkip};
 use salvajocs_core::config::{AppConfig, ListSort, PasswordMode};
 use salvajocs_core::crossbuild::{self, Confidence, MappingEntry, ResolveError};
+use salvajocs_core::custom_games;
 use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ProblemKind, ScanProblem, ScanReport};
 use salvajocs_core::selection::{self, Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
 use salvajocs_core::stats::{self, BackupStats};
-use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::storage::{SnapshotInfo, Storage};
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
@@ -37,8 +38,13 @@ use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
 use crate::tabs::{count, format_size, format_time};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices, Games};
+use unsent::{
+    Answer, Asking, Checked, Shared, conflict_lines, conflict_ui, has_unsent, is_session,
+    rule_lines, send_unsent,
+};
 
 mod choices;
+mod unsent;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
@@ -645,6 +651,8 @@ struct Progress {
     done: Vec<GameResult>,
     /// Every game is done and old backups are being removed.
     cleaning: bool,
+    /// This PC's unsent custom games and rules are being saved, before anything else.
+    sending: bool,
 }
 
 /// What saving the selection before a backup ran into.
@@ -658,6 +666,8 @@ struct SaveProblems {
 
 /// What the cleanup after a backup did.
 struct Cleaned {
+    /// This PC's rules could not be saved, so nothing was forgotten.
+    rules_failed: bool,
     /// Why the retention policy could not be read, so nothing was forgotten.
     policy_error: Option<String>,
     /// What the cleanup did, up to `error` if it stopped.
@@ -668,15 +678,20 @@ struct Cleaned {
 
 /// What a finished backup job hands back.
 struct Backed {
-    /// The scan the backup went by, which replaces the shown list.
-    report: ScanReport,
+    /// The repository the backup ran on.
+    source: Weak<Mutex<Storage>>,
+    /// What was saved of this PC's unsent changes.
+    shared: Shared,
+    /// The scan the backup went by, which replaces the shown list; `None` when no game was
+    /// chosen, so only the unsent changes were saved.
+    report: Option<ScanReport>,
     /// Why the run stopped early, if it did.
     error: Option<String>,
     /// What saving the selection ran into.
     saving: SaveProblems,
-    /// What the backup left of the selection.
-    after: AfterBackup,
-    /// The cleanup after the backup, `None` when the run stopped early.
+    /// What the backup left of the selection; `None` when no game was chosen.
+    after: Option<AfterBackup>,
+    /// The cleanup after the backup, `None` when the run stopped early or no game was chosen.
     cleanup: Option<Cleaned>,
 }
 
@@ -728,6 +743,16 @@ pub struct BackupTab {
     removed: bool,
     /// Back up was clicked; the backup starts once the pending file is written.
     backup_requested: bool,
+    /// Checks the repository it was started for for changes made on another PC to what this PC
+    /// is about to save; it only reads.
+    checking: Option<(Weak<Mutex<Storage>>, Job<Checked>)>,
+    /// The open question about changes made on another PC, before the backup.
+    asking: Option<Asking>,
+    /// The repository a passed check, or the answered question, was for: the backup starts once
+    /// no pending file write runs.
+    cleared: Option<Weak<Mutex<Storage>>>,
+    /// What the last backup saved of this PC's unsent custom games and rules.
+    shared: Shared,
     /// The open mapping dialog: the game's title and the roots it shows.
     mapping: Option<(String, Vec<MappingEntry>, Dialog)>,
     /// The open details of a changed file; it only reads, so it is not counted as busy.
@@ -761,6 +786,7 @@ impl BackupTab {
             self.results_ui(ui);
         });
         self.mapping_ui(ui.ctx(), state);
+        self.asking_ui(ui.ctx(), state);
         if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
@@ -768,7 +794,7 @@ impl BackupTab {
 
     /// Collects the tab's finished jobs and starts what waits on them. The app calls it every
     /// frame, whichever tab is in front, so a pending file write or a load never stalls.
-    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &State) {
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, state: &mut State) {
         if let Some(job) = &mut self.scanning
             && let Some(result) = job.take_result()
         {
@@ -788,21 +814,33 @@ impl BackupTab {
             self.running = None;
             match result {
                 Ok(Backed {
+                    source,
+                    shared,
                     report,
                     error,
                     saving,
                     after,
                     cleanup,
                 }) => {
-                    self.adopt(report);
-                    self.start_preview(ctx, state);
+                    if let Some(report) = report {
+                        self.adopt(report);
+                        self.start_preview(ctx, state);
+                    }
                     self.run_error = error;
                     self.saving = saving;
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
-                    if self.choices.backed_up(after) {
+                    if let Some(after) = after
+                        && self.choices.backed_up(after)
+                    {
                         self.listed.iter_mut().for_each(Listed::invalidate);
                     }
+                    // Another repository, connected meanwhile, never got these changes.
+                    let sent = !shared.games.is_empty() || shared.rules.is_some();
+                    if sent && is_session(&source, state) {
+                        state.custom_games_sent(ctx, &shared.games, shared.rules);
+                    }
+                    self.shared = shared;
                 }
                 Err(err) => self.run_error = Some(format!("{err:#}")),
             }
@@ -859,6 +897,39 @@ impl BackupTab {
         }
         if self.choices.poll(ctx, state) {
             self.listed.iter_mut().for_each(Listed::invalidate);
+        }
+        if let Some((source, job)) = &mut self.checking
+            && let Some(result) = job.take_result()
+        {
+            let source = source.clone();
+            self.checking = None;
+            // A check of a repository Settings replaced is dropped, and so is its backup.
+            if is_session(&source, state) {
+                match result {
+                    Ok(Checked { games, rules }) if games.is_empty() && rules.is_none() => {
+                        self.cleared = Some(source);
+                    }
+                    Ok(Checked { games, rules }) => {
+                        self.asking = Some(Asking {
+                            source,
+                            games: games.into_iter().map(|conflict| (conflict, None)).collect(),
+                            rules: rules.map(|stored| (stored, None)),
+                        });
+                    }
+                    Err(err) => {
+                        self.run_error = Some(format!(
+                            "The repository could not be checked for changes made on another \
+                             PC: {err:#}"
+                        ));
+                    }
+                }
+            }
+        }
+        if (self.asking.as_ref()).is_some_and(|asking| !is_session(&asking.source, state)) {
+            self.asking = None;
+        }
+        if (self.cleared.as_ref()).is_some_and(|source| !is_session(source, state)) {
+            self.cleared = None;
         }
         self.start_requested(ctx, state);
     }
@@ -964,6 +1035,9 @@ impl BackupTab {
         self.scanning.is_some()
             || self.running.is_some()
             || self.backup_requested
+            || self.checking.is_some()
+            || self.asking.is_some()
+            || self.cleared.is_some()
             || self.choices.busy()
     }
 
@@ -1026,7 +1100,12 @@ impl BackupTab {
     /// The scan button: `primary` in the empty state, the one framed button of the list header
     /// otherwise.
     fn scan_ui(&mut self, ui: &mut Ui, state: &State, manifest_loading: bool, primary: bool) {
-        let enabled = !manifest_loading && self.scanning.is_none() && self.running.is_none();
+        // A Back up waiting on its check, or to start, scans again itself.
+        let enabled = !manifest_loading
+            && self.scanning.is_none()
+            && self.running.is_none()
+            && self.checking.is_none()
+            && self.cleared.is_none();
         let glyph = icons::MAGNIFYING_GLASS;
         let button = if primary {
             theme::primary(ui, enabled, Some(glyph), "Scan for games")
@@ -1270,6 +1349,59 @@ impl BackupTab {
         }
     }
 
+    /// The dialog asking which version to keep of each change made on another PC: this PC's
+    /// version from the config, the repository's from the check. **Back up** puts the choices
+    /// into the config and starts the backup; **Cancel** drops it and writes nothing.
+    fn asking_ui(&mut self, ctx: &egui::Context, state: &mut State) {
+        let (Some(asking), Some(config)) = (&mut self.asking, &mut state.config) else {
+            return;
+        };
+        let answer = theme::modal(ctx, "backup_conflicts", 720.0, |ui| {
+            ui.heading("Changed on another PC");
+            ui.label(
+                "Another PC changed these in the repository since this PC's changes started. \
+                 Choose which version to keep; the backup then saves this PC's choices.",
+            );
+            for (index, (conflict, keep)) in asking.games.iter_mut().enumerate() {
+                let here = (config.custom_games.iter()).find(|game| game.name == conflict.name);
+                let (here, theirs) = conflict_lines(here, conflict.newest.as_ref());
+                ui.push_id(index, |ui| {
+                    conflict_ui(ui, &conflict.name, &here, &theirs, keep)
+                });
+            }
+            if let (Some((stored, keep)), Some(unsent)) =
+                (&mut asking.rules, &config.retention_unsent)
+            {
+                let (here, theirs) = (rule_lines(&unsent.policy), rule_lines(stored));
+                ui.push_id("rules", |ui| {
+                    conflict_ui(ui, "Old backups rules", &here, &theirs, keep);
+                });
+            }
+            ui.add_space(8.0);
+            // After the blocks, so the choice made in this frame counts.
+            let answered = asking.answered();
+            theme::row_end(ui, |ui| {
+                if ui.button("Cancel").clicked() {
+                    return Some(Answer::Cancel);
+                }
+                let back_up = theme::primary(ui, answered, Some(icons::FLOPPY_DISK), "Back up");
+                back_up.clicked().then_some(Answer::BackUp)
+            })
+        });
+        match answer {
+            Some(Answer::BackUp) => {
+                if let Some(asking) = self.asking.take() {
+                    self.cleared = Some(asking.source.clone());
+                    asking.apply(config);
+                }
+                state.save_config(ctx);
+                self.start_requested(ctx, state);
+            }
+            Some(Answer::Cancel) => self.asking = None,
+            None => {}
+        }
+    }
+
     /// The mapping dialog of a game whose newest backup is of the other build. Its choices are
     /// saved as after a restore (ADR-0011), then the comparison runs again (ADR-0021).
     fn mapping_ui(&mut self, ctx: &egui::Context, state: &mut State) {
@@ -1303,7 +1435,7 @@ impl BackupTab {
     /// Whether the tab adds the repository and the backup button to the bottom bar. It waits for
     /// a scan report, so the empty state has one call to action.
     pub(crate) fn has_bar(&self, state: &State) -> bool {
-        state.config.is_some() && self.report.is_some()
+        state.config.is_some() && (self.report.is_some() || has_unsent(state.config.as_ref()))
     }
 
     /// Draws the bottom bar in `bar`, the room [`status_bar::reserve`] took, with the app's
@@ -1319,15 +1451,24 @@ impl BackupTab {
         mut end: impl FnMut(&mut Ui),
     ) {
         let selected = self.chosen();
+        // With no game chosen, the backup only saves the unsent changes (ADR-0029).
+        let unsent = has_unsent(state.config.as_ref());
         // A pending file write does not hold the button back: the click waits for it.
         let ready = state.session.is_some()
             && self.choices.loaded()
-            && selected > 0
+            && (selected > 0 || unsent)
             && !manifest_loading
             && self.scanning.is_none()
             && self.running.is_none()
-            && !self.backup_requested;
-        let label = format!("Back up {}", count(selected, "game"));
+            && !self.backup_requested
+            && self.checking.is_none()
+            && self.asking.is_none()
+            && self.cleared.is_none();
+        let label = if selected == 0 && unsent {
+            "Back up".to_owned()
+        } else {
+            format!("Back up {}", count(selected, "game"))
+        };
         let button = |ui: &mut Ui| theme::primary(ui, ready, Some(icons::FLOPPY_DISK), &label);
         let back_up = status_bar::show(
             ui,
@@ -1378,23 +1519,62 @@ impl BackupTab {
     }
 
     /// Starts the requested backup once no pending file write runs, so the backup saves every
-    /// change and is the file's only writer.
+    /// change and is the file's only writer. With unsent custom games or rules, the repository
+    /// is checked first for changes made on another PC to them, and the backup starts once the
+    /// check passed or its question is answered, also only with no pending file write running.
     fn start_requested(&mut self, ctx: &egui::Context, state: &State) {
-        if self.backup_requested && !self.choices.busy() && self.running.is_none() {
+        if self.choices.busy() || self.running.is_some() {
+            return;
+        }
+        if self.backup_requested {
             self.backup_requested = false;
+            if has_unsent(state.config.as_ref()) {
+                self.start_check(ctx, state);
+            } else {
+                self.start_backup(ctx, state);
+            }
+        } else if self.cleared.take().is_some() {
             self.start_backup(ctx, state);
         }
+    }
+
+    /// Reads the repository's copies of this PC's unsent custom games and rules in a job, for
+    /// the conflicts the backup asks about first; writes nothing.
+    fn start_check(&mut self, ctx: &egui::Context, state: &State) {
+        let (Some(session), Some(config)) = (&state.session, &state.config) else {
+            return;
+        };
+        let storage = session.storage.clone();
+        let games = config.custom_games.clone();
+        let (unsent, rules) = (config.custom_games_unsent.clone(), config.retention_unsent);
+        self.run_error = None;
+        let job = Job::spawn(ctx, move || {
+            let mut storage = lock_storage(&storage)?;
+            let games = custom_games::conflicts(&mut storage, &games, &unsent)?;
+            // Rules that cannot be read are the backup's to report when it saves them.
+            let rules = rules.and_then(|unsent| {
+                let stored = retention::load(&mut storage).ok()?;
+                unsent.conflicts(&stored).then_some(stored)
+            });
+            Ok(Checked { games, rules })
+        });
+        self.checking = Some((Arc::downgrade(&session.storage), job));
     }
 
     /// The tab's part of the bottom bar's left: the repository and whether it is encrypted, or the
     /// running backup's progress.
     fn bar_status(&self, ui: &mut Ui, state: &State) {
         let muted = ui.visuals().weak_text_color();
-        if self.running.is_some() {
+        if self.checking.is_some() {
+            ui.spinner();
+            ui.label("Checking the repository");
+        } else if self.running.is_some() {
             autosave_mark(ui);
             let progress = lock(&self.progress);
             let (checked, games) = *lock(&self.checked);
-            if progress.cleaning {
+            if progress.sending {
+                ui.label("Saving the custom games and rules to the repository");
+            } else if progress.cleaning {
                 ui.label("Removing old backups");
             } else if checked < games {
                 ui.label(format!("Checked {checked} of {}", count(games, "game")));
@@ -1421,21 +1601,28 @@ impl BackupTab {
     }
 
     /// Backs up the chosen games in a job, with the staging mirrors under the cache dir
-    /// (ADR-0004). The job first saves the pending selection changes to the repository and reads
-    /// every game's settings again, so another machine's newer choices count. Then it scans
-    /// again, so a save made since the last scan is included, and filters each game by its
-    /// settings. Last, it removes old backups by the repository's retention policy.
+    /// (ADR-0004). The job first saves this PC's unsent custom games and rules (ADR-0029), then
+    /// the pending selection changes, and reads every game's settings again, so another
+    /// machine's newer choices count. Then it scans again, so a save made since the last scan
+    /// is included, and filters each game by its settings. Last, it removes old backups by the
+    /// repository's retention policy. With no game chosen it only saves the unsent changes.
     fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
         };
-        let Some((pending, settings)) = self.choices.for_backup() else {
-            return;
+        let chosen = self.chosen();
+        let selection = match chosen {
+            0 => None,
+            _ => match self.choices.for_backup() {
+                Some(selection) => Some(selection),
+                None => return,
+            },
         };
         let progress = Arc::new(Mutex::new(Progress {
-            total: self.chosen(),
+            total: chosen,
             done: Vec::new(),
             cleaning: false,
+            sending: has_unsent(Some(config)),
         }));
         self.progress = progress.clone();
         self.checked = Arc::default();
@@ -1443,6 +1630,7 @@ impl BackupTab {
         self.run_error = None;
         self.saving = SaveProblems::default();
         self.cleanup = None;
+        self.shared = Shared::default();
         let (manifest, config) = (state.manifest_or_empty(), config.clone());
         let (storage, stage_root, waker) = (
             session.storage.clone(),
@@ -1452,7 +1640,21 @@ impl BackupTab {
         let config_dir = state.env.config_dir.clone();
         let environment = state.env.environment.clone();
         self.running = Some(Job::spawn(ctx, move || {
-            let mut pending = pending;
+            let source = Arc::downgrade(&storage);
+            // First, so the scan and the cleanup go by this PC's custom games and rules.
+            let shared = send_unsent(&storage, &config, &stage_root);
+            lock(&progress).sending = false;
+            let Some((mut pending, settings)) = selection else {
+                return Ok(Backed {
+                    source,
+                    shared,
+                    report: None,
+                    error: None,
+                    saving: SaveProblems::default(),
+                    after: None,
+                    cleanup: None,
+                });
+            };
             let (mut saving, written) = match &mut pending {
                 Some(pending) => save_selection(
                     &storage,
@@ -1490,21 +1692,23 @@ impl BackupTab {
                 Ok(made) => {
                     lock(&progress).cleaning = true;
                     waker.request_repaint();
-                    (None, Some(clean_up(&storage, &made)))
+                    (None, Some(clean_up(&storage, &made, shared.rules_failed)))
                 }
                 Err(err) => (Some(format!("{err:#}")), None),
             };
             Ok(Backed {
-                report,
+                source,
+                shared,
+                report: Some(report),
                 error,
                 saving,
                 cleanup,
-                after: AfterBackup {
+                after: Some(AfterBackup {
                     source: Arc::downgrade(&storage),
                     pending,
                     written,
                     games: reloaded.ok(),
-                },
+                }),
             })
         }));
     }
@@ -1520,6 +1724,9 @@ impl BackupTab {
                 format!("The backup failed: {error}"),
             );
         }
+        for error in &self.shared.errors {
+            theme::status(ui, icons::X_CIRCLE, error_color, error);
+        }
         for failed in &self.saving.failed {
             theme::status(
                 ui,
@@ -1529,16 +1736,32 @@ impl BackupTab {
             );
         }
         let warn = ui.visuals().warn_fg_color;
-        for warning in &self.saving.warnings {
+        for warning in self.shared.warnings.iter().chain(&self.saving.warnings) {
             theme::status(ui, icons::WARNING, warn, warning);
         }
         let accent = theme::palette(ui).accent;
+        if self.shared.written > 0 {
+            let text = format!(
+                "Saved {} to the repository",
+                count(self.shared.written, "custom game")
+            );
+            theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
+        }
+        if self.shared.rules.is_some() {
+            let text = "Saved the Old backups rules";
+            theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
+        }
         if let Some(Cleaned {
+            rules_failed,
             policy_error,
             done,
             error,
         }) = &self.cleanup
         {
+            if *rules_failed {
+                let text = "The Old backups rules were not saved, so no old backup was removed";
+                theme::status(ui, icons::WARNING, warn, text);
+            }
             if let Some(error) = policy_error {
                 let text = "The cleanup rules could not be read, so no old backup was removed";
                 theme::status(ui, icons::WARNING, warn, format!("{text}: {error}"));
@@ -1665,21 +1888,27 @@ fn back_up(
 }
 
 /// Forgets and prunes by the repository's retention policy, never the snapshots `made`
-/// (ADR-0015). A policy that cannot be read forgets nothing, but marked packs are still pruned.
-fn clean_up(storage: &SharedStorage, made: &[String]) -> Cleaned {
+/// (ADR-0015). A policy that cannot be read forgets nothing, but marked packs are still pruned;
+/// so does a backup whose rules were not saved (`rules_failed`), since the stored ones may be
+/// stricter than this PC's (ADR-0029).
+fn clean_up(storage: &SharedStorage, made: &[String], rules_failed: bool) -> Cleaned {
     let mut storage = match lock_storage(storage) {
         Ok(storage) => storage,
         Err(err) => {
             return Cleaned {
+                rules_failed,
                 policy_error: None,
                 done: Cleanup::default(),
                 error: Some(format!("{err:#}")),
             };
         }
     };
-    let (policy, policy_error) = match retention::load(&mut storage) {
-        Ok(policy) => (policy, None),
-        Err(err) => (Retention::default(), Some(chain(&err))),
+    let (policy, policy_error) = match rules_failed {
+        true => (Retention::default(), None),
+        false => match retention::load(&mut storage) {
+            Ok(policy) => (policy, None),
+            Err(err) => (Retention::default(), Some(chain(&err))),
+        },
     };
     let keep: Vec<&str> = made.iter().map(String::as_str).collect();
     let (done, error) = match retention::apply(&mut storage, &policy, &keep, SystemTime::now()) {
@@ -1691,6 +1920,7 @@ fn clean_up(storage: &SharedStorage, made: &[String]) -> Cleaned {
         }
     };
     Cleaned {
+        rules_failed,
         policy_error,
         done,
         error,

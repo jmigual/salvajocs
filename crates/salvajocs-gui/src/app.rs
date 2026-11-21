@@ -186,7 +186,7 @@ impl App {
     /// Collects the finished jobs of the state and every tab, whichever tab is in front.
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         self.state.poll(ctx);
-        self.backup.poll(ctx, &self.state);
+        self.backup.poll(ctx, &mut self.state);
         if self.backup.take_removed() {
             self.restore.drop_listing();
         }

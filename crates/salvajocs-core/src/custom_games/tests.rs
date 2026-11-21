@@ -644,3 +644,239 @@ fn sync_with_a_failed_upload_is_incomplete() {
     assert!(!synced.complete);
     assert_eq!(synced.games, local, "the game that failed stays");
 }
+
+#[test]
+fn a_change_the_repository_already_holds_is_not_changed() {
+    let (f, mut storage) = Fixture::new();
+    f.save(&mut storage, GAME, None, Some(&game(GAME))).unwrap();
+    let mut both = game(GAME);
+    both.skips.clear();
+    // Another PC made the same edit first.
+    f.save(&mut f.open(), GAME, Some(&game(GAME)), Some(&both))
+        .unwrap();
+    let before = ids(&storage);
+    let saved = save(&mut storage, GAME, Some(&game(GAME)), Some(&both), &f.stage).unwrap();
+    assert!(saved.written.is_none());
+    assert_eq!(ids(&storage), before);
+
+    // The same holds for a removal of a game another PC removed too.
+    f.save(&mut f.open(), GAME, Some(&both), None);
+    let saved = save(&mut storage, GAME, Some(&game(GAME)), None, &f.stage).unwrap();
+    assert!(saved.written.is_none());
+}
+
+fn unsent(name: &str, based_on: Option<&CustomGame>) -> Unsent {
+    Unsent::new(name.into(), based_on.cloned())
+}
+
+#[test]
+fn an_unsent_base_has_no_wine_prefix() {
+    let entry = unsent(GAME, Some(&with_prefix(game(GAME), "/prefixes/game")));
+    assert_eq!(entry.based_on, Some(game(GAME)));
+}
+
+#[test]
+fn conflicts_are_changes_made_elsewhere_since_the_base() {
+    let (f, mut storage) = Fixture::new();
+    let mut other = f.open();
+    let mut theirs = game("Edited");
+    theirs.skips.clear();
+    f.save(&mut other, "Edited", None, Some(&theirs));
+    f.save(&mut other, "Same", None, Some(&game("Same")));
+    f.save(&mut other, "Gone", None, Some(&game("Gone")));
+    f.save(&mut other, "Gone", Some(&game("Gone")), None);
+    f.save(&mut other, "Base", None, Some(&game("Base")));
+    f.write_raw(&mut other, "Newer", r#"{ "format": 2, "name": "Newer" }"#);
+
+    let mut mine = with_prefix(game("Edited"), "/prefixes/edited");
+    mine.files.clear();
+    let games = [
+        mine,
+        game("Same"),
+        game("Gone"),
+        game("Base"),
+        game("New"),
+        game("Newer"),
+    ];
+    let entries = [
+        // Edited here from game("Edited"), and since then elsewhere.
+        unsent("Edited", Some(&game("Edited"))),
+        // Changed to what the repository holds already.
+        unsent("Same", Some(&game("Other"))),
+        // A migration's entry: based on this PC's copy, removed elsewhere.
+        unsent("Gone", Some(&game("Gone"))),
+        // Unchanged elsewhere since the base.
+        unsent("Base", Some(&game("Base"))),
+        // A name the repository never had.
+        unsent("New", None),
+        // A copy that cannot be read is the send's to report.
+        unsent("Newer", None),
+        // Removed here from a copy the repository has changed since.
+        unsent("Base", Some(&game("Older"))),
+    ];
+    let found = conflicts(&mut storage, &games, &entries[..6]).unwrap();
+    assert_eq!(
+        found,
+        [
+            Conflict {
+                name: "Edited".into(),
+                newest: Some(theirs)
+            },
+            Conflict {
+                name: "Gone".into(),
+                newest: None
+            },
+        ]
+    );
+    let found = conflicts(&mut storage, &[], &entries[6..]).unwrap();
+    let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Base"]);
+}
+
+#[test]
+fn send_writes_games_then_removals_and_reports_each() {
+    let (f, mut storage) = Fixture::new();
+    f.save(&mut storage, "Old", None, Some(&game("Old")));
+    f.save(&mut storage, "Kept", None, Some(&game("Kept")));
+    let mut edited = with_prefix(game("Kept"), "/prefixes/kept");
+    edited.skips.clear();
+    let games = [game("New"), edited.clone()];
+    // A rename of Old to New, and an edit of Kept.
+    let entries = [
+        unsent("Old", Some(&game("Old"))),
+        unsent("New", None),
+        unsent("Kept", Some(&game("Kept"))),
+    ];
+    let sent = send(&mut storage, &games, &entries, &f.stage);
+    assert!(sent.failed.is_empty(), "{:?}", sent.failed);
+    assert!(sent.held_back.is_empty());
+    assert!(sent.forget_errors.is_empty());
+    let mut shared_edit = edited.clone();
+    shared_edit.wine_prefix = None;
+    assert_eq!(
+        sent.sent,
+        [
+            ("New".to_owned(), Some(game("New"))),
+            ("Kept".to_owned(), Some(shared_edit.clone())),
+            ("Old".to_owned(), None),
+        ]
+    );
+    assert_eq!(sent.written, ["New", "Kept", "Old"]);
+    let all = loaded(&mut f.open());
+    assert_eq!(all["Old"], Stored::Removed);
+    assert_eq!(all["New"], Stored::Game(Box::new(game("New"))));
+    assert_eq!(all["Kept"], Stored::Game(Box::new(shared_edit)));
+}
+
+#[test]
+fn send_holds_removals_back_after_a_write_that_may_pass() {
+    let (f, mut storage) = Fixture::new();
+    f.save(&mut storage, "Old", None, Some(&game("Old")));
+    // A directory where the game's file is staged makes its write fail.
+    let blocked = (f.stage.join("settings").join(STAGE_DIR))
+        .join(slug("New"))
+        .join(GAME_FILE);
+    fs::create_dir_all(&blocked).unwrap();
+    let entries = [unsent("Old", Some(&game("Old"))), unsent("New", None)];
+    let sent = send(&mut storage, &[game("New")], &entries, &f.stage);
+    assert!(matches!(
+        sent.failed.as_slice(),
+        [(name, CustomGameError::Io { .. })] if name == "New"
+    ));
+    assert_eq!(sent.held_back, ["Old"]);
+    assert!(sent.sent.is_empty());
+    assert_eq!(
+        loaded(&mut f.open())["Old"],
+        Stored::Game(Box::new(game("Old")))
+    );
+}
+
+#[test]
+fn send_of_one_stuck_game_does_not_hold_back_another_removal() {
+    let (f, mut storage) = Fixture::new();
+    f.write_raw(&mut storage, "Newer", r#"{ "format": 2, "name": "Newer" }"#);
+    f.save(&mut storage, "Gone", None, Some(&game("Gone")));
+    let mut theirs = game("Changed");
+    f.save(&mut storage, "Changed", None, Some(&theirs));
+    theirs.skips.clear();
+    f.save(
+        &mut f.open(),
+        "Changed",
+        Some(&game("Changed")),
+        Some(&theirs),
+    );
+    let entries = [
+        unsent("Newer", None),
+        unsent("Changed", Some(&game("Changed"))),
+        unsent("Gone", Some(&game("Gone"))),
+    ];
+    let mut mine = game("Changed");
+    mine.files.clear();
+    let sent = send(&mut storage, &[game("Newer"), mine], &entries, &f.stage);
+    assert!(matches!(
+        sent.failed.as_slice(),
+        [
+            (_, CustomGameError::NewerFormat(2)),
+            (_, CustomGameError::Changed(Some(_))),
+        ]
+    ));
+    assert!(sent.held_back.is_empty());
+    assert_eq!(sent.sent, [("Gone".to_owned(), None)]);
+    let all = load_all(&mut f.open()).unwrap();
+    assert!(matches!(all["Gone"], Ok(Stored::Removed)));
+}
+
+#[test]
+fn after_send_drops_what_was_sent_and_rebases_what_changed_meanwhile() {
+    let mut edited = game("Edited");
+    edited.skips.clear();
+    let mut entries = vec![
+        unsent("Sent", Some(&game("Base"))),
+        unsent("Edited", Some(&game("Edited"))),
+        unsent("Removed", Some(&game("Removed"))),
+        unsent("Failed", None),
+        unsent("Later", None),
+    ];
+    // During the backup Edited was edited again, and Later added.
+    let mut again = with_prefix(edited.clone(), "/prefixes/edited");
+    again.files.clear();
+    let games = [
+        with_prefix(game("Sent"), "/prefixes/sent"),
+        again,
+        game("Failed"),
+        game("Later"),
+    ];
+    let sent = [
+        ("Sent".to_owned(), Some(game("Sent"))),
+        ("Edited".to_owned(), Some(edited.clone())),
+        ("Removed".to_owned(), None),
+    ];
+    after_send(&mut entries, &games, &sent);
+    assert_eq!(
+        entries,
+        [
+            unsent("Edited", Some(&edited)),
+            unsent("Failed", None),
+            unsent("Later", None),
+        ]
+    );
+}
+
+#[test]
+fn a_game_added_and_removed_here_is_neither_asked_about_nor_sent() {
+    let (f, mut storage) = Fixture::new();
+    // Another PC has a game of the same name this PC never sent.
+    f.save(&mut f.open(), "Brief", None, Some(&game("Brief")));
+    let before = ids(&storage);
+    let entries = [unsent("Brief", None)];
+    assert!(conflicts(&mut storage, &[], &entries).unwrap().is_empty());
+
+    let sent = send(&mut storage, &[], &entries, &f.stage);
+    assert!(sent.failed.is_empty());
+    assert!(sent.written.is_empty());
+    assert_eq!(sent.sent, [("Brief".to_owned(), None)]);
+    assert_eq!(ids(&storage), before, "the other PC's game stays");
+    let mut entries = entries.to_vec();
+    after_send(&mut entries, &[], &sent.sent);
+    assert!(entries.is_empty());
+}

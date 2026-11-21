@@ -10,8 +10,10 @@ use std::process::{Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
+use crate::custom_games;
 use crate::layout::Root;
 use crate::manifest::CustomGame;
+use crate::retention;
 use crate::secret::SecretKey;
 use crate::storage::RepoLocation;
 
@@ -179,6 +181,16 @@ where
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// Unsent rules that do not parse, such as a rule a newer version added, read as none, so the
+/// rest of the config still loads.
+fn lenient_retention<'de, D>(deserializer: D) -> Result<Option<retention::Unsent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 /// A kind of repository backend the picker offers (ADR-0009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
@@ -317,9 +329,25 @@ pub struct AppConfig {
     )]
     pub restore_sort: ListSort,
     /// The key ([`AppConfig::secret_scope`]) of the repository whose custom games
-    /// `custom_games` mirrors; `None` until one was synced (ADR-0028).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `custom_games` mirrors; `None` until one was read (ADR-0028). Written under a new name,
+    /// so salvajocs 0.8.0 never mirrors over the unsent games (ADR-0029).
+    #[serde(
+        rename = "custom_games_read_from",
+        alias = "custom_games_repository",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub custom_games_repository: Option<String>,
+    /// The custom games changed here since the last Back up, in the order changed (ADR-0029).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_games_unsent: Vec<custom_games::Unsent>,
+    /// The Old backups rules changed here since the last Back up (ADR-0029).
+    #[serde(
+        default,
+        deserialize_with = "lenient_retention",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub retention_unsent: Option<retention::Unsent>,
 }
 
 fn default_true() -> bool {
@@ -334,7 +362,8 @@ pub fn default_dir() -> Option<PathBuf> {
 impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
     /// reads from the file: no options, roots or custom games, update checks on, the system
-    /// theme, both lists sorted by name and no repository's custom games mirrored.
+    /// theme, both lists sorted by name, no repository's custom games mirrored and nothing
+    /// unsent.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -348,6 +377,8 @@ impl AppConfig {
             backup_sort: ListSort::default(),
             restore_sort: ListSort::default(),
             custom_games_repository: None,
+            custom_games_unsent: Vec::new(),
+            retention_unsent: None,
         }
     }
 

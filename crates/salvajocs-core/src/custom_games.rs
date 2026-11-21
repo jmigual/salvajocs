@@ -216,9 +216,10 @@ pub struct Saved {
 
 /// Saves the custom game `name`: `new` (its own name is not used), or a tombstone when `new` is
 /// `None`. Reindexes and reads the game's newest snapshot; when its shared fields (all but
-/// `wine_prefix`) are not those of `based_on`, the copy the edit started from (`None`: the
-/// repository had none, or a tombstone), nothing is written. A name with no snapshot at all is
-/// saved whatever `based_on` is, as a sync uploads it; removing it writes nothing. Otherwise
+/// `wine_prefix`) are neither those of `based_on`, the copy the edit started from (`None`: the
+/// repository had none, or a tombstone), nor those of `new`, nothing is written. A name with no
+/// snapshot at all is saved whatever `based_on` is, as a first upload; removing it writes
+/// nothing. Otherwise
 /// writes the game, staged in `stage_root/settings/custom-games/<slug>`, keeping the top-level
 /// fields a newer version added to the newest snapshot, and forgets the older snapshots it
 /// listed before writing, never one written since; also when nothing new was written.
@@ -239,7 +240,11 @@ pub fn save(
     storage.reindex()?;
     let read = read_newest(storage, name)?;
     let newest = read.game()?;
-    if read.file.is_some() && newest.as_ref() != based_on.map(shared).as_ref() {
+    // The same change made on another PC first is no conflict.
+    if read.file.is_some()
+        && newest.as_ref() != based_on.map(shared).as_ref()
+        && newest.as_ref() != new.map(shared).as_ref()
+    {
         return Err(CustomGameError::Changed(newest.map(Box::new)));
     }
     write(storage, name, new, &read, stage_root)
@@ -355,6 +360,182 @@ fn read(
 ) -> Result<File, CustomGameError> {
     let path = format!("{}/{GAME_FILE}", as_path(slug));
     File::parse(&storage.read_file(&snapshot.id, &path)?)
+}
+
+/// A custom game changed on this PC and not yet saved to the repository (ADR-0029). The change
+/// is the local game of `name`, or its removal when the local copy has no game of that name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Unsent {
+    /// The game's name.
+    pub name: String,
+    /// The copy this PC had before its first unsent change, without a Wine prefix; `None` when
+    /// it had no game of that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<CustomGame>,
+}
+
+impl Unsent {
+    /// The change of `name` from `based_on`, whose Wine prefix is dropped.
+    pub fn new(name: String, based_on: Option<CustomGame>) -> Self {
+        Self {
+            name,
+            based_on: based_on.as_ref().map(shared),
+        }
+    }
+}
+
+/// Whether `entry` is a game added and removed here: other PCs never had it from this PC.
+fn nothing_to_send(games: &[CustomGame], entry: &Unsent) -> bool {
+    entry.based_on.is_none() && !games.iter().any(|game| game.name == entry.name)
+}
+
+/// What this PC sends for `name`: its game of `games` without the Wine prefix, `None` for a
+/// removal.
+fn sends(games: &[CustomGame], name: &str) -> Option<CustomGame> {
+    games.iter().find(|game| game.name == name).map(shared)
+}
+
+/// An unsent custom game whose repository copy changed since its base.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Conflict {
+    /// The game's name.
+    pub name: String,
+    /// The repository's newest copy, without a Wine prefix; `None` when it removed the game.
+    pub newest: Option<CustomGame>,
+}
+
+/// The entries of `unsent` that conflict with the repository: it has a snapshot of the name
+/// whose newest copy is neither the entry's base nor what this PC sends from `games`. A name with
+/// no snapshot, or whose newest copy cannot be read, is none, and so is a game added and removed
+/// here, which has nothing to send. Reindexes first; writes nothing.
+///
+/// # Errors
+/// The repository error when it cannot be reindexed.
+pub fn conflicts(
+    storage: &mut Storage,
+    games: &[CustomGame],
+    unsent: &[Unsent],
+) -> Result<Vec<Conflict>, StorageError> {
+    storage.reindex()?;
+    let mut found = Vec::new();
+    for entry in unsent.iter().filter(|entry| !nothing_to_send(games, entry)) {
+        // An unreadable copy is the send's to report.
+        let Ok(read) = read_newest(storage, &entry.name) else {
+            continue;
+        };
+        let Ok(newest) = read.game() else {
+            continue;
+        };
+        let base = entry.based_on.as_ref().map(shared);
+        if read.file.is_some() && newest != base && newest != sends(games, &entry.name) {
+            found.push(Conflict {
+                name: entry.name.clone(),
+                newest,
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// What a [`send`] did.
+#[derive(Debug, Default)]
+#[non_exhaustive]
+pub struct Sent {
+    /// Each name done, with the copy the repository now holds as this PC sent it (no Wine
+    /// prefix; `None` for a removal, or for a game added and removed here, which is not sent),
+    /// for [`after_send`].
+    pub sent: Vec<(String, Option<CustomGame>)>,
+    /// The names of `sent` written as a new snapshot.
+    pub written: Vec<String>,
+    /// The names that could not be saved, with why; they stay unsent.
+    pub failed: Vec<(String, CustomGameError)>,
+    /// Removals not tried because a game's write failed for a reason that may pass; they stay
+    /// unsent.
+    pub held_back: Vec<String>,
+    /// Saved names whose older snapshots could not be forgotten.
+    pub forget_errors: Vec<(String, StorageError)>,
+}
+
+impl Sent {
+    fn save(
+        &mut self,
+        storage: &mut Storage,
+        entry: &Unsent,
+        game: Option<&CustomGame>,
+        stage_root: &Path,
+    ) {
+        let name = &entry.name;
+        match save(storage, name, entry.based_on.as_ref(), game, stage_root) {
+            Ok(saved) => {
+                if saved.written.is_some() {
+                    self.written.push(name.clone());
+                }
+                if let Some(err) = saved.forget_error {
+                    self.forget_errors.push((name.clone(), err));
+                }
+                self.sent.push((name.clone(), saved.game));
+            }
+            Err(err) => self.failed.push((name.clone(), err)),
+        }
+    }
+}
+
+/// Saves each entry of `unsent` with [`save`]: first the games this PC has in `games`, then the
+/// removals, staged below `stage_root`. The removals are held back when a game's write failed
+/// for a reason that may pass (repository, I/O, not written), so a rename never leaves the game
+/// missing on other PCs; a failure tied to one game does not hold them back. A game added and
+/// removed here is done without a write.
+pub fn send(
+    storage: &mut Storage,
+    games: &[CustomGame],
+    unsent: &[Unsent],
+    stage_root: &Path,
+) -> Sent {
+    let mut sent = Sent::default();
+    let local = |entry: &Unsent| games.iter().find(|game| game.name == entry.name);
+    for entry in unsent {
+        if let Some(game) = local(entry) {
+            sent.save(storage, entry, Some(game), stage_root);
+        }
+    }
+    let retry = (sent.failed.iter()).any(|(_, err)| {
+        matches!(
+            err,
+            CustomGameError::Storage(_) | CustomGameError::Io { .. } | CustomGameError::NotWritten
+        )
+    });
+    for entry in unsent.iter().filter(|entry| local(entry).is_none()) {
+        if nothing_to_send(games, entry) {
+            sent.sent.push((entry.name.clone(), None));
+        } else if retry {
+            sent.held_back.push(entry.name.clone());
+        } else {
+            sent.save(storage, entry, None, stage_root);
+        }
+    }
+    sent
+}
+
+/// Updates `unsent` once the repository holds the copies `sent` ([`Sent::sent`]): an entry
+/// whose game in `games` is still what was sent is dropped; one changed since, during the
+/// backup, stays, based on what was sent.
+pub fn after_send(
+    unsent: &mut Vec<Unsent>,
+    games: &[CustomGame],
+    sent: &[(String, Option<CustomGame>)],
+) {
+    for (name, copy) in sent {
+        let Some(index) = unsent.iter().position(|entry| entry.name == *name) else {
+            continue;
+        };
+        if sends(games, name) == *copy {
+            unsent.remove(index);
+        } else {
+            unsent[index].based_on = copy.clone();
+        }
+    }
 }
 
 /// This PC's custom games after a [`merge`] with the repository's.

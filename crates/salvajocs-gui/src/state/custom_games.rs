@@ -9,6 +9,7 @@ use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
 use salvajocs_core::custom_games::{self, CustomGameError};
 use salvajocs_core::manifest::CustomGame;
+use salvajocs_core::retention::Retention;
 use salvajocs_core::storage::Storage;
 
 use super::{State, lock_storage};
@@ -166,6 +167,30 @@ impl State {
         choices: Vec<(SnapshotRoot, Choice)>,
     ) {
         self.queue_custom_games(ctx, Work::Choices { title, choices });
+    }
+
+    /// Takes what a Back up saved to the repository open now: the custom games `sent`
+    /// ([`custom_games::Sent::sent`]) and the Old backups rules `rules`, when it sent them. A
+    /// change still as sent is no longer unsent; one changed during the backup is based on what
+    /// was sent (ADR-0029). Saves the config.
+    pub fn custom_games_sent(
+        &mut self,
+        ctx: &egui::Context,
+        sent: &[(String, Option<CustomGame>)],
+        rules: Option<Retention>,
+    ) {
+        let Some(config) = &mut self.config else {
+            return;
+        };
+        custom_games::after_send(&mut config.custom_games_unsent, &config.custom_games, sent);
+        if let (Some(rules), Some(unsent)) = (rules, &mut config.retention_unsent) {
+            if unsent.policy == rules {
+                config.retention_unsent = None;
+            } else {
+                unsent.based_on = rules;
+            }
+        }
+        self.save_config(ctx);
     }
 
     fn queue_custom_games(&mut self, ctx: &egui::Context, work: Work) {
