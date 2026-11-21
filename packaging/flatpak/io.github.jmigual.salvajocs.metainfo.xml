@@ -52,6 +52,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.9.1" date="2026-11-21">
+      <description>
+        <p>The Restore tab's list of games scrolls when it is longer than the window, also while
+        a job runs.</p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-11-21">
       <description>
         <p>Only Back up writes custom games and the Old backups rules to the repository. Opening

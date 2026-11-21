@@ -6,6 +6,8 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-21
+
 ### Fixed
 
 - The Restore tab's list of games scrolls when it is longer than the window.
@@ -380,7 +382,8 @@ First release.
 - Custom games, Wine prefixes and cross-OS game pairs.
 - Windows installer with in-app updates, Windows zip, Linux AppImage and tarball, and crates.io.
 
-[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jmigual/salvajocs/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/jmigual/salvajocs/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jmigual/salvajocs/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jmigual/salvajocs/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jmigual/salvajocs/compare/v0.6.0...v0.7.0
