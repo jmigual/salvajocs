@@ -6,6 +6,10 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The Restore tab's list of games scrolls when it is longer than the window.
+
 ## [0.9.0] - 2026-11-21
 
 ### Changed

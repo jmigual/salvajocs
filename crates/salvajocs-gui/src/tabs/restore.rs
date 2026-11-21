@@ -809,9 +809,7 @@ impl RestoreTab {
                 .size_range(SIDEBAR_WIDTH..=widest)
                 .resizable(true)
                 .frame(frame)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(idle, |ui| self.games_ui(ui, state));
-                });
+                .show(ui, |ui| self.games_ui(ui, state, idle));
             theme::page(ui, |ui| {
                 ui.add_enabled_ui(idle, |ui| self.game_ui(ui, state, manifest_loading));
                 if busy || self.detecting.is_some() {
@@ -1182,8 +1180,35 @@ impl RestoreTab {
     }
 
     /// The sidebar: the listing button, the Sort by row and the games of the repository in the
-    /// config's order, each with a line of its backup figures.
-    fn games_ui(&mut self, ui: &mut Ui, state: &mut State) {
+    /// config's order, each with a line of its backup figures. Only `idle` enables the controls:
+    /// the list scrolls either way, which a disabled `Ui` would not allow.
+    fn games_ui(&mut self, ui: &mut Ui, state: &mut State, idle: bool) {
+        let sort = ui
+            .add_enabled_ui(idle, |ui| self.sidebar_header_ui(ui, state))
+            .inner;
+        let Some(sort) = sort else {
+            return;
+        };
+        // The batch button keeps its room under the list, so a long list cannot push it off.
+        let reserve = self.batch_button_room(ui);
+        let chosen = egui::ScrollArea::vertical()
+            .id_salt("restore_games_list")
+            .auto_shrink([false, true])
+            .max_height((ui.available_height() - reserve).max(0.0))
+            .show(ui, |ui| {
+                ui.add_enabled_ui(idle, |ui| self.games_list_ui(ui, sort))
+                    .inner
+            })
+            .inner;
+        if let Some(game) = chosen {
+            self.choose(ui.ctx(), state, &game);
+        }
+        ui.add_enabled_ui(idle, |ui| self.batch_button_ui(ui, state));
+    }
+
+    /// The listing button and, once there are games, the select-all row and the sort control.
+    /// Returns the sort to list by, or `None` while there are no games.
+    fn sidebar_header_ui(&mut self, ui: &mut Ui, state: &mut State) -> Option<ListSort> {
         let load = egui::Button::new("Load backups").min_size(Vec2::new(ui.available_width(), 0.0));
         if ui.add_enabled(state.session.is_some(), load).clicked() {
             self.load(ui.ctx(), state);
@@ -1192,7 +1217,7 @@ impl RestoreTab {
             ui.weak("The repository is not open.");
         }
         if self.games.is_empty() {
-            return;
+            return None;
         }
         self.select_all_ui(ui);
         let sort = (state.config.as_ref()).map_or(ListSort::default(), |c| c.restore_sort);
@@ -1203,6 +1228,11 @@ impl RestoreTab {
             state.save_config(ui.ctx());
         }
         self.sort_rows(sort);
+        Some(sort)
+    }
+
+    /// The boxed list of games; returns the one whose row was clicked.
+    fn games_list_ui(&mut self, ui: &mut Ui, sort: ListSort) -> Option<GameBackups> {
         let mut chosen = None;
         let (figures, space, lines) = (&self.figures, &self.space, &mut self.lines);
         theme::group(ui, |ui| {
@@ -1249,10 +1279,7 @@ impl RestoreTab {
                 });
             }
         });
-        if let Some(game) = chosen {
-            self.choose(ui.ctx(), state, &game);
-        }
-        self.batch_button_ui(ui, state);
+        chosen
     }
 
     /// The chosen game: its snapshot and the build to restore into.

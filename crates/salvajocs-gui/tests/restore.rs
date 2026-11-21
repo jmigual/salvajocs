@@ -10,9 +10,11 @@ use common::{
     back_up_unsent, env, harness, init_repo, local_config, record_opened, replace_text, repo_dir,
     run_settled, run_until, run_until_ready, save_config, shows, shows_path,
 };
-use eframe::egui::accesskit::{Role, Toggled};
+use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
-use eframe::egui::{Key, Pos2, Rect, Vec2};
+use eframe::egui::{
+    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2,
+};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::backup::backup_games;
@@ -420,6 +422,108 @@ fn restore_sidebar_truncates_a_long_title_after_its_checkbox() {
     run_until(&mut harness, "the full title on hover", |h| {
         h.query_all_by_label(LONG_TITLE).count() > 1
     });
+}
+
+const WINDOW_HEIGHT: f32 = 500.0;
+
+/// The Restore tab listing 40 games in a window too short for them.
+fn long_list(tmp: &TempDir) -> (Harness<'static, App>, Vec<String>) {
+    let titles: Vec<String> = (0..40).map(|n| format!("Game {n:02}")).collect();
+    let games: Vec<GameScan> = (titles.iter())
+        .map(|title| {
+            let tail = format!("{title}/save.dat");
+            scan(
+                tmp,
+                title,
+                &[(Base::WinAppData, &tail)],
+                &[(Base::WinAppData, title)],
+            )
+        })
+        .collect();
+    let (mut harness, _env) = open_tab(tmp, Vec::new(), &games);
+    harness.set_size(Vec2::new(1000.0, WINDOW_HEIGHT));
+    run_settled(&mut harness);
+    (harness, titles)
+}
+
+/// The bounds of the node labelled `label` in the last frame.
+fn bounds(harness: &Harness<'static, App>, label: &str) -> accesskit::Rect {
+    (harness.get_by_label(label).accesskit_node().raw_bounds()).unwrap()
+}
+
+/// Turns the mouse wheel down over the sidebar, as a user does.
+fn wheel_over_sidebar(harness: &mut Harness<'static, App>) {
+    let at = Pos2::new(
+        harness.get_by_label("Load backups").rect().center().x,
+        WINDOW_HEIGHT / 2.0,
+    );
+    harness.hover_at(at);
+    harness.step();
+    harness.event(Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -2000.0),
+        phase: TouchPhase::Move,
+        source: MouseWheelSource::Wheel,
+        modifiers: Modifiers::NONE,
+    });
+    run_settled(harness);
+}
+
+#[test]
+fn restore_sidebar_scrolls_a_list_longer_than_the_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, titles) = long_list(&tmp);
+    let window = f64::from(WINDOW_HEIGHT);
+    let last = titles.last().unwrap();
+    assert!(
+        bounds(&harness, last).y0 > window,
+        "the last game starts below the window"
+    );
+    let load_top = bounds(&harness, "Load backups").y0;
+
+    harness.get_by_label(last).scroll_to_me();
+    run_settled(&mut harness);
+    let button = bounds(&harness, "Restore 0 games");
+    assert!(button.y1 <= window, "the batch button stays in the window");
+    assert!(
+        bounds(&harness, last).y1 <= button.y0,
+        "the last game scrolls into view above the batch button"
+    );
+    assert_eq!(
+        bounds(&harness, "Load backups").y0,
+        load_top,
+        "the sidebar's controls stay put"
+    );
+}
+
+#[test]
+fn restore_sidebar_scrolls_with_the_wheel_while_a_batch_is_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, titles) = long_list(&tmp);
+    click(&mut harness, "Include Game 00");
+    plan_batch(&mut harness, "Restore 1 game");
+    let last = titles.last().unwrap();
+    assert!(
+        bounds(&harness, last).y0 > f64::from(WINDOW_HEIGHT),
+        "the last game starts below the window"
+    );
+
+    wheel_over_sidebar(&mut harness);
+    assert!(
+        bounds(&harness, last).y1 <= f64::from(WINDOW_HEIGHT),
+        "the wheel brings the last game into the window"
+    );
+}
+
+#[test]
+fn restore_sidebar_keeps_the_batch_button_under_a_short_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _saves) = alpha(&tmp);
+    run_settled(&mut harness);
+    let row = bounds(&harness, "Alpha");
+    let button = bounds(&harness, "Restore 0 games");
+    let gap = button.y0 - row.y1;
+    assert!(gap < 100.0, "the button sits right under the list: {gap}");
 }
 
 #[test]

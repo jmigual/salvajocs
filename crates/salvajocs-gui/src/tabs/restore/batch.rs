@@ -213,6 +213,17 @@ impl RestoreTab {
         });
     }
 
+    /// The height [`Self::batch_button_ui`] takes under the list: its gaps, its space and the
+    /// button, which is as tall as its text and padding or the minimum a widget gets.
+    pub(super) fn batch_button_room(&self, ui: &Ui) -> f32 {
+        if self.batch.open() {
+            return 0.0;
+        }
+        let spacing = ui.spacing();
+        let text = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * spacing.button_padding.y;
+        2.0 * spacing.item_spacing.y + 8.0 + text.max(spacing.interact_size.y)
+    }
+
     /// The button that plans the ticked games; hidden while the confirm shows its own.
     pub(super) fn batch_button_ui(&mut self, ui: &mut Ui, state: &State) {
         if self.batch.open() {
