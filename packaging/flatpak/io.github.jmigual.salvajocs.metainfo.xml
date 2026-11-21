@@ -52,6 +52,14 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.9.0" date="2026-11-21">
+      <description>
+        <p>Only Back up writes custom games and the Old backups rules to the repository. Opening
+        the app and the new Read repository button only read them, and custom games can be edited
+        without the repository. When a game or the rules changed here and on another PC, Back up
+        shows both versions and you choose which one to keep.</p>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-11-20">
       <description>
         <p>Custom games are stored in the repository, so every PC that uses it has the same ones.
