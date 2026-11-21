@@ -2,6 +2,9 @@
 
 **Status:** Accepted
 **Date:** 2026-11-18
+**Amended:** 2026-11-21: the policy is saved on the next Back up, a policy changed on another PC
+since is asked about, and the cleanup forgets nothing when this PC's rules could not be written
+(ADR-0029).
 
 ## Context
 

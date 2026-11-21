@@ -2,6 +2,9 @@
 
 **Status:** Proposed
 **Date:** 2026-11-20
+**Amended:** 2026-11-21: custom games are written to the repository only by Back up, read on open
+and from a Read repository button; a migration asks instead of the repository winning; offline
+editing; no `config-before-custom-games.yaml` (ADR-0029).
 
 ## Context
 
