@@ -18,10 +18,10 @@ egui = "0.37.0"
 egui_kittest = "0.37.0"
 glob = "0.3.4"
 keyring-core = "1.0.1"
-opendal = "0.58.2"
+opendal = "0.59.5"
 reqwest = { version = "0.13.5", default-features = false }
 rfd = { version = "0.18.0", default-features = false }
-rustic_backend = "=0.7.0"
+rustic_backend = "=0.8.0"
 rustic_core = "=0.13.0"
 salvajocs-core = { path = "crates/salvajocs-core", version = "0.9.1" }
 semver = "1.0.28"

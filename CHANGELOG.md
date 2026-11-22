@@ -6,6 +6,21 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
+  injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
+  (RUSTSEC-2026-0592).
+
+### Changed
+
+- The REST and rclone keys `cacert` and `tls-client-cert` are now `http-cacert` and
+  `http-tls-client-cert`, as in `rustic_backend` 0.8.0. A saved configuration with the old names
+  is renamed when it is read, and the new names are written at the next save. The keys
+  `timeout`, `http-cacert`, `http-tls-client-cert`, `http-insecure-tls`, `http-referer`,
+  `http-read-timeout` and `http-connect-timeout` now also apply to the storage services, which
+  now time out a request after 10 minutes by default; `timeout` raises the limit.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed

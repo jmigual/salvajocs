@@ -4,6 +4,10 @@
 **Date:** 2026-11-16
 **Amended:** 2026-11-19: salvajocs starts `rclone serve restic` itself, so it opens no console
 window on Windows.
+**Amended:** 2026-11-22: `rustic_backend` 0.8.0 (opendal 0.59.5) with `rustic_core` 0.13.0, for the
+`suppaftp` fix (RUSTSEC-2026-0271). It renames the REST and rclone keys `cacert` and
+`tls-client-cert` to `http-cacert` and `http-tls-client-cert`; `core::config` renames them when
+it loads a config, and keeps the old names in `secret_scope` so keyring entries stay valid.
 
 ## Context
 
@@ -13,8 +17,9 @@ where the repository lives: a folder or any backend rustic supports.
 
 restic is Go and has no embedding API (research.md §3). rustic_core reads and writes the restic
 repo format (research.md §4). The facts below were checked against the crate sources
-(rustic_core 0.13.0, rustic_backend 0.7.0, both 2026-08-16, the latest releases) and a
-throwaway program built against them in the scratchpad:
+(rustic_core 0.13.0 and rustic_backend 0.7.0, both 2026-08-16; the 2026-11-22 upgrade to
+rustic_backend 0.8.0 needed no code change in `core::storage`, and its `rclone.rs` is unchanged)
+and a throwaway program built against them in the scratchpad:
 
 - **API:** the API is synchronous, so we need no async code.
   - `Repository::new(&RepositoryOptions, &backends)`, then `.init(&Credentials, &KeyOptions,
@@ -64,13 +69,14 @@ throwaway program built against them in the scratchpad:
     `zstd-sys`.
   - The default-feature tree (opendal, rest, rclone) is larger and was not measured.
   - The opendal backends add a tokio multi-thread runtime that rustic_backend owns internally.
-  - The rest backend adds reqwest (rustls).
+  - The rest backend adds reqwest (rustls); since rustic_backend 0.8.0 it is async reqwest on
+    its own tokio runtime, not `reqwest::blocking`.
   - MSRV of both crates: 1.91.
 - rustic_core changes its API almost every release (research.md §4; 0.9 → 0.13 within a year).
 
 ## Decision
 
-- Depend on `rustic_core = "=0.13.0"` and `rustic_backend = "=0.7.0"`, pinned exactly in
+- Depend on `rustic_core = "=0.13.0"` and `rustic_backend = "=0.8.0"`, pinned exactly in
   `[workspace.dependencies]`. Upgrades are their own commit with the storage tests green.
 - All rustic calls live in `core::storage`, the only module that names rustic types. Everything
   else uses our own types (`RepoState`, `SnapshotInfo`, `Compression`). The one exception is
