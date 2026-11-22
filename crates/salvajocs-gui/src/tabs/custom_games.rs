@@ -14,6 +14,7 @@ use salvajocs_core::crossbuild::{self, Family, FileError, PairError, SkipError};
 use salvajocs_core::layout::{self, Context, GameVars, WinFolders};
 use salvajocs_core::manifest::{CustomFile, CustomGame, InstallDir, Integration, Pair};
 use salvajocs_core::prefix;
+use salvajocs_core::registry;
 use salvajocs_core::restore;
 use salvajocs_core::scan::Environment;
 
@@ -106,6 +107,11 @@ enum FormError {
     /// An install folder is not one plain folder name.
     #[error("An install folder is one folder name, not a path: {0}")]
     InstallDir(String),
+    /// A registry key is outside `HKEY_CURRENT_USER` or a system key ([`registry::protected_key`]).
+    #[error(
+        "A restore never writes this registry key: it is a system key or not under HKEY_CURRENT_USER: {0}"
+    )]
+    RegistryKey(String),
     /// A pair side is not a placeholder template of its OS.
     #[error(transparent)]
     Pair(#[from] PairError),
@@ -207,6 +213,13 @@ fn install_dir_error(name: &str) -> Option<FormError> {
     (!plain).then(|| FormError::InstallDir(name.to_owned()))
 }
 
+/// Why `key` cannot be a registry key row: a restore ignores a protected key (ADR-0005).
+fn registry_key_error(key: &str) -> Option<FormError> {
+    let key = key.trim();
+    (!key.is_empty() && registry::protected_key(key))
+        .then(|| FormError::RegistryKey(key.to_owned()))
+}
+
 fn wine_prefix_text(path: Option<&Path>) -> String {
     path.map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -265,7 +278,8 @@ impl Form {
     /// # Errors
     /// [`FormError`] for an empty or taken name, a file row, pair side or skipped folder that
     /// `crossbuild::validate_file`, `validate_pair` or `validate_skip` rejects, an install folder
-    /// that is not one folder name, and a game that is no longer the one the form was opened on.
+    /// that is not one folder name, a protected registry key, and a game that is no longer the
+    /// one the form was opened on.
     fn build(&self, games: &[CustomGame]) -> Result<CustomGame, FormError> {
         if let Some(index) = self.index
             && games.get(index) != self.snapshot.as_ref()
@@ -288,6 +302,9 @@ impl Form {
             .iter()
             .find_map(|name| install_dir_error(name))
         {
+            return Err(error);
+        }
+        if let Some(error) = self.registry.iter().find_map(|key| registry_key_error(key)) {
             return Err(error);
         }
         let files = (self.files.iter().filter_map(FileRow::file))
@@ -368,10 +385,11 @@ impl Form {
             .collect()
     }
 
-    /// Whether every file row and install folder is valid, so the game can be saved.
+    /// Whether every file row, install folder and registry key is valid, so the game can be saved.
     fn rows_valid(&self) -> bool {
         self.files.iter().all(|row| row.error().is_none())
             && (self.install_dirs.iter()).all(|name| install_dir_error(name).is_none())
+            && (self.registry.iter()).all(|key| registry_key_error(key).is_none())
     }
 
     /// Puts a finished pick into its row.
@@ -637,7 +655,7 @@ impl Form {
         ui.heading("Registry keys");
         ui.weak("Keys under HKEY_CURRENT_USER where the Windows build keeps saves or settings.");
         let key = ("Registry key", "HKEY_CURRENT_USER/Software/My Game");
-        text_rows(ui, &mut self.registry, key, idle, |_| None);
+        text_rows(ui, &mut self.registry, key, idle, registry_key_error);
         ui.add_space(16.0);
         ui.heading("Install folders");
         ui.weak(

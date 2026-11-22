@@ -75,6 +75,9 @@ All notable changes to salvajocs. The format follows
 - Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
   injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
   (RUSTSEC-2026-0592).
+- The Custom games form refuses a registry key a restore never writes: one outside
+  `HKEY_CURRENT_USER`, `Software` itself, or a system key such as `Software/Microsoft/Windows`,
+  `Software/Classes` or `Environment`. The row shows why, and **Save game** stays disabled.
 - A REST password still in the repository URL, because the keyring refused it, is now hidden in
   error messages too.
 - The manifest download accepts HTTPS only and is read up to 64 MiB.

@@ -380,6 +380,27 @@ fn custom_games_install_folder_that_is_a_path_shows_its_error_and_cannot_be_save
     assert!(!disabled(&harness, "Save game"));
 }
 
+#[test]
+fn custom_games_a_registry_key_under_run_disables_save_game() {
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), &[]);
+
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "My Game");
+    harness.get_by_label("Add registry key").click();
+    run_settled(&mut harness);
+    let run = r"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run";
+    replace_text(&mut harness, "Registry key 1", run);
+    assert!(shows(&harness, "A restore never writes this registry key"));
+    assert!(disabled(&harness, "Save game"));
+    replace_text(
+        &mut harness,
+        "Registry key 1",
+        "HKEY_CURRENT_USER/Software/My Game",
+    );
+    assert!(!disabled(&harness, "Save game"));
+}
+
 #[cfg(not(windows))]
 #[test]
 fn custom_games_install_folder_makes_a_browsed_folder_base_relative() {

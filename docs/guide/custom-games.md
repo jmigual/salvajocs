@@ -108,7 +108,9 @@ characters in a name), `?` (one character) and `[...]` (one character of a set).
 
 Keys under `HKEY_CURRENT_USER` where the Windows build keeps saves or settings, one per row, for
 example `HKEY_CURRENT_USER/Software/My Game`. **Add registry key** and **Remove registry key**
-change the list.
+change the list. A key outside `HKEY_CURRENT_USER`, `HKEY_CURRENT_USER/Software` itself, or a
+system key such as `Software/Microsoft/Windows`, `Software/Classes` or `Environment` cannot be
+saved: a restore never writes it.
 
 ### Install folders
 
