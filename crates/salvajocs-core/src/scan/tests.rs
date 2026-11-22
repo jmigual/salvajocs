@@ -458,6 +458,81 @@ fn prefix_scan_matches_case_insensitively() {
     assert_eq!(found.files[0].real, save);
 }
 
+/// A native Windows environment whose folders are those of `prefix`'s `me` user.
+fn windows_env(prefix: &Path) -> Environment {
+    Environment {
+        native: Some(Context::WindowsNative(WinFolders::for_prefix(prefix, "me"))),
+        ..no_native_env(vec![])
+    }
+}
+
+#[test]
+fn native_windows_scan_matches_wildcards_case_insensitively() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("Ace/SG_PC-1.sav"), "x");
+    let manifest = parse_yaml("Foo:\n  files:\n    <winDocuments>/Ace/SG_PC-*.SAV: {}\n").unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(tails(&found), [(Base::WinDocuments, "Ace/SG_PC-1.sav")]);
+}
+
+#[test]
+fn native_windows_scan_lists_one_file_once_whatever_its_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("X/Save"), "x");
+    write(&docs.join("x/save"), "y");
+    let manifest = parse_yaml("Foo:\n  files:\n    <winDocuments>/*/*: {}\n").unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(tails(&found), [(Base::WinDocuments, "X/Save")]);
+}
+
+#[test]
+fn native_windows_scan_lists_a_file_reached_by_two_templates_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("Ace/s.sav"), "x");
+    let manifest = parse_yaml(
+        "Foo:\n  files:\n    <winDocuments>/Ace/*.sav: {}\n    <winDocuments>/ACE/*.sav: {}\n",
+    )
+    .unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(found.files.len(), 1, "{found:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_with_a_non_utf8_name_is_a_problem_not_a_lossy_copy() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let saves = home.path().join(".local/share/Foo");
+    write(&saves.join("ok.sav"), "a");
+    let bad: Vec<PathBuf> = [&b"bad\xfe.sav"[..], &b"bad\xff.sav"[..]]
+        .map(|name| saves.join(OsStr::from_bytes(name)))
+        .into();
+    for path in &bad {
+        fs::write(path, "b").unwrap();
+    }
+    let manifest = parse_yaml("Foo:\n  files:\n    <xdgData>/Foo: {}\n").unwrap();
+    let report = scan(
+        &manifest,
+        &config(vec![], vec![]),
+        &linux_env(home.path()),
+        |_, _| {},
+    );
+    assert_eq!(report.games.len(), 1, "{report:?}");
+    assert_eq!(tails(&report.games[0]), [(Base::XdgData, "Foo/ok.sav")]);
+    let mut problems: Vec<_> = report.problems.iter().map(|p| p.path.clone()).collect();
+    problems.sort();
+    assert_eq!(problems, bad);
+    assert!((report.problems.iter()).all(|p| matches!(p.kind, ProblemKind::Unreadable(_))));
+    let mut unreadable = report.games[0].unreadable.clone();
+    unreadable.sort();
+    assert_eq!(unreadable, bad);
+}
+
 #[test]
 fn roots_record_glob_free_prefixes() {
     let home = tempfile::tempdir().unwrap();
@@ -645,7 +720,7 @@ fn a_glob_is_skipped_only_when_its_first_part_matches_no_entry() {
     fs::create_dir(dir.path().join("Empty")).unwrap();
     let cache = Cache::default();
     let may_match = |base: &Path, rest: &str, folded: bool| {
-        cache.may_match(base, &glob_pattern(base, rest, folded))
+        cache.may_match(base, &glob_pattern(base, rest, folded), false)
     };
     assert!(may_match(&base, "my games/foo", true));
     assert!(!may_match(&base, "Other Games/Foo", true));
@@ -658,6 +733,9 @@ fn a_glob_is_skipped_only_when_its_first_part_matches_no_entry() {
     assert!(may_match(&dir.path().join("Empty"), ".*/save", true));
     assert!(!may_match(&dir.path().join("Missing"), "foo/*", true));
     assert!(!may_match(&base.join("My Games/Foo/save"), "y*", true));
+    let upper = glob_pattern(&base, "MY*/Foo", false);
+    assert!(!cache.may_match(&base, &upper, false));
+    assert!(cache.may_match(&base, &upper, true));
 }
 
 #[cfg(unix)]
@@ -669,7 +747,8 @@ fn a_glob_below_an_unreadable_dir_still_runs() {
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let may_match = Cache::default().may_match(&locked, &glob_pattern(&locked, "*.dat", true));
+    let may_match =
+        Cache::default().may_match(&locked, &glob_pattern(&locked, "*.dat", true), false);
     let readable = fs::read_dir(&locked).is_ok();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     if readable {
