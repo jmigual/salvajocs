@@ -17,13 +17,13 @@ use crate::registry::RegistryExport;
 
 mod run;
 
-pub(crate) use run::parse_base;
 pub use run::{
     ApplyError, DefaultTargets, FetchError, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG,
     PrefixReason, RestoreReport, RunError, SafetyBackup, UnreadableTarget, WriteState,
     compare_writes, default_targets, describe_prefix, download, fetch, game_info, game_vars, list,
     read, run, staged_target,
 };
+pub(crate) use run::{MAX_JSON_BYTES, parse_base};
 
 /// A snapshot of one game restored into a work dir (ADR-0004).
 #[derive(Clone, Debug, PartialEq, Eq)]

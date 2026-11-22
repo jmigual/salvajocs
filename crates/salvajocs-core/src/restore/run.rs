@@ -31,6 +31,10 @@ pub use defaults::{DefaultTargets, PrefixReason, default_targets, describe_prefi
 /// The extra tag of a safety backup made before a restore (ADR-0010).
 pub const PRE_RESTORE_TAG: &str = "pre-restore";
 
+/// The most bytes [`read`] takes of a `salvajocs.json`, `registry.json` or `hashes.json`, each
+/// read whole into memory from a snapshot that is untrusted.
+pub(crate) const MAX_JSON_BYTES: u64 = 64 << 20;
+
 /// The snapshots of one game in the restore list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -325,6 +329,17 @@ pub fn read(
     snapshot: &SnapshotInfo,
     work_dir: &Path,
 ) -> Result<Listed, FetchError> {
+    read_capped(storage, snapshot, work_dir, MAX_JSON_BYTES)
+}
+
+/// [`read`] taking at most `cap` bytes of each JSON file, by its listed size and, since a
+/// crafted snapshot lies about it, as the bytes are read.
+fn read_capped(
+    storage: &mut Storage,
+    snapshot: &SnapshotInfo,
+    work_dir: &Path,
+    cap: u64,
+) -> Result<Listed, FetchError> {
     let slug = game_slug(snapshot)?;
     let dir = format!("/salvajocs/{slug}");
     let mut listing = storage.snapshot_entries(&snapshot.id, &dir)?;
@@ -332,8 +347,16 @@ pub fn read(
     listing.sort_by(|a, b| a.path.cmp(&b.path));
     let mut read_listed = |name: &str| {
         let local = work_dir.join(name);
-        let bytes = (storage.read_file_if_present(&snapshot.id, &format!("{dir}/{name}"))?)
-            .ok_or_else(|| fetch_io(&local)(io::ErrorKind::NotFound.into()))?;
+        let too_large = || fetch_io(&local)(io::ErrorKind::FileTooLarge.into());
+        if (listing.iter()).any(|entry| entry.path == name && entry.size > cap) {
+            return Err(too_large());
+        }
+        let bytes = match storage.read_file_if_present(&snapshot.id, &format!("{dir}/{name}"), cap)
+        {
+            Err(StorageError::TooLarge { .. }) => return Err(too_large()),
+            read => read?,
+        }
+        .ok_or_else(|| fetch_io(&local)(io::ErrorKind::NotFound.into()))?;
         Ok::<_, FetchError>((bytes, local))
     };
     if !listed_as(&listing, META_FILE, false, work_dir)? {

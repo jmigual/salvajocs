@@ -546,7 +546,11 @@ fn a_backup_stores_the_hash_list() {
     let info = written(&outcomes)[0].clone().unwrap();
     let slug = slug("Foo");
     let stored = storage
-        .read_file_if_present(&info.id, &format!("/salvajocs/{slug}/{HASHES_FILE}"))
+        .read_file_if_present(
+            &info.id,
+            &format!("/salvajocs/{slug}/{HASHES_FILE}"),
+            u64::MAX,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(

@@ -367,6 +367,52 @@ fn listed_of(staged: &StagedGame) -> Listed {
 }
 
 #[test]
+fn read_refuses_a_json_file_over_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let stage = crafted_game_stage(tmp.path().join("stage"));
+    let meta_len = fs::metadata(stage.join(META_FILE)).unwrap().len();
+    let plain = crafted_snapshot(&mut storage, &stage);
+    // Valid JSON one byte over the cap, so only its size can refuse it.
+    let mut registry = br#"{"keys":{}}"#.to_vec();
+    registry.resize(usize::try_from(meta_len).unwrap() + 1, b' ');
+    fs::write(stage.join(REGISTRY_FILE), registry).unwrap();
+    let with_registry = crafted_snapshot(&mut storage, &stage);
+
+    let mut read = |snapshot: &SnapshotInfo, cap: u64, work: &str| {
+        let work = tmp.path().join(work);
+        read_capped(&mut storage, snapshot, &work, cap)
+    };
+    let too_large = |read: &Result<Listed, FetchError>| matches!(read, Err(FetchError::Io { source, .. }) if source.kind() == io::ErrorKind::FileTooLarge);
+    // A file of exactly the cap is read.
+    assert!(read(&plain, meta_len, "work0").is_ok());
+    assert!(too_large(&read(&plain, meta_len - 1, "work1")));
+    assert!(too_large(&read(&with_registry, meta_len, "work2")));
+}
+
+#[test]
+fn a_hash_list_over_the_cap_is_not_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let game = game_with_save(tmp.path(), "Foo", "foo");
+    back_up(&mut storage, tmp.path(), &[game], &[]);
+    let id = list(&storage).unwrap()[0].snapshots[0].id.clone();
+    let dir = format!("/salvajocs/{}", crate::slug::slug("Foo"));
+    let mut listing = storage.snapshot_entries(&id, &dir).unwrap();
+    let hash_list = |storage: &mut Storage, listing: &[SnapshotFile]| {
+        crate::changes::hash_list(storage, &id, &dir, listing).unwrap()
+    };
+    assert!(hash_list(&mut storage, &listing).is_some());
+
+    for entry in &mut listing {
+        if entry.path == crate::layout::HASHES_FILE {
+            entry.size = MAX_JSON_BYTES + 1;
+        }
+    }
+    assert_eq!(hash_list(&mut storage, &listing), None);
+}
+
+#[test]
 fn read_keeps_a_verified_hash_list_and_drops_a_stale_one() {
     let tmp = tempfile::tempdir().unwrap();
     let mut storage = init_repo(tmp.path());
