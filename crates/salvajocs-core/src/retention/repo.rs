@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{Retention, SETTINGS_TAG};
+use crate::restore::MAX_JSON_BYTES;
 use crate::selection::{Settled, forget_listed, settle};
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
@@ -143,7 +144,8 @@ fn write(
 }
 
 fn read(storage: &mut Storage, snapshot: &SnapshotInfo) -> Result<Retention, RetentionError> {
-    let bytes = storage.read_file(&snapshot.id, &format!("{AS_PATH}/{POLICY_FILE}"))?;
+    let path = format!("{AS_PATH}/{POLICY_FILE}");
+    let bytes = storage.read_file(&snapshot.id, &path, MAX_JSON_BYTES)?;
     parse(&bytes)
 }
 

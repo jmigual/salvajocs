@@ -126,7 +126,7 @@ impl GameSettings {
         self.paths
             .iter()
             .filter(|(node, _)| covers(node, path))
-            .max_by_key(|(node, _)| components(&canonical(node)).count())
+            .max_by_key(|(node, _)| depth(node))
             .is_none_or(|(_, &included)| included)
     }
 
@@ -239,11 +239,40 @@ fn canonical(key: &str) -> Cow<'_, str> {
     }
 }
 
+/// `key` as older settings spelled it, `WinHome/AppData/<Roaming|Local|LocalLow>/..`, when it
+/// starts at one of those folders' bases ([`layout::legacy_win_home`]).
+fn legacy(key: &str) -> Option<String> {
+    let (first, rest) = key.split_once('/').unwrap_or((key, ""));
+    [
+        Base::WinAppData,
+        Base::WinLocalAppData,
+        Base::WinLocalAppDataLow,
+    ]
+    .into_iter()
+    .find(|base| base.dir_name() == first)
+    .and_then(|base| layout::legacy_win_home(base, rest))
+    .map(|tail| format!("{}/{tail}", Base::WinHome.dir_name()))
+}
+
+/// How deep `node` is, counted in the old `WinHome/AppData/..` spelling so that a key on an
+/// ancestor such as `WinHome/Appdata` ranks above one on `WinLocalAppDataLow`.
+fn depth(node: &str) -> usize {
+    let node = canonical(node);
+    components(legacy(&node).as_deref().unwrap_or(&node)).count()
+}
+
 /// Whether `node` is `path` or one of its ancestors, component by component. Below a
-/// Windows-family base the tail ignores ASCII case, as the scan does in prefixes.
+/// Windows-family base the tail ignores ASCII case, as the scan does in prefixes. A key of an
+/// older setting on an ancestor of `AppData`, such as `WinHome`, still covers the paths now
+/// keyed by `WinLocalAppDataLow` and its siblings.
 fn covers(node: &str, path: &str) -> bool {
     let (node, path) = (canonical(node), canonical(path));
-    let (mut node, mut path) = (components(&node), components(&path));
+    is_prefix(&node, &path) || legacy(&path).is_some_and(|old| is_prefix(&node, &old))
+}
+
+/// Whether the components of `node` start `path`'s, ignoring ASCII case below a Windows base.
+fn is_prefix(node: &str, path: &str) -> bool {
+    let (mut node, mut path) = (components(node), components(path));
     let (Some(base), Some(path_base)) = (node.next(), path.next()) else {
         return false;
     };

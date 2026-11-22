@@ -49,9 +49,15 @@ All notable changes to salvajocs. The format follows
 - A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
   `AppData`) is now stored under the same folder name as `AppData/LocalLow` and mapped to Linux
   by the Unity rule. The next **Back up** of each affected game makes one extra snapshot.
+- A file or folder you unticked before that change, by a folder above `AppData` such as the home
+  folder, is unticked again. Before, a saved choice on such a folder stopped applying to the
+  `AppData/LocalLow`, `Local` and `Roaming` files and they were backed up.
 - Two PCs saving the same game's selection, custom game or Old backups rules at the same time
   could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
   counted as saved, so the change stays on this PC and is tried again at the next Back up.
+- On Windows, a restore of a read-only file that failed halfway left a read-only `.salvajocs-tmp`
+  file beside it that made every later restore of that file fail. It is now removed, and one an
+  earlier version left is replaced.
 
 ### Security
 
@@ -69,7 +75,15 @@ All notable changes to salvajocs. The format follows
 - Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
   injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
   (RUSTSEC-2026-0592).
+- A REST password still in the repository URL, because the keyring refused it, is now hidden in
+  error messages too.
 - The manifest download accepts HTTPS only and is read up to 64 MiB.
+- A restore no longer writes a registry key that a snapshot and a game spell with an empty part,
+  such as `Software//Microsoft/Windows/CurrentVersion/Run`, to get past the protected system
+  keys.
+- The saved choices, custom games and Old backups rules of a repository, and the file compared in
+  a backup's details, are read up to a size limit counted while reading. Before, a crafted
+  repository could make the app read a very large file into memory.
 
 ## [0.9.1] - 2026-11-21
 

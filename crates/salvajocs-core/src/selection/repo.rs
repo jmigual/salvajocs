@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use super::{Change, GameSettings, SelectionError};
+use crate::restore::MAX_JSON_BYTES;
 use crate::retention::POLICY_TAG;
 use crate::slug::slug;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
@@ -216,7 +217,7 @@ fn read(
     slug: &str,
 ) -> Result<GameSettings, SelectionError> {
     let path = format!("{}/{SETTINGS_FILE}", as_path(slug));
-    GameSettings::from_json(&storage.read_file(&snapshot.id, &path)?)
+    GameSettings::from_json(&storage.read_file(&snapshot.id, &path, MAX_JSON_BYTES)?)
 }
 
 #[cfg(test)]

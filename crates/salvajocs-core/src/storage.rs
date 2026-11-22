@@ -223,10 +223,14 @@ impl RepoLocation {
             .map_err(|err| {
                 // rustic quotes the URL, password included, when it cannot parse it.
                 let text = AsRef::<RusticError>::as_ref(&err).display_log();
-                StorageError::Backend(match &password {
-                    Some(password) => rest_url::mask_password(&text, password),
-                    None => text,
-                })
+                // A password that could not move to the keyring is still in the URL.
+                let in_url = rest_url::split_rest_password(&self.repository);
+                let secrets = password
+                    .iter()
+                    .chain(in_url.iter().map(|(_, secret)| secret));
+                StorageError::Backend(
+                    secrets.fold(text, |text, secret| rest_url::mask_password(&text, secret)),
+                )
             })?;
         Ok((backends, rclone))
     }
@@ -802,20 +806,8 @@ impl Storage {
         let Some(&Some(at)) = found.matches.first() else {
             return Ok(None);
         };
-        let mut capped = Capped {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        };
-        let dumped = repo.dump(&found.nodes[at], &mut capped);
-        if capped.exceeded {
-            return Err(StorageError::TooLarge {
-                path: path_in_snapshot.to_owned(),
-                limit,
-            });
-        }
-        dumped.map_err(backend)?;
-        Ok(Some(capped.bytes))
+        self.dump_capped(&found.nodes[at], path_in_snapshot, limit)
+            .map(Some)
     }
 
     /// Stores new snapshots as made by `host`, as another machine would.
@@ -824,20 +816,46 @@ impl Storage {
         self.host = Some(host.to_owned());
     }
 
-    /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`.
+    /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`. The bytes are
+    /// counted as they are read, since a crafted snapshot can declare any size.
+    ///
+    /// # Errors
+    /// [`StorageError::TooLarge`] when the file holds more than `limit` bytes.
     pub fn read_file(
         &mut self,
         snapshot_id: &str,
         path_in_snapshot: &str,
+        limit: u64,
     ) -> Result<Vec<u8>, StorageError> {
         let snap = self.snapshot(snapshot_id)?;
-        let repo = &self.repo;
-        let node = repo
+        let node = self
+            .repo
             .node_from_snapshot_and_path(&snap, path_in_snapshot)
             .map_err(backend)?;
-        let mut bytes = Vec::new();
-        repo.dump(&node, &mut bytes).map_err(backend)?;
-        Ok(bytes)
+        self.dump_capped(&node, path_in_snapshot, limit)
+    }
+
+    /// Dumps `node`, the file at `path_in_snapshot`, stopping at `limit` bytes.
+    fn dump_capped(
+        &self,
+        node: &Node,
+        path_in_snapshot: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>, StorageError> {
+        let mut capped = Capped {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        };
+        let dumped = self.repo.dump(node, &mut capped);
+        if capped.exceeded {
+            return Err(StorageError::TooLarge {
+                path: path_in_snapshot.to_owned(),
+                limit,
+            });
+        }
+        dumped.map_err(backend)?;
+        Ok(capped.bytes)
     }
 
     /// Restores `path_in_snapshot` of snapshot `snapshot_id` into `dest_dir`: a directory's

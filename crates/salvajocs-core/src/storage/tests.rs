@@ -201,6 +201,24 @@ fn the_rest_password_stays_out_of_the_error_for_a_url_rustic_cannot_parse() {
 }
 
 #[test]
+fn a_password_left_in_the_url_stays_out_of_the_error_for_a_url_rustic_cannot_parse() {
+    // The keyring refused the password, so it is still in the URL and there is no option.
+    for (encoded, password) in [("hunter2", "hunter2"), ("p%40ss%3Aw%2Frd", "p@ss:w/rd")] {
+        let location = RepoLocation {
+            repository: format!("rest:http://user:{encoded}@127.0.0.1:99999/"),
+            options: BTreeMap::new(),
+        };
+        let RepoState::Error(message) = probe(&location, "") else {
+            panic!("the URL is invalid");
+        };
+        for leaked in [password, encoded] {
+            assert!(!message.contains(leaked), "{leaked} in {message}");
+        }
+        assert!(message.contains("***"), "{message}");
+    }
+}
+
+#[test]
 fn a_refused_webdav_login_is_login_refused_not_missing() {
     let location = RepoLocation {
         repository: "opendal:webdav".to_string(),
@@ -556,7 +574,7 @@ fn read_file_returns_a_file_of_a_snapshot_written_this_session() {
         .unwrap()
         .unwrap();
     let bytes = storage
-        .read_file(&info.id, "/salvajocs/test-slug/sub/b.sav")
+        .read_file(&info.id, "/salvajocs/test-slug/sub/b.sav", u64::MAX)
         .unwrap();
     assert_eq!(bytes, b"beta");
 }
@@ -765,6 +783,30 @@ fn reading_a_file_stops_at_the_limit_whatever_size_the_snapshot_declares() {
     assert!(matches!(
         at(&mut storage, 0),
         Err(StorageError::TooLarge { .. })
+    ));
+}
+
+#[test]
+fn read_file_stops_at_the_limit_and_still_reports_a_missing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let path = format!("{AS_PATH}/sub/b.sav");
+    assert_eq!(
+        storage.read_file(&info.id, &path, 4).unwrap(),
+        b"beta".to_vec()
+    );
+    assert!(matches!(
+        storage.read_file(&info.id, &path, 3),
+        Err(StorageError::TooLarge { limit: 3, .. })
+    ));
+    assert!(matches!(
+        storage.read_file(&info.id, &format!("{AS_PATH}/missing.sav"), u64::MAX),
+        Err(StorageError::Backend(_))
     ));
 }
 

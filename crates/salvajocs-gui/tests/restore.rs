@@ -2998,7 +2998,9 @@ fn an_unticked_registry_key_is_neither_restored_nor_backed_up() {
         "/salvajocs/{}/registry.json",
         salvajocs_core::slug::slug("Reg")
     );
-    let saved = open_repo(&tmp).read_file(&safety[0].id, &path).unwrap();
+    let saved = open_repo(&tmp)
+        .read_file(&safety[0].id, &path, u64::MAX)
+        .unwrap();
     let saved = String::from_utf8(saved).unwrap();
     assert!(saved.contains("old-reg"), "{saved}");
     assert!(!saved.contains("Other"), "{saved}");
@@ -3211,7 +3213,9 @@ fn assert_slot1_left_alone(tmp: &TempDir, prefix: &Path) {
         "/salvajocs/{}/registry.json",
         salvajocs_core::slug::slug("Reg")
     );
-    let saved = open_repo(tmp).read_file(&safety.id, &path).unwrap();
+    let saved = open_repo(tmp)
+        .read_file(&safety.id, &path, u64::MAX)
+        .unwrap();
     let saved = String::from_utf8(saved).unwrap();
     assert!(
         saved.contains("old-slot1") && saved.contains("old-local"),

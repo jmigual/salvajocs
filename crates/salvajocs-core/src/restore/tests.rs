@@ -558,6 +558,14 @@ fn registry_key_at_or_under_a_system_key_declares_nothing() {
             "HKEY_CURRENT_USER/Software/Microsoft",
             "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
         ),
+        (
+            "HKEY_CURRENT_USER/Software//Microsoft/Windows/CurrentVersion/Run",
+            "Software\\\\Microsoft\\Windows\\CurrentVersion\\Run\\Evil",
+        ),
+        (
+            "HKEY_CURRENT_USER//Software/Microsoft/Windows",
+            "\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        ),
     ] {
         let mut staged = staged(&[], &[]);
         staged.registry = Some(registry(&[staged_key]));

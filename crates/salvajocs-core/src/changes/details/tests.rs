@@ -328,6 +328,35 @@ fn without_a_cap_a_large_file_is_read_and_diffed() {
 }
 
 #[test]
+fn a_backup_that_lists_a_small_size_is_still_read_within_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let location = RepoLocation::new(
+        tmp.path().join("repo").to_str().unwrap().into(),
+        BTreeMap::new(),
+    );
+    let mut storage = Storage::init(&location, "", Compression::Default).unwrap();
+    let stage = tmp.path().join("stage");
+    let content = stage.join("files/Home/G/save.dat");
+    fs::create_dir_all(content.parent().unwrap()).unwrap();
+    fs::write(&content, vec![b'x'; CAP as usize + 1]).unwrap();
+    fs::write(stage.join("salvajocs.json"), "{}").unwrap();
+    let tags = ["salvajocs", "game:game"];
+    let snapshot = (storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game"))
+        .unwrap()
+        .unwrap();
+    // The listing claims 3 bytes; the file holds more than the cap.
+    let mut copy = backed_up(b"abc", true);
+    copy.snapshot = snapshot;
+    let local = write(tmp.path(), "save.dat", b"abc", at(20));
+
+    let read = read_backed_up(&mut storage, "game", &copy, &local, Some(CAP));
+    assert!(matches!(read, Err(StorageError::TooLarge { .. })));
+    // Lifting the cap still bounds the read by the listed size.
+    let read = read_backed_up(&mut storage, "game", &copy, &local, None);
+    assert!(matches!(read, Err(StorageError::TooLarge { .. })));
+}
+
+#[test]
 fn without_a_cap_a_large_binary_file_is_still_not_text() {
     let tmp = tempfile::tempdir().unwrap();
     let local = write(tmp.path(), "save.dat", &vec![0; CAP as usize + 1], at(20));

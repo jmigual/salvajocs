@@ -1009,6 +1009,9 @@ fn replace(
     let mut tmp = target.as_os_str().to_owned();
     tmp.push(".salvajocs-tmp");
     let tmp = PathBuf::from(tmp);
+    // A temp file an older version left read-only would fail every later restore of `target`.
+    #[cfg(windows)]
+    clear_read_only(&tmp);
     match fs::remove_file(&tmp) {
         Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(apply_io(&tmp)(err)),
         _ => {}
@@ -1029,9 +1032,23 @@ fn replace(
     let result = written.and_then(|()| fs::rename(&tmp, target));
     if result.is_err() {
         // Best effort: the write's own error is the one to report.
+        #[cfg(windows)]
+        clear_read_only(&tmp);
         let _ = fs::remove_file(&tmp);
     }
     result.map_err(apply_io(target))
+}
+
+/// Clears the read-only attribute of `path`, which Windows refuses to delete a file with; the
+/// temp file in [`replace`] gets it from a read-only target.
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_read_only(path: &Path) {
+    if let Ok(meta) = fs::metadata(path) {
+        let mut permissions = meta.permissions();
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(path, permissions);
+    }
 }
 
 #[cfg(test)]
