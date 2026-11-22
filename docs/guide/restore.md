@@ -15,7 +15,9 @@ walks through those steps and explains how to undo a restore. Back to the
    used`; hover it for the full sentence. `… used` means the space is still being worked out,
    and `Only safety backups` a game with only the backups a restore makes. The **Sort by** row
    above the list works as on the [Backup tab](backup.md#sort-and-backup-sizes), with a choice
-   of its own, and the figure the list is sorted by comes first on each line.
+   of its own, and the figure the list is sorted by comes first on each line. **Load backups**
+   waits while a backup runs. Once a **Back up** has saved new backups, a loaded list is read
+   again by itself and keeps the game and snapshot you chose.
 2. Click a game. The **Snapshot** list shows its backups, newest first, as `time, host`. A backup
    made by a restore adds `, pre-restore`. The newest backup that is not a `pre-restore` one is
    preselected.
@@ -23,7 +25,7 @@ walks through those steps and explains how to undo a restore. Back to the
    leave the field.
 4. The **Plan** shows by itself, read from the backup's file list. Nothing is downloaded or
    written yet. Until it shows, a line next to the disabled **Restore files** says why: a snapshot
-   or a target to choose, the file list being read, or folders to choose (see
+   or a target to choose, the file list being read, a backup running, or folders to choose (see
    [Cross-OS restore](cross-os-restore.md#the-mapping-dialog)). If reading fails, the error shows
    with **Try again**.
 5. Read the **Plan**. Untick what you do not want restored, and fix anything you do not like
@@ -244,7 +246,8 @@ An undo has limits:
 
 To delete one backup, choose it in the **Snapshot** list and click **Delete snapshot**. To delete
 every backup of the chosen game, click **Delete all backups of …**, which names the game. A
-`pre-restore` backup can be deleted like any other.
+`pre-restore` backup can be deleted like any other. Both buttons, and the dialog's **Delete**,
+wait while a backup runs.
 
 A dialog names the game and lists the backups that go, as in the **Snapshot** list: `time, host`,
 plus `, pre-restore` for a safety backup. Deleting removes them from the repository for every
