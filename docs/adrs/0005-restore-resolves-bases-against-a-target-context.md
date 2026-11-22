@@ -50,9 +50,11 @@ configured roots (research.md §2).
   (`<home>`, `<home>/*`, `/`, `C:/`; `crossbuild::too_wide`) declares nothing, and
   `validate_file` refuses it; a declared registry key must not be `registry::protected_key`
   (the hive, `Software`, `Environment`, `Control Panel`, and the keys under `Software` that run
-  code at logon or change the shell; not an exhaustive list). They do not stop a precise or
-  absolute path such as `<home>/.bashrc`: a custom game from the repository is accepted on
-  each PC instead (ADR-0030).
+  code at logon or change the shell; not an exhaustive list). `too_wide` blocks only a bare
+  base. It does not block a broad path that means the same, such as `/home/<user>/*`,
+  `C:/Users/<user>/*` or `<home>/.*`, and `validate_file` accepts a literal path such as
+  `<home>/.bashrc`. So these rules cannot stop a crafted custom game; the guard is that each PC
+  accepts a custom game from the repository before it is used (ADR-0030).
   A pre-restore snapshot whose roots came from a per-file override (`Absolute`/`WinAbsolute`)
   is therefore not restorable through the normal flow; its files show as skipped.
 - **Target choice on restore:** one restore has up to two targets,
