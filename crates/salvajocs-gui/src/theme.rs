@@ -380,8 +380,8 @@ pub fn column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.scope_builder(UiBuilder::new().max_rect(rect), add).inner
 }
 
-/// A vertically scrolling page holding the content [`column`], 16 px below the top bar. The
-/// scroll bar stays at the window edge.
+/// A vertically scrolling page holding the content [`column`](fn@column), 16 px below the top
+/// bar. The scroll bar stays at the window edge.
 pub fn page<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ScrollArea::vertical()
         .auto_shrink([false, true])
