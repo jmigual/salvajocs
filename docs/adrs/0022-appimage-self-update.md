@@ -29,11 +29,12 @@ replaces the directory entry while the open file stays readable.
   next to `$APPIMAGE` with the old file's mode plus the owner's execute bit (set after creating,
   so the umask does not mask it), syncs it and renames it over `$APPIMAGE`, which keeps the
   user's file name. A failed step removes the new file.
-- **Restart now:** once no background job runs (`App::busy`, as for the installer), the window
-  closes, and `on_exit` starts `$APPIMAGE` with the same arguments (`Env::restart_appimage`) after
-  writing the unsaved choices, which the new instance reads at start. Unlike the installer, the
-  new AppImage does not wait for the old process to exit. When the close dialog's **Wait** cancels
-  that close, the restart goes back to waiting for the jobs, so a later quit does not restart.
+- **Restart now:** once no background job runs (`App::busy`, as for the installer) and no form
+  holds unapplied edits (`App::editing`), the window closes, and `on_exit` starts `$APPIMAGE`
+  with the same arguments (`Env::restart_appimage`) after writing the unsaved choices, which the
+  new instance reads at start. Unlike the installer, the new AppImage does not wait for the old
+  process to exit. When the close dialog's **Wait** cancels that close, the restart goes back to
+  waiting for the jobs, so a later quit does not restart.
 - Other Linux builds (tarball, `cargo install`, mise) still do not check.
 
 ## Alternatives considered

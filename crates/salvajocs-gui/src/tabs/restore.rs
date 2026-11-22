@@ -9,7 +9,6 @@ use std::io;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Response, RichText, Role, TextEdit, Ui, Vec2, WidgetInfo};
@@ -30,19 +29,19 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
-use crate::tabs::count;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::sort::{self, Line};
 use crate::tabs::space::{Polled, Space};
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
+use crate::tabs::{count, format_time};
 use crate::theme::{self, icons};
 use crate::widgets::named_button;
 
 mod batch;
 mod keys;
 
-use batch::Batch;
+use batch::{Batch, remove_stale_restore_dirs};
 use keys::KeyTree;
 
 /// The width of the games sidebar at rest, and the least it can be dragged to.
@@ -50,29 +49,6 @@ const SIDEBAR_WIDTH: f32 = 240.0;
 
 /// The width the plan beside the games sidebar keeps, which the sidebar cannot be dragged into.
 const PLAN_WIDTH: f32 = 600.0;
-
-/// A UTC time as `YYYY-MM-DD HH:MM UTC`.
-fn format_time(time: SystemTime) -> String {
-    let secs = time
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let (days, rest) = (secs / 86_400, secs % 86_400);
-    // Howard Hinnant's `civil_from_days`, for days since 1970-01-01.
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + u64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
-        rest / 3600,
-        rest % 3600 / 60
-    )
-}
 
 /// How a snapshot shows in the picker: time, host and the `pre-restore` label.
 fn snapshot_label(snapshot: &SnapshotInfo) -> String {
@@ -743,6 +719,9 @@ pub struct RestoreTab {
     lines: Vec<Option<Line>>,
     /// A restore, batch restore or delete ended since [`RestoreTab::take_written`] last ran.
     written: bool,
+    /// A Back up checks, asks, waits to start or runs; it holds the repository's lock, so the
+    /// tab's controls wait for it.
+    backing_up: bool,
     /// The slug of the chosen game.
     selected: Option<String>,
     /// The slugs of the games ticked for a batch restore.
@@ -828,10 +807,13 @@ impl RestoreTab {
         }
     }
 
-    /// Drops the listed backups, the chosen and ticked games and a delete waiting for its
-    /// confirm, as after a cleanup that may have forgotten one of them; "Load backups" lists them
-    /// again. A running plan job or restore is kept.
+    /// Drops the listed backups, the plan, the chosen and ticked games, the batch confirm and a
+    /// delete waiting for its confirm, as after a cleanup that may have forgotten a snapshot;
+    /// "Load backups" lists them again. A running plan job's result is dropped; a running restore
+    /// is kept.
     pub(crate) fn drop_listing(&mut self) {
+        self.forget_plan();
+        self.batch.close();
         self.confirm_delete = None;
         self.repository = None;
         self.listing = None;
@@ -848,6 +830,11 @@ impl RestoreTab {
     /// too and would swallow it.
     pub(crate) fn take_written(&mut self) -> bool {
         mem::take(&mut self.written)
+    }
+
+    /// Tells the tab whether a Back up runs, which keeps its controls disabled until it ends.
+    pub(crate) fn set_backing_up(&mut self, backing_up: bool) {
+        self.backing_up = backing_up;
     }
 
     /// Whether a listing, restore or other job of this tab is running. A plan job only reads,
@@ -912,9 +899,7 @@ impl RestoreTab {
         if (self.repository.as_ref())
             .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
         {
-            self.forget_plan();
             self.drop_listing();
-            self.batch.close();
             self.last_read = None;
             self.detecting = None;
             self.pick = None;
@@ -970,7 +955,14 @@ impl RestoreTab {
                     self.checked.retain(|slug| {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())
                     });
+                    // The new list may order the snapshots differently.
+                    let chosen = self.chosen().map(|snapshot| snapshot.id.clone());
                     self.games = games;
+                    if let Some(chosen) = chosen {
+                        self.snapshot = (self.games.iter())
+                            .find(|game| Some(&game.slug) == self.selected.as_ref())
+                            .and_then(|game| game.snapshots.iter().position(|s| s.id == chosen));
+                    }
                     self.start_space(ctx, state);
                 }
                 Err(err) => self.error = Some(format!("The backups cannot be listed: {err:#}")),
@@ -1135,16 +1127,34 @@ impl RestoreTab {
     }
 
     fn start_listing(&mut self, ctx: &egui::Context, state: &State) {
+        if self.read_list(ctx, state) {
+            self.selected = None;
+            self.pick = None;
+        }
+    }
+
+    /// Lists the backups again after a Back up saved snapshots, keeping the chosen game and
+    /// snapshot, the plan with its edits, the targets and the ticked games: a backup removes
+    /// no snapshot. Does nothing before the first listing, and while a restore or delete runs,
+    /// which list again when they end.
+    pub(crate) fn relist(&mut self, ctx: &egui::Context, state: &State) {
+        let writing = self.restoring.is_some() || self.deleting.is_some() || self.batch.writing();
+        if self.repository.is_some() && !writing {
+            self.read_list(ctx, state);
+        }
+    }
+
+    /// Starts the listing job; returns whether the repository is open to list.
+    fn read_list(&mut self, ctx: &egui::Context, state: &State) -> bool {
         let Some(session) = &state.session else {
-            return;
+            return false;
         };
         let storage = session.storage.clone();
         self.repository = Some(storage.clone());
-        self.selected = None;
-        self.pick = None;
         self.listing = Some(Job::spawn(ctx, move || {
             Ok(restore::list(&*lock_storage(&storage)?)?)
         }));
+        true
     }
 
     /// Before the first listing: what the tab is for and the listing as its one action.
@@ -1154,7 +1164,8 @@ impl RestoreTab {
             ui.weak("See the games in your repository and their snapshots.");
             ui.add_space(8.0);
             let session = state.session.is_some();
-            if theme::primary(ui, session, None, "Load backups").clicked() {
+            let enabled = session && !self.backing_up;
+            if theme::primary(ui, enabled, None, "Load backups").clicked() {
                 self.load(ui.ctx(), state);
             }
             if !session {
@@ -1162,6 +1173,9 @@ impl RestoreTab {
             }
             if manifest_loading {
                 ui.weak("The game manifest is loading.");
+            }
+            if self.backing_up {
+                ui.weak("A backup is running.");
             }
         });
     }
@@ -1204,8 +1218,12 @@ impl RestoreTab {
     /// Returns the sort to list by, or `None` while there are no games.
     fn sidebar_header_ui(&mut self, ui: &mut Ui, state: &mut State) -> Option<ListSort> {
         let load = egui::Button::new("Load backups").min_size(Vec2::new(ui.available_width(), 0.0));
-        if ui.add_enabled(state.session.is_some(), load).clicked() {
+        let enabled = state.session.is_some() && !self.backing_up;
+        if ui.add_enabled(enabled, load).clicked() {
             self.load(ui.ctx(), state);
+        }
+        if self.backing_up {
+            ui.weak("A backup is running.");
         }
         if state.session.is_none() {
             ui.weak("The repository is not open.");
@@ -1305,7 +1323,8 @@ impl RestoreTab {
                 .response
                 .labelled_by(label.id);
             let chosen = self.snapshot.and_then(|index| game.snapshots.get(index));
-            let delete = ui.add_enabled(chosen.is_some(), egui::Button::new("Delete snapshot"));
+            let deletable = chosen.is_some() && !self.backing_up;
+            let delete = ui.add_enabled(deletable, egui::Button::new("Delete snapshot"));
             if delete.clicked()
                 && let Some(snapshot) = chosen
             {
@@ -1322,9 +1341,8 @@ impl RestoreTab {
         if let Some(pick) = &mut self.pick {
             changed |= pick.ui(ui);
             if pick.windows.is_none() && ui.button("Browse").clicked() {
-                self.picking = Some(Job::spawn(ui.ctx(), || {
-                    Ok(rfd::FileDialog::new().pick_folder())
-                }));
+                let pick = state.env.pick_folder.clone();
+                self.picking = Some(Job::spawn(ui.ctx(), move || Ok(pick())));
             }
         }
         if changed {
@@ -1344,11 +1362,12 @@ impl RestoreTab {
         if manifest_loading {
             ui.weak("The game manifest is loading.");
         }
+        if self.backing_up {
+            ui.weak("A backup is running.");
+        }
         ui.add_space(16.0);
-        if ui
-            .button(format!("Delete all backups of {}", game.title))
-            .clicked()
-        {
+        let delete_all = egui::Button::new(format!("Delete all backups of {}", game.title));
+        if ui.add_enabled(!self.backing_up, delete_all).clicked() {
             self.confirm_delete = Some(Deletion {
                 title: game.title.clone(),
                 snapshots: game.snapshots.clone(),
@@ -1545,6 +1564,7 @@ impl RestoreTab {
 
     /// The confirm dialog of a delete; Delete starts it in the listed repository.
     fn delete_ui(&mut self, ctx: &egui::Context) {
+        let backing_up = self.backing_up;
         let Some(deletion) = &mut self.confirm_delete else {
             return;
         };
@@ -1569,9 +1589,11 @@ impl RestoreTab {
                     button.request_focus();
                 }
                 cancel |= button.clicked();
-                delete |= ui
-                    .button(RichText::new("Delete").color(error).strong())
-                    .clicked();
+                if backing_up {
+                    ui.weak("Waiting for the running backup to end.");
+                }
+                let button = egui::Button::new(RichText::new("Delete").color(error).strong());
+                delete |= ui.add_enabled(!backing_up, button).clicked();
             });
         });
         if delete {
@@ -1692,14 +1714,22 @@ impl RestoreTab {
         }
         let blocked = !blocking.is_empty();
         let nothing = writes == 0 && !preview.keys.any_ticked();
-        let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked && !nothing;
+        let ready = !busy
+            && !self.backing_up
+            && state.session.is_some()
+            && unapplied.is_none()
+            && !blocked
+            && !nothing;
         let restoring = self.restoring.is_some();
         let empty = nothing_to_restore(&preview.plan);
         let has_registry = preview.plan.registry.is_some();
         let mut retry = false;
+        let backing_up = self.backing_up;
         let start = |ui: &mut Ui| {
             if restoring {
                 ui.weak("Downloading and restoring…");
+            } else if backing_up {
+                ui.weak("Waiting for the running backup to end.");
             } else if blocked {
                 ui.weak("Untick them, or make them readable and check again.");
                 retry |= ui.button("Try again").clicked();
@@ -1772,8 +1802,11 @@ impl RestoreTab {
         );
         let fetched = preview.fetched.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
+        let cache_dir = state.env.cache_dir.clone();
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {
+            // Each session makes dirs of its own, and an earlier one may have left its.
+            remove_stale_restore_dirs(&cache_dir);
             let staged = &fetched.listed.staged;
             remove_dir(&staged.root)
                 .with_context(|| format!("cannot clear {}", staged.root.display()))?;

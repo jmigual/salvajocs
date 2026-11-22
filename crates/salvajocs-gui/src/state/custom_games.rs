@@ -10,7 +10,7 @@ use salvajocs_core::custom_games::{self, CustomGameError, Stored, Unsent};
 use salvajocs_core::manifest::CustomGame;
 use salvajocs_core::retention::Retention;
 
-use super::{State, lock_storage};
+use super::{State, chain, lock_storage};
 use crate::job::Job;
 
 /// A change of one custom game: an add, an edit (a rename included) or a remove.
@@ -228,7 +228,7 @@ impl State {
                     CustomGameError::NewerFormat(_) => {
                         "Written by a newer salvajocs; it cannot be changed here.".to_owned()
                     }
-                    err => format!("Cannot be read from the repository: {}", describe(err)),
+                    err => format!("Cannot be read from the repository: {}", chain(err)),
                 };
                 Some((name.clone(), why))
             })
@@ -262,17 +262,6 @@ fn apply(games: &mut Vec<CustomGame>, update: Update) {
         },
         Update::Drop(name) => games.retain(|game| game.name != name),
     }
-}
-
-/// An error and its causes in one line.
-fn describe(err: &CustomGameError) -> String {
-    let mut text = err.to_string();
-    let mut source = std::error::Error::source(err);
-    while let Some(next) = source {
-        text = format!("{text}: {next}");
-        source = next.source();
-    }
-    text
 }
 
 #[cfg(test)]

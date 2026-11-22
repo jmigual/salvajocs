@@ -717,6 +717,12 @@ pub struct CustomGamesTab {
 }
 
 impl CustomGamesTab {
+    /// Whether the form is open, even untouched: an open form holds back a downloaded update
+    /// (`App::editing`), since closing the app would lose its edits.
+    pub(crate) fn editing(&self) -> bool {
+        self.form.is_some()
+    }
+
     /// Draws the tab. Saving or removing a game changes this PC's copy only; the next Back up
     /// saves it to the repository, and **Read repository** reads the other PCs' changes
     /// (ADR-0029).

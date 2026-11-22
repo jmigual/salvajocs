@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::Vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::{Compression, RepoLocation};
@@ -209,6 +209,137 @@ fn restart_whose_close_was_cancelled_waits_for_the_job() {
     }
     eframe::App::on_exit(harness.state_mut(), None);
     assert_eq!(RESTARTED_AFTER_WAIT.load(Ordering::SeqCst), 1);
+}
+
+/// Makes the app hold a downloaded installer that closes the window once it may start, without
+/// counting it in `STARTED`.
+fn ready_installer(harness: &mut Harness<'static, App>) {
+    let app = harness.state_mut();
+    app.state.env.run_installer = |_| Ok(());
+    app.updater.offer(release(), true);
+    app.updater.set_ready(PathBuf::from("setup.exe"));
+}
+
+/// Steps until the window closes, or fails.
+fn step_until_closed(harness: &mut Harness<'static, App>) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !closed(harness) {
+        assert!(Instant::now() < deadline, "timed out waiting for the close");
+        harness.step();
+    }
+}
+
+#[test]
+fn downloaded_update_waits_for_an_open_custom_game_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().set_tab(Tab::CustomGames);
+    harness.step();
+    harness.get_by_label("Add game").click();
+    harness.step();
+    assert!(harness.state().custom_games.editing());
+
+    ready_installer(&mut harness);
+    for _ in 0..3 {
+        harness.step();
+        assert!(!closed(&harness), "the form's edits would be lost");
+    }
+    let held = harness.query_by_label_contains("Save or cancel the open form");
+    assert!(held.is_some(), "the bar says what holds the update");
+    let running = harness.query_by_label_contains("when the running task finishes");
+    assert!(running.is_none());
+
+    harness.get_by_label("Cancel").click();
+    step_until_closed(&mut harness);
+}
+
+#[test]
+fn downloaded_update_waits_for_unapplied_repository_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().set_tab(Tab::Settings);
+    harness.step();
+    let location = harness.get_by_label("Location");
+    location.focus();
+    location.type_text("-other");
+    harness.step();
+    assert!(harness.state().settings.editing());
+
+    ready_installer(&mut harness);
+    for _ in 0..3 {
+        harness.step();
+        assert!(!closed(&harness), "the typed location would be lost");
+    }
+
+    harness.state_mut().settings.reset();
+    step_until_closed(&mut harness);
+}
+
+#[test]
+fn downloaded_update_does_not_wait_for_an_untouched_settings_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().set_tab(Tab::Settings);
+    harness.step();
+    assert!(!harness.state().settings.editing());
+    // A failed keyring write changes the config, not what the user typed.
+    harness.state_mut().state.config.as_mut().unwrap().password = PasswordMode::Ask;
+    harness.step();
+    assert!(!harness.state().settings.editing());
+
+    ready_installer(&mut harness);
+    step_until_closed(&mut harness);
+}
+
+#[test]
+fn a_backup_ending_as_the_repository_is_replaced_keeps_nothing_of_the_old_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().set_tab(Tab::Restore);
+    harness.step();
+    harness.get_by_label("Load backups").click();
+    harness.step();
+    step_until(&mut harness, "the list", |app| !app.restore.busy());
+    harness.step();
+    assert!(harness.query_by_label_contains("See the games").is_none());
+
+    // Settings replaced the repository while a backup ran; the backup ends in this frame.
+    let location = RepoLocation::new(
+        dir.path().join("other").to_str().unwrap().into(),
+        Default::default(),
+    );
+    let storage = Storage::init(&location, "", Compression::Default).unwrap();
+    let app = harness.state_mut();
+    app.state.session.as_mut().unwrap().storage = Arc::new(std::sync::Mutex::new(storage));
+    app.backup.mark_saved();
+    harness.step();
+    harness.step();
+
+    let empty = harness.query_by_label_contains("See the games");
+    assert!(empty.is_some(), "the old list is dropped, not listed again");
+}
+
+#[test]
+fn the_restore_tab_waits_while_a_backup_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    harness.state_mut().set_tab(Tab::Restore);
+    harness.step();
+    harness.step();
+
+    let load = harness.get_by_label("Load backups");
+    assert!(load.accesskit_node().is_disabled());
+    assert!(harness.query_by_label("A backup is running.").is_some());
+
+    drop(end_backup);
+    step_until(&mut harness, "the backup to end", |app| {
+        !app.backup.backing_up()
+    });
+    harness.step();
+    let load = harness.get_by_label("Load backups");
+    assert!(!load.accesskit_node().is_disabled());
 }
 
 #[test]

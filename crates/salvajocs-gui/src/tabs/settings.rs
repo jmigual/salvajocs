@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use eframe::egui::{self, Ui};
 use salvajocs_core::config::{PasswordMode, ThemeChoice};
 use salvajocs_core::layout::{Root, RootKind};
@@ -11,7 +10,7 @@ use salvajocs_core::storage::Compression;
 
 use crate::first_run::Connect;
 use crate::job::Job;
-use crate::state::State;
+use crate::state::{State, lock_storage};
 use crate::theme::{self, icons};
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{form_grid, labelled_edit};
@@ -90,6 +89,12 @@ impl SettingsTab {
         self.compression_job = None;
         self.compression_error = None;
         self.retention.reset();
+    }
+
+    /// Whether the repository form holds edits that were not applied, which closing the app
+    /// would lose.
+    pub(crate) fn editing(&self) -> bool {
+        self.connect.as_ref().is_some_and(Connect::edited)
     }
 
     /// Reads the Old backups rules from the repository again, keeping every other edit.
@@ -232,9 +237,7 @@ impl SettingsTab {
         if let (true, Some(new)) = (apply.clicked(), new) {
             let storage = session.storage.clone();
             self.compression_job = Some(Job::spawn(ui.ctx(), move || {
-                let mut storage = storage
-                    .lock()
-                    .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))?;
+                let mut storage = lock_storage(&storage)?;
                 storage.set_compression(new)?;
                 Ok(storage.compression())
             }));
@@ -301,9 +304,8 @@ impl SettingsTab {
             ui.end_row();
             labelled_edit(ui, "Root folder", &mut self.root_path, false);
             if ui.button("Browse").clicked() && self.root_picker.is_none() {
-                self.root_picker = Some(Job::spawn(ui.ctx(), || {
-                    Ok(rfd::FileDialog::new().pick_folder())
-                }));
+                let pick = state.env.pick_folder.clone();
+                self.root_picker = Some(Job::spawn(ui.ctx(), move || Ok(pick())));
             }
             ui.end_row();
         });

@@ -2,11 +2,12 @@
 //! probes the location, asks before creating a repository, opens it, and only then saves the
 //! config (ADR-0003, ADR-0009).
 
+use std::collections::BTreeMap;
 use std::mem;
 
 use anyhow::Result;
 use eframe::egui::{self, Ui};
-use salvajocs_core::config::{AppConfig, PasswordMode};
+use salvajocs_core::config::{AppConfig, PasswordMode, RepoOption};
 use salvajocs_core::secret::SecretKey;
 use salvajocs_core::storage::{Compression, RepoLocation, RepoState, Storage, StorageError, probe};
 
@@ -61,6 +62,16 @@ enum Step {
     Finishing(Job<Connected>, bool),
 }
 
+/// What the user can type into the repository form, to tell whether it was edited.
+#[derive(Default, PartialEq)]
+struct Typed {
+    repository: String,
+    options: Vec<RepoOption>,
+    secrets: BTreeMap<String, String>,
+    password: String,
+    remember: bool,
+}
+
 /// The repository form and the state of connecting to what it describes.
 pub struct Connect {
     form: BackendForm,
@@ -69,30 +80,56 @@ pub struct Connect {
     remember: bool,
     submit: &'static str,
     step: Step,
+    /// The form as built, which [`Connect::edited`] compares with.
+    baseline: Typed,
 }
 
 impl Connect {
     /// An empty form for the first run.
     pub fn first_run() -> Self {
-        Self {
+        Self::with_baseline(Self {
             form: BackendForm::default(),
             compression: CompressionField::new(Compression::Default),
             password: String::new(),
             remember: true,
             submit: "Continue",
             step: Step::Editing(None),
+            baseline: Typed::default(),
+        })
+    }
+
+    /// `form` with its current values as the baseline of [`Connect::edited`].
+    fn with_baseline(mut form: Self) -> Self {
+        form.baseline = form.typed();
+        form
+    }
+
+    fn typed(&self) -> Typed {
+        Typed {
+            repository: self.form.repository(),
+            options: self.form.options(),
+            secrets: self.form.secrets(),
+            password: self.password.clone(),
+            remember: self.remember,
         }
     }
 
     /// A form showing the current repository.
     pub fn editing(config: &AppConfig, credentials: &Credentials) -> Self {
-        Self {
+        Self::with_baseline(Self {
             form: BackendForm::from_config(config, &credentials.options),
             password: credentials.password.clone(),
             remember: config.password == PasswordMode::Keyring || credentials.options_remembered,
             submit: "Apply",
             ..Self::first_run()
-        }
+        })
+    }
+
+    /// Whether the form differs from how it was built, so closing the app would lose what the
+    /// user typed. The config may change meanwhile, such as a failed keyring write; the form
+    /// does not.
+    pub(crate) fn edited(&self) -> bool {
+        self.typed() != self.baseline
     }
 
     /// Whether a probe or a repository creation is running.

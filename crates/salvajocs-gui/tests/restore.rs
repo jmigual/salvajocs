@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    back_up_unsent, env, harness, init_repo, local_config, record_opened, replace_text, repo_dir,
-    run_settled, run_until, run_until_ready, save_config, shows, shows_path,
+    back_up_unsent, env, harness, init_repo, local_config, pick, record_opened, replace_text,
+    repo_dir, run_settled, run_until, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -679,6 +679,21 @@ fn restore_switching_snapshots_shows_only_the_last_plan() {
 }
 
 #[test]
+fn restore_browse_asks_the_env_for_the_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tmp.path().join("other-pfx");
+    let (mut harness, _env, _) = alpha_with(&tmp, |env| pick(env, other.clone()));
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Browse").click();
+
+    run_until(&mut harness, "the picked prefix", |h| {
+        value(h, "Prefix") == other.to_str().unwrap()
+    });
+}
+
+#[test]
 fn restore_prefix_typing_waits_for_enter() {
     let tmp = tempfile::tempdir().unwrap();
     let mut opened = None;
@@ -1148,6 +1163,32 @@ fn restore_fetch_preview_restore_reports() {
     assert!(!value(&harness, "Snapshot").contains("pre-restore"));
     click(&mut harness, "Snapshot");
     assert!(shows(&harness, ", pre-restore"));
+}
+
+#[test]
+fn a_restore_removes_the_dirs_earlier_sessions_left() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    // What an earlier session left a day and a half ago, and a dir salvajocs did not make.
+    for parent in ["restore-work", "restore-stage", "restore-batch"] {
+        let parent = env.cache_dir.join(parent);
+        put(&parent.join("99999999/x"), "stale");
+        age(&parent.join("99999999"));
+        put(&parent.join("keep/x"), "not ours");
+        age(&parent.join("keep"));
+    }
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(env.cache_dir.join("restore-work/99999999").exists());
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    for parent in ["restore-work", "restore-stage", "restore-batch"] {
+        let parent = env.cache_dir.join(parent);
+        assert!(!parent.join("99999999").exists());
+        assert!(parent.join("keep/x").exists());
+    }
 }
 
 #[test]
@@ -2031,6 +2072,9 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     let batches = env.cache_dir.join("restore-batch");
     put(&batches.join("99999999/0/files/x"), "stale");
     age(&batches.join("99999999"));
+    let works = env.cache_dir.join("restore-work");
+    put(&works.join("99999999/x"), "stale");
+    age(&works.join("99999999"));
     put(&batches.join("keep/x"), "not ours");
     age(&batches.join("keep"));
 
@@ -2044,6 +2088,7 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
 
     assert!(!batches.join("99999999").exists());
+    assert!(!works.join("99999999").exists());
     assert!(batches.join("keep/x").exists());
     assert!(
         !batch_dir(&env).exists(),

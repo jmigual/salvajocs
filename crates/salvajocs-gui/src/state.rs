@@ -1,6 +1,7 @@
 //! What every screen shares: the config, the open repository and the notices to show.
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use eframe::egui;
@@ -26,6 +27,17 @@ pub fn lock_storage(storage: &SharedStorage) -> anyhow::Result<MutexGuard<'_, St
     storage
         .lock()
         .map_err(|_| anyhow::anyhow!("the repository lock is poisoned; restart the app"))
+}
+
+/// `error` and its sources, joined.
+pub(crate) fn chain(error: &dyn Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(next) = source {
+        text = format!("{text}: {next}");
+        source = next.source();
+    }
+    text
 }
 
 /// The space each game's backups use, by the game's sorted snapshot ids: a value stays right as

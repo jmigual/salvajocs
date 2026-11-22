@@ -37,7 +37,9 @@ replace it after the app closes.
   rotation: `docs/guide/releasing.md`.
 - The UI thread starts it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH` and closes the
   window only on a frame where no background job runs (`App::busy`: backup, restore, repository
-  or compression change, config save, keyring write, startup), so no job is cut off mid-write.
+  or compression change, config save, keyring write, startup) and no form holds unapplied edits
+  (`App::editing`: an open custom-game form, an edited Settings repository form), so no job is cut
+  off mid-write and no typed text is lost; the notice then says to save or cancel the form.
   The installer closes any remaining instance and starts the new version.
 - All logic except the notice lives in `core::update`, testable on every OS; `sha2` and `semver`
   were already in the lock file through rustic.

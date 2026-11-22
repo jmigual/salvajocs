@@ -200,6 +200,11 @@ impl App {
             || self.settings.busy()
     }
 
+    /// Whether a form holds edits that closing the app would lose.
+    fn editing(&self) -> bool {
+        self.custom_games.editing() || self.settings.editing()
+    }
+
     /// Whether a job runs that writes to the repository, the config, the keyring or the games'
     /// files, and that closing would cut short. Reads and waits, such as scans and the manifest load, are
     /// not in it, and neither are the pending file writes, which `on_exit` flushes.
@@ -219,15 +224,21 @@ impl App {
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         self.state.poll(ctx);
         self.backup.poll(ctx, &mut self.state);
-        if self.backup.take_removed() {
-            self.restore.drop_listing();
-        }
         if self.backup.take_rules_changed() {
             self.settings.reload_rules();
         }
         self.settings.set_backing_up(self.backup.backing_up());
+        self.restore.set_backing_up(self.backup.backing_up());
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
+        // After the poll, which drops the state of a repository Settings replaced: `relist` would
+        // otherwise adopt the new repository and keep what belongs to the old one.
+        let (removed, saved) = (self.backup.take_removed(), self.backup.take_saved());
+        if removed {
+            self.restore.drop_listing();
+        } else if saved {
+            self.restore.relist(ctx, &self.state);
+        }
         // A restore adds safety backups and a delete removes backups, which the comparison and
         // the figures of the Backup tab show.
         if self.restore.take_written() {
@@ -428,17 +439,16 @@ impl App {
             }
             Stage::OpenFailed(error) => {
                 let error = error.clone();
-                ui.horizontal(|ui| {
-                    theme::status(
-                        ui,
-                        icons::X_CIRCLE,
-                        ui.visuals().error_fg_color,
-                        format!("The repository could not be opened: {error}"),
-                    );
-                    if ui.button("Retry").clicked() {
-                        self.stage = self.resolve(ui.ctx());
-                    }
-                });
+                // The message is long, so the button gets its own row to stay on screen.
+                theme::status(
+                    ui,
+                    icons::X_CIRCLE,
+                    ui.visuals().error_fg_color,
+                    format!("The repository could not be opened: {error}"),
+                );
+                if ui.button("Retry").clicked() {
+                    self.stage = self.resolve(ui.ctx());
+                }
             }
             _ => {}
         }
@@ -452,12 +462,10 @@ impl App {
         }
         let mut dismissed = None;
         for (index, notice) in self.state.notices.iter().enumerate() {
-            ui.horizontal(|ui| {
-                theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
-                if ui.button("Dismiss").clicked() {
-                    dismissed = Some(index);
-                }
-            });
+            theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
+            if ui.button("Dismiss").clicked() {
+                dismissed = Some(index);
+            }
         }
         if let Some(index) = dismissed {
             self.state.notices.remove(index);
@@ -595,9 +603,11 @@ impl eframe::App for App {
             self.close_dialog(&ctx);
         }
         title_bar::controls(ui, bar, buttons);
-        // Last, so a job started in this frame holds the update back.
-        let busy = self.busy();
-        self.updater.install_when_idle(&ctx, &mut self.state, busy);
+        // Last, so a job started in this frame holds the update back, and so does a form open
+        // with edits, which the close would lose.
+        let (busy, editing) = (self.busy(), self.editing());
+        self.updater
+            .install_when_idle(&ctx, &mut self.state, busy, editing);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

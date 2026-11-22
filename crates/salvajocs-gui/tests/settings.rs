@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use common::{
     MemorySecrets, back_up_unsent, env, env_with, harness, init_repo, init_repo_with, local_config,
-    other_repo_dir, refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled,
+    other_repo_dir, pick, refusing_rest_repo, refusing_server, replace_text, repo_dir, run_settled,
     run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
@@ -709,6 +709,32 @@ fn without_roots_settings_says_which_folders_are_found_anyway() {
     harness.get_by_label("Add root").click();
     run_settled(&mut harness);
     assert!(!shows(&harness, "No roots yet."));
+}
+
+#[test]
+fn browse_asks_the_env_for_the_root_folder_and_the_repository_location() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let picked = tmp.path().join("picked");
+    pick(&mut env, picked.clone());
+    let mut harness = open_settings(env);
+
+    // The repository form's Browse comes first, the roots' second.
+    let browse = |h: &Harness<'static, App>, nth: usize| {
+        h.query_all_by_label("Browse").nth(nth).unwrap().click();
+    };
+    let value = |h: &Harness<'static, App>, label| h.get_by_label(label).accesskit_node().value();
+    browse(&harness, 0);
+    run_until(&mut harness, "the location", |h| {
+        value(h, "Location").as_deref() == picked.to_str()
+    });
+    browse(&harness, 1);
+    run_until(&mut harness, "the root folder", |h| {
+        value(h, "Root folder").as_deref() == picked.to_str()
+    });
 }
 
 #[test]

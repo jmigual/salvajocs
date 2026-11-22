@@ -1,5 +1,5 @@
 use std::sync::{Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -22,13 +22,6 @@ use crate::theme;
 
 fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
-}
-
-#[test]
-fn times_show_as_utc_dates() {
-    assert_eq!(format_time(at(0)), "1970-01-01 00:00 UTC");
-    assert_eq!(format_time(at(1_709_210_096)), "2024-02-29 12:34 UTC");
-    assert_eq!(format_time(at(1_798_761_540)), "2026-12-31 23:59 UTC");
 }
 
 #[test]
@@ -110,6 +103,36 @@ fn a_cleanup_dropping_the_list_closes_the_delete_dialog() {
     harness.step();
     assert!(harness.state().0.confirm_delete.is_none());
     assert!(harness.query_by_label("Cancel").is_none());
+}
+
+#[test]
+fn a_running_backup_disables_every_delete_and_leaves_the_list_browsable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    harness.step();
+    harness.get_by_label("Delete all backups of Mix").click();
+    harness.step();
+    harness.step();
+    assert!(!is_disabled(&harness, "Delete"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Delete"), "the confirm's button");
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    harness.get_by_label("Cancel").click();
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Delete all backups of Mix"));
+    assert!(is_disabled(&harness, "Load backups"));
+    let mut rows = harness.query_all_by_label("Mix").peekable();
+    assert!(rows.peek().is_some());
+    assert!(
+        rows.all(|row| !row.accesskit_node().is_disabled()),
+        "the game list stays usable"
+    );
 }
 
 /// A state whose repository, in `dir`, is open.
@@ -459,6 +482,50 @@ fn with_mix(storage: &SharedStorage) -> RestoreTab {
     }
 }
 
+/// A game `Mix` whose snapshots are `ids`, newest first.
+fn mix_snapshots(ids: &[&str]) -> GameBackups {
+    let snapshots = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let time = at(1_000 - index as u64);
+            let tags = vec!["salvajocs".into(), "game:mix".into()];
+            SnapshotInfo::new(id.repeat(64), time, "pc".into(), "Mix".into(), tags)
+        })
+        .collect();
+    GameBackups::new("mix".into(), "Mix".into(), snapshots, Some(0))
+}
+
+#[test]
+fn a_new_snapshot_in_the_list_keeps_the_chosen_older_one_and_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        repository: Some(storage.clone()),
+        games: vec![mix_snapshots(&["b", "a"])],
+        selected: Some("mix".into()),
+        snapshot: Some(1),
+        preview: Some(preview(
+            fetched(storage),
+            RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+        )),
+        ..RestoreTab::default()
+    });
+    let older = harness.state().0.chosen().unwrap().id.clone();
+    let ctx = harness.ctx.clone();
+    let state = &mut harness.state_mut();
+    state.0.relist(&ctx, &state.1);
+    assert!(state.0.preview.is_some(), "a backup removes no snapshot");
+    // The new list has a snapshot in front, which shifts the older one's index.
+    state.0.listing = Some(Job::spawn(&ctx, || {
+        Ok(vec![mix_snapshots(&["c", "b", "a"])])
+    }));
+    step_until(&mut harness, "the list", |h| h.state().0.listing.is_none());
+
+    let tab = &harness.state().0;
+    assert_eq!(tab.snapshot, Some(2));
+    assert_eq!(tab.chosen().unwrap().id, older);
+}
+
 #[test]
 fn deleting_waits_while_a_restore_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -630,6 +697,26 @@ fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     let tab = &harness.state().0;
     assert!(tab.preview.is_some(), "the plan is kept for another try");
     assert!(tab.error.as_deref().unwrap().contains("Close the game"));
+    assert!(!is_disabled(&harness, "Restore files"));
+}
+
+#[test]
+fn a_running_backup_disables_restore_files_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = registry_restore(dir.path(), || false);
+    assert!(!is_disabled(&harness, "Restore files"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+
+    assert!(is_disabled(&harness, "Restore files"));
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    harness.state_mut().0.set_backing_up(false);
+    harness.step();
+    harness.step();
     assert!(!is_disabled(&harness, "Restore files"));
 }
 
@@ -869,6 +956,42 @@ fn a_new_repository_closes_the_batch_confirm() {
     );
 
     switch_repository_and_check_nothing_ran(&mut harness, dir.path());
+}
+
+#[test]
+fn a_cleanup_dropping_the_list_closes_the_batch_confirm() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = planned_batch(dir.path(), Base::XdgData, "<xdgData>/Mix");
+    assert!(harness.query_by_label("Cancel").is_some());
+
+    harness.state_mut().0.drop_listing();
+    harness.step();
+    assert!(harness.query_by_label("Cancel").is_none());
+}
+
+#[test]
+fn a_running_backup_disables_the_batch_restore_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = planned_batch(dir.path(), Base::XdgData, "<xdgData>/Mix");
+    assert!(!is_disabled(&harness, "Restore 1 game"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+
+    assert!(is_disabled(&harness, "Restore 1 game"));
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    // Without the confirm, the sidebar's button that plans the batch waits too.
+    harness.state_mut().0.batch.close();
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Restore 1 game"));
+    harness.state_mut().0.set_backing_up(false);
+    harness.step();
+    harness.step();
+    assert!(!is_disabled(&harness, "Restore 1 game"));
 }
 
 #[test]

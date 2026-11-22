@@ -122,3 +122,18 @@ fn modal_in_a_window_narrower_than_its_margins_does_not_panic() {
         harness.step();
     }
 }
+
+#[test]
+fn retry_after_a_failed_open_stays_on_screen_beside_a_long_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    save_config(&env, &local_config("nosuchbackend:somewhere"));
+    let mut harness = harness_sized(env, Vec2::new(300.0, 900.0));
+    run_until(&mut harness, "the failure", |h| {
+        shows(h, "could not be opened")
+    });
+    run_settled(&mut harness);
+
+    let right = harness.get_by_label("Retry").rect().max.x;
+    assert!(right <= 300.0, "Retry is on screen");
+}

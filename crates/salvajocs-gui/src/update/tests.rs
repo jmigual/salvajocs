@@ -64,7 +64,7 @@ fn downloaded_update_waits_for_backup_or_restore_to_end() {
         |ui, (updater, state, busy)| {
             updater.poll(state);
             updater.ui(ui, state);
-            updater.install_when_idle(ui.ctx(), state, *busy);
+            updater.install_when_idle(ui.ctx(), state, *busy, false);
         },
         (Updater::default(), state(dir.path()), true),
     );
@@ -114,7 +114,7 @@ fn replaced_appimage_restarts_once_idle_and_closed() {
         |ui, (updater, state, busy)| {
             updater.poll(state);
             updater.ui(ui, state);
-            updater.install_when_idle(ui.ctx(), state, *busy);
+            updater.install_when_idle(ui.ctx(), state, *busy, false);
         },
         (Updater::default(), state, true),
     );
