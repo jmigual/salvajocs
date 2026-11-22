@@ -257,7 +257,7 @@ backups it removed and lists the games again. If it stops partway, the error say
 removed before it.
 
 As with [old backups](settings.md#old-backups), the disk space comes back at a later cleanup, at
-least a day later. In an append-only repository nothing is deleted, and the tab says so.
+least 23 hours later. In an append-only repository nothing is deleted, and the tab says so.
 
 ## Next
 

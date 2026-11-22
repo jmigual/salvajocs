@@ -1,5 +1,8 @@
 # Implementation plan (v1)
 
+This is the historical v1 plan. Later work is recorded in the [ADRs](adrs/README.md) and the
+[CHANGELOG](../CHANGELOG.md).
+
 Each step is sized for one coder agent. Read `docs/adrs/README.md` first, then the ADRs the step
 names. Every step ends with `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D
 warnings` passing for the workspace. That check is implied below and not repeated.

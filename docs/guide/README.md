@@ -7,7 +7,7 @@ It describes the app as it is today. For the project overview, go back to the
 
 | Page | What it covers |
 | --- | --- |
-| [Installation](installation.md) | Install salvajocs on Linux or Windows: AppImage, Windows zip, or cargo. |
+| [Installation](installation.md) | Install salvajocs on Linux or Windows: AppImage, Windows installer or zip, mise, cargo-binstall, or cargo. |
 | [First run](first-run.md) | Choose where backups are stored, the compression level and the encryption password. |
 | [Backup](backup.md) | Scan for games and back them up. |
 | [Restore](restore.md) | Pick a snapshot, check the plan, restore, and undo. |

@@ -91,10 +91,10 @@ its number of files and how its target was found.
 
 For each row you can:
 
-- type a **Target**;
-- pick one from the **Candidates** list, which holds the save paths the manifest knows for the
-  build you restore into;
-- tick **Skip** to leave that folder out.
+- type a **Target** (labelled Target 1, Target 2, ...);
+- pick one from the **Candidates** list (Candidates 1, Candidates 2, ...), which holds the save
+  paths the manifest knows for the build you restore into;
+- tick **Skip** (Skip 1, Skip 2, ...) to leave that folder out.
 
 A typed target must be a placeholder template, for example `<winLocalAppDataLow>/Company/Game` or
 `<xdgData>/Game`, not a real path. Valid starts are `<home>`, `<xdgData>` and `<xdgConfig>` on

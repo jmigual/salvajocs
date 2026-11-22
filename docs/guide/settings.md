@@ -44,11 +44,15 @@ A backup is only made when a game's files changed, so the last N backups are the
 A backup is kept if any rule keeps it. The newest backup of each game, and of each computer, is
 always kept. With both rules off, all backups are kept.
 
+The last N backups are ranked by time across all computers. If one computer's clock runs far
+ahead, its backups can take all N places, and the other computers keep only their newest backup
+of the game.
+
 The same rules also remove the safety backups (`pre-restore`) a restore makes first. They are
 counted on their own, so they never take the place of a game's regular backups.
 
 Old backups are removed after the next backup. Their disk space comes back at a later cleanup, at
-least a day later.
+least 23 hours later.
 
 The rules are stored in the repository, so every machine that uses it shares them. The section is
 disabled until the repository is open and its rules are loaded. A change stays on this PC, with
@@ -138,9 +142,11 @@ opens the changelog at the tag of this version.
 
 ## Where settings are stored
 
-All settings except the compression level, the old-backup rules and the custom games are in
-`config.yaml`, listed in [Installation](installation.md#where-salvajocs-keeps-its-files). The
-compression level, the old-backup rules and the custom games are in the repository, with a copy
-of the custom games and their Wine prefixes in `config.yaml`. Changes to the custom games and the
+All settings except the compression level, the old-backup rules, the custom games and the choices
+of what to back up of each game are in `config.yaml`, listed in
+[Installation](installation.md#where-salvajocs-keeps-its-files). The compression level, the
+old-backup rules, the custom games and those choices are in the repository, with a copy of the
+custom games and their Wine prefixes in `config.yaml`. Changes to the custom games and the
 old-backup rules wait in `config.yaml` until the next Back up saves them to the repository.
+Unsaved backup choices wait in `pending-selection.json`.
 Passwords and secret options are in the keyring or asked each session.

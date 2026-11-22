@@ -127,7 +127,7 @@ must be path templates without wildcards. The section only shows when the game h
 
 A skipped folder is a template that a cross-build restore leaves out, for example
 `<home>/Foo`. It applies in both directions. The mapping dialog adds skipped folders here when
-you tick **Skip**.
+you tick **Skip** on a row (labelled Skip 1, Skip 2, ...).
 
 ## Saving
 

@@ -45,7 +45,7 @@ location, and click **Apply**. salvajocs does not create a repository unless you
 salvajocs asks for the password every time you start it. This is expected on Linux without a
 Secret Service daemon (such as GNOME Keyring or KWallet). A warning "Could not store a secret in
 the keyring" means the store refused the value. The Windows Credential Manager rejects values over
-2560 bytes. In both cases the password mode becomes "asked once per session".
+2560 bytes. In both cases the password mode becomes "Asked once per session".
 
 ## The scan finds no games
 
@@ -60,8 +60,9 @@ the keyring" means the store refused the value. The Windows Credential Manager r
 - Games on another drive or library need that library added as a **Steam library**. salvajocs does
   not read Steam's list of libraries.
 - Non-Steam games, and Wine games that Steam does not manage, need a prefix. Add a **Wine prefix**
-  in Settings, or set the prefix on a [custom game](custom-games.md). Heroic, Lutris and Bottles
-  prefixes are not found by themselves.
+  in Settings, or set the prefix on a [custom game](custom-games.md). On Linux, Heroic, Lutris and
+  Bottles prefixes are found by themselves. If one is missing, check that it is ticked under
+  **Settings**, **Roots**, [Found by salvajocs](settings.md#found-by-salvajocs).
 - A game that has never been run has no save files yet.
 
 ## Scan problems in yellow

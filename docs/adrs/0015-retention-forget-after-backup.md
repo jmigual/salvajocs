@@ -101,6 +101,9 @@ label and paths, so two machines with the same files each write their own snapsh
 - The last save wins: two machines editing the policy at once each write their own, and the
   newer one stays. The Settings tab reloads the policy each time it is shown, unless an edit is
   still being saved, but a tab left open shows its own copy until then.
+- `keep_last` ranks a game's snapshots across all hosts by time, so a machine whose clock runs
+  far ahead can take all the `keep_last` places and the other machines keep only their newest
+  snapshot each.
 - `keep_within` counts from the local clock: a machine whose clock jumps far ahead forgets
   everything that `keep_last` and the newest-per-host guard do not keep.
 - Clock skew also affects `keep_delete`: a pruning machine whose clock is about 23 h or more

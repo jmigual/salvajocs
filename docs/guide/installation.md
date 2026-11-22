@@ -126,6 +126,7 @@ cargo run --release -p salvajocs
 | --- | --- | --- |
 | Settings (`config.yaml`) | `~/.config/salvajocs/` | `%APPDATA%\salvajocs\` |
 | Copy of the settings salvajocs 0.8.0 kept before the repository's custom games first replaced or removed one of yours, if that happened (`config-before-custom-games.yaml`) | `~/.config/salvajocs/` | `%APPDATA%\salvajocs\` |
+| Backup choices not saved to the repository yet (`pending-selection.json`) | `~/.config/salvajocs/` | `%APPDATA%\salvajocs\` |
 | Game list cache and temporary work folders | `~/.cache/salvajocs/` | `%LOCALAPPDATA%\salvajocs\` |
 
 The backups themselves live in the repository you choose on first run.
