@@ -1,6 +1,6 @@
 # ADR-0024: The Backup and Restore tabs show what makes a changed file differ
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 
 ## Context

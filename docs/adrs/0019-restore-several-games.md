@@ -1,6 +1,6 @@
 # ADR-0019: Restore several games with their defaults, one safety backup each
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-19
 
 ## Context

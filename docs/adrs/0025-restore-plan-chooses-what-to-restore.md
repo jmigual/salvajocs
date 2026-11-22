@@ -1,6 +1,6 @@
 # ADR-0025: A restore plan chooses its files and registry keys with checkboxes
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 
 ## Context

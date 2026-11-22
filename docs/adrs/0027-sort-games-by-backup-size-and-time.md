@@ -1,6 +1,6 @@
 # ADR-0027: The Backup and Restore tabs sort their games by name, last backup or space used
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR-0020: A restore plans from the snapshot's metadata and downloads only on Restore
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-19
 
 ## Context

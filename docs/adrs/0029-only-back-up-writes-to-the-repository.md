@@ -1,6 +1,6 @@
 # ADR-0029: Only Back up writes custom games and the Old backups rules to the repository
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-21
 
 ## Context

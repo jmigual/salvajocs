@@ -1,6 +1,6 @@
 # ADR-0023: A backup remembers its Wine prefix, and a restore finds it again
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 
 ## Context

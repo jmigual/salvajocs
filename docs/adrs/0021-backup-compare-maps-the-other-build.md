@@ -1,6 +1,6 @@
 # ADR-0021: The backup preview and skip map the other build's backup through the folder pairs
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-19
 
 ## Context

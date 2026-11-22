@@ -1,6 +1,6 @@
 # ADR-0028: Custom games stored in the repository, one settings snapshot per game
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 **Amended:** 2026-11-21: custom games are written to the repository only by Back up, read on open
 and from a Read repository button; a migration asks instead of the repository winning; offline

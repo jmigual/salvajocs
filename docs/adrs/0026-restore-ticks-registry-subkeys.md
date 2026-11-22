@@ -1,6 +1,6 @@
 # ADR-0026: A restore ticks registry keys one by one
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-20
 
 ## Context

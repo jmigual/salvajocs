@@ -1,6 +1,6 @@
 # ADR-0022: AppImage self-update: replace the file in one rename, restart on request
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-19
 
 ## Context

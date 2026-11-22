@@ -1,6 +1,6 @@
 # ADR-0018: Hash list per game snapshot; backup preview and skip compare with the newest one
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-19
 
 ## Context
