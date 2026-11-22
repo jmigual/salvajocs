@@ -552,6 +552,14 @@ fn scan_game(
                     let Some(tail) = tail_of(&real, &base_dir) else {
                         continue;
                     };
+                    // The tail would be a lossy copy of the name, and two such names could merge.
+                    if real
+                        .strip_prefix(&base_dir)
+                        .is_ok_and(|below| below.to_str().is_none())
+                    {
+                        issues.push((real, "the path is not valid UTF-8".to_owned()));
+                        continue;
+                    }
                     matched = true;
                     // A prefix and native Windows match case-insensitively, so their logical paths
                     // are too.

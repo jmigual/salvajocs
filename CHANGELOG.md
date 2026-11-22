@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A file whose name is not valid UTF-8 is reported as a scan problem instead of being copied
+  under a changed name; the game keeps all its old backed-up files until it is renamed.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed

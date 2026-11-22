@@ -500,6 +500,39 @@ fn native_windows_scan_lists_a_file_reached_by_two_templates_once() {
     assert_eq!(found.files.len(), 1, "{found:?}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_file_with_a_non_utf8_name_is_a_problem_not_a_lossy_copy() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let saves = home.path().join(".local/share/Foo");
+    write(&saves.join("ok.sav"), "a");
+    let bad: Vec<PathBuf> = [&b"bad\xfe.sav"[..], &b"bad\xff.sav"[..]]
+        .map(|name| saves.join(OsStr::from_bytes(name)))
+        .into();
+    for path in &bad {
+        fs::write(path, "b").unwrap();
+    }
+    let manifest = parse_yaml("Foo:\n  files:\n    <xdgData>/Foo: {}\n").unwrap();
+    let report = scan(
+        &manifest,
+        &config(vec![], vec![]),
+        &linux_env(home.path()),
+        |_, _| {},
+    );
+    assert_eq!(report.games.len(), 1, "{report:?}");
+    assert_eq!(tails(&report.games[0]), [(Base::XdgData, "Foo/ok.sav")]);
+    let mut problems: Vec<_> = report.problems.iter().map(|p| p.path.clone()).collect();
+    problems.sort();
+    assert_eq!(problems, bad);
+    assert!((report.problems.iter()).all(|p| matches!(p.kind, ProblemKind::Unreadable(_))));
+    let mut unreadable = report.games[0].unreadable.clone();
+    unreadable.sort();
+    assert_eq!(unreadable, bad);
+}
+
 #[test]
 fn roots_record_glob_free_prefixes() {
     let home = tempfile::tempdir().unwrap();
