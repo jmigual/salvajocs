@@ -7,7 +7,7 @@ use salvajocs_core::layout::{Context, WinFolders};
 use salvajocs_core::registry::{RegData, RegValue};
 use salvajocs_core::selection::GameSettings;
 
-use super::super::ticked_plan;
+use super::super::plan::ticked_plan;
 use super::*;
 use crate::theme;
 
