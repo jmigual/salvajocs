@@ -3,11 +3,12 @@
 //! (ADR-0011).
 
 use std::collections::BTreeMap;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use eframe::egui::{self, Popup, PopupCloseBehavior, TextEdit, Ui};
+use eframe::egui::{self, Popup, PopupCloseBehavior, RichText, TextEdit, Ui};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Family, FileError, PairError, SkipError};
 use salvajocs_core::layout::{self, Context, GameVars, WinFolders};
@@ -710,10 +711,19 @@ impl Form {
     }
 }
 
+/// A removal waiting for its confirm.
+struct ConfirmRemove {
+    /// The game's name, since a read of the repository may move or drop games meanwhile.
+    name: String,
+    /// Whether Cancel still has to take the focus, which the dialog does on its first frame.
+    focus: bool,
+}
+
 /// The state of the Custom games tab.
 #[derive(Default)]
 pub struct CustomGamesTab {
     form: Option<Form>,
+    confirm_remove: Option<ConfirmRemove>,
 }
 
 impl CustomGamesTab {
@@ -721,6 +731,52 @@ impl CustomGamesTab {
     /// (`App::editing`), since closing the app would lose its edits.
     pub(crate) fn editing(&self) -> bool {
         self.form.is_some()
+    }
+
+    /// Draws the confirm of a removal; returns the removal once confirmed. Cancel has the focus,
+    /// and Escape cancels.
+    fn remove_ui(&mut self, ctx: &egui::Context, config: &AppConfig) -> Option<Edit> {
+        let confirm = self.confirm_remove.as_mut()?;
+        let Some(index) = (config.custom_games.iter()).position(|game| game.name == confirm.name)
+        else {
+            self.confirm_remove = None;
+            return None;
+        };
+        let (mut cancel, mut remove) = (false, false);
+        let ((), dismissed) = theme::modal_dismissible(ctx, "custom_games_remove", 560.0, |ui| {
+            ui.heading(format!("Remove {}?", confirm.name));
+            // Whether the repository holds the game is not known here, so the line says "if".
+            ui.label(
+                "It is removed on this PC now. If your other PCs have it, the next Back up \
+                 removes it from them too.",
+            );
+            let error = ui.visuals().error_fg_color;
+            theme::row_end(ui, |ui| {
+                let button = ui.button("Cancel");
+                // `row_end` first runs this in a sizing pass, whose widgets are not the real ones.
+                if !ui.is_sizing_pass() && mem::take(&mut confirm.focus) {
+                    button.request_focus();
+                }
+                cancel |= button.clicked();
+                remove |= ui
+                    .button(RichText::new("Remove game").color(error).strong())
+                    .clicked();
+            });
+        });
+        if remove {
+            self.confirm_remove = None;
+            if self.form.as_ref().and_then(|form| form.index) == Some(index) {
+                self.form = None;
+            }
+            return Some(Edit {
+                based_on: Some(config.custom_games[index].clone()),
+                game: None,
+            });
+        }
+        if cancel || dismissed {
+            self.confirm_remove = None;
+        }
+        None
     }
 
     /// Draws the tab. Saving or removing a game changes this PC's copy only; the next Back up
@@ -816,12 +872,9 @@ impl CustomGamesTab {
                 self.form = Some(Form::edit(index, &config.custom_games[index]));
             }
             if let Some(index) = remove {
-                if self.form.as_ref().and_then(|form| form.index) == Some(index) {
-                    self.form = None;
-                }
-                edit = Some(Edit {
-                    based_on: Some(config.custom_games[index].clone()),
-                    game: None,
+                self.confirm_remove = Some(ConfirmRemove {
+                    name: config.custom_games[index].name.clone(),
+                    focus: true,
                 });
             }
             ui.horizontal(|ui| {
@@ -865,6 +918,9 @@ impl CustomGamesTab {
                 }
             }
         });
+        if let Some(config) = &state.config {
+            edit = self.remove_ui(&ctx, config).or(edit);
+        }
         if let Some(edit) = edit {
             state.edit_custom_game(&ctx, edit);
         }

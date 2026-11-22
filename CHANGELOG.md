@@ -13,6 +13,7 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- **Remove** on a custom game asks you to confirm first.
 - Escape or a click outside a dialog cancels it for the delete, close-during-a-job,
   changed-on-another-PC and file details dialogs. The dialogs that must be answered and the folder
   mapping dialogs stay open.
