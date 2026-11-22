@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-19
+**Amended:** 2026-11-22: `SHA256SUMS` must carry the release key's minisign signature (ADR-0013).
 
 ## Context
 
@@ -20,9 +21,10 @@ replaces the directory entry while the open file stays readable.
 - **Notice:** when the release is found, `update::replaceable` probes the AppImage's folder by
   creating and removing a file next to it. A writable folder gets **Update now**; a read-only one
   keeps the release page link, so it never shows a failed download.
-- **Update now:** a job downloads `salvajocs-<version>-x86_64.AppImage` and `SHA256SUMS` through
-  the installer's code (same URL, HTTPS and size checks) and refuses a hash that is missing or
-  differs, before anything is written. Requests time out after 30 s to connect or 60 s without
+- **Update now:** a job downloads `salvajocs-<version>-x86_64.AppImage`, `SHA256SUMS` and
+  `SHA256SUMS.minisig` through the installer's code (same URL, HTTPS and size checks), refuses a
+  missing or invalid signature of `SHA256SUMS` and then a hash that is missing or differs, before
+  anything is written. Requests time out after 30 s to connect or 60 s without
   data, never on the total, which a slow link would exceed. It then writes `.<name>.update-<pid>`
   next to `$APPIMAGE` with the old file's mode plus the owner's execute bit (set after creating,
   so the umask does not mask it), syncs it and renames it over `$APPIMAGE`, which keeps the
@@ -46,8 +48,8 @@ replaces the directory entry while the open file stays readable.
 
 ## Consequences
 
-- The hash protects against a corrupted or truncated download, not a compromised release, as in
-  ADR-0013.
+- The hash protects against a corrupted or truncated download; the signature of `SHA256SUMS`
+  against assets swapped outside the release workflow, as in ADR-0013.
 - A crash between creating and renaming the temp file can leave a hidden `.update-<pid>` file next
   to the AppImage.
 - An AppImage owned by another user in a sticky folder such as `/tmp` passes the probe, and the

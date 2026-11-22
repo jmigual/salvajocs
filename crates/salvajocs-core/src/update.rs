@@ -1,5 +1,6 @@
 //! Finds a newer GitHub release and downloads its Windows installer or AppImage, checked against
-//! the release's `SHA256SUMS` (ADR-0013, ADR-0022).
+//! the release's `SHA256SUMS`, which must carry the release key's minisign signature (ADR-0013,
+//! ADR-0022).
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -12,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use minisign_verify::{PublicKey, Signature};
 use reqwest::blocking::{Client, RequestBuilder};
 use semver::Version;
 use serde::Deserialize;
@@ -22,6 +24,10 @@ const LATEST_URL: &str = "https://api.github.com/repos/jmigual/salvajocs/release
 
 /// The release asset that lists the SHA-256 of every other asset.
 const SUMS_ASSET: &str = "SHA256SUMS";
+/// The release asset holding the minisign signature of [`SUMS_ASSET`].
+const SIGNATURE_ASSET: &str = "SHA256SUMS.minisig";
+/// The minisign public key whose secret key signs every release's `SHA256SUMS`.
+const RELEASE_KEY: &str = include_str!("update/salvajocs.pub");
 /// Inno Setup's uninstaller, which the installer puts next to `salvajocs.exe`.
 const UNINSTALLER: &str = "unins000.exe";
 /// Installs without questions and starts the app again afterwards.
@@ -61,6 +67,12 @@ pub enum UpdateError {
     /// A response is larger than any release file should be.
     #[error("the download is larger than {MAX_DOWNLOAD} bytes")]
     TooLarge,
+    /// The release has no `SHA256SUMS.minisig`, as the releases before the signature was added.
+    #[error("the release is not signed: it has no `{SIGNATURE_ASSET}`")]
+    Unsigned,
+    /// `SHA256SUMS` is not signed by the release key, or the signature is not a minisign one.
+    #[error("`{SUMS_ASSET}` is not signed with the salvajocs release key")]
+    BadSignature(#[from] minisign_verify::Error),
     /// `SHA256SUMS` lists no hash for this file.
     #[error("SHA256SUMS has no entry for `{0}`")]
     MissingChecksum(String),
@@ -173,6 +185,14 @@ fn checksum(sums: &str, file: &str) -> Option<String> {
     })
 }
 
+/// Checks that `signature` (the text of a `.minisig` file) is `key`'s signature of `sums`.
+fn verify_signature(key: &str, sums: &[u8], signature: &[u8]) -> Result<(), UpdateError> {
+    let signature = Signature::decode(&String::from_utf8_lossy(signature))?;
+    // No legacy (unhashed) signatures: the release workflow only makes prehashed ones.
+    PublicKey::decode(key)?.verify(sums, &signature, false)?;
+    Ok(())
+}
+
 /// Checks `bytes` against the hash `sums` lists for `file`.
 fn verify(bytes: &[u8], sums: &str, file: &str) -> Result<(), UpdateError> {
     let expected =
@@ -206,7 +226,7 @@ pub fn check(current: &str) -> Result<Option<Release>, UpdateError> {
 }
 
 /// Empties `dir`, then downloads the installer of `release` into it after checking it against
-/// the release's `SHA256SUMS`, and returns its path. Nothing is written when the check fails.
+/// the release's signed `SHA256SUMS`, and returns its path. Nothing is written when the check fails.
 pub fn download_installer(
     release: &Release,
     current: &str,
@@ -251,7 +271,7 @@ pub fn replaceable(path: &Path) -> bool {
             .is_ok()
 }
 
-/// Downloads the AppImage of `release`, checks it against the release's `SHA256SUMS`, and
+/// Downloads the AppImage of `release`, checks it against the release's signed `SHA256SUMS`, and
 /// replaces the file at `appimage` with it in one rename, keeping its name. A failed download
 /// or check leaves `appimage` untouched and writes nothing.
 pub fn download_appimage(
@@ -272,12 +292,19 @@ pub fn restart_appimage(path: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
-/// Downloads the asset `name` of `release` and checks it against the release's `SHA256SUMS`.
+/// Downloads the asset `name` of `release` and checks it against the release's `SHA256SUMS`,
+/// after checking that list against its signature.
 fn download_verified(release: &Release, current: &str, name: &str) -> Result<Vec<u8>, UpdateError> {
     let client = client(current)?;
     let asset = release.asset(name)?;
     let sums = release.asset(SUMS_ASSET)?;
+    let signature = release.asset(SIGNATURE_ASSET).map_err(|err| match err {
+        UpdateError::MissingAsset(_) => UpdateError::Unsigned,
+        err => err,
+    })?;
     let sums = download(client.get(&sums.browser_download_url))?;
+    let signature = download(client.get(&signature.browser_download_url))?;
+    verify_signature(RELEASE_KEY, &sums, &signature)?;
     let bytes = download(client.get(&asset.browser_download_url))?;
     verify(&bytes, &String::from_utf8_lossy(&sums), name)?;
     Ok(bytes)

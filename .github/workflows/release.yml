@@ -150,8 +150,10 @@ jobs:
           path: salvajocs-*-x86_64-setup.exe
           if-no-files-found: error
 
+  # After `release`, so a missing signing secret fails the run before a version that cannot be
+  # published twice goes to crates.io.
   crates:
-    needs: check
+    needs: [check, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -178,12 +180,17 @@ jobs:
   release:
     needs: [binaries, appimage, installer]
     runs-on: ubuntu-latest
+    # The environment's required reviewer approves a release before it is signed.
+    environment: release
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: CHANGELOG.md
+          persist-credentials: false
+          sparse-checkout: |
+            CHANGELOG.md
+            crates/salvajocs-core/src/update/salvajocs.pub
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v8
         with:
@@ -193,6 +200,26 @@ jobs:
       # against it.
       - name: Checksums
         run: cd dist && sha256sum -- * > SHA256SUMS
+      # Built from source with the version pinned, in a step without the secret: its dependencies'
+      # build scripts run here. It writes the minisign format the app verifies.
+      - name: Install rsign2
+        run: cargo install rsign2 --version 0.6.7 --locked
+      # The updater refuses a release whose SHA256SUMS lacks this signature (ADR-0013).
+      - name: Sign the checksums
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "the MINISIGN_SECRET_KEY secret is not set" >&2
+            exit 1
+          fi
+          umask 077
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          rsign sign -W -s "$key" -x dist/SHA256SUMS.minisig dist/SHA256SUMS
+          # Fails when the secret is not the key whose public half the app embeds.
+          rsign verify -p crates/salvajocs-core/src/update/salvajocs.pub -x dist/SHA256SUMS.minisig dist/SHA256SUMS
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

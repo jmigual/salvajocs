@@ -11,6 +11,13 @@ All notable changes to salvajocs. The format follows
 - A file whose name is not valid UTF-8 is reported as a scan problem instead of being copied
   under a changed name; the game keeps all its old backed-up files until it is renamed.
 
+### Security
+
+- **Update now** installs a release only when its `SHA256SUMS` carries a minisign signature made
+  with the release key built into the app; before, the hashes came from the same release as the
+  installer and proved no more than a complete download. Releases are signed in the release
+  workflow, and a release without `SHA256SUMS.minisig` is refused.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed
