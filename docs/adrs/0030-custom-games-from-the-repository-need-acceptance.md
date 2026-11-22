@@ -99,6 +99,7 @@ by another PC, is not used on this PC until the user accepts it on this PC.
   only unsent entries.
 - The shape rules do not stop precise or absolute paths; only acceptance does.
 - Offers are not shown offline.
-- Residual risk, not confirmed: a saved pair with a bare side (`{linux: "<home>", windows:
-  "<winDocuments>/x"}`) still maps a declared Windows root onto the whole Linux home in a
-  cross-build restore; the pair-side rule only stops that side from declaring a root (ADR-0011).
+- A saved pair with a bare side (`{linux: "<home>", windows: "<winDocuments>/x"}`) still maps a
+  declared Windows root onto the whole Linux home in a cross-build restore; the pair-side rule
+  only stops that side from declaring a root. The user chose to warn only: the mapping dialog
+  and the preview name such a pair (ADR-0011).

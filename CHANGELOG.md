@@ -13,6 +13,9 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- A cross-build restore through a saved mapping whose target is a whole folder, such as
+  `<home>` in `<home> / <winDocuments>/x`, now says so in the mapping dialog and the plan: "The
+  saved mapping … writes into the whole … folder". The mapping still applies.
 - After a delete or a restore, the Restore tab keeps the chosen game chosen when it still has
   backups, instead of asking you to pick it again.
 - **Remove** on a custom game asks you to confirm first.
