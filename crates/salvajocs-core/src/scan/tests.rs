@@ -458,6 +458,24 @@ fn prefix_scan_matches_case_insensitively() {
     assert_eq!(found.files[0].real, save);
 }
 
+/// A native Windows environment whose folders are those of `prefix`'s `me` user.
+fn windows_env(prefix: &Path) -> Environment {
+    Environment {
+        native: Some(Context::WindowsNative(WinFolders::for_prefix(prefix, "me"))),
+        ..no_native_env(vec![])
+    }
+}
+
+#[test]
+fn native_windows_scan_matches_wildcards_case_insensitively() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("Ace/SG_PC-1.sav"), "x");
+    let manifest = parse_yaml("Foo:\n  files:\n    <winDocuments>/Ace/SG_PC-*.SAV: {}\n").unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(tails(&found), [(Base::WinDocuments, "Ace/SG_PC-1.sav")]);
+}
+
 #[test]
 fn roots_record_glob_free_prefixes() {
     let home = tempfile::tempdir().unwrap();
@@ -645,7 +663,7 @@ fn a_glob_is_skipped_only_when_its_first_part_matches_no_entry() {
     fs::create_dir(dir.path().join("Empty")).unwrap();
     let cache = Cache::default();
     let may_match = |base: &Path, rest: &str, folded: bool| {
-        cache.may_match(base, &glob_pattern(base, rest, folded))
+        cache.may_match(base, &glob_pattern(base, rest, folded), false)
     };
     assert!(may_match(&base, "my games/foo", true));
     assert!(!may_match(&base, "Other Games/Foo", true));
@@ -658,6 +676,9 @@ fn a_glob_is_skipped_only_when_its_first_part_matches_no_entry() {
     assert!(may_match(&dir.path().join("Empty"), ".*/save", true));
     assert!(!may_match(&dir.path().join("Missing"), "foo/*", true));
     assert!(!may_match(&base.join("My Games/Foo/save"), "y*", true));
+    let upper = glob_pattern(&base, "MY*/Foo", false);
+    assert!(!cache.may_match(&base, &upper, false));
+    assert!(cache.may_match(&base, &upper, true));
 }
 
 #[cfg(unix)]
@@ -669,7 +690,8 @@ fn a_glob_below_an_unreadable_dir_still_runs() {
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let may_match = Cache::default().may_match(&locked, &glob_pattern(&locked, "*.dat", true));
+    let may_match =
+        Cache::default().may_match(&locked, &glob_pattern(&locked, "*.dat", true), false);
     let readable = fs::read_dir(&locked).is_ok();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     if readable {

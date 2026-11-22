@@ -236,7 +236,8 @@ pub enum Context {
 
 impl Context {
     /// Whether paths in this context must match case-insensitively (a prefix is case-sensitive
-    /// on disk but Windows programs are not; native Windows already ignores case).
+    /// on disk but Windows programs are not). Native Windows ignores case on disk, so it is
+    /// false there; the scan still tells `glob` to ignore case.
     pub fn case_insensitive(&self) -> bool {
         matches!(self, Context::WinePrefix { .. })
     }

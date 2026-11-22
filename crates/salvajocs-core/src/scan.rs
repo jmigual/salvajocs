@@ -70,7 +70,8 @@ impl Environment {
 pub struct FoundFile {
     /// The semantic base the file is staged under.
     pub base: Base,
-    /// The path below the base, `/`-separated, in the case it has on disk.
+    /// The path below the base, `/`-separated, in the case it has on disk; on native Windows
+    /// the parts of the template without wildcards keep the template's case.
     pub tail: String,
     /// The file on disk.
     pub real: PathBuf,
@@ -223,7 +224,8 @@ impl Cache {
 
     /// Whether `pattern`, a glob of [`expand`] below `base_dir`, may match: false only when no
     /// entry of `base_dir` matches its first component, so a skipped glob would find nothing.
-    fn may_match(&self, base_dir: &Path, pattern: &str) -> bool {
+    /// `ignore_case` is the one `matches` is run with.
+    fn may_match(&self, base_dir: &Path, pattern: &str, ignore_case: bool) -> bool {
         let base = glob::Pattern::escape(&base_dir.to_string_lossy());
         let first = pattern
             .strip_prefix(base.trim_end_matches('/'))
@@ -245,12 +247,14 @@ impl Cache {
         });
         // Glob also tries `.`, which no listing holds, for a part that starts with a literal dot.
         let dot = first.starts_with('.');
+        let options = match_options(ignore_case);
         match listing {
             Ok(names) => glob::Pattern::new(first).is_ok_and(|first| {
-                dot && first.matches(".")
-                    || names
-                        .iter()
-                        .any(|name| name.to_str().is_some_and(|name| first.matches(name)))
+                dot && first.matches_with(".", options)
+                    || names.iter().any(|name| {
+                        name.to_str()
+                            .is_some_and(|name| first.matches_with(name, options))
+                    })
             }),
             // A missing base matches nothing; other failures are left for glob to report.
             Err(kind) => !matches!(kind, io::ErrorKind::NotFound | io::ErrorKind::NotADirectory),
@@ -437,11 +441,26 @@ fn collect_files(path: &Path, out: &mut Vec<Found>, issues: &mut Vec<Issue>) {
     }
 }
 
+/// Whether the file system of `ctx` ignores case, which `glob` does only when asked: native
+/// Windows. A prefix is case-sensitive on disk and handled by
+/// [`glob_pattern`](crate::layout::glob_pattern) instead.
+fn fs_ignores_case(ctx: &Context) -> bool {
+    matches!(ctx, Context::WindowsNative(_))
+}
+
+/// The options to match a glob's wildcard parts with.
+fn match_options(ignore_case: bool) -> glob::MatchOptions {
+    glob::MatchOptions {
+        case_sensitive: !ignore_case,
+        ..glob::MatchOptions::new()
+    }
+}
+
 /// The real files one glob pattern matches; a matched directory contributes everything below it
 /// (ADR-0008). A malformed pattern matches nothing.
-fn matches(pattern: &str, issues: &mut Vec<Issue>) -> Vec<Found> {
+fn matches(pattern: &str, ignore_case: bool, issues: &mut Vec<Issue>) -> Vec<Found> {
     let mut files = Vec::new();
-    if let Ok(paths) = glob::glob(pattern) {
+    if let Ok(paths) = glob::glob_with(pattern, match_options(ignore_case)) {
         for path in paths {
             match path {
                 Ok(path) => collect_files(&path, &mut files, issues),
@@ -524,11 +543,12 @@ fn scan_game(
             }
             let mut matched = false;
             let mut issues = Vec::new();
+            let ignore_case = fs_ignores_case(ctx);
             for (base_dir, pattern) in expand(template, ctx, vars) {
-                if !shared.cache.may_match(&base_dir, &pattern) {
+                if !shared.cache.may_match(&base_dir, &pattern, ignore_case) {
                     continue;
                 }
-                for (real, size, modified) in matches(&pattern, &mut issues) {
+                for (real, size, modified) in matches(&pattern, ignore_case, &mut issues) {
                     let Some(tail) = tail_of(&real, &base_dir) else {
                         continue;
                     };
