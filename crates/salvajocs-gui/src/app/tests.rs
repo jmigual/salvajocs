@@ -703,6 +703,21 @@ fn waiting_keeps_the_window_until_the_job_ends() {
 }
 
 #[test]
+fn escape_waits_like_the_wait_button() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let _end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    request_close(&mut harness);
+    harness.step();
+    harness.get_by_label(RUNNING);
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.query_by_label(RUNNING).is_none());
+    assert!(!closed(&harness));
+}
+
+#[test]
 fn the_dialog_goes_away_when_the_job_ends() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = ready_app(dir.path());

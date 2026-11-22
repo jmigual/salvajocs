@@ -100,7 +100,7 @@ impl Details {
     /// without the size cap.
     pub(crate) fn ui(&mut self, ctx: &egui::Context) -> bool {
         let (mut closed, mut anyway) = (false, false);
-        theme::modal(ctx, "backup_file_details", 720.0, |ui| {
+        let ((), dismissed) = theme::modal_dismissible(ctx, "backup_file_details", 720.0, |ui| {
             ui.heading(&self.name);
             ui.weak(&self.key);
             match &self.result {
@@ -122,7 +122,7 @@ impl Details {
         if anyway {
             self.read(ctx, None);
         }
-        closed
+        closed || dismissed
     }
 
     /// The two copies' facts, then how their content compares; `anyway` is set when the

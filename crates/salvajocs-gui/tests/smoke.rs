@@ -3,10 +3,10 @@
 mod common;
 
 use common::{
-    env, harness, harness_sized, init_repo, local_config, repo_dir, run_settled, run_until,
-    run_until_ready, save_config, shows,
+    click_at, env, harness, harness_sized, init_repo, local_config, repo_dir, run_settled,
+    run_until, run_until_ready, save_config, shows,
 };
-use eframe::egui::Vec2;
+use eframe::egui::{Key, Pos2, Vec2};
 use egui_kittest::kittest::Queryable;
 use salvajocs_gui::tabs::Tab;
 
@@ -40,6 +40,23 @@ fn smoke_renders_every_tab() {
         }
     }
     assert!(!shows(&harness, "Welcome to salvajocs"));
+}
+
+/// The first-run dialog must be answered: Escape and a click outside leave it open.
+#[test]
+fn first_run_modal_ignores_escape_and_a_click_outside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = harness(env(&tmp));
+    run_until(&mut harness, "the first-run dialog", |h| {
+        shows(h, "Welcome to salvajocs")
+    });
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    click_at(&mut harness, Pos2::new(5.0, 400.0));
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "Welcome to salvajocs"));
 }
 
 #[test]

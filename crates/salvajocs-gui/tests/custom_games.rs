@@ -190,6 +190,12 @@ fn first<'a>(harness: &'a Harness<'static, App>, label: &'a str) -> egui_kittest
     harness.query_all_by_label(label).next().unwrap()
 }
 
+/// Clicks Remove game in the confirm dialog of a removal.
+fn confirm_remove(harness: &mut Harness<'static, App>) {
+    harness.get_by_label("Remove game").click();
+    run_settled(harness);
+}
+
 /// A game whose kept lines carry rules the form cannot show: an OS condition and a tag.
 fn kept_rules_game() -> CustomGame {
     let mut when = When::default();
@@ -543,6 +549,7 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     // Removing one game leaves the other as it was.
     first(&harness, "Remove").click();
     run_settled(&mut harness);
+    confirm_remove(&mut harness);
     assert_eq!(
         run_until_saved(&mut harness, &env, |games| games.len() == 1),
         [other]
@@ -557,6 +564,7 @@ fn custom_games_removing_an_earlier_game_keeps_the_open_form_on_its_game() {
     run_settled(&mut harness);
     first(&harness, "Remove").click();
     run_settled(&mut harness);
+    confirm_remove(&mut harness);
     assert!(shows(&harness, "Edit custom game"), "the form stays open");
     replace_text(&mut harness, "Name", "Moved");
     harness.get_by_label("Save game").click();
@@ -606,6 +614,7 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
 
     harness.get_by_label("Remove").click();
     run_settled(&mut harness);
+    confirm_remove(&mut harness);
     run_until_saved(&mut harness, &env, |games| games.is_empty());
     assert!(!shows(&harness, "Manifest Game ("));
 }
@@ -717,6 +726,33 @@ fn custom_games_save_stays_on_this_pc_until_back_up() {
 }
 
 #[test]
+fn custom_games_remove_asks_first_and_cancel_or_escape_keeps_the_game() {
+    let (mut harness, env, _tmp) = open_tab(vec![dialog_game("Keep")], &[]);
+    back_up(&mut harness, "Saved 1 custom game to the repository");
+
+    harness.get_by_label("Remove").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Remove Keep?"));
+    assert!(shows(&harness, "removes it from them too"));
+    assert!(harness.get_by_label("Cancel").is_focused());
+    harness.get_by_label("Cancel").click();
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Remove Keep?"));
+
+    harness.get_by_label("Remove").click();
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Remove Keep?"));
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Remove Keep?"));
+
+    assert!(shows(&harness, "Keep (custom game)"));
+    assert!(!shows(&harness, "Removed here"));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(config.custom_games.len(), 1);
+}
+
+#[test]
 fn custom_games_remove_on_one_pc_removes_it_on_the_other() {
     let (mut first, first_env, tmp) = open_tab(vec![dialog_game("Shared")], &[]);
     run_until_read(&mut first, &first_env);
@@ -726,6 +762,8 @@ fn custom_games_remove_on_one_pc_removes_it_on_the_other() {
     assert!(shows(&second, "Shared (custom game)"));
 
     first.get_by_label("Remove").click();
+    run_settled(&mut first);
+    confirm_remove(&mut first);
     run_until(&mut first, "the removal", |h| {
         !shows(h, "Shared (custom game)")
     });
@@ -837,6 +875,19 @@ fn custom_games_first_open_keeps_this_pcs_version_and_back_up_asks() {
     let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(config.custom_games, [mine]);
     assert!(config.custom_games_unsent.is_empty());
+}
+
+#[test]
+fn escape_cancels_the_changed_on_another_pc_question() {
+    let mine = dialog_game("Shared");
+    let (mut harness, _env, tmp) = first_open_with_another_version(&mine, None);
+    let written = settings_snapshots(&tmp);
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Changed on another PC"));
+    assert_eq!(settings_snapshots(&tmp), written, "Cancel writes nothing");
 }
 
 #[test]
@@ -1086,6 +1137,7 @@ fn custom_games_remove_in_an_append_only_repository_says_the_old_copy_stays() {
 
     harness.get_by_label("Remove").click();
     run_settled(&mut harness);
+    confirm_remove(&mut harness);
     back_up(
         &mut harness,
         "The custom game Gone was saved, but its older copies could not be removed",
@@ -1140,6 +1192,7 @@ fn custom_games_only_back_up_writes_them_to_the_repository() {
     // The rows are Mine, Theirs and Added.
     harness.query_all_by_label("Remove").nth(1).unwrap().click();
     run_settled(&mut harness);
+    confirm_remove(&mut harness);
     assert!(!shows(&harness, "Theirs (custom game)"));
     unchanged(&harness, "Remove");
 

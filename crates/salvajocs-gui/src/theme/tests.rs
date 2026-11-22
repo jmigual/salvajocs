@@ -186,3 +186,22 @@ fn a_new_button_row_is_in_place_on_its_first_frame() {
         .bounding_box();
     assert_eq!(first, settled);
 }
+
+/// Pressing Escape makes a dismissible dialog report that it should close.
+#[test]
+fn escape_dismisses_a_dismissible_modal() {
+    let mut harness = harness(
+        |ui, dismissed: &mut bool| {
+            let ((), asked) = modal_dismissible(ui.ctx(), "dialog", 400.0, |ui| {
+                ui.label("A dialog");
+            });
+            *dismissed |= asked;
+        },
+        false,
+    );
+    harness.run();
+    assert!(!*harness.state());
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(*harness.state());
+}

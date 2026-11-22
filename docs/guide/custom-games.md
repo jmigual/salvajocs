@@ -9,10 +9,11 @@ store the choices of a [cross-build restore](cross-os-restore.md). Back to the
 
 The tab lists your custom games. Each line says how the game relates to the manifest: a custom
 game, a game that extends the manifest entry, or one that overrides it. **Edit** and **Remove**
-change the list. **Add game** opens the form. Changes stay on this PC until the next
-[Back up](backup.md#custom-games-and-rules), which saves them to the repository, so every PC that
-uses it has the same custom games. **Read repository** reads the changes other PCs saved. The
-**Wine prefix** stays on this PC: each PC sets its own.
+change the list; **Remove** asks you to confirm first, and Escape or a click outside that dialog
+cancels it. **Add game** opens the form. Changes stay on this PC until the next [Back
+up](backup.md#custom-games-and-rules), which saves them to the repository, so every PC that uses it
+has the same custom games. **Read repository** reads the changes other PCs saved. The **Wine
+prefix** stays on this PC: each PC sets its own.
 
 ## The form
 

@@ -16,6 +16,13 @@ process on the machine, not only the one of the prefix.
 Backing up is not blocked. What the scan reads from `user.reg` can be up to 30 seconds old if a
 game is running.
 
+## "Salvajocs is already running"
+
+Only one salvajocs runs at a time per cache folder, because two copies share the files a backup
+is staged in. Copies with different cache folders, such as a Flatpak and an AppImage, can run side
+by side. Switch to the window that is open and click **Close** here. If there is no window, look
+for a `salvajocs` process, such as one that is minimized or on another desktop, and end it.
+
 ## Wrong encryption password
 
 The prompt shows "Wrong encryption password." Type the encryption password again. If you stored it

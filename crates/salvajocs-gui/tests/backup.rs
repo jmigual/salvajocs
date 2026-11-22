@@ -12,8 +12,8 @@ use common::{
     env, harness, init_repo, init_repo_with, local_config, record_opened, replace_text, repo_dir,
     run_settled, run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
 };
-use eframe::egui::Vec2;
 use eframe::egui::accesskit::{Role, Toggled};
+use eframe::egui::{Key, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
@@ -1371,6 +1371,17 @@ fn details_show_that_only_line_endings_differ() {
     assert!(shows(&harness, backup));
     assert!(shows(&harness, "(from its hash list)"));
     assert!(!shows(&harness, "Reading the backup"));
+}
+
+#[test]
+fn escape_closes_the_details() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"a\nb\n", b"a\r\nb\r\n");
+    open_details(&mut harness, "Only the line endings differ.");
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Backup ("));
 }
 
 #[test]

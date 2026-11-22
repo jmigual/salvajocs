@@ -368,6 +368,8 @@ impl RestoreTab {
         let Some((index, title, mapping)) = self.batch.waiting() else {
             return;
         };
+        // Not dismissible: Escape in a target field or a click closing its candidates list would
+        // drop the whole batch.
         let action = theme::modal(ctx, "restore_batch_mapping", 720.0, |ui| {
             (mapping.dialog).ui(ui, title, busy, false, true, error.as_deref())
         });

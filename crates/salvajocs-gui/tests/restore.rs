@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    back_up_unsent, env, harness, init_repo, local_config, pick, record_opened, replace_text,
-    repo_dir, run_settled, run_until, run_until_ready, save_config, shows, shows_path,
+    back_up_unsent, click_at, env, harness, init_repo, local_config, pick, record_opened,
+    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
+    shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -1155,11 +1156,14 @@ fn restore_fetch_preview_restore_reports() {
         .join(salvajocs_core::slug::slug("Alpha"));
     assert!(!mirror.exists());
 
-    // The reloaded list offers the safety backup, but not as the default.
+    // The reloaded list offers the safety backup, but not as the default, and the game stays
+    // chosen without a click.
     run_until(&mut harness, "the list to reload", |h| {
         !disabled(h, "Load backups")
     });
-    select(&mut harness, "Alpha");
+    run_until(&mut harness, "the game to stay chosen", |h| {
+        shows(h, "Restore into:")
+    });
     assert!(!value(&harness, "Snapshot").contains("pre-restore"));
     click(&mut harness, "Snapshot");
     assert!(shows(&harness, ", pre-restore"));
@@ -1837,7 +1841,11 @@ fn deleting_a_snapshot_removes_only_it() {
 
     assert_eq!(backups_of(&tmp, "Alpha"), alpha[..1]);
     assert_eq!(backups_of(&tmp, "Beta"), beta);
-    select(&mut harness, "Alpha");
+    // The game stays chosen, and the count of the delete stays shown.
+    run_until(&mut harness, "the game to stay chosen", |h| {
+        shows(h, "Restore into:")
+    });
+    assert!(shows(&harness, "Removed 1 backup"));
     click(&mut harness, "Snapshot");
     // The open list holds the one snapshot left.
     assert_eq!(harness.query_all_by_label_contains(" UTC, ").count(), 1);
@@ -1873,6 +1881,36 @@ fn cancelling_a_delete_removes_nothing() {
     click(&mut harness, "Delete all backups of Alpha");
     assert!(harness.get_by_label("Cancel").is_focused());
     click(&mut harness, "Cancel");
+
+    assert!(!shows(&harness, "It cannot be undone"));
+    assert_eq!(snapshots(&tmp, "salvajocs"), before);
+}
+
+#[test]
+fn escape_cancels_a_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let before = snapshots(&tmp, "salvajocs");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(shows(&harness, "It cannot be undone"));
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "It cannot be undone"));
+    assert_eq!(snapshots(&tmp, "salvajocs"), before);
+}
+
+#[test]
+fn clicking_outside_cancels_a_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let before = snapshots(&tmp, "salvajocs");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(shows(&harness, "It cannot be undone"));
+    click_at(&mut harness, Pos2::new(5.0, 800.0));
+    run_settled(&mut harness);
 
     assert!(!shows(&harness, "It cannot be undone"));
     assert_eq!(snapshots(&tmp, "salvajocs"), before);
@@ -1959,6 +1997,22 @@ fn unmapped(tmp: &TempDir, name: &str) -> (CustomGame, GameScan) {
 fn run_until_dialog(harness: &mut Harness<'static, App>, title: &str) {
     let heading = format!("Where should the saves of {title} go?");
     run_until(harness, "the mapping dialog", move |h| shows(h, &heading));
+}
+
+/// Escape in the mapping dialog of a batch does not drop the batch.
+#[test]
+fn escape_keeps_the_batch_mapping_dialog_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
+    let (mut harness, _env) = open_tab(&tmp, vec![kilo], &[kilo_scan]);
+
+    click(&mut harness, "Select all");
+    harness.get_by_label("Restore 1 game").click();
+    run_until_dialog(&mut harness, "Kilo");
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "Where should the saves of Kilo go?"));
 }
 
 #[test]

@@ -135,6 +135,29 @@ fn a_running_backup_disables_every_delete_and_leaves_the_list_browsable() {
     );
 }
 
+/// A listing that fails after a restore or delete drops the game to choose again, so a later
+/// listing does not choose it.
+#[test]
+fn a_failed_relisting_forgets_the_game_to_choose_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    let ctx = harness.ctx.clone();
+    {
+        let tab = &mut harness.state_mut().0;
+        tab.selected = None;
+        tab.reselect = Some("mix".into());
+        tab.listing = Some(Job::spawn(&ctx, || Err(anyhow!("cannot list"))));
+    }
+    step_until(&mut harness, "the listing to end", |h| {
+        h.state().0.listing.is_none()
+    });
+
+    let tab = &harness.state().0;
+    assert_eq!(tab.reselect, None);
+    assert_eq!(tab.selected, None);
+    assert!(tab.error.is_some());
+}
+
 /// A state whose repository, in `dir`, is open.
 fn state(dir: &Path) -> State {
     fn offline(_: &Path) -> Result<Freshness, FetchError> {

@@ -6,8 +6,19 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Only one salvajocs runs at a time per cache folder. A second one shows "Salvajocs is already
+  running" with a **Close** button, instead of sharing the backup staging files with the first.
+
 ### Changed
 
+- After a delete or a restore, the Restore tab keeps the chosen game chosen when it still has
+  backups, instead of asking you to pick it again.
+- **Remove** on a custom game asks you to confirm first.
+- Escape or a click outside a dialog cancels it for the delete, close-during-a-job,
+  changed-on-another-PC and file details dialogs. The dialogs that must be answered and the folder
+  mapping dialogs stay open.
 - A new Advanced option ticks **secret** by itself when its key names a secret of a service or has
   `secret`, `password`, `token` or `key` in it, unless the key is one rustic or a non-secret
   field of a service uses, such as `use-password` or `access_key_id`. You can untick it.
