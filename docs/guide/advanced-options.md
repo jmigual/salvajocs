@@ -121,7 +121,7 @@ These keys are for the program:
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `rclone-command` | Text | `rclone serve restic --addr localhost:0` | The command that starts the server. The location is added at the end. |
-| `use-password` | `true` or `false` | `true` | Whether a random user and password are set on the local server. |
+| `use-password` | `true` or `false` | `true` | Whether a random user and password are set on the local server. With `false` any program on this PC can read and delete the repository through it, so Settings shows a warning. |
 | `rest-url` | Text | Read from the output of rclone | Use this URL, and do not read it from the output of rclone. With `use-password` it must start with `http://`. |
 
 ## Alibaba Cloud OSS

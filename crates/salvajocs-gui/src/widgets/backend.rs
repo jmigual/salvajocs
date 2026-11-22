@@ -109,6 +109,9 @@ fn fields_of(kind: BackendKind) -> &'static [BackendField] {
 /// The warning under an Advanced key the backend does not read.
 const UNKNOWN_KEY: &str = "Not an option of this backend, so it probably does nothing. Check the spelling in the option reference.";
 
+/// The warning for an rclone remote served without a login.
+const RCLONE_NO_LOGIN: &str = "use-password is false, so the local rclone server has no login. Any program on this PC can read and delete the repository while salvajocs runs.";
+
 /// Whether an Advanced key is typed but is not one the backend reads. Allowed, but a typo would
 /// otherwise be ignored without a word.
 fn is_unknown_key(kind: BackendKind, key: &str) -> bool {
@@ -344,6 +347,16 @@ impl BackendForm {
         }
     }
 
+    /// Whether the rclone server salvajocs starts would run without a login: `use-password` is
+    /// `false`, which is the only value rustic reads as off.
+    fn rclone_without_login(&self) -> bool {
+        self.kind == BackendKind::Rclone
+            && self
+                .entries()
+                .iter()
+                .any(|entry| entry.key == "use-password" && entry.value == "false")
+    }
+
     /// The options as the config keeps them: a secret option has no value.
     pub fn options(&self) -> Vec<RepoOption> {
         self.entries()
@@ -551,6 +564,12 @@ impl BackendForm {
     /// The toggle row and, when open, the option reference and the option list. A toggle row
     /// because a `CollapsingHeader` cannot span the rows of a grid.
     fn advanced_ui(&mut self, ui: &mut Ui) {
+        if self.rclone_without_login() {
+            ui.label("");
+            let color = ui.visuals().warn_fg_color;
+            field_status(ui, icons::WARNING, color, RCLONE_NO_LOGIN);
+            ui.end_row();
+        }
         ui.label("");
         // A framed button, so it reads as a button while closed; selected while open.
         let toggle = egui::Button::new("Advanced options").selected(self.advanced_open);
@@ -1103,6 +1122,23 @@ mod tests {
         let mut form = BackendForm::from_config(&loaded, &BTreeMap::new());
         form.options[0].key_changed(BackendKind::OpenDal("s3"));
         assert!(!form.options[0].secret, "a loaded row never flips");
+    }
+
+    #[test]
+    fn only_an_rclone_remote_with_use_password_false_warns_of_no_login() {
+        let mut form =
+            BackendForm::from_config(&config("rclone:remote:games", Vec::new()), &BTreeMap::new());
+        assert!(
+            !form.rclone_without_login(),
+            "no option, so the default of true"
+        );
+        form.push_option("use-password", "true", false);
+        assert!(!form.rclone_without_login());
+        form.options[0].value = "false".to_string();
+        assert!(form.rclone_without_login());
+
+        form.switch_kind(BackendKind::Rest);
+        assert!(!form.rclone_without_login(), "only rclone starts a server");
     }
 
     #[test]

@@ -19,6 +19,8 @@ All notable changes to salvajocs. The format follows
   repository string. A password in the URL of an existing config moves there when the app starts.
   If the keyring refuses it, it stays in the config file's URL until it can be stored. Going back
   to 0.9.1 after the move needs the URL entered again with its password.
+- Settings warns when an rclone remote has `use-password` set to `false`: its local server then
+  has no login, so any program on the PC can read and delete the repository.
 
 ## [0.9.1] - 2026-11-21
 
