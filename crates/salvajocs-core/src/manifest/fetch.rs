@@ -1,11 +1,6 @@
 //! Downloads the ludusavi manifest with `ETag` revalidation and keeps a JSON cache (ADR-0008).
 
-use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
-    path::Path,
-    time::Duration,
-};
+use std::{fs, io, path::Path, time::Duration};
 
 use reqwest::{
     StatusCode,
@@ -14,6 +9,7 @@ use reqwest::{
 };
 
 use super::{Manifest, ManifestError, from_json, parse_yaml, to_json};
+use crate::fsutil::{read_capped, remove_if_exists, write_atomic};
 
 /// Ludusavi's own manifest endpoint.
 pub const MANIFEST_URL: &str = "https://raw.githubusercontent.com/mtkennerly/ludusavi-manifest/refs/heads/data/data/manifest.yaml";
@@ -100,7 +96,9 @@ fn refresh_from(
         .get(ETAG)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let yaml = read_capped(response.content_length(), response, limit)?;
+    let body =
+        read_capped(response.content_length(), response, limit)?.ok_or(FetchError::TooLarge)?;
+    let yaml = String::from_utf8_lossy(&body);
     let json = to_json(&parse_yaml(&yaml)?)?;
 
     fs::create_dir_all(cache_dir)?;
@@ -113,36 +111,6 @@ fn refresh_from(
     // A leftover old cache is harmless, so its removal must not fail the refresh.
     let _ = remove_if_exists(&cache_dir.join(OLD_JSON_FILE));
     Ok(Freshness::Updated)
-}
-
-/// Reads `body` as text, refusing it when the declared or the actual length exceeds `limit`.
-fn read_capped(declared: Option<u64>, body: impl Read, limit: u64) -> Result<String, FetchError> {
-    if declared.is_some_and(|len| len > limit) {
-        return Err(FetchError::TooLarge);
-    }
-    let mut bytes = Vec::new();
-    body.take(limit + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
-        return Err(FetchError::TooLarge);
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn remove_if_exists(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
-    }
-}
-
-/// Writes via a synced sibling temp file so a crash never leaves a truncated cache.
-fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let mut file = File::create(&tmp)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    fs::rename(&tmp, path)
 }
 
 #[cfg(test)]

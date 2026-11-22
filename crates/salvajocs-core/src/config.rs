@@ -4,13 +4,14 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
 use crate::custom_games;
+use crate::fsutil::write_atomic;
 use crate::layout::Root;
 use crate::manifest::CustomGame;
 use crate::retention;
@@ -397,12 +398,7 @@ impl AppConfig {
         }
         let yaml = serde_saphyr::to_string(&stripped)?;
         fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!("{CONFIG_FILE}.tmp"));
-        // Sync before the rename so a crash cannot leave an empty config.yaml.
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(yaml.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, dir.join(CONFIG_FILE))?;
+        write_atomic(&dir.join(CONFIG_FILE), yaml.as_bytes())?;
         Ok(())
     }
 

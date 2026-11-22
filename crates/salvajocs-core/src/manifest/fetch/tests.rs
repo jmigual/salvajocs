@@ -153,19 +153,6 @@ fn invalid_yaml_leaves_cache_untouched() {
 }
 
 #[test]
-fn read_capped_refuses_bodies_over_the_limit() {
-    assert_eq!(read_capped(Some(5), &b"hello"[..], 5).unwrap(), "hello");
-    assert!(matches!(
-        read_capped(Some(6), &b"hello!"[..], 5),
-        Err(FetchError::TooLarge)
-    ));
-    assert!(matches!(
-        read_capped(None, &b"hello!"[..], 5),
-        Err(FetchError::TooLarge)
-    ));
-}
-
-#[test]
 fn a_download_over_the_limit_leaves_the_cache_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let url = serve(1, "200 OK", SAMPLE, true);

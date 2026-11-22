@@ -92,19 +92,6 @@ fn asset_refuses_a_url_outside_this_release() {
 }
 
 #[test]
-fn read_capped_refuses_bodies_over_the_limit() {
-    assert_eq!(read_capped(Some(5), &b"hello"[..], 5).unwrap(), b"hello");
-    assert!(matches!(
-        read_capped(Some(6), &b"hello!"[..], 5),
-        Err(UpdateError::TooLarge)
-    ));
-    assert!(matches!(
-        read_capped(None, &b"hello!"[..], 5),
-        Err(UpdateError::TooLarge)
-    ));
-}
-
-#[test]
 fn checksum_reads_sha256sum_lines() {
     let sums = format!(
         "{HELLO_SHA256}  salvajocs-1.2.3-x86_64-linux.tar.gz\r\n{}  {SETUP}\n{HELLO_SHA256} *other.zip\n",

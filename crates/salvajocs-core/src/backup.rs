@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::changes;
 
+use crate::fsutil::remove_if_exists;
 use crate::layout::{
     FILES_DIR, FileHash, HASHES_FILE, HASHES_FORMAT, Hashes, META_FILE, REGISTRY_FILE,
     SNAPSHOT_FORMAT, SnapshotMeta, target_path,
@@ -149,7 +150,7 @@ pub fn stage(
     if !registry.keys.is_empty() {
         write_if_changed(&registry_file, &json(registry))?;
     } else if !keep_all {
-        remove_if_exists(&registry_file)?;
+        remove_if_exists(&registry_file).map_err(io_error(&registry_file))?;
     }
 
     let mut files = BTreeMap::new();
@@ -258,13 +259,6 @@ fn hex(hasher: Sha256) -> String {
         .collect()
 }
 
-fn remove_if_exists(path: &Path) -> Result<(), BackupError> {
-    match fs::remove_file(path) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(io_error(path)(err)),
-        _ => Ok(()),
-    }
-}
-
 /// The staged `salvajocs.json`, `None` when there is none yet.
 fn staged_meta(meta_file: &Path) -> Result<Option<SnapshotMeta>, BackupError> {
     let bytes = match fs::read(meta_file) {
@@ -347,7 +341,7 @@ fn sync_file(real: &Path, dest: &Path) -> Result<Synced, BackupError> {
     let mut tmp = dest.as_os_str().to_owned();
     tmp.push(".salvajocs-tmp");
     let tmp = PathBuf::from(tmp);
-    remove_if_exists(&tmp)?;
+    remove_if_exists(&tmp).map_err(io_error(&tmp))?;
     let copied = copy_to(&mut source, real, &tmp, dest, modified);
     if copied.is_err() {
         // Best effort: the copy's own error is the one to report.
