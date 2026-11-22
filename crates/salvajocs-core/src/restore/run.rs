@@ -994,6 +994,13 @@ fn replace(
     // Windows needs, and synced so a crash cannot leave the renamed file empty.
     let written = File::create_new(&tmp).and_then(|mut file| {
         fill(&mut file)?;
+        // A new file gets the umask's mode; the file it replaces keeps its own. Best effort:
+        // FUSE, CIFS and exFAT mounts refuse chmod, and the save is worth more than its mode.
+        if let Ok(existing) = fs::symlink_metadata(target)
+            && existing.is_file()
+        {
+            let _ = file.set_permissions(existing.permissions());
+        }
         file.sync_all()
     });
     let result = written.and_then(|()| fs::rename(&tmp, target));

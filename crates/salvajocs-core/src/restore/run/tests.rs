@@ -2033,6 +2033,32 @@ fn staged_symlink_not_restored() {
     assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "new");
 }
 
+#[cfg(unix)]
+#[test]
+fn restored_files_keep_the_mode_of_the_files_they_replace() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let user_reg = f.prefix.join("user.reg");
+    // Modes the umask would not give a new file.
+    for (path, mode) in [(&target, 0o640), (&user_reg, 0o600)] {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert!(matches!(report.registry, Some(Ok(()))));
+    assert_eq!(read(&target), "new");
+    for (path, mode) in [(&target, 0o640), (&user_reg, 0o600)] {
+        let found = fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(found & 0o777, mode, "{}", path.display());
+    }
+}
+
 fn tmp_of(target: &Path) -> PathBuf {
     let mut tmp = target.as_os_str().to_owned();
     tmp.push(".salvajocs-tmp");
