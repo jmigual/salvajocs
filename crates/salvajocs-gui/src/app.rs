@@ -483,13 +483,18 @@ impl App {
     }
 }
 
-/// The tab strip: the selected tab is a pill, the others show a frame only when hovered.
-fn tabs_ui(current: &mut Tab, ui: &mut Ui) {
+/// The tab strip: the selected tab is a pill, the others show a frame only when hovered. The
+/// Custom games tab counts the `offers` from other PCs that wait for an answer.
+fn tabs_ui(current: &mut Tab, offers: usize, ui: &mut Ui) {
     ui.scope(|ui| {
         theme::pill_list(ui);
         for tab in Tab::ALL {
             let selected = *current == tab;
-            let label = theme::semibold(tab.label());
+            let label = match tab {
+                Tab::CustomGames if offers > 0 => format!("{} ({offers})", tab.label()),
+                _ => tab.label().to_owned(),
+            };
+            let label = theme::semibold(label);
             let button = egui::Button::selectable(selected, (theme::icon(tab.icon()), label));
             if ui.add(button).clicked() {
                 *current = tab;
@@ -532,7 +537,9 @@ impl eframe::App for App {
             self.updater.poll(&mut self.state);
             ui.horizontal(|ui| {
                 title_bar::app_icon(ui);
-                tabs_ui(&mut self.tab, ui);
+                let offers = (self.state.config.as_ref())
+                    .map_or(0, |config| self.state.custom_games.waiting(config));
+                tabs_ui(&mut self.tab, offers, ui);
                 theme::row_end(ui, |ui| {
                     // The sizing pass runs first, so the slot of the real pass is kept.
                     buttons = title_bar::reserve_buttons(ui);

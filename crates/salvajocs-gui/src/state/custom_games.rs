@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use eframe::egui;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{self, Choice, SnapshotRoot};
-use salvajocs_core::custom_games::{self, CustomGameError, Stored, Unsent};
+use salvajocs_core::custom_games::{self, CustomGameError, NotNow, Stored, Unsent};
 use salvajocs_core::manifest::CustomGame;
 use salvajocs_core::retention::Retention;
 
@@ -86,6 +86,21 @@ impl CustomGameJobs {
     /// Every game [`CustomGameJobs::offered`] holds, by name.
     pub fn all_offered(&self) -> &BTreeMap<String, CustomGame> {
         &self.offered
+    }
+
+    /// The offers the Custom games tab lists, by name: those whose name has no unsent change in
+    /// `config`, set aside ([`AppConfig::set_aside`]) or not.
+    pub fn listed<'a>(&'a self, config: &'a AppConfig) -> impl Iterator<Item = &'a CustomGame> {
+        let unsent =
+            |name: &str| (config.custom_games_unsent.iter()).any(|entry| entry.name == name);
+        (self.offered.values()).filter(move |game| !unsent(&game.name))
+    }
+
+    /// How many listed offers wait for an answer: those not set aside.
+    pub fn waiting(&self, config: &AppConfig) -> usize {
+        self.listed(config)
+            .filter(|game| !config.set_aside(game))
+            .count()
     }
 
     /// Forgets what the last read found, offers and unreadable games, for a repository that is
@@ -199,6 +214,12 @@ impl State {
             return;
         };
         let name = &shown.name;
+        if let Some(not_now) = &mut config.custom_games_not_now {
+            not_now.games.retain(|game| game.name != *name);
+            if not_now.games.is_empty() {
+                config.custom_games_not_now = None;
+            }
+        }
         let local = config.custom_games.iter().find(|game| game.name == *name);
         game.wine_prefix = local.and_then(|game| game.wine_prefix.clone());
         let at = name.clone();
@@ -212,24 +233,25 @@ impl State {
         self.save_config(ctx);
     }
 
-    /// Declines the offered copy `shown`, as the user saw it: marks its name as unsent from that
-    /// copy, so the next Back up writes this PC's game over it, or removes it from the repository
-    /// when this PC has no game of that name (ADR-0029, ADR-0030). Saves the config. Nothing
-    /// happens when the offer of its name is gone or is no longer `shown`.
-    pub fn keep_this_pcs_custom_game(&mut self, ctx: &egui::Context, shown: &CustomGame) {
+    /// Sets the offered copy `shown`, as the user saw it, aside with **Not now** (ADR-0030): it
+    /// stays offered, listed apart and without a notice, until the repository holds another copy
+    /// of its name. Writes nothing to the repository; saves the config. Nothing happens when the
+    /// offer of its name is gone or is no longer `shown`.
+    pub fn set_custom_game_aside(&mut self, ctx: &egui::Context, shown: &CustomGame) {
         let Some(config) = &mut self.config else {
             return;
         };
-        let offers = &mut self.custom_games.offered;
-        let Some(offered) = take_offer(offers, shown) else {
+        if self.custom_games.offered.get(&shown.name) != Some(shown) {
             return;
-        };
-        mark(
-            &mut config.custom_games_unsent,
-            offers,
-            &shown.name,
-            Some(offered),
-        );
+        }
+        let scope = config.secret_scope();
+        let not_now = (config.custom_games_not_now)
+            .take()
+            .filter(|not_now| not_now.repository == scope);
+        let mut not_now = not_now.unwrap_or_else(|| NotNow::new(scope));
+        not_now.games.retain(|game| game.name != shown.name);
+        not_now.games.push(shown.clone());
+        config.custom_games_not_now = Some(not_now);
         self.save_config(ctx);
     }
 
@@ -289,7 +311,8 @@ impl State {
 
     /// Merges `listed`, read from the repository of key `scope`, into this PC's copy as it is
     /// now, so an edit made while the read ran is kept. Its offers replace the last read's, and
-    /// names not offered before get one notice.
+    /// those not offered before and not set aside get one notice. A copy set aside from this
+    /// repository stays so while this read offered it again or could not read its name.
     fn merge_custom_games(&mut self, ctx: &egui::Context, listed: &Listed, scope: String) {
         let Some(config) = &mut self.config else {
             return;
@@ -297,14 +320,26 @@ impl State {
         let mirrors = config.custom_games_repository.as_ref() == Some(&scope);
         let unsent = &config.custom_games_unsent;
         let merged = custom_games::merge(&config.custom_games, unsent, listed, mirrors);
+        // Another repository's copies set nothing aside here; they wait for a read of theirs.
+        let not_now = match config.custom_games_not_now.clone() {
+            Some(mut not_now) if not_now.repository == scope => {
+                not_now.games.retain(|game| {
+                    merged.offered.contains(game) || matches!(listed.get(&game.name), Some(Err(_)))
+                });
+                Some(not_now).filter(|not_now| !not_now.games.is_empty())
+            }
+            other => other,
+        };
         // An incomplete read leaves no marker, so the next read migrates again.
         let marker = merged.complete.then_some(scope);
         let changed = config.custom_games != merged.games
             || config.custom_games_repository != marker
-            || !merged.new_unsent.is_empty();
+            || !merged.new_unsent.is_empty()
+            || config.custom_games_not_now != not_now;
         config.custom_games = merged.games;
         config.custom_games_repository = marker;
         config.custom_games_unsent.extend(merged.new_unsent);
+        config.custom_games_not_now = not_now;
         self.custom_games.unreadable = (listed.iter())
             .filter_map(|(name, stored)| {
                 let why = match stored.as_ref().err()? {
@@ -318,6 +353,7 @@ impl State {
             .collect();
         let new: Vec<&str> = (merged.offered.iter())
             .filter(|game| self.custom_games.offered.get(&game.name) != Some(*game))
+            .filter(|game| !config.set_aside(game))
             .map(|game| game.name.as_str())
             .collect();
         if !new.is_empty() {

@@ -2547,6 +2547,7 @@ fn config(roots: Vec<Root>) -> AppConfig {
         restore_sort: ListSort::default(),
         custom_games_repository: None,
         custom_games_unsent: Vec::new(),
+        custom_games_not_now: None,
         retention_unsent: None,
     }
 }

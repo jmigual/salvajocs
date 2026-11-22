@@ -7,8 +7,8 @@ impl AppConfig {
     /// Moves the password out of a `rest:` URL into the secret option [`REST_PASSWORD_KEY`], whose
     /// value is held in memory until [`AppConfig::save`] drops it. Returns the keyring scope the
     /// config had before, which held the password in its repository string, or `None` when the
-    /// repository has no password in its URL. The marker of the custom games' repository follows
-    /// the new scope.
+    /// repository has no password in its URL. The marker of the custom games' repository and the
+    /// scope of the set-aside ones follow the new scope.
     pub fn take_rest_password(&mut self) -> Option<String> {
         let (repository, password) = split_rest_password(&self.repository)?;
         let old_scope = self.secret_scope();
@@ -20,9 +20,7 @@ impl AppConfig {
             Some(password),
             true,
         ));
-        if self.custom_games_repository.as_ref() == Some(&old_scope) {
-            self.custom_games_repository = Some(self.secret_scope());
-        }
+        self.rescope_custom_games(&old_scope);
         Some(old_scope)
     }
 
@@ -42,8 +40,20 @@ impl AppConfig {
         self.repository_options
             .retain(|option| option.key != REST_PASSWORD_KEY);
         self.repository = join_rest_password(&self.repository, &password);
-        if self.custom_games_repository.as_ref() == Some(&scope) {
-            self.custom_games_repository = Some(self.secret_scope());
+        self.rescope_custom_games(&scope);
+    }
+
+    /// Moves the custom games' marker and set-aside scope that are `old_scope` to the current
+    /// scope.
+    fn rescope_custom_games(&mut self, old_scope: &str) {
+        let scope = self.secret_scope();
+        if self.custom_games_repository.as_deref() == Some(old_scope) {
+            self.custom_games_repository = Some(scope.clone());
+        }
+        if let Some(not_now) = &mut self.custom_games_not_now
+            && not_now.repository == old_scope
+        {
+            not_now.repository = scope;
         }
     }
 }

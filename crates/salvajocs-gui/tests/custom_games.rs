@@ -756,22 +756,71 @@ fn custom_games_an_offered_game_is_listed_with_its_rows_and_used_after_accept() 
     let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(config.custom_games, [dialog_game("Shared")]);
 
-    let saved = accept(&mut harness, &env, "Shared");
-    assert_eq!(saved, [theirs]);
+    // Not `accept`: the saved config already has a game of that name.
+    harness.get_by_label("Use Shared on this PC").click();
+    run_settled(&mut harness);
+    run_until_saved(&mut harness, &env, |games| games == [theirs.clone()]);
     assert!(!shows(&harness, "Shared (changed on another PC)"));
     assert!(
         !shows(&harness, "Not backed up yet"),
         "the copy is the repository's"
     );
 
-    // Removing a game new here waits for the next Back up, like a removal made here.
-    harness
-        .get_by_label("Remove Game from the repository")
-        .click();
+    // Not now writes nothing to the repository, and leaves nothing for Back up to send.
+    harness.get_by_label("Not now for Game").click();
     run_settled(&mut harness);
-    assert!(!shows(&harness, "From other PCs"));
-    back_up(&mut harness, "Saved 1 custom game to the repository");
-    assert_eq!(in_repository(&tmp)["Game"], Stored::Removed);
+    assert!(shows(&harness, "Set aside (1)"));
+    assert!(!shows(&harness, "Not backed up yet"));
+    assert_eq!(in_repository(&tmp)["Game"], shared(&kept_rules_game()));
+}
+
+/// Whether the saved config of `env` sets a copy aside with **Not now**.
+fn sets_aside(env: &Env) -> bool {
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    config.custom_games_not_now.is_some()
+}
+
+#[test]
+fn custom_games_not_now_sets_an_offer_aside_across_a_restart_until_used() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_elsewhere(&tmp, "Aside", None, Some(&dialog_game("Aside")));
+    save_elsewhere(&tmp, "Waiting", None, Some(&dialog_game("Waiting")));
+    let mut first = start(env.clone(), &repository, Vec::new(), &[]);
+    run_until_read(&mut first, &env);
+    assert!(shows(&first, "Custom games (2)"));
+
+    first.get_by_label("Not now for Aside").click();
+    run_settled(&mut first);
+    let saved_env = env.clone();
+    run_until(&mut first, "the config to be saved", move |_| {
+        sets_aside(&saved_env)
+    });
+    assert!(shows(&first, "Custom games (1)"));
+    assert!(shows(&first, "Set aside (1)"));
+    assert!(
+        !shows(&first, "Use Aside on this PC"),
+        "the set-aside list starts collapsed"
+    );
+    drop(first);
+
+    // A restart names only the offer that still waits.
+    let mut again = harness(env.clone());
+    run_until_ready(&mut again);
+    again.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut again);
+    run_until(&mut again, "the offers", |h| shows(h, "Set aside (1)"));
+    assert!(shows(&again, "wait for review in Custom games: Waiting"));
+    assert!(shows(&again, "Custom games (1)"));
+
+    again.get_by_label("Set aside (1)").click();
+    run_settled(&mut again);
+    assert!(!shows(&again, "Not now for Aside"));
+    assert_eq!(accept(&mut again, &env, "Aside"), [dialog_game("Aside")]);
+    assert!(!sets_aside(&env));
+    assert!(!shows(&again, "Set aside"));
 }
 
 #[test]

@@ -135,7 +135,8 @@ impl State {
     }
 
     /// Makes a repository the user just connected the current one and saves the config. Roots,
-    /// custom games and their unsent changes, the unsent Old backups rules, the update setting,
+    /// custom games, their unsent changes and the set-aside ones (which apply only to the
+    /// repository they came from), the unsent Old backups rules, the update setting,
     /// the theme, the sorts and the ignored prefixes come from the current config, which may
     /// have changed since the form was built. Then reads the custom games of the new
     /// repository, which writes nothing to it (ADR-0029).
@@ -151,6 +152,7 @@ impl State {
             config.custom_games = old.custom_games.clone();
             config.custom_games_repository = old.custom_games_repository.clone();
             config.custom_games_unsent = old.custom_games_unsent.clone();
+            config.custom_games_not_now = old.custom_games_not_now.clone();
             config.retention_unsent = old.retention_unsent;
             config.check_updates = old.check_updates;
             config.theme = old.theme;

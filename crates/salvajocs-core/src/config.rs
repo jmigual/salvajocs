@@ -397,6 +397,9 @@ pub struct AppConfig {
     /// The custom games changed here since the last Back up, in the order changed (ADR-0029).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_games_unsent: Vec<custom_games::Unsent>,
+    /// The repository's custom game copies set aside here with **Not now** (ADR-0030).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_games_not_now: Option<custom_games::NotNow>,
     /// The Old backups rules changed here since the last Back up (ADR-0029).
     #[serde(
         default,
@@ -419,7 +422,7 @@ impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
     /// reads from the file: no options, roots or custom games, update checks on, the system
     /// theme, both lists sorted by name, no repository's custom games mirrored and nothing
-    /// unsent.
+    /// unsent or set aside.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -434,6 +437,7 @@ impl AppConfig {
             restore_sort: ListSort::default(),
             custom_games_repository: None,
             custom_games_unsent: Vec::new(),
+            custom_games_not_now: None,
             retention_unsent: None,
         }
     }
@@ -511,6 +515,15 @@ impl AppConfig {
             .collect();
         serde_json::to_string(&(&self.repository, options))
             .expect("strings and string maps always serialize")
+    }
+
+    /// Whether the offered custom game `offered`, from this config's repository, is set aside
+    /// with **Not now**: [`AppConfig::custom_games_not_now`] holds exactly that copy for this
+    /// repository (ADR-0030).
+    pub fn set_aside(&self, offered: &CustomGame) -> bool {
+        (self.custom_games_not_now.as_ref()).is_some_and(|not_now| {
+            not_now.repository == self.secret_scope() && not_now.games.contains(offered)
+        })
     }
 
     /// The repository location, with secret options taken from `secrets` (key to value).

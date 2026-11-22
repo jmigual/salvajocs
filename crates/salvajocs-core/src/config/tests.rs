@@ -41,6 +41,7 @@ fn sample() -> AppConfig {
         restore_sort: ListSort::default(),
         custom_games_repository: None,
         custom_games_unsent: Vec::new(),
+        custom_games_not_now: None,
         retention_unsent: None,
     }
 }
@@ -665,12 +666,14 @@ fn custom_games_repository_is_left_out_until_set_and_round_trips() {
     let mut config = AppConfig::load(tmp.path()).unwrap().unwrap();
     assert_eq!(config.custom_games_repository, None);
     assert!(config.custom_games_unsent.is_empty());
+    assert_eq!(config.custom_games_not_now, None);
     assert_eq!(config.retention_unsent, None);
     config.save(tmp.path()).unwrap();
     let yaml = fs::read_to_string(&file).unwrap();
     for field in [
         "custom_games_read_from",
         "custom_games_unsent",
+        "custom_games_not_now",
         "retention_unsent",
     ] {
         assert!(!yaml.contains(field), "{yaml}");
@@ -682,6 +685,29 @@ fn custom_games_repository_is_left_out_until_set_and_round_trips() {
     assert!(yaml.contains("custom_games_read_from"), "{yaml}");
     assert!(!yaml.contains("custom_games_repository"), "{yaml}");
     assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
+fn set_aside_games_round_trip_and_count_only_for_their_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = sample();
+    let game = config.custom_games[0].clone();
+    let mut not_now = custom_games::NotNow::new(config.secret_scope());
+    not_now.games.push(game.clone());
+    config.custom_games_not_now = Some(not_now);
+    config.save(tmp.path()).unwrap();
+    let reloaded = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(reloaded, config);
+    assert!(reloaded.set_aside(&game));
+
+    let mut changed = game.clone();
+    changed.integration = Integration::Override;
+    assert!(!config.set_aside(&changed), "another copy is not set aside");
+    config.repository = "/other".into();
+    assert!(
+        !config.set_aside(&game),
+        "another repository's copy sets nothing aside"
+    );
 }
 
 #[test]
@@ -751,6 +777,7 @@ fn a_password_in_a_rest_url_becomes_a_secret_option_and_the_scope_follows() {
         PasswordMode::Ask,
     );
     config.custom_games_repository = Some(config.secret_scope());
+    config.custom_games_not_now = Some(custom_games::NotNow::new(config.secret_scope()));
     let old_scope = config.secret_scope();
     assert!(old_scope.contains("p%40ss"), "the scope held the password");
 
@@ -765,6 +792,8 @@ fn a_password_in_a_rest_url_becomes_a_secret_option_and_the_scope_follows() {
         config.custom_games_repository.as_deref(),
         Some(config.secret_scope().as_str())
     );
+    let not_now = config.custom_games_not_now.as_ref().unwrap();
+    assert_eq!(not_now.repository, config.secret_scope());
     assert_eq!(config.take_rest_password(), None, "nothing left to move");
 
     let tmp = tempfile::tempdir().unwrap();
@@ -782,6 +811,7 @@ fn a_password_in_a_rest_url_becomes_a_secret_option_and_the_scope_follows() {
 fn a_rest_password_put_back_survives_a_save_and_a_restart() {
     let mut config = AppConfig::new("rest:https://user:p%40ss@host/r".into(), PasswordMode::Ask);
     config.custom_games_repository = Some(config.secret_scope());
+    config.custom_games_not_now = Some(custom_games::NotNow::new(config.secret_scope()));
     let before = config.clone();
     let old_scope = config.take_rest_password().unwrap();
 
@@ -793,6 +823,7 @@ fn a_rest_password_put_back_survives_a_save_and_a_restart() {
         saved.custom_games_repository,
         before.custom_games_repository
     );
+    assert_eq!(saved.custom_games_not_now, before.custom_games_not_now);
     assert!(saved.repository_options.is_empty());
     let tmp = tempfile::tempdir().unwrap();
     saved.save(tmp.path()).unwrap();

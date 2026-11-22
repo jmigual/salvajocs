@@ -366,6 +366,28 @@ impl Unsent {
     }
 }
 
+/// The repository copies of custom games this PC set aside with **Not now** (ADR-0030): each
+/// stays offered without a notice while the repository holds exactly that copy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NotNow {
+    /// The key ([`crate::config::AppConfig::secret_scope`]) of the repository the copies come
+    /// from; they set nothing aside in another.
+    pub repository: String,
+    /// The copies, as offered (without a Wine prefix), one per name.
+    pub games: Vec<CustomGame>,
+}
+
+impl NotNow {
+    /// No copy set aside yet from the repository of key `repository`.
+    pub fn new(repository: String) -> Self {
+        Self {
+            repository,
+            games: Vec::new(),
+        }
+    }
+}
+
 /// Whether `entry` is a game added and removed here: other PCs never had it from this PC.
 fn nothing_to_send(games: &[CustomGame], entry: &Unsent) -> bool {
     entry.based_on.is_none() && !games.iter().any(|game| game.name == entry.name)
