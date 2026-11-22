@@ -5,6 +5,8 @@
 **Amended:** 2026-11-21: the policy is saved on the next Back up, a policy changed on another PC
 since is asked about, and the cleanup forgets nothing when this PC's rules could not be written
 (ADR-0029).
+**Amended:** 2026-11-22: a save that finds another machine's policy snapshot written meanwhile
+forgets its own and fails with `NotWritten` (see Consequences).
 
 ## Context
 
@@ -98,9 +100,11 @@ label and paths, so two machines with the same files each write their own snapsh
   counted, and the backup shows that count once as a warning. A server that enforces
   append-only itself (`rest-server --append-only`) leaves the repository config unmarked, so
   every cleanup with something to forget fails; turning the rules off avoids it.
-- The last save wins: two machines editing the policy at once each write their own, and the
-  newer one stays. The Settings tab reloads the policy each time it is shown, unless an edit is
-  still being saved, but a tab left open shows its own copy until then.
+- Two machines editing the policy at once each write their own; the one that then finds the
+  other's snapshot forgets its own and fails with `NotWritten`, and its rules stay unsent.
+  The narrow cases that can still lose a policy are those of ADR-0014.
+- The Settings tab reloads the policy each time it is shown, unless an edit is still being
+  saved, but a tab left open shows its own copy until then.
 - `keep_last` ranks a game's snapshots across all hosts by time, so a machine whose clock runs
   far ahead can take all the `keep_last` places and the other machines keep only their newest
   snapshot each.

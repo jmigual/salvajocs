@@ -838,6 +838,7 @@ fn a_change_to_choices_another_version_replaced_stays_pending() {
     run_until_backed_up(&mut harness, "Alpha: backed up");
 
     assert!(shows(&harness, "What to back up was not saved for Beta"));
+    assert!(shows(&harness, "it is tried again at the next Back up"));
     assert_eq!(pending_changes(&env)["Beta"], [Change::Skip(true)]);
 }
 

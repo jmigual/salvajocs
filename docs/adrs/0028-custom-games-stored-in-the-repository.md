@@ -5,6 +5,8 @@
 **Amended:** 2026-11-21: custom games are written to the repository only by Back up, read on open
 and from a Read repository button; a migration asks instead of the repository winning; offline
 editing; no `config-before-custom-games.yaml` (ADR-0029).
+**Amended:** 2026-11-22: a save that finds another PC's snapshot written meanwhile forgets its
+own and fails with `NotWritten` (see Consequences).
 
 ## Context
 
@@ -122,7 +124,16 @@ What the code allows:
 
 - Loading reads one file per custom game; slower on remote repositories.
 - "Newest" is by each PC's clock (as ADR-0014). Two PCs saving the same game at the same moment
-  can lose one edit: the newer snapshot wins and the other is forgotten by the next save.
+  write from the same snapshot. After writing, a save lists the game again and, when a snapshot
+  it did not read is there, forgets its own and fails with `NotWritten`; the change stays unsent.
+  Usually only the PC that lists later does, and its next Back up gets the conflict dialog; when
+  the writes overlap both do, and the PC that retries first just sends again while the other
+  then gets the conflict dialog.
+- That check can still lose the other PC's edit in a narrow case: a crash, a failed listing or
+  a failed forget of its own snapshot between the write and the withdrawal leaves the newest
+  snapshot without the other PC's edit, which that PC has dropped as saved. An append-only
+  repository always fails the forget (`Storage` error, the snapshot stays). Closing this needs a
+  schema change; not done.
 - Forgotten snapshots keep their data until a prune; an append-only repository keeps them all,
   which is harmless. The newest tombstone of a name is never forgotten.
 - Removing the newest custom game snapshot with restic brings back the previous version, or

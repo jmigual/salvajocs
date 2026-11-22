@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair};
-use crate::selection::forget_listed;
+use crate::selection::{Settled, forget_listed, settle};
 use crate::slug::slug;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
@@ -55,7 +55,8 @@ pub enum CustomGameError {
     /// The repository failed.
     #[error("repository error")]
     Storage(#[from] StorageError),
-    /// The repository found the new snapshot unchanged from an older one and stored none.
+    /// The repository found the new snapshot unchanged from an older one and stored none, or
+    /// another PC saved the game meanwhile and the new snapshot was forgotten.
     #[error("the custom game snapshot was not written")]
     NotWritten,
     /// The repository's newest copy is not the one the edit started from, so nothing was
@@ -226,7 +227,8 @@ pub struct Saved {
 /// # Errors
 /// [`CustomGameError::Changed`] with the newest copy, [`CustomGameError::NewerFormat`] or the
 /// parse error when the newest snapshot cannot be read, so it is never overwritten,
-/// [`CustomGameError::NotWritten`], or the I/O or repository error. A failed forget is not an
+/// [`CustomGameError::NotWritten`] (also when another PC saved the game meanwhile: the new
+/// snapshot is forgotten, so retry), or the I/O or repository error. A failed forget is not an
 /// error: it is in [`Saved::forget_error`].
 pub fn save(
     storage: &mut Storage,
@@ -320,11 +322,14 @@ fn write(
     let written = storage
         .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], name)?
         .ok_or(CustomGameError::NotWritten)?;
-    Ok(Saved {
-        game,
-        written: Some(written),
-        forget_error: forget_listed(storage, &tag, &read.ids),
-    })
+    match settle(storage, &tag, &read.ids, &written.id)? {
+        Settled::Raced => Err(CustomGameError::NotWritten),
+        Settled::Done(forget_error) => Ok(Saved {
+            game,
+            written: Some(written),
+            forget_error,
+        }),
+    }
 }
 
 fn read(

@@ -58,7 +58,8 @@ fn save_then_load_is_equal() {
     let config = sample();
     config.save(&dir).unwrap();
     assert_eq!(AppConfig::load(&dir).unwrap(), Some(config));
-    assert!(!dir.join("config.yaml.tmp").exists());
+    // No temp file is left beside it.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
 }
 
 #[test]

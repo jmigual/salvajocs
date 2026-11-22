@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{
     ffi::OsString,
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{self, Command},
     time::Duration,
@@ -18,6 +18,8 @@ use reqwest::blocking::{Client, RequestBuilder};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::fsutil::read_capped;
 
 /// The GitHub API endpoint of the latest published release.
 const LATEST_URL: &str = "https://api.github.com/repos/jmigual/salvajocs/releases/latest";
@@ -356,20 +358,7 @@ fn client(current: &str) -> Result<Client, UpdateError> {
 /// Sends `request` and reads the body, up to [`MAX_DOWNLOAD`] bytes.
 fn download(request: RequestBuilder) -> Result<Vec<u8>, UpdateError> {
     let response = request.send()?.error_for_status()?;
-    read_capped(response.content_length(), response, MAX_DOWNLOAD)
-}
-
-/// Reads `body`, refusing it when the declared or the actual length exceeds `limit`.
-fn read_capped(declared: Option<u64>, body: impl Read, limit: u64) -> Result<Vec<u8>, UpdateError> {
-    if declared.is_some_and(|len| len > limit) {
-        return Err(UpdateError::TooLarge);
-    }
-    let mut bytes = Vec::new();
-    body.take(limit + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
-        return Err(UpdateError::TooLarge);
-    }
-    Ok(bytes)
+    read_capped(response.content_length(), response, MAX_DOWNLOAD)?.ok_or(UpdateError::TooLarge)
 }
 
 #[cfg(test)]

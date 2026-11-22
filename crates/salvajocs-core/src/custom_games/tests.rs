@@ -276,22 +276,78 @@ fn a_save_forgets_only_what_it_read() {
     let first = f.save(&mut storage, GAME, None, Some(&game(GAME))).unwrap();
     let read = read_newest(&mut storage, GAME).unwrap();
 
-    // Another PC saves between this save's read and its write.
+    // Another PC forgets what this save read and saves a newer one, after the read.
     let mut theirs = game(GAME);
     theirs.skips.push("<home>/Theirs".into());
     let theirs = f
         .save(&mut f.open(), GAME, Some(&game(GAME)), Some(&theirs))
         .unwrap();
+    assert!(!ids(&storage).contains(&first.id));
 
+    // Their snapshot is one this save never read, so the new snapshot, which lacks theirs, is
+    // withdrawn.
     let mut ours = game(GAME);
     ours.skips.push("<home>/Ours".into());
-    let saved = write(&mut storage, GAME, Some(&ours), &read, &f.stage).unwrap();
-    assert!(saved.forget_error.is_none());
-    let ours = saved.written.unwrap();
-    let left = ids(&storage);
-    assert!(left.contains(&theirs.id));
-    assert!(left.contains(&ours.id));
-    assert!(!left.contains(&first.id));
+    let result = write(&mut storage, GAME, Some(&ours), &read, &f.stage);
+    assert!(matches!(result, Err(CustomGameError::NotWritten)));
+    assert_eq!(ids(&storage), vec![theirs.id]);
+}
+
+#[test]
+fn forgetting_what_was_read_skips_a_snapshot_another_pc_already_forgot() {
+    let (f, mut storage) = Fixture::new();
+    let first = f.save(&mut storage, GAME, None, Some(&game(GAME))).unwrap();
+    let mut theirs = game(GAME);
+    theirs.skips.push("<home>/Theirs".into());
+    let second = f
+        .save(&mut f.open(), GAME, Some(&game(GAME)), Some(&theirs))
+        .unwrap();
+    // `first` is gone for good, `second` is still listed.
+    let read = vec![first.id, second.id];
+    assert!(forget_listed(&storage, &game_tag(&slug(GAME)), &read).is_none());
+    assert!(ids(&storage).is_empty());
+}
+
+#[test]
+fn a_racing_save_that_cannot_forget_its_snapshot_fails_and_leaves_it() {
+    let (f, mut a) = Fixture::new();
+    f.save(&mut a, GAME, None, Some(&game(GAME))).unwrap();
+    let read_a = read_newest(&mut a, GAME).unwrap();
+    let mut b = f.open();
+    let read_b = read_newest(&mut b, GAME).unwrap();
+
+    let mut mine = game(GAME);
+    mine.skips.push("<home>/A".into());
+    write(&mut a, GAME, Some(&mine), &read_a, &f.stage).unwrap();
+    b.set_append_only();
+    let mut theirs = game(GAME);
+    theirs.skips.push("<home>/B".into());
+    let result = write(&mut b, GAME, Some(&theirs), &read_b, &f.stage);
+    assert!(matches!(result, Err(CustomGameError::Storage(_))));
+    assert_eq!(ids(&a).len(), 2);
+}
+
+#[test]
+fn a_save_that_raced_another_is_changed_once_retried() {
+    let (f, mut storage) = Fixture::new();
+    f.save(&mut storage, GAME, None, Some(&game(GAME))).unwrap();
+    let read = read_newest(&mut storage, GAME).unwrap();
+
+    let mut theirs = game(GAME);
+    theirs.skips.push("<home>/Theirs".into());
+    f.save(&mut f.open(), GAME, Some(&game(GAME)), Some(&theirs))
+        .unwrap();
+    let mut ours = game(GAME);
+    ours.skips.push("<home>/Ours".into());
+    let result = write(&mut storage, GAME, Some(&ours), &read, &f.stage);
+    assert!(matches!(result, Err(CustomGameError::NotWritten)));
+
+    // The retry meets their copy, so the edit goes through the conflict flow.
+    let result = save(&mut storage, GAME, Some(&game(GAME)), Some(&ours), &f.stage);
+    match result {
+        Err(CustomGameError::Changed(Some(newest))) => assert_eq!(*newest, theirs),
+        other => panic!("expected Changed, got {other:?}"),
+    }
 }
 
 #[test]

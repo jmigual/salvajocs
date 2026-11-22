@@ -111,5 +111,6 @@ dependency yet; once added, the two builds unify.
 ## Consequences
 
 - The first start needs the network to have any manifest games.
+- The download is HTTPS only and read up to 64 MiB; a larger body is an error.
 - The typed subset gains fields only when a feature uses them (`gog.id` and `id` for
   launcher matching), and each gain renames the cache file so one full download refills it.

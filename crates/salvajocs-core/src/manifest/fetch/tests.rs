@@ -66,7 +66,10 @@ fn refresh_caches_then_revalidates_with_etag() {
     let cache = dir.path().join("nested");
     let url = serve(2, "200 OK", SAMPLE, true);
 
-    assert_eq!(refresh_from(&url, &cache).unwrap(), Freshness::Updated);
+    assert_eq!(
+        refresh_from(&url, &cache, false, MAX_MANIFEST).unwrap(),
+        Freshness::Updated
+    );
     assert_eq!(
         fs::read_to_string(cache.join(ETAG_FILE)).unwrap(),
         ETAG_VALUE
@@ -74,7 +77,10 @@ fn refresh_caches_then_revalidates_with_etag() {
     let cached = load_cached(&cache).unwrap().unwrap();
     assert_eq!(cached, parse_yaml(SAMPLE).unwrap());
 
-    assert_eq!(refresh_from(&url, &cache).unwrap(), Freshness::NotModified);
+    assert_eq!(
+        refresh_from(&url, &cache, false, MAX_MANIFEST).unwrap(),
+        Freshness::NotModified
+    );
     assert_eq!(load_cached(&cache).unwrap().unwrap(), cached);
 }
 
@@ -83,7 +89,10 @@ fn etag_without_json_is_not_sent() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join(ETAG_FILE), ETAG_VALUE).unwrap();
     let url = serve(1, "200 OK", SAMPLE, true);
-    assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
+    assert_eq!(
+        refresh_from(&url, dir.path(), false, MAX_MANIFEST).unwrap(),
+        Freshness::Updated
+    );
     assert!(load_cached(dir.path()).unwrap().is_some());
 }
 
@@ -95,7 +104,10 @@ fn old_cache_name_forces_full_fetch() {
     // The server answers 304 to this ETag, which would keep a cache without the new fields.
     let url = serve(1, "200 OK", "Game:\n  gog:\n    id: 5\n", true);
 
-    assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
+    assert_eq!(
+        refresh_from(&url, dir.path(), false, MAX_MANIFEST).unwrap(),
+        Freshness::Updated
+    );
     assert!(!dir.path().join(OLD_JSON_FILE).exists());
     let cached = load_cached(dir.path()).unwrap().unwrap();
     assert_eq!(
@@ -110,7 +122,10 @@ fn update_without_etag_drops_stale_etag() {
     fs::write(dir.path().join(JSON_FILE), "{\"games\":{}}").unwrap();
     fs::write(dir.path().join(ETAG_FILE), "\"old\"").unwrap();
     let url = serve(1, "200 OK", SAMPLE, false);
-    assert_eq!(refresh_from(&url, dir.path()).unwrap(), Freshness::Updated);
+    assert_eq!(
+        refresh_from(&url, dir.path(), false, MAX_MANIFEST).unwrap(),
+        Freshness::Updated
+    );
     assert!(!dir.path().join(ETAG_FILE).exists());
 }
 
@@ -119,7 +134,7 @@ fn error_status_leaves_cache_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let url = serve(1, "500 Internal Server Error", "", true);
     assert!(matches!(
-        refresh_from(&url, dir.path()),
+        refresh_from(&url, dir.path(), false, MAX_MANIFEST),
         Err(FetchError::Http(_))
     ));
     assert!(load_cached(dir.path()).unwrap().is_none());
@@ -130,11 +145,34 @@ fn invalid_yaml_leaves_cache_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let url = serve(1, "200 OK", "a: [", true);
     assert!(matches!(
-        refresh_from(&url, dir.path()),
+        refresh_from(&url, dir.path(), false, MAX_MANIFEST),
         Err(FetchError::Manifest(ManifestError::Yaml(_)))
     ));
     assert!(!dir.path().join(JSON_FILE).exists());
     assert!(!dir.path().join(ETAG_FILE).exists());
+}
+
+#[test]
+fn a_download_over_the_limit_leaves_the_cache_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = serve(1, "200 OK", SAMPLE, true);
+    assert!(matches!(
+        refresh_from(&url, dir.path(), false, SAMPLE.len() as u64 - 1),
+        Err(FetchError::TooLarge)
+    ));
+    assert!(!dir.path().join(JSON_FILE).exists());
+    assert!(!dir.path().join(ETAG_FILE).exists());
+}
+
+#[test]
+fn plain_http_is_refused_when_https_only() {
+    let dir = tempfile::tempdir().unwrap();
+    // The request is refused before connecting, so nothing needs to listen.
+    let url = "http://127.0.0.1:9/manifest.yaml";
+    assert!(matches!(
+        refresh_from(url, dir.path(), true, MAX_MANIFEST),
+        Err(FetchError::Http(err)) if err.is_builder()
+    ));
 }
 
 #[test]

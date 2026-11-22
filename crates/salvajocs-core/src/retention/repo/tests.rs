@@ -123,6 +123,31 @@ fn a_failed_forget_still_saves() {
     assert_eq!(load(&mut storage).unwrap(), keep_last(3));
 }
 
+/// The newest policy and the ids of all policy snapshots, as a save reads them.
+fn newest_and_ids(storage: &mut Storage) -> (Retention, Vec<String>) {
+    let listed = storage.snapshots(POLICY_TAG).unwrap();
+    let newest = read(storage, &listed[0]).unwrap();
+    (
+        newest,
+        listed.into_iter().map(|snapshot| snapshot.id).collect(),
+    )
+}
+
+#[test]
+fn a_save_that_raced_another_is_not_written_and_forgets_its_snapshot() {
+    let (f, mut a) = Fixture::new();
+    f.save(&mut a, &keep_last(5)).unwrap();
+    let mut b = f.open();
+    let (current_a, ids_a) = newest_and_ids(&mut a);
+    let (current_b, ids_b) = newest_and_ids(&mut b);
+
+    write(&mut a, &keep_last(3), &current_a, &ids_a, &f.stage).unwrap();
+    let result = write(&mut b, &keep_last(2), &current_b, &ids_b, &f.stage);
+    assert!(matches!(result, Err(RetentionError::NotWritten)));
+    assert_eq!(load(&mut a).unwrap(), keep_last(3));
+    assert_eq!(a.snapshots(POLICY_TAG).unwrap().len(), 1);
+}
+
 #[test]
 fn newer_format_is_neither_loaded_nor_overwritten() {
     let (f, mut storage) = Fixture::new();

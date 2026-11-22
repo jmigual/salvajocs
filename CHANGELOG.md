@@ -25,6 +25,9 @@ All notable changes to salvajocs. The format follows
 - A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
   `AppData`) is now stored under the same folder name as `AppData/LocalLow` and mapped to Linux
   by the Unity rule. The next **Back up** of each affected game makes one extra snapshot.
+- Two PCs saving the same game's selection, custom game or Old backups rules at the same time
+  could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
+  counted as saved, so the change stays on this PC and is tried again at the next Back up.
 
 ### Security
 
@@ -42,6 +45,7 @@ All notable changes to salvajocs. The format follows
 - Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
   injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
   (RUSTSEC-2026-0592).
+- The manifest download accepts HTTPS only and is read up to 64 MiB.
 
 ## [0.9.1] - 2026-11-21
 

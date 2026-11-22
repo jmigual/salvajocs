@@ -3,13 +3,14 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use super::{Change, SelectionError, check_format};
 use crate::config::AppConfig;
+use crate::fsutil::write_atomic;
 
 /// The pending file name inside the config directory.
 const PENDING_FILE: &str = "pending-selection.json";
@@ -55,14 +56,8 @@ impl Pending {
     /// a rename, creating `dir`.
     pub fn save(&self, dir: &Path) -> Result<(), SelectionError> {
         let json = serde_json::to_vec_pretty(self).expect("string-keyed maps always serialize");
-        let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
-        let written = fs::create_dir_all(dir).and_then(|()| {
-            // Sync before the rename so a crash cannot leave an empty file.
-            let mut file = fs::File::create(&tmp)?;
-            file.write_all(&json)?;
-            file.sync_all()?;
-            fs::rename(&tmp, dir.join(PENDING_FILE))
-        });
+        let written =
+            fs::create_dir_all(dir).and_then(|()| write_atomic(&dir.join(PENDING_FILE), &json));
         written.map_err(|source| SelectionError::Io {
             path: dir.join(PENDING_FILE),
             source,

@@ -4,6 +4,8 @@
 **Date:** 2026-11-18
 **Amended:** 2026-11-20: the `settings:` tag prefix is reserved for game selections and the
 retention policy; other settings snapshots, such as custom games, use another prefix (ADR-0028).
+**Amended:** 2026-11-22: a save that finds another machine's snapshot written meanwhile forgets
+its own and fails with `NotWritten`, so the changes stay pending (see Consequences).
 
 ## Context
 
@@ -70,9 +72,18 @@ everything the restore would overwrite.
   append-only repository nothing is forgotten; saves still work.
 - "Newest" is by snapshot time, which is each machine's clock: a machine whose clock runs
   behind can have its newer settings read as older.
-- Two machines saving the same game at once can lose one save's changes: both read the same
-  snapshot, so the newer write lacks the other's changes, and load takes the newest. The other
-  snapshot stays until the game's next save forgets it.
+- Two machines saving the same game at once both read the same snapshot, so each write lacks the
+  other's changes. After writing, `save` lists the game again; when a snapshot it did not read
+  is there, it forgets its own and fails with `NotWritten`, so the machine keeps its pending
+  changes and a retry merges them. Usually only the machine that lists later sees the other's
+  snapshot; both do when their writes overlap, and both then retry.
+- That check can still lose the other machine's changes in a narrow case: a crash, a failed
+  listing or a failed forget of its own snapshot between the write and the withdrawal leaves
+  the newest snapshot without the other's changes, and the machine that saw nothing wrong has
+  dropped them. So can a backend whose listing lags behind writes (some rclone remotes): both
+  machines can miss each other's snapshot, and one change is lost. An append-only repository always fails the forget (`Storage` error, the
+  snapshot stays). Closing this needs a schema change (a revision in the snapshot to compare
+  on write); not done.
 - A corrupt or newer-format newest settings snapshot makes every save of that game fail until
   it is replaced or forgotten by hand.
 - Changes reach other machines only after a backup on this one.
