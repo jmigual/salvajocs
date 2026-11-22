@@ -18,7 +18,7 @@ with `--appimage-extract-and-run`.
 The app offers updates when a newer release exists. When the folder that holds the AppImage is
 writable, **Update now** downloads the new AppImage, checks it against the release's signed `SHA256SUMS`
 and replaces the file, keeping its name. **Restart now** then starts the new version once no
-backup or restore runs. In a read-only folder the notice links the release page instead.
+backup or restore runs and no form is open with edits you have not saved or applied. In a read-only folder the notice links the release page instead.
 
 The file also embeds update information that points at the latest GitHub release. Open it in
 [Gear Lever](https://github.com/mijorus/gearlever) or run
