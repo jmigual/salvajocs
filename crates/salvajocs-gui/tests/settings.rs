@@ -261,7 +261,7 @@ fn backend_option_marked_secret_not_written_to_config() {
     run_settled(&mut harness);
     fill(&mut harness, "Option 1 key", "access_key");
     fill(&mut harness, "Option 1 value", "hunter2");
-    harness.get_by_label("secret").click();
+    // The "secret" box is already ticked: the key says `key`, and nothing was clicked.
     run_settled(&mut harness);
     harness.get_by_label("Continue").click();
     run_until(&mut harness, "the confirmation", |h| {

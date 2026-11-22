@@ -755,3 +755,71 @@ fn the_rest_password_is_a_known_key_of_the_rest_kind_only() {
     assert!(!option_key_known(BackendKind::Local, "rest-password"));
     assert!(rest_fields().iter().all(|field| field.secret));
 }
+
+#[test]
+fn every_secret_field_key_and_alias_looks_secret() {
+    for service in OPENDAL_SERVICES {
+        for field in service.fields.iter().filter(|field| field.secret) {
+            for key in std::iter::once(&field.key).chain(field.aliases) {
+                assert!(looks_secret(key), "{} of {}", key, service.name);
+                assert!(looks_secret(&key.to_ascii_uppercase()), "{key} in capitals");
+            }
+        }
+    }
+}
+
+#[test]
+fn names_with_a_secret_word_look_secret_and_plain_ones_do_not() {
+    for key in [
+        "my_Secret",
+        "db-PASSWORD",
+        "api_token",
+        "My_Key",
+        " sas_key ",
+    ] {
+        assert!(looks_secret(key), "{key}");
+    }
+    for key in ["bucket", "region", "root", "retry", "endpoint", ""] {
+        assert!(!looks_secret(key), "{key}");
+    }
+}
+
+#[test]
+fn keys_that_name_no_secret_do_not_look_secret_whatever_they_contain() {
+    // rustic's own keys, and the non-secret fields of services.
+    for key in [
+        "use-password",
+        "tls-client-cert",
+        "access_key_id",
+        "application_key_id",
+        "secret_id",
+        "key",
+        "ACCESS_KEY_ID",
+    ] {
+        assert!(!looks_secret(key), "{key}");
+    }
+    for key in ["rest-password", "secret_key", "application_key"] {
+        assert!(looks_secret(key), "{key}");
+    }
+}
+
+#[test]
+fn no_non_secret_field_key_looks_secret() {
+    for service in OPENDAL_SERVICES {
+        for field in service.fields {
+            // The same key can be a secret in one service and not in another.
+            let secret_elsewhere = OPENDAL_SERVICES
+                .iter()
+                .flat_map(|s| s.fields)
+                .any(|f| f.secret && (f.key == field.key || f.aliases.contains(&field.key)));
+            if !field.secret && !secret_elsewhere {
+                assert!(
+                    !looks_secret(field.key),
+                    "{} of {}",
+                    field.key,
+                    service.name
+                );
+            }
+        }
+    }
+}

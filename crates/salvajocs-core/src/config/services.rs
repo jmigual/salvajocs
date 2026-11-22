@@ -410,6 +410,19 @@ pub fn opendal_hint(service_name: &str) -> Option<&'static str> {
     service(service_name).map(|service| service.hint)
 }
 
+/// Whether the table makes `key` (lowercase) a secret: `Some(true)` when it, or an alias of it,
+/// is a secret field of any service, `Some(false)` when it only names non-secret fields, `None`
+/// when no field has it.
+pub(super) fn field_is_secret(key: &str) -> Option<bool> {
+    let mut named = OPENDAL_SERVICES
+        .iter()
+        .flat_map(|service| service.fields)
+        .filter(|field| field.key == key || field.aliases.contains(&key))
+        .peekable();
+    named.peek()?;
+    Some(named.any(|field| field.secret))
+}
+
 /// What opendal's config struct for `service` reads from the JSON `input`, serialized back to
 /// JSON; `null` gives its default. `None` when the struct rejects the input.
 pub(super) fn config_json(service_name: &str, input: Value) -> Option<Value> {

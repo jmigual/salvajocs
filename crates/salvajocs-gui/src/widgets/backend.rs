@@ -28,6 +28,28 @@ struct OptionRow {
     /// Whether the backend does not read the key. Kept here because working it out is too slow
     /// for every frame; it is redone when the key or the backend changes.
     unknown: bool,
+    /// Whether the secret flag still follows the key: set on a row the user added, cleared when
+    /// they click the checkbox. A loaded row never follows, as flipping its flag would change the
+    /// keyring scope.
+    follows_key: bool,
+}
+
+impl OptionRow {
+    /// A row the user just added, which ticks "secret" for a key that looks like one.
+    fn added() -> Self {
+        Self {
+            follows_key: true,
+            ..Self::default()
+        }
+    }
+
+    /// Redoes what depends on the key, after it or the backend changed.
+    fn key_changed(&mut self, kind: BackendKind) {
+        self.unknown = is_unknown_key(kind, &self.key);
+        if self.follows_key {
+            self.secret = config::looks_secret(&self.key);
+        }
+    }
 }
 
 /// An option the form would save, as typed.
@@ -167,6 +189,7 @@ impl BackendForm {
                     value,
                     secret: option.secret,
                     unknown: is_unknown_key(kind, &option.key),
+                    follows_key: false,
                 });
             }
         }
@@ -551,7 +574,7 @@ impl BackendForm {
             let number = index + 1;
             let key_edit = labelled_edit(ui, &format!("Option {number} key"), &mut row.key, false);
             if key_edit.changed() {
-                row.unknown = is_unknown_key(kind, &row.key);
+                row.key_changed(kind);
             }
             if ui.button("Remove").clicked() {
                 remove = Some(index);
@@ -569,7 +592,9 @@ impl BackendForm {
                 &mut row.value,
                 row.secret,
             );
-            ui.checkbox(&mut row.secret, "secret");
+            if ui.checkbox(&mut row.secret, "secret").clicked() {
+                row.follows_key = false;
+            }
             ui.end_row();
         }
         if let Some(index) = remove {
@@ -577,7 +602,7 @@ impl BackendForm {
         }
         ui.label("");
         if ui.button("Add option").clicked() {
-            self.options.push(OptionRow::default());
+            self.options.push(OptionRow::added());
         }
         ui.end_row();
     }
@@ -590,6 +615,7 @@ impl BackendForm {
             value: value.to_string(),
             secret,
             unknown: is_unknown_key(self.kind, key),
+            follows_key: false,
         });
     }
 
@@ -1050,6 +1076,33 @@ mod tests {
         form.push_option("retry", "1", false);
         form.push_option("retry", "2", false);
         assert!(!form.is_complete(), "two Advanced rows clash too");
+    }
+
+    #[test]
+    fn an_added_row_ticks_secret_for_a_key_that_looks_secret() {
+        let mut row = OptionRow::added();
+        for (key, secret) in [("api_token", true), ("api_toke", false), ("Password", true)] {
+            row.key = key.to_string();
+            row.key_changed(BackendKind::Local);
+            assert_eq!(row.secret, secret, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_row_the_user_set_keeps_its_secret_flag() {
+        let mut added = OptionRow::added();
+        added.key = "api_key".to_string();
+        added.key_changed(BackendKind::Local);
+        added.secret = false;
+        added.follows_key = false;
+        added.key = "api_keys".to_string();
+        added.key_changed(BackendKind::Local);
+        assert!(!added.secret, "unticked by the user");
+
+        let loaded = config("opendal:s3", vec![option("my_token", Some("x"), false)]);
+        let mut form = BackendForm::from_config(&loaded, &BTreeMap::new());
+        form.options[0].key_changed(BackendKind::OpenDal("s3"));
+        assert!(!form.options[0].secret, "a loaded row never flips");
     }
 
     #[test]

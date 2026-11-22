@@ -16,7 +16,11 @@ the way, so the rules below are those of the code that reads the value.
 - Rows with an empty key are ignored. The key is trimmed. The value is **not**: a space before or
   after it is part of the value, so `true ` is not `true`.
 - Tick **secret** on a row that holds a key or token. It is then kept in the keyring, not in the
-  config file.
+  config file. A new row ticks it for you when its key is a secret field of a service, or has
+  `secret`, `password`, `token` or `key` in it, in any letter case, unless the key is one rustic
+  or a non-secret field of a service uses, such as `use-password` or `access_key_id`. You can
+  untick it. A row
+  loaded from the config keeps the flag it was saved with.
 - A key with no meaning for the backend gets a warning under the row: "Not an option of this
   backend". It is still saved and passed on, and it does nothing.
 - A key set in a form field and again in Advanced options is refused, and so is a key set twice.
