@@ -494,10 +494,9 @@ impl RestoreTab {
         let root = own_dir(&state.env.cache_dir, "restore-batch");
         let wineserver_running = state.env.wineserver_running;
         let waker = ctx.clone();
+        let cache_dir = state.env.cache_dir.clone();
         self.batch.running = Some(Job::spawn(ctx, move || {
-            if let Some(parent) = root.parent() {
-                remove_stale(parent);
-            }
+            remove_stale_restore_dirs(&cache_dir);
             remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
             let planned: Vec<_> = (planned.into_iter())
                 .map(|(fetched, plan)| {
@@ -677,8 +676,16 @@ pub(super) fn state_chips(ui: &mut Ui, states: &[WriteState]) {
     theme::chips(ui, &chips, &text.join(", "));
 }
 
-/// Removes the batch dirs under `parent` that earlier sessions left: named by another process id
-/// and untouched for a day, so the batch of another running salvajocs is kept.
+/// Removes the dirs that earlier sessions left under the cache dir's `restore-work`,
+/// `restore-stage` and `restore-batch`, for a restore or batch to start clean.
+pub(super) fn remove_stale_restore_dirs(cache_dir: &Path) {
+    for name in ["restore-work", "restore-stage", "restore-batch"] {
+        remove_stale(&cache_dir.join(name));
+    }
+}
+
+/// Removes the dirs under `parent` named by another process id and untouched for a day, so the
+/// files of another running salvajocs are kept.
 fn remove_stale(parent: &Path) {
     const STALE: Duration = Duration::from_secs(24 * 60 * 60);
     let Ok(entries) = fs::read_dir(parent) else {

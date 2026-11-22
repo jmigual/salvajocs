@@ -42,7 +42,7 @@ use crate::widgets::named_button;
 mod batch;
 mod keys;
 
-use batch::Batch;
+use batch::{Batch, remove_stale_restore_dirs};
 use keys::KeyTree;
 
 /// The width of the games sidebar at rest, and the least it can be dragged to.
@@ -1826,8 +1826,11 @@ impl RestoreTab {
         );
         let fetched = preview.fetched.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
+        let cache_dir = state.env.cache_dir.clone();
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {
+            // Each session makes dirs of its own, and an earlier one may have left its.
+            remove_stale_restore_dirs(&cache_dir);
             let staged = &fetched.listed.staged;
             remove_dir(&staged.root)
                 .with_context(|| format!("cannot clear {}", staged.root.display()))?;

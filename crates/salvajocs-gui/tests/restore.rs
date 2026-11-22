@@ -1166,6 +1166,32 @@ fn restore_fetch_preview_restore_reports() {
 }
 
 #[test]
+fn a_restore_removes_the_dirs_earlier_sessions_left() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    // What an earlier session left a day and a half ago, and a dir salvajocs did not make.
+    for parent in ["restore-work", "restore-stage", "restore-batch"] {
+        let parent = env.cache_dir.join(parent);
+        put(&parent.join("99999999/x"), "stale");
+        age(&parent.join("99999999"));
+        put(&parent.join("keep/x"), "not ours");
+        age(&parent.join("keep"));
+    }
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(env.cache_dir.join("restore-work/99999999").exists());
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    for parent in ["restore-work", "restore-stage", "restore-batch"] {
+        let parent = env.cache_dir.join(parent);
+        assert!(!parent.join("99999999").exists());
+        assert!(parent.join("keep/x").exists());
+    }
+}
+
+#[test]
 fn restore_preview_per_file_override_changes_one_write() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, _env, saves) = alpha(&tmp);
@@ -2046,6 +2072,9 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     let batches = env.cache_dir.join("restore-batch");
     put(&batches.join("99999999/0/files/x"), "stale");
     age(&batches.join("99999999"));
+    let works = env.cache_dir.join("restore-work");
+    put(&works.join("99999999/x"), "stale");
+    age(&works.join("99999999"));
     put(&batches.join("keep/x"), "not ours");
     age(&batches.join("keep"));
 
@@ -2059,6 +2088,7 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
 
     assert!(!batches.join("99999999").exists());
+    assert!(!works.join("99999999").exists());
     assert!(batches.join("keep/x").exists());
     assert!(
         !batch_dir(&env).exists(),
