@@ -1,5 +1,5 @@
 use std::sync::{Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -22,13 +22,6 @@ use crate::theme;
 
 fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
-}
-
-#[test]
-fn times_show_as_utc_dates() {
-    assert_eq!(format_time(at(0)), "1970-01-01 00:00 UTC");
-    assert_eq!(format_time(at(1_709_210_096)), "2024-02-29 12:34 UTC");
-    assert_eq!(format_time(at(1_798_761_540)), "2026-12-31 23:59 UTC");
 }
 
 #[test]

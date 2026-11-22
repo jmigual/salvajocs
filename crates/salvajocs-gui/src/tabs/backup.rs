@@ -4,7 +4,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::error::Error;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -28,7 +27,7 @@ use salvajocs_core::stats::{self, BackupStats};
 use salvajocs_core::storage::{SnapshotInfo, Storage};
 
 use crate::job::Job;
-use crate::state::{SharedStorage, State, lock_storage};
+use crate::state::{SharedStorage, State, chain, lock_storage};
 use crate::status_bar;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
@@ -67,17 +66,6 @@ enum Outcome {
 struct GameResult {
     title: String,
     outcome: Outcome,
-}
-
-/// `error` and its sources, joined.
-fn chain(error: &dyn Error) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(next) = source {
-        text = format!("{text}: {next}");
-        source = next.source();
-    }
-    text
 }
 
 fn summarize(backup: &GameBackup) -> GameResult {

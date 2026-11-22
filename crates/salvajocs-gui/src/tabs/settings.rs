@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use eframe::egui::{self, Ui};
 use salvajocs_core::config::{PasswordMode, ThemeChoice};
 use salvajocs_core::layout::{Root, RootKind};
@@ -11,7 +10,7 @@ use salvajocs_core::storage::Compression;
 
 use crate::first_run::Connect;
 use crate::job::Job;
-use crate::state::State;
+use crate::state::{State, lock_storage};
 use crate::theme::{self, icons};
 use crate::widgets::compression::CompressionField;
 use crate::widgets::{form_grid, labelled_edit};
@@ -238,9 +237,7 @@ impl SettingsTab {
         if let (true, Some(new)) = (apply.clicked(), new) {
             let storage = session.storage.clone();
             self.compression_job = Some(Job::spawn(ui.ctx(), move || {
-                let mut storage = storage
-                    .lock()
-                    .map_err(|_| anyhow!("the repository lock is poisoned; restart the app"))?;
+                let mut storage = lock_storage(&storage)?;
                 storage.set_compression(new)?;
                 Ok(storage.compression())
             }));
