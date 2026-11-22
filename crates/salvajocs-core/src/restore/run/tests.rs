@@ -361,6 +361,57 @@ fn read_without_meta_is_no_meta() {
     assert!(matches!(read, Err(FetchError::NoMeta(_))), "{read:?}");
 }
 
+/// `staged` as listed, with no mtimes.
+fn listed_of(staged: &StagedGame) -> Listed {
+    super::super::tests::listed_at(staged.clone(), &[])
+}
+
+#[test]
+fn read_refuses_a_json_file_over_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let stage = crafted_game_stage(tmp.path().join("stage"));
+    let meta_len = fs::metadata(stage.join(META_FILE)).unwrap().len();
+    let plain = crafted_snapshot(&mut storage, &stage);
+    // Valid JSON one byte over the cap, so only its size can refuse it.
+    let mut registry = br#"{"keys":{}}"#.to_vec();
+    registry.resize(usize::try_from(meta_len).unwrap() + 1, b' ');
+    fs::write(stage.join(REGISTRY_FILE), registry).unwrap();
+    let with_registry = crafted_snapshot(&mut storage, &stage);
+
+    let mut read = |snapshot: &SnapshotInfo, cap: u64, work: &str| {
+        let work = tmp.path().join(work);
+        read_capped(&mut storage, snapshot, &work, cap)
+    };
+    let too_large = |read: &Result<Listed, FetchError>| matches!(read, Err(FetchError::Io { source, .. }) if source.kind() == io::ErrorKind::FileTooLarge);
+    // A file of exactly the cap is read.
+    assert!(read(&plain, meta_len, "work0").is_ok());
+    assert!(too_large(&read(&plain, meta_len - 1, "work1")));
+    assert!(too_large(&read(&with_registry, meta_len, "work2")));
+}
+
+#[test]
+fn a_hash_list_over_the_cap_is_not_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let game = game_with_save(tmp.path(), "Foo", "foo");
+    back_up(&mut storage, tmp.path(), &[game], &[]);
+    let id = list(&storage).unwrap()[0].snapshots[0].id.clone();
+    let dir = format!("/salvajocs/{}", crate::slug::slug("Foo"));
+    let mut listing = storage.snapshot_entries(&id, &dir).unwrap();
+    let hash_list = |storage: &mut Storage, listing: &[SnapshotFile]| {
+        crate::changes::hash_list(storage, &id, &dir, listing).unwrap()
+    };
+    assert!(hash_list(&mut storage, &listing).is_some());
+
+    for entry in &mut listing {
+        if entry.path == crate::layout::HASHES_FILE {
+            entry.size = MAX_JSON_BYTES + 1;
+        }
+    }
+    assert_eq!(hash_list(&mut storage, &listing), None);
+}
+
 #[test]
 fn read_keeps_a_verified_hash_list_and_drops_a_stale_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1140,7 +1191,7 @@ fn a_bottle_backup_restores_into_that_bottle_without_cross_build() {
     assert_eq!(found.reason, Some(PrefixReason::Backup));
     let info = game_info("Tower Wizard", &manifest, &[]);
     let vars = game_vars("Tower Wizard", info.entry.as_ref(), &config, &env);
-    let plan = super::super::prepare(&listed.staged, &found.targets, &vars, &info, &[]).unwrap();
+    let plan = super::super::prepare(&listed, &found.targets, &vars, &info, &[]).unwrap();
     assert!(!plan.cross_build);
     let save = roaming.join("Godot/app_userdata/Tower Wizard/save.tres");
     assert_eq!(plan.writes[0].target, save);
@@ -1251,7 +1302,7 @@ fn a_saved_pair_wins_a_tie_with_a_row_pair() {
         ))),
     };
     let vars = GameVars::new("Foo", vec![], &[], None);
-    let plan = super::super::prepare(&staged, &targets, &vars, &info, &[]).unwrap();
+    let plan = super::super::prepare(&listed_of(&staged), &targets, &vars, &info, &[]).unwrap();
     let written: Vec<_> = plan.writes.iter().map(|w| w.target.as_path()).collect();
     assert_eq!(
         written,
@@ -1422,6 +1473,14 @@ impl Fixture {
         plan: &RestorePlan,
         wineserver_running: bool,
     ) -> Result<RestoreReport, RunError> {
+        self.run_probing(plan, || wineserver_running)
+    }
+
+    fn run_probing(
+        &mut self,
+        plan: &RestorePlan,
+        wineserver_running: impl Fn() -> bool,
+    ) -> Result<RestoreReport, RunError> {
         let stage_root = self.tmp.path().join("pre-restore");
         run(
             &mut self.storage,
@@ -1502,6 +1561,27 @@ fn registry_restore_refused_while_wineserver_runs() {
     let report = f.run(&plan_of(writes, None), true).unwrap();
     assert!(report.files.iter().all(Result::is_ok), "{report:?}");
     assert_eq!(read(&target), "new");
+}
+
+#[test]
+fn nothing_is_written_when_a_wineserver_starts_during_the_safety_backup() {
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    // Quiet at the early check, running once the safety backup is made.
+    let asked = std::cell::Cell::new(0);
+    let result = f.run_probing(&plan, || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    });
+    assert!(matches!(result, Err(RunError::WineserverRunning)));
+    assert_eq!(read(&target), "old");
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("old"));
+    // The backup it made stays.
+    assert_eq!(f.storage.snapshots("salvajocs").unwrap().len(), 1);
 }
 
 #[test]
@@ -1999,6 +2079,32 @@ fn staged_symlink_not_restored() {
     assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "new");
 }
 
+#[cfg(unix)]
+#[test]
+fn restored_files_keep_the_mode_of_the_files_they_replace() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let user_reg = f.prefix.join("user.reg");
+    // Modes the umask would not give a new file.
+    for (path, mode) in [(&target, 0o640), (&user_reg, 0o600)] {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert!(matches!(report.registry, Some(Ok(()))));
+    assert_eq!(read(&target), "new");
+    for (path, mode) in [(&target, 0o640), (&user_reg, 0o600)] {
+        let found = fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(found & 0o777, mode, "{}", path.display());
+    }
+}
+
 fn tmp_of(target: &Path) -> PathBuf {
     let mut tmp = target.as_os_str().to_owned();
     tmp.push(".salvajocs-tmp");
@@ -2466,7 +2572,7 @@ fn proton_backup_restores_into_windows_layout() {
     let vars = GameVars::new("Foo", vec![], &[], Some("620".into()));
     let entry = manifest.games.get("Foo");
     let plan = super::super::prepare(
-        &staged,
+        &listed_of(&staged),
         &targets,
         &vars,
         &GameInfo {
@@ -2478,7 +2584,7 @@ fn proton_backup_restores_into_windows_layout() {
     .unwrap();
     assert!(plan.skipped.is_empty(), "{plan:?}");
     let stage_root = tmp.path().join("pre-restore");
-    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+    let report = run(&mut storage, "Foo", &plan, &stage_root, || false).unwrap();
 
     assert_applied(&report);
     // Nothing existed at the targets.
@@ -2529,7 +2635,7 @@ fn prefix_registry_restores_into_other_prefix() {
     let vars = GameVars::new("Foo", vec![], &[], None);
     let entry = manifest.games.get("Foo");
     let plan = super::super::prepare(
-        &staged,
+        &listed_of(&staged),
         &targets,
         &vars,
         &GameInfo {
@@ -2540,7 +2646,7 @@ fn prefix_registry_restores_into_other_prefix() {
     )
     .unwrap();
     let stage_root = tmp.path().join("pre-restore");
-    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+    let report = run(&mut storage, "Foo", &plan, &stage_root, || false).unwrap();
 
     assert_applied(&report);
     assert!(report.registry.is_some());

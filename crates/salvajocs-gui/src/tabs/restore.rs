@@ -282,13 +282,7 @@ struct Fetched {
 
 impl Fetched {
     fn prepare(&self, choices: &[(SnapshotRoot, Choice)]) -> Result<RestorePlan, PrepareError> {
-        restore::prepare(
-            &self.listed.staged,
-            &self.targets,
-            &self.vars,
-            &self.info,
-            choices,
-        )
+        restore::prepare(&self.listed, &self.targets, &self.vars, &self.info, choices)
     }
 
     /// `plan` with how each write compares with its target, the tree of its writes and the tree
@@ -1787,8 +1781,8 @@ impl RestoreTab {
             restore::download(&mut storage, &fetched.listed)
                 .context("the backup cannot be fetched")?;
             let title = fetched.title.clone();
-            let running = wineserver_running();
-            let report = restore::run(&mut storage, &title, &plan, &stage_root, running)?;
+            let report =
+                restore::run(&mut storage, &title, &plan, &stage_root, wineserver_running)?;
             Ok(Restored::new(title, &plan, report))
         }));
     }

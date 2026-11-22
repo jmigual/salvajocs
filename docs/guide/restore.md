@@ -163,7 +163,8 @@ The result lists each file as restored or failed, and the registry result.
 
 One thing blocks a restore: a restore that includes registry keys for a Wine prefix is refused
 while any `wineserver` is running, because Wine would overwrite the change. Nothing is written in
-that case. Close every Wine and Proton game and try again, or untick the registry keys to restore
+that case. It is checked again after the safety backup and before the first write, so a game
+started meanwhile also stops the restore. Close every Wine and Proton game and try again, or untick the registry keys to restore
 only the files.
 
 ## Restore several games

@@ -338,6 +338,36 @@ fn restore_preview_lists_writes_and_skips() {
     assert!(!shows(&harness, "Where should the saves"));
 }
 
+#[cfg(unix)]
+#[test]
+fn case_variants_of_one_save_restore_once_into_a_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let game = custom("Alpha", &["<winAppData>/Alpha"], Some(&prefix), Vec::new());
+    // A Linux-side prefix backup can hold both; the prefix has `save.dat`, which both reuse.
+    let snapshot = scan(
+        &tmp,
+        "Alpha",
+        &[
+            (Base::WinAppData, "Alpha/Save.dat"),
+            (Base::WinAppData, "Alpha/save.dat"),
+        ],
+        &[(Base::WinAppData, "Alpha")],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    let saves = under(&prefix, "drive_c/users/steamuser/AppData/Roaming/Alpha");
+    put(&saves.join("save.dat"), "old");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    assert!(shows(&harness, "Files to write (1)"));
+    assert!(shows(&harness, "Skipped (1)"));
+    assert!(shows(
+        &harness,
+        ": another file for the same target is newer"
+    ));
+}
+
 #[test]
 fn restore_plan_says_into_which_targets() {
     let tmp = tempfile::tempdir().unwrap();

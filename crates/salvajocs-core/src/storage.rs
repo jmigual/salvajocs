@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::io;
 use std::iter;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -62,9 +63,41 @@ pub enum StorageError {
     /// rclone did not print the address it serves on in time; what it printed is attached.
     #[error("rclone did not report its address within {0:?}{suffix}", suffix = output_suffix(.1))]
     RcloneTimeout(Duration, String),
+    /// A file of a snapshot is larger than the caller allows to read into memory.
+    #[error("{path} is larger than {limit} bytes")]
+    TooLarge {
+        /// The path in the snapshot.
+        path: String,
+        /// The most bytes the caller accepted.
+        limit: u64,
+    },
     /// Any other repository or backend failure, as rustic reports it.
     #[error("repository error: {0}")]
     Backend(String),
+}
+
+/// A buffer that refuses bytes past `limit`, so a dump of a crafted file stops there.
+struct Capped {
+    bytes: Vec<u8>,
+    limit: u64,
+    exceeded: bool,
+}
+
+impl io::Write for Capped {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let held = u64::try_from(self.bytes.len()).unwrap_or(u64::MAX);
+        let more = u64::try_from(data.len()).unwrap_or(u64::MAX);
+        if held.saturating_add(more) > self.limit {
+            self.exceeded = true;
+            return Err(io::ErrorKind::FileTooLarge.into());
+        }
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// `: <output>` after an error message, or nothing when the program printed nothing.
@@ -731,11 +764,16 @@ impl Storage {
     }
 
     /// The contents of the file `path_in_snapshot` in snapshot `snapshot_id`, `None` when the
-    /// snapshot has nothing at that path.
+    /// snapshot has nothing at that path. The bytes are counted as they are read, since a
+    /// crafted snapshot can declare any size.
+    ///
+    /// # Errors
+    /// [`StorageError::TooLarge`] when the file holds more than `limit` bytes.
     pub fn read_file_if_present(
         &mut self,
         snapshot_id: &str,
         path_in_snapshot: &str,
+        limit: u64,
     ) -> Result<Option<Vec<u8>>, StorageError> {
         let snap = self.snapshot(snapshot_id)?;
         let repo = &self.repo;
@@ -745,9 +783,20 @@ impl Storage {
         let Some(&Some(at)) = found.matches.first() else {
             return Ok(None);
         };
-        let mut bytes = Vec::new();
-        repo.dump(&found.nodes[at], &mut bytes).map_err(backend)?;
-        Ok(Some(bytes))
+        let mut capped = Capped {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        };
+        let dumped = repo.dump(&found.nodes[at], &mut capped);
+        if capped.exceeded {
+            return Err(StorageError::TooLarge {
+                path: path_in_snapshot.to_owned(),
+                limit,
+            });
+        }
+        dumped.map_err(backend)?;
+        Ok(Some(capped.bytes))
     }
 
     /// Stores new snapshots as made by `host`, as another machine would.

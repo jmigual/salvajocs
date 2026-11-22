@@ -512,13 +512,12 @@ impl RestoreTab {
                     let fetch = fetch.context("the backup cannot be fetched");
                     let storage = fetch.and_then(|()| lock_storage(&fetched.storage));
                     let report = storage.and_then(|mut storage| {
-                        let running = wineserver_running();
                         Ok(restore::run(
                             &mut storage,
                             &title,
                             &plan,
                             &stage_root,
-                            running,
+                            wineserver_running,
                         )?)
                     });
                     done.fetch_add(1, Ordering::Relaxed);

@@ -87,10 +87,20 @@ pub(crate) fn hash_list(
     dir: &str,
     listing: &[SnapshotFile],
 ) -> Result<Option<Hashes>, StorageError> {
-    let listed =
-        (listing.iter()).any(|file| file.path == HASHES_FILE && file.kind == EntryKind::File);
+    // Too large to read whole counts as no list.
+    let listed = (listing.iter()).any(|file| {
+        file.path == HASHES_FILE
+            && file.kind == EntryKind::File
+            && file.size <= restore::MAX_JSON_BYTES
+    });
     let hashes = if listed {
-        let bytes = storage.read_file_if_present(snapshot_id, &format!("{dir}/{HASHES_FILE}"))?;
+        let path = format!("{dir}/{HASHES_FILE}");
+        let bytes = match storage.read_file_if_present(snapshot_id, &path, restore::MAX_JSON_BYTES)
+        {
+            // The listed size can be a lie; one that is too large to read counts as no list.
+            Err(StorageError::TooLarge { .. }) => None,
+            read => read?,
+        };
         bytes.and_then(|bytes| Hashes::from_json(&bytes))
     } else {
         None
@@ -393,8 +403,7 @@ impl<'a> Mapper<'a> {
     ) -> Option<Mapped> {
         let info = restore::game_info(&game.title, self.manifest, &self.config.custom_games);
         let vars = restore::game_vars(&game.title, info.entry.as_ref(), self.config, self.env);
-        let prepare =
-            |choices: &[_]| restore::prepare(&listed.staged, targets, &vars, &info, choices);
+        let prepare = |choices: &[_]| restore::prepare(listed, targets, &vars, &info, choices);
         let mut entries = Vec::new();
         let plan = match prepare(&[]) {
             Err(PrepareError::NeedsMapping(needed)) => {

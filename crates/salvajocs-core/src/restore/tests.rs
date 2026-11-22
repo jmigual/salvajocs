@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 use super::*;
 use crate::crossbuild::{Confidence, PLAYER_PREFS_NOTE, root_template};
 use crate::layout::{Root, RootKind, SNAPSHOT_FORMAT, WinFolders};
 use crate::manifest::{CustomFile, CustomGame, FileRule, Integration, Manifest, RegistryRule};
 use crate::registry::HKCU;
+use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo};
 
 fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
     let owned = |list: &[(Base, &str)]| {
@@ -1633,4 +1635,182 @@ fn a_single_row_whose_sides_end_differently_asks_where_its_files_go() {
             "{windows}: {result:?}"
         );
     }
+}
+
+/// A listed `staged` whose files are `(path key below files/, mtime in seconds)`.
+pub(super) fn listed_at(staged: StagedGame, files: &[(&str, u64)]) -> Listed {
+    let listing = (files.iter())
+        .map(|&(key, secs)| SnapshotFile {
+            path: format!("files/{key}"),
+            size: 1,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs)),
+            kind: EntryKind::File,
+        })
+        .collect();
+    let snapshot = SnapshotInfo {
+        id: "snap".into(),
+        time: SystemTime::UNIX_EPOCH,
+        host: "there".into(),
+        label: "Game".into(),
+        tags: vec!["salvajocs".into(), "game:game".into()],
+        size: None,
+    };
+    Listed::new(snapshot, staged, listing, None)
+}
+
+/// [`super::prepare`] of `staged` with no mtimes in its listing.
+fn prepare(
+    staged: &StagedGame,
+    targets: &Targets,
+    vars: &GameVars,
+    info: &GameInfo,
+    choices: &[(SnapshotRoot, Choice)],
+) -> Result<RestorePlan, PrepareError> {
+    super::prepare(
+        &listed_at(staged.clone(), &[]),
+        targets,
+        vars,
+        info,
+        choices,
+    )
+}
+
+/// The plan of `Foo/Save.dat` and `Foo/save.dat` of `WinAppData` into `ctx`, where `newer` is
+/// the one the listing dates newest.
+fn case_variants_plan(ctx: Context, newer: &str) -> RestorePlan {
+    let staged = staged(
+        &[(Base::WinAppData, "Foo")],
+        &[
+            (Base::WinAppData, "Foo/Save.dat"),
+            (Base::WinAppData, "Foo/save.dat"),
+        ],
+    );
+    let older = if newer == "Save.dat" {
+        "save.dat"
+    } else {
+        "Save.dat"
+    };
+    let (newer, older) = (
+        format!("WinAppData/Foo/{newer}"),
+        format!("WinAppData/Foo/{older}"),
+    );
+    let info = info(Some(&entry_of(&staged)), &[], &[]);
+    let listed = listed_at(staged, &[(&newer, 10), (&older, 1)]);
+    super::prepare(&listed, &win_only(ctx), &vars(), &info, &[]).unwrap()
+}
+
+/// Asserts `plan` writes only `Foo/<kept>` and skips `Foo/<skipped>` for a newer sibling.
+fn assert_only(plan: &RestorePlan, kept: &str, skipped: &str) {
+    let sources: Vec<_> = (plan.writes.iter())
+        .map(|write| {
+            write
+                .source
+                .strip_prefix("/stage/game/files/WinAppData/Foo")
+        })
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(sources, [Path::new(kept)]);
+    assert_eq!(
+        plan.skipped,
+        [Skipped {
+            item: SkippedItem::File(Base::WinAppData, format!("Foo/{skipped}")),
+            reason: SkipReason::ShadowedByNewer,
+        }]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn case_variants_in_a_prefix_keep_the_newest() {
+    let prefix = tempfile::tempdir().unwrap();
+    let folders = WinFolders::for_prefix(prefix.path(), "steamuser");
+    fs::create_dir_all(folders.app_data.join("Foo")).unwrap();
+    fs::write(folders.app_data.join("Foo/save.dat"), "old").unwrap();
+    let ctx = Context::WinePrefix {
+        prefix: prefix.path().into(),
+        folders,
+    };
+    // The newest is the one kept, whichever of the two sorts last.
+    for (kept, skipped) in [("Save.dat", "save.dat"), ("save.dat", "Save.dat")] {
+        let plan = case_variants_plan(ctx.clone(), kept);
+        assert_only(&plan, kept, skipped);
+    }
+}
+
+#[test]
+fn case_variants_on_native_windows_keep_the_newest() {
+    // NTFS stores one file for both spellings, which differ as paths.
+    for (kept, skipped) in [("Save.dat", "save.dat"), ("save.dat", "Save.dat")] {
+        let plan = case_variants_plan(native_win(), kept);
+        assert_only(&plan, kept, skipped);
+    }
+}
+
+#[test]
+fn case_variants_on_native_linux_are_two_files() {
+    let staged = staged(
+        &[(Base::XdgData, "Foo")],
+        &[
+            (Base::XdgData, "Foo/Save.dat"),
+            (Base::XdgData, "Foo/save.dat"),
+        ],
+    );
+    let plan = prepare(
+        &staged,
+        &linux_only(),
+        &vars(),
+        &info(Some(&entry_of(&staged)), &[], &[]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(plan.writes.len(), 2);
+    assert!(plan.skipped.is_empty());
+}
+
+#[test]
+fn writes_to_different_targets_are_all_kept() {
+    let staged = staged(
+        &[(Base::WinAppData, "Foo")],
+        &[
+            (Base::WinAppData, "Foo/a.dat"),
+            (Base::WinAppData, "Foo/b.dat"),
+        ],
+    );
+    let listed = listed_at(
+        staged,
+        &[("WinAppData/Foo/a.dat", 1), ("WinAppData/Foo/b.dat", 2)],
+    );
+    let info = info(Some(&entry_of(&listed.staged)), &[], &[]);
+    let plan = super::prepare(&listed, &win_only(native_win()), &vars(), &info, &[]).unwrap();
+    assert_eq!(plan.writes.len(), 2);
+    assert!(plan.skipped.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn names_windows_cannot_store_are_skipped_with_their_own_reason() {
+    let staged = staged(
+        &[(Base::WinAppData, "Foo")],
+        &[
+            (Base::WinAppData, "Foo/aux.txt"),
+            (Base::WinAppData, "Foo/a.dat"),
+        ],
+    );
+    let plan = plan(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(plan.writes.len(), 1);
+    assert_eq!(
+        plan.skipped,
+        [Skipped {
+            item: SkippedItem::File(Base::WinAppData, "Foo/aux.txt".into()),
+            reason: SkipReason::UnstorableName,
+        }]
+    );
 }

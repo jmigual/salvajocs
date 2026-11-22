@@ -6,7 +6,9 @@ Common problems, with cause and fix. Back to the [guide index](README.md).
 
 The message is "a wineserver is running: close every Wine and Proton program first". A restore that
 includes registry keys for a Wine prefix edits `user.reg`. Wine keeps the registry in memory and
-saves it again later, which would overwrite the change. salvajocs refuses and writes nothing.
+saves it again later, which would overwrite the change. salvajocs refuses and writes nothing. It
+checks again after the safety backup, which can take long, so a game started meanwhile also stops
+the restore before the first write; the safety backup is then kept.
 
 Close every Wine and Proton game, then restore again. salvajocs checks for any `wineserver`
 process on the machine, not only the one of the prefix.

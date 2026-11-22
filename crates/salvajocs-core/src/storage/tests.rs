@@ -657,12 +657,35 @@ fn reading_a_file_the_snapshot_lacks_gives_none() {
         .unwrap();
     let mut read = |path: &str| {
         storage
-            .read_file_if_present(&info.id, &format!("{AS_PATH}/{path}"))
+            .read_file_if_present(&info.id, &format!("{AS_PATH}/{path}"), u64::MAX)
             .unwrap()
     };
     assert_eq!(read("sub/b.sav"), Some(b"beta".to_vec()));
     assert_eq!(read("missing.json"), None);
     assert_eq!(read("missing/b.sav"), None);
+}
+
+#[test]
+fn reading_a_file_stops_at_the_limit_whatever_size_the_snapshot_declares() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let info = storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .unwrap()
+        .unwrap();
+    let path = format!("{AS_PATH}/sub/b.sav");
+    // `beta` is 4 bytes: the read counts what it dumps, not a size from the listing.
+    let at = |storage: &mut Storage, limit| storage.read_file_if_present(&info.id, &path, limit);
+    assert_eq!(at(&mut storage, 4).unwrap(), Some(b"beta".to_vec()));
+    assert!(matches!(
+        at(&mut storage, 3),
+        Err(StorageError::TooLarge { limit: 3, .. })
+    ));
+    assert!(matches!(
+        at(&mut storage, 0),
+        Err(StorageError::TooLarge { .. })
+    ));
 }
 
 #[test]
@@ -692,7 +715,7 @@ fn a_snapshot_another_session_added_is_read_after_a_reindex() {
     let listed = storage.snapshot_entries(&info.id, AS_PATH).unwrap();
     assert_eq!(listed.len(), 3);
     let read = storage
-        .read_file_if_present(&info.id, &format!("{AS_PATH}/a.sav"))
+        .read_file_if_present(&info.id, &format!("{AS_PATH}/a.sav"), u64::MAX)
         .unwrap();
     assert_eq!(read, Some(b"alpha".to_vec()));
     let out = tmp.path().join("out");
