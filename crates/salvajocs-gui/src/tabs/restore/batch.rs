@@ -19,11 +19,14 @@ use salvajocs_core::scan::Environment;
 use salvajocs_core::selection::GameSettings;
 use salvajocs_core::storage::SnapshotInfo;
 
-use super::{
-    Fetched, Label, Labelled, RestoreTab, Restored, WriteTree, blocking, describe_run_error,
-    hover_label, into_line, name_context, nothing_to_restore, offer_ui, own_dir, remove_dir,
-    skipped_ui, snapshot_label, ticked_plan, warnings_ui,
+use super::RestoreTab;
+use super::dirs::{own_dir, remove_dir};
+use super::pick::snapshot_label;
+use super::plan::{
+    Fetched, Label, Labelled, WriteTree, blocking, hover_label, into_line, name_context,
+    nothing_to_restore, offer_ui, skipped_ui, ticked_plan, warnings_ui,
 };
+use super::run::{Restored, describe_run_error};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;

@@ -1,20 +1,32 @@
+use std::fs;
+use std::path::Path;
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use anyhow::anyhow;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, PasswordMode};
-use salvajocs_core::crossbuild::{Confidence, MappingEntry};
+use salvajocs_core::crossbuild::{Choice, Confidence, MappingEntry, SnapshotRoot};
 use salvajocs_core::launcher::{Launcher, LauncherPrefix};
-use salvajocs_core::layout::{Base, SNAPSHOT_FORMAT, SnapshotMeta};
+use salvajocs_core::layout::{
+    Base, Context, GameVars, LinuxFolders, PrefixOrigin, SNAPSHOT_FORMAT, SnapshotMeta, WinFolders,
+};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::manifest::{CustomGame, Integration, parse_yaml};
 use salvajocs_core::registry::{RegData, RegValue, RegistryExport};
-use salvajocs_core::restore::StagedGame;
-use salvajocs_core::scan::{FoundFile, GameScan};
-use salvajocs_core::storage::{Compression, RepoLocation, Storage};
+use salvajocs_core::restore::{
+    self, GameInfo, RestorePlan, RestoreReport, RunError, SafetyBackup, StagedGame, Targets, Write,
+};
+use salvajocs_core::retention::{self, DeleteError};
+use salvajocs_core::scan::{Environment, FoundFile, GameScan};
+use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
 
+use super::delete::describe_delete_error;
+use super::dirs::own_dir;
+use super::plan::{Fetched, Prepared, Preview};
+use super::run::{Restored, describe_run_error};
 use super::*;
 use crate::env::{Env, MemorySecrets};
 use crate::state::Session;
@@ -660,6 +672,8 @@ fn a_repository_switch_keeps_a_running_restore_and_drops_a_running_preview() {
 #[test]
 fn clearing_the_work_dir_removes_read_only_dirs_without_following_links() {
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    use super::dirs::remove_dir;
 
     let tmp = tempfile::tempdir().unwrap();
     let (work, outside) = (tmp.path().join("work"), tmp.path().join("outside"));
