@@ -12,6 +12,7 @@ use common::{
     env, harness, init_repo, init_repo_with, local_config, record_opened, replace_text, repo_dir,
     run_settled, run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
 };
+use eframe::egui::Vec2;
 use eframe::egui::accesskit::{Role, Toggled};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -587,6 +588,28 @@ fn a_folder_button_opens_the_folder_on_disk() {
 
     let alpha = prefix.join("drive_c/users/steamuser/AppData/Roaming/Alpha");
     assert_eq!(*opened.lock().unwrap(), [alpha.clone(), alpha.join("sub")]);
+}
+
+#[test]
+fn dismiss_stays_on_screen_beside_a_long_notice() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_with_sub_and_beta(&scratch);
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut env = env(&tmp);
+    env.open_folder = Arc::new(|_| Err(io::Error::other("no file manager here, ".repeat(10))));
+    let (mut harness, _) = start_app(env, &repository, Vec::new(), games, true);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "2 files, 5 B");
+    click(&mut harness, "Show WinAppData/Alpha in the file manager");
+    run_until(&mut harness, "the notice", |h| shows(h, "Could not open"));
+
+    harness.set_size(Vec2::new(400.0, 900.0));
+    run_settled(&mut harness);
+
+    let right = harness.get_by_label("Dismiss").rect().max.x;
+    assert!(right <= 400.0, "Dismiss is on screen");
 }
 
 #[test]

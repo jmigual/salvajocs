@@ -433,17 +433,16 @@ impl App {
             }
             Stage::OpenFailed(error) => {
                 let error = error.clone();
-                ui.horizontal(|ui| {
-                    theme::status(
-                        ui,
-                        icons::X_CIRCLE,
-                        ui.visuals().error_fg_color,
-                        format!("The repository could not be opened: {error}"),
-                    );
-                    if ui.button("Retry").clicked() {
-                        self.stage = self.resolve(ui.ctx());
-                    }
-                });
+                // The message is long, so the button gets its own row to stay on screen.
+                theme::status(
+                    ui,
+                    icons::X_CIRCLE,
+                    ui.visuals().error_fg_color,
+                    format!("The repository could not be opened: {error}"),
+                );
+                if ui.button("Retry").clicked() {
+                    self.stage = self.resolve(ui.ctx());
+                }
             }
             _ => {}
         }
@@ -457,12 +456,10 @@ impl App {
         }
         let mut dismissed = None;
         for (index, notice) in self.state.notices.iter().enumerate() {
-            ui.horizontal(|ui| {
-                theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
-                if ui.button("Dismiss").clicked() {
-                    dismissed = Some(index);
-                }
-            });
+            theme::status(ui, icons::WARNING, ui.visuals().warn_fg_color, notice);
+            if ui.button("Dismiss").clicked() {
+                dismissed = Some(index);
+            }
         }
         if let Some(index) = dismissed {
             self.state.notices.remove(index);
