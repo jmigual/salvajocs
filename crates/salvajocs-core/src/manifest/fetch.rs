@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::Path,
     time::Duration,
 };
@@ -25,6 +25,8 @@ const OLD_JSON_FILE: &str = "manifest.json";
 const ETAG_FILE: &str = "manifest.etag";
 // The default 30 s total timeout is too short for 2.4 MB on a slow link.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+// The real manifest is a few MB; the cap only stops a hostile or broken server filling memory.
+const MAX_MANIFEST: u64 = 64 * 1024 * 1024;
 
 /// Failure to refresh or read the manifest cache.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +38,9 @@ pub enum FetchError {
     /// The cache directory could not be read or written.
     #[error("manifest cache I/O failed")]
     Io(#[from] io::Error),
+    /// The download is larger than the cap.
+    #[error("the manifest is larger than {MAX_MANIFEST} bytes")]
+    TooLarge,
     /// The downloaded YAML or the cached JSON is invalid.
     #[error("invalid manifest")]
     Manifest(#[from] ManifestError),
@@ -54,7 +59,7 @@ pub enum Freshness {
 /// Revalidates the cache in `cache_dir` against [`MANIFEST_URL`], replacing it when it changed.
 /// `cache_dir` holds `manifest-v2.json` and `manifest.etag`; it is created if missing.
 pub fn refresh(cache_dir: &Path) -> Result<Freshness, FetchError> {
-    refresh_from(MANIFEST_URL, cache_dir)
+    refresh_from(MANIFEST_URL, cache_dir, true, MAX_MANIFEST)
 }
 
 /// Reads the cached manifest, or `None` when nothing was cached yet.
@@ -66,8 +71,18 @@ pub fn load_cached(cache_dir: &Path) -> Result<Option<Manifest>, FetchError> {
     }
 }
 
-fn refresh_from(url: &str, cache_dir: &Path) -> Result<Freshness, FetchError> {
-    let client = Client::builder().timeout(REQUEST_TIMEOUT).build()?;
+/// [`refresh`] of `url`, reading at most `limit` bytes; `https_only` and a small `limit` are
+/// relaxed only by tests, which serve plain HTTP.
+fn refresh_from(
+    url: &str,
+    cache_dir: &Path,
+    https_only: bool,
+    limit: u64,
+) -> Result<Freshness, FetchError> {
+    let client = Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .https_only(https_only)
+        .build()?;
     let mut request = client.get(url);
     // An ETag without its JSON would make a 304 leave us with no manifest.
     if cache_dir.join(JSON_FILE).is_file()
@@ -85,7 +100,8 @@ fn refresh_from(url: &str, cache_dir: &Path) -> Result<Freshness, FetchError> {
         .get(ETAG)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let json = to_json(&parse_yaml(&response.text()?)?)?;
+    let yaml = read_capped(response.content_length(), response, limit)?;
+    let json = to_json(&parse_yaml(&yaml)?)?;
 
     fs::create_dir_all(cache_dir)?;
     // The old ETag must not outlive a JSON it no longer describes.
@@ -97,6 +113,19 @@ fn refresh_from(url: &str, cache_dir: &Path) -> Result<Freshness, FetchError> {
     // A leftover old cache is harmless, so its removal must not fail the refresh.
     let _ = remove_if_exists(&cache_dir.join(OLD_JSON_FILE));
     Ok(Freshness::Updated)
+}
+
+/// Reads `body` as text, refusing it when the declared or the actual length exceeds `limit`.
+fn read_capped(declared: Option<u64>, body: impl Read, limit: u64) -> Result<String, FetchError> {
+    if declared.is_some_and(|len| len > limit) {
+        return Err(FetchError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    body.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(FetchError::TooLarge);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn remove_if_exists(path: &Path) -> io::Result<()> {

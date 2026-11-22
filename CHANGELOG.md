@@ -12,6 +12,10 @@ All notable changes to salvajocs. The format follows
   could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
   counted as saved, so the change stays on this PC and is tried again at the next Back up.
 
+### Security
+
+- The manifest download accepts HTTPS only and is read up to 64 MiB.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed
