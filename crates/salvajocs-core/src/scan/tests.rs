@@ -477,6 +477,30 @@ fn native_windows_scan_matches_wildcards_case_insensitively() {
 }
 
 #[test]
+fn native_windows_scan_lists_one_file_once_whatever_its_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("X/Save"), "x");
+    write(&docs.join("x/save"), "y");
+    let manifest = parse_yaml("Foo:\n  files:\n    <winDocuments>/*/*: {}\n").unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(tails(&found), [(Base::WinDocuments, "X/Save")]);
+}
+
+#[test]
+fn native_windows_scan_lists_a_file_reached_by_two_templates_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("drive_c/users/me/Documents");
+    write(&docs.join("Ace/s.sav"), "x");
+    let manifest = parse_yaml(
+        "Foo:\n  files:\n    <winDocuments>/Ace/*.sav: {}\n    <winDocuments>/ACE/*.sav: {}\n",
+    )
+    .unwrap();
+    let found = game(&manifest, &config(vec![], vec![]), &windows_env(dir.path()));
+    assert_eq!(found.files.len(), 1, "{found:?}");
+}
+
+#[test]
 fn roots_record_glob_free_prefixes() {
     let home = tempfile::tempdir().unwrap();
     write(&home.path().join(".config/foo/slot1/save.dat"), "a");

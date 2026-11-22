@@ -553,8 +553,9 @@ fn scan_game(
                         continue;
                     };
                     matched = true;
-                    // A prefix is matched case-insensitively, so its logical paths are too.
-                    let logical = if ctx.case_insensitive() {
+                    // A prefix and native Windows match case-insensitively, so their logical paths
+                    // are too.
+                    let logical = if ctx.case_insensitive() || ignore_case {
                         tail.to_ascii_lowercase()
                     } else {
                         tail.clone()
