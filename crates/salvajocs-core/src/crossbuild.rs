@@ -208,7 +208,7 @@ pub(crate) fn classify(template: &str, family: Family) -> Option<(Base, String)>
 
 /// Classifies a template typed by the user: a placeholder template without globs, not a real
 /// path (ADR-0004, ADR-0011).
-fn classify_choice(template: &str, family: Family) -> Option<(Base, String)> {
+pub(crate) fn classify_choice(template: &str, family: Family) -> Option<(Base, String)> {
     let classified = classify(template, family)?;
     let real_path = matches!(classified.0, Base::Absolute | Base::WinAbsolute);
     (!real_path && layout::glob_free_prefix(template) == template).then_some(classified)
@@ -291,6 +291,15 @@ pub enum FileError {
         /// Its template.
         template: String,
     },
+    /// A side names a whole base or drive (`<home>`, `<home>/*`, `/`), which a restore never
+    /// trusts: a folder or a literal name must follow the base.
+    #[error("name a folder below the base: {template}")]
+    TooWide {
+        /// The rejected side.
+        family: Family,
+        /// Its template.
+        template: String,
+    },
 }
 
 /// Checks a custom game file row: at least one side, each a placeholder template of its family
@@ -311,6 +320,68 @@ pub fn validate_file(file: &CustomFile) -> Result<(), FileError> {
         .into_iter()
         .filter_map(|(side, family)| Some((side.as_deref()?, family)))
         .try_for_each(|(template, family)| check_side(template, family))
+}
+
+/// Whether a file `template` of `family` trusts a whole base or real-path root: nothing but
+/// the base (`<home>`, `/`, `C:/`, `<root>`), or a glob below it with no literal character at
+/// all (`<home>/*`, `<home>/*/*`). Placeholders count as wild, since a restore matches
+/// `<osUserName>` with `*`. Restore declares no root for it (ADR-0005). `<base>`, one game's
+/// install folder, is never too wide; `<root>` is the whole Steam root.
+pub(crate) fn too_wide(template: &str, family: Family) -> bool {
+    let prefix = layout::glob_free_prefix(template);
+    // Decided here, not by `classify`, so `/*` and a Windows host agree with every other host.
+    let linux_absolute = family == Family::Linux && template.starts_with('/');
+    // A drive path classifies only on a Windows host, and `C:` alone (before `/*`) never.
+    let drive = |text: &str| match text.as_bytes() {
+        [letter, b':'] if letter.is_ascii_alphabetic() => Some(char::from(*letter).to_string()),
+        _ => layout::drive_absolute_tail(text),
+    };
+    let classified = if linux_absolute {
+        Some((Base::Absolute, prefix.trim_start_matches('/').to_owned()))
+    } else {
+        classify(prefix, family).or_else(|| match family {
+            Family::Windows => drive(prefix).map(|tail| (Base::WinAbsolute, tail)),
+            Family::Linux => None,
+        })
+    };
+    let Some((base, rest)) = classified else {
+        return false;
+    };
+    // `WinAbsolute` rests start with the drive letter.
+    let whole = usize::from(base == Base::WinAbsolute);
+    if base == Base::GameDir || components(&rest).count() > whole {
+        return false;
+    }
+    // `[...]` classes hold no literal; a `]` right after `[` or `[!` is a member (as in
+    // `layout::fold_case`).
+    let (mut in_class, mut first, mut in_placeholder) = (false, false, false);
+    let literal = template[prefix.len()..].chars().any(|c| {
+        if in_class {
+            if c == ']' && !first {
+                in_class = false;
+            } else if c != '!' || !first {
+                first = false;
+            }
+            return false;
+        }
+        if in_placeholder {
+            in_placeholder = c != '>';
+            return false;
+        }
+        match c {
+            '[' => {
+                (in_class, first) = (true, true);
+                false
+            }
+            '<' => {
+                in_placeholder = true;
+                false
+            }
+            '*' | '?' | '/' => false,
+            _ => true,
+        }
+    });
+    !literal
 }
 
 /// Checks one side of a file row, see [`validate_file`].
@@ -334,6 +405,13 @@ fn check_side(template: &str, family: Family) -> Result<(), FileError> {
         .split(['/', '\\'])
         .any(|part| part == "." || part == "..");
     if (placeholder(template) || absolute) && !dots {
+        // `CustomGame::game_entry` stores a drive path with `/`, so restore sees it that way.
+        if too_wide(&template.replace('\\', "/"), family) {
+            return Err(FileError::TooWide {
+                family,
+                template: template.to_owned(),
+            });
+        }
         Ok(())
     } else {
         Err(FileError::Side {

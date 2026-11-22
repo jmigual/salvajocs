@@ -11,6 +11,45 @@ use serde::{Deserialize, Serialize};
 /// Root every key path starts with; only HKCU is supported in v1.
 pub const HKCU: &str = "HKEY_CURRENT_USER";
 
+/// Keys below `HKEY_CURRENT_USER` that run code at logon or change the shell, lowercase with
+/// `/`; `Software/Classes` is handled apart, for its `VirtualStore` exception.
+const PROTECTED_KEYS: [&str; 6] = [
+    "software/microsoft/windows",
+    "software/microsoft/windows nt",
+    "software/microsoft/command processor",
+    "software/policies",
+    "environment",
+    "control panel",
+];
+
+/// Whether a game must not declare the registry `key`, so a restore never writes it for one:
+/// the key is not under `HKEY_CURRENT_USER`, has fewer than two parts below it (`Software`),
+/// or equals, contains or lies below a system key: `Software/Microsoft/Windows`, `.../Windows
+/// NT`, `.../Command Processor`, `Software/Policies`, `Software/Classes` (but not
+/// `Classes/VirtualStore`), `Environment` and `Control Panel`. Ignores case, takes `\` and `/`
+/// alike and reads `Software/Wow6432Node/...` as `Software/...`. The list is not exhaustive.
+pub fn protected_key(key: &str) -> bool {
+    let key = key.replace('\\', "/").to_ascii_lowercase();
+    let key = key.trim_end_matches('/');
+    let Some(rest) = (key.strip_prefix("hkey_current_user/")).filter(|rest| !rest.is_empty())
+    else {
+        return true;
+    };
+    let rest = match rest.strip_prefix("software/wow6432node") {
+        Some(below) if below.is_empty() || below.starts_with('/') => format!("software{below}"),
+        _ => rest.to_owned(),
+    };
+    if rest.split('/').count() < 2 {
+        return true;
+    }
+    let under = |path: &str, dir: &str| {
+        (path.strip_prefix(dir)).is_some_and(|below| below.is_empty() || below.starts_with('/'))
+    };
+    let related = |system: &str| under(&rest, system) || under(system, &rest);
+    let classes = related("software/classes") && !under(&rest, "software/classes/virtualstore");
+    classes || PROTECTED_KEYS.iter().any(|system| related(system))
+}
+
 /// Errors from reading, exporting or replacing registry data.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -298,6 +337,41 @@ mod tests {
             export
         );
         assert!(json.contains(r#""kind":"multi_sz""#));
+    }
+
+    #[test]
+    fn protected_key_ignores_case_and_separators() {
+        for key in [
+            "HKEY_CURRENT_USER/Software/Microsoft/Windows/CurrentVersion/Run",
+            r"hkey_current_user\SOFTWARE\microsoft\windows\CurrentVersion\Run\",
+            "HKEY_CURRENT_USER/Software/Microsoft/Windows NT/CurrentVersion/Winlogon",
+            "HKEY_CURRENT_USER/Software/Microsoft/Command Processor",
+            "HKEY_CURRENT_USER/Software/Microsoft",
+            "HKEY_CURRENT_USER/Software/Classes/exefile",
+            "HKEY_CURRENT_USER/Software/Classes",
+            "HKEY_CURRENT_USER/Software/Policies/Microsoft",
+            "HKEY_CURRENT_USER/Software/Wow6432Node/Microsoft/Windows/CurrentVersion/Run",
+            "HKEY_CURRENT_USER/Software/Wow6432Node",
+            "HKEY_CURRENT_USER/Environment",
+            "HKEY_CURRENT_USER/Control Panel/Desktop",
+            "HKEY_CURRENT_USER/Software",
+            "HKEY_CURRENT_USER",
+            "HKEY_CURRENT_USER/",
+            "HKEY_LOCAL_MACHINE/Software/Foo",
+            "Software/Foo",
+        ] {
+            assert!(protected_key(key), "{key}");
+        }
+        for key in [
+            "HKEY_CURRENT_USER/Software/Foo",
+            "hkey_current_user/software/team cherry/hollow knight",
+            r"HKEY_CURRENT_USER\Software\Microsoft\Foo",
+            "HKEY_CURRENT_USER/Software/Classes/VirtualStore/MACHINE/SOFTWARE/Foo",
+            "HKEY_CURRENT_USER/Software/Wow6432Node/Foo",
+            "HKEY_CURRENT_USER/Software/Windows Foo",
+        ] {
+            assert!(!protected_key(key), "{key}");
+        }
     }
 
     fn full(key: &str) -> String {

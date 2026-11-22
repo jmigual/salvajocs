@@ -11,7 +11,7 @@ use crate::crossbuild::{
 };
 use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Pair, RegistryRule};
-use crate::registry::RegistryExport;
+use crate::registry::{RegistryExport, protected_key};
 
 mod run;
 
@@ -440,6 +440,10 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
             else {
                 continue;
             };
+            // A whole base (`<home>/*`) would trust every file below it.
+            if crossbuild::too_wide(template, family) {
+                continue;
+            }
             // A literal template's full path is its prefix; a globbed one's prefix alone would
             // trust a whole shallow dir (`<winDir>/System32`).
             let glob = if layout::glob_free_prefix(template) == template.as_str() {
@@ -457,9 +461,11 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
             Family::Linux => pair.linux.as_str(),
             Family::Windows => pair.windows.as_str(),
         });
+        // A bare base would trust every root of it, and a real path any file there.
         declared.extend(
             sides
-                .filter_map(|side| crossbuild::classify(side, family))
+                .filter_map(|side| crossbuild::classify_choice(side, family))
+                .filter(|(_, rest)| components(rest).next().is_some())
                 .map(|prefix| Declared { prefix, glob: None }),
         );
     }
@@ -533,6 +539,8 @@ fn file_declared(root: &SnapshotRoot, tail: &str, declared: &[Declared], vars: &
 
 /// Whether the registry `key` lies at or below a key `entry` declares, ignoring ASCII case, with
 /// `\` and `/` both separating; a snapshot is untrusted, so nothing else is restored (ADR-0005).
+/// A [`protected_key`] declares nothing, so a game cannot declare the hive, `Software` or a key
+/// that runs code at logon.
 fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
     let normalize = |key: &str| key.replace('\\', "/").to_ascii_lowercase();
     let key = normalize(key);
@@ -540,7 +548,8 @@ fn declared(entry: Option<&GameEntry>, key: &str) -> bool {
         entry.registry.keys().any(|declared| {
             let declared = normalize(declared);
             let declared = declared.trim_end_matches('/');
-            key == declared || key.starts_with(&format!("{declared}/"))
+            !protected_key(declared)
+                && (key == declared || key.starts_with(&format!("{declared}/")))
         })
     })
 }

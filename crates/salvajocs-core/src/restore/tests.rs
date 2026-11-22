@@ -507,6 +507,94 @@ fn undeclared_registry_key_skipped() {
 }
 
 #[test]
+fn registry_key_at_or_above_a_vendor_declares_nothing() {
+    let mut staged = staged(&[], &[]);
+    staged.registry = Some(registry(&[
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "Environment",
+    ]));
+    for declared in [
+        "HKEY_CURRENT_USER",
+        "HKEY_CURRENT_USER/",
+        "HKEY_CURRENT_USER/Software",
+        "HKEY_CURRENT_USER/Environment",
+    ] {
+        let entry = declaring(&staged, &[declared]);
+        let plan = plan(
+            &staged,
+            &win_only(native_win()),
+            &vars(),
+            Some(&entry),
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(plan.registry, None, "{declared}");
+    }
+}
+
+#[test]
+fn registry_key_at_or_under_a_system_key_declares_nothing() {
+    for (declared, staged_key) in [
+        (
+            "HKEY_CURRENT_USER/Software/Microsoft/Windows/CurrentVersion/Run",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        ),
+        (
+            "HKEY_CURRENT_USER/Software/Classes/exefile",
+            "Software\\Classes\\exefile\\shell",
+        ),
+        (
+            "HKEY_CURRENT_USER/Software/Microsoft/Command Processor",
+            "Software\\Microsoft\\Command Processor",
+        ),
+        (
+            "HKEY_CURRENT_USER/Software/Wow6432Node/Microsoft/Windows/CurrentVersion/Run",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        ),
+        (
+            "HKEY_CURRENT_USER/Software/Microsoft",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        ),
+    ] {
+        let mut staged = staged(&[], &[]);
+        staged.registry = Some(registry(&[staged_key]));
+        let entry = declaring(&staged, &[declared]);
+        let plan = plan(
+            &staged,
+            &win_only(native_win()),
+            &vars(),
+            Some(&entry),
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(plan.registry, None, "{declared}");
+    }
+}
+
+#[test]
+fn registry_key_under_classes_virtualstore_is_declared() {
+    let mut staged = staged(&[], &[]);
+    let key = "Software\\Classes\\VirtualStore\\MACHINE\\SOFTWARE\\Foo";
+    staged.registry = Some(registry(&[key]));
+    let entry = declaring(
+        &staged,
+        &["HKEY_CURRENT_USER/Software/Classes/VirtualStore/MACHINE/SOFTWARE/Foo"],
+    );
+    let plan = plan(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(plan.registry, Some((registry(&[key]), native_win())));
+}
+
+#[test]
 fn registry_skipped_without_game_entry() {
     let mut staged = staged(&[], &[]);
     staged.registry = Some(registry(&["Software\\Game"]));
@@ -1331,6 +1419,92 @@ fn pair_side_root_is_trusted() {
         targets_of(&plan),
         [Path::new("/home/me/.local/share/Foo/x.sav")]
     );
+}
+
+#[test]
+fn pair_side_without_a_folder_or_a_real_path_declares_nothing() {
+    // A bare base would trust every root of that base, and `/` the whole disk.
+    let linux = staged(
+        &[(Base::Home, ".config/autostart"), (Base::Absolute, "etc")],
+        &[
+            (Base::Home, ".config/autostart/x.desktop"),
+            (Base::Absolute, "etc/passwd"),
+        ],
+    );
+    let windows = staged(
+        &[(Base::WinHome, "Saves"), (Base::WinAbsolute, "C/Games")],
+        &[
+            (Base::WinHome, "Saves/x.sav"),
+            (Base::WinAbsolute, "C/Games/x.sav"),
+        ],
+    );
+    for (pair, game, targets) in [
+        (("<home>", "<home>/x"), &linux, linux_only()),
+        (("/", "<home>/x"), &linux, linux_only()),
+        (("<xdgData>/x", "<home>"), &windows, win_only(native_win())),
+        (("<xdgData>/x", "C:/"), &windows, win_only(native_win())),
+    ] {
+        let pairs = [Pair {
+            linux: pair.0.into(),
+            windows: pair.1.into(),
+        }];
+        let plan = plan(game, &targets, &vars(), None, &pairs, &[]).unwrap();
+        assert!(plan.writes.is_empty(), "{pair:?}");
+        assert!(
+            plan.skipped
+                .iter()
+                .all(|skipped| skipped.reason == SkipReason::UndeclaredRoot),
+            "{pair:?}"
+        );
+    }
+}
+
+#[test]
+fn file_template_without_a_folder_below_its_base_declares_nothing() {
+    let linux = staged(
+        &[(Base::Home, ""), (Base::Absolute, "etc")],
+        &[(Base::Home, ".bashrc"), (Base::Absolute, "etc/passwd")],
+    );
+    let windows = staged(
+        &[(Base::WinDocuments, "")],
+        &[(Base::WinDocuments, "x.sav")],
+    );
+    let store = staged(&[(Base::StoreRoot, "")], &[(Base::StoreRoot, "steam.sh")]);
+    for (template, game, targets) in [
+        ("<home>", &linux, linux_only()),
+        ("<home>/*", &linux, linux_only()),
+        ("<home>/**", &linux, linux_only()),
+        ("<home>/<osUserName>*", &linux, linux_only()),
+        ("<home>/[!]]*", &linux, linux_only()),
+        ("/", &linux, linux_only()),
+        ("<root>", &store, linux_only()),
+        ("<root>/*", &store, linux_only()),
+        ("<winDocuments>", &windows, win_only(native_win())),
+        ("<winDocuments>/*", &windows, win_only(native_win())),
+    ] {
+        // As a manifest-style entry and as the legacy `entry.files` of an extending custom game.
+        let direct = templates(&[template]);
+        let custom = CustomGame::new("Game".into(), templates(&[template]), Integration::Extend);
+        let info = game_info("Game", &Manifest::default(), &[custom]);
+        for entry in [direct, info.entry.unwrap()] {
+            let plan = plan(game, &targets, &vars(), Some(&entry), &[], &[]).unwrap();
+            assert!(plan.writes.is_empty(), "{template}");
+            assert!(
+                plan.skipped
+                    .iter()
+                    .all(|skipped| skipped.reason == SkipReason::UndeclaredRoot),
+                "{template}"
+            );
+        }
+    }
+}
+
+#[test]
+fn file_template_with_a_literal_first_component_declares() {
+    let game = staged(&[(Base::Home, "")], &[(Base::Home, ".gamesave")]);
+    let entry = templates(&["<home>/.game*"]);
+    let plan = plan(&game, &linux_only(), &vars(), Some(&entry), &[], &[]).unwrap();
+    assert_eq!(targets_of(&plan), [Path::new("/home/me/.gamesave")]);
 }
 
 #[test]
