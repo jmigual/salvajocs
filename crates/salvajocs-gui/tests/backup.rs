@@ -935,6 +935,67 @@ fn removing_old_backups_drops_the_loaded_restore_list() {
     assert!(shows(&harness, "Load backups"));
 }
 
+#[test]
+fn removing_old_backups_forgets_the_plan_of_a_chosen_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    keep_last_one(&tmp);
+
+    let (mut harness, _) = back_up_a_change(&tmp, |harness| {
+        harness.state_mut().set_tab(Tab::Restore);
+        run_settled(harness);
+        harness.get_by_label("Load backups").click();
+        run_until(harness, "the list", |h| shows(h, "Alpha"));
+        harness.get_by_label("Alpha").click();
+        run_until(harness, "the plan", |h| shows(h, "Files to write"));
+        harness.state_mut().set_tab(Tab::Backup);
+        run_settled(harness);
+    });
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+
+    assert!(
+        !shows(&harness, "Files to write"),
+        "the snapshot may be gone"
+    );
+    assert!(shows(&harness, "Load backups"));
+}
+
+#[test]
+fn a_new_backup_lists_the_restore_tab_again_and_keeps_its_choice() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, games) = alpha_beta(&scratch);
+    let (mut harness, _env, _tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "2 games found");
+    click(&mut harness, "Beta");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    click(&mut harness, "Load backups");
+    run_until(&mut harness, "the list", |h| {
+        h.query_by_label("Include Alpha").is_some()
+    });
+    harness.get_by_label("Alpha").click();
+    run_until(&mut harness, "the default targets", |h| {
+        shows(h, "Restore into:")
+    });
+    assert!(harness.query_by_label("Include Beta").is_none());
+
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    click(&mut harness, "Beta");
+    click(&mut harness, "Alpha");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Beta: backed up");
+    harness.state_mut().set_tab(Tab::Restore);
+
+    run_until(&mut harness, "the new game in the list", |h| {
+        h.query_by_label("Include Beta").is_some()
+    });
+    assert!(shows(&harness, "Restore into:"), "Alpha stays chosen");
+}
+
 /// Stores a retention policy that keeps each game's last backup in the repository of `tmp`.
 fn keep_last_one(tmp: &TempDir) {
     let mut policy = Retention::default();

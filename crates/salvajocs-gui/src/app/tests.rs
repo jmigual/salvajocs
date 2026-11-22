@@ -212,6 +212,34 @@ fn restart_whose_close_was_cancelled_waits_for_the_job() {
 }
 
 #[test]
+fn a_backup_ending_as_the_repository_is_replaced_keeps_nothing_of_the_old_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    harness.state_mut().set_tab(Tab::Restore);
+    harness.step();
+    harness.get_by_label("Load backups").click();
+    harness.step();
+    step_until(&mut harness, "the list", |app| !app.restore.busy());
+    harness.step();
+    assert!(harness.query_by_label_contains("See the games").is_none());
+
+    // Settings replaced the repository while a backup ran; the backup ends in this frame.
+    let location = RepoLocation::new(
+        dir.path().join("other").to_str().unwrap().into(),
+        Default::default(),
+    );
+    let storage = Storage::init(&location, "", Compression::Default).unwrap();
+    let app = harness.state_mut();
+    app.state.session.as_mut().unwrap().storage = Arc::new(std::sync::Mutex::new(storage));
+    app.backup.mark_saved();
+    harness.step();
+    harness.step();
+
+    let empty = harness.query_by_label_contains("See the games");
+    assert!(empty.is_some(), "the old list is dropped, not listed again");
+}
+
+#[test]
 fn the_backup_tab_finishes_its_jobs_while_another_tab_is_shown() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = Harness::builder()

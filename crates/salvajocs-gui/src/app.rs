@@ -219,15 +219,20 @@ impl App {
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         self.state.poll(ctx);
         self.backup.poll(ctx, &mut self.state);
-        if self.backup.take_removed() {
-            self.restore.drop_listing();
-        }
         if self.backup.take_rules_changed() {
             self.settings.reload_rules();
         }
         self.settings.set_backing_up(self.backup.backing_up());
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
+        // After the poll, which drops the state of a repository Settings replaced: `relist` would
+        // otherwise adopt the new repository and keep what belongs to the old one.
+        let (removed, saved) = (self.backup.take_removed(), self.backup.take_saved());
+        if removed {
+            self.restore.drop_listing();
+        } else if saved {
+            self.restore.relist(ctx, &self.state);
+        }
         // A restore adds safety backups and a delete removes backups, which the comparison and
         // the figures of the Backup tab show.
         if self.restore.take_written() {

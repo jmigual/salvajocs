@@ -828,10 +828,13 @@ impl RestoreTab {
         }
     }
 
-    /// Drops the listed backups, the chosen and ticked games and a delete waiting for its
-    /// confirm, as after a cleanup that may have forgotten one of them; "Load backups" lists them
-    /// again. A running plan job or restore is kept.
+    /// Drops the listed backups, the plan, the chosen and ticked games, the batch confirm and a
+    /// delete waiting for its confirm, as after a cleanup that may have forgotten a snapshot;
+    /// "Load backups" lists them again. A running plan job's result is dropped; a running restore
+    /// is kept.
     pub(crate) fn drop_listing(&mut self) {
+        self.forget_plan();
+        self.batch.close();
         self.confirm_delete = None;
         self.repository = None;
         self.listing = None;
@@ -912,9 +915,7 @@ impl RestoreTab {
         if (self.repository.as_ref())
             .is_some_and(|listed| !current.is_some_and(|current| Arc::ptr_eq(listed, current)))
         {
-            self.forget_plan();
             self.drop_listing();
-            self.batch.close();
             self.last_read = None;
             self.detecting = None;
             self.pick = None;
@@ -970,7 +971,14 @@ impl RestoreTab {
                     self.checked.retain(|slug| {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())
                     });
+                    // The new list may order the snapshots differently.
+                    let chosen = self.chosen().map(|snapshot| snapshot.id.clone());
                     self.games = games;
+                    if let Some(chosen) = chosen {
+                        self.snapshot = (self.games.iter())
+                            .find(|game| Some(&game.slug) == self.selected.as_ref())
+                            .and_then(|game| game.snapshots.iter().position(|s| s.id == chosen));
+                    }
                     self.start_space(ctx, state);
                 }
                 Err(err) => self.error = Some(format!("The backups cannot be listed: {err:#}")),
@@ -1135,16 +1143,34 @@ impl RestoreTab {
     }
 
     fn start_listing(&mut self, ctx: &egui::Context, state: &State) {
+        if self.read_list(ctx, state) {
+            self.selected = None;
+            self.pick = None;
+        }
+    }
+
+    /// Lists the backups again after a Back up saved snapshots, keeping the chosen game and
+    /// snapshot, the plan with its edits, the targets and the ticked games: a backup removes
+    /// no snapshot. Does nothing before the first listing, and while a restore or delete runs,
+    /// which list again when they end.
+    pub(crate) fn relist(&mut self, ctx: &egui::Context, state: &State) {
+        let writing = self.restoring.is_some() || self.deleting.is_some() || self.batch.writing();
+        if self.repository.is_some() && !writing {
+            self.read_list(ctx, state);
+        }
+    }
+
+    /// Starts the listing job; returns whether the repository is open to list.
+    fn read_list(&mut self, ctx: &egui::Context, state: &State) -> bool {
         let Some(session) = &state.session else {
-            return;
+            return false;
         };
         let storage = session.storage.clone();
         self.repository = Some(storage.clone());
-        self.selected = None;
-        self.pick = None;
         self.listing = Some(Job::spawn(ctx, move || {
             Ok(restore::list(&*lock_storage(&storage)?)?)
         }));
+        true
     }
 
     /// Before the first listing: what the tab is for and the listing as its one action.

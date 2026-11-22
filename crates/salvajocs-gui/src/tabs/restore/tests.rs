@@ -459,6 +459,50 @@ fn with_mix(storage: &SharedStorage) -> RestoreTab {
     }
 }
 
+/// A game `Mix` whose snapshots are `ids`, newest first.
+fn mix_snapshots(ids: &[&str]) -> GameBackups {
+    let snapshots = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let time = at(1_000 - index as u64);
+            let tags = vec!["salvajocs".into(), "game:mix".into()];
+            SnapshotInfo::new(id.repeat(64), time, "pc".into(), "Mix".into(), tags)
+        })
+        .collect();
+    GameBackups::new("mix".into(), "Mix".into(), snapshots, Some(0))
+}
+
+#[test]
+fn a_new_snapshot_in_the_list_keeps_the_chosen_older_one_and_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), |storage| RestoreTab {
+        repository: Some(storage.clone()),
+        games: vec![mix_snapshots(&["b", "a"])],
+        selected: Some("mix".into()),
+        snapshot: Some(1),
+        preview: Some(preview(
+            fetched(storage),
+            RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new()),
+        )),
+        ..RestoreTab::default()
+    });
+    let older = harness.state().0.chosen().unwrap().id.clone();
+    let ctx = harness.ctx.clone();
+    let state = &mut harness.state_mut();
+    state.0.relist(&ctx, &state.1);
+    assert!(state.0.preview.is_some(), "a backup removes no snapshot");
+    // The new list has a snapshot in front, which shifts the older one's index.
+    state.0.listing = Some(Job::spawn(&ctx, || {
+        Ok(vec![mix_snapshots(&["c", "b", "a"])])
+    }));
+    step_until(&mut harness, "the list", |h| h.state().0.listing.is_none());
+
+    let tab = &harness.state().0;
+    assert_eq!(tab.snapshot, Some(2));
+    assert_eq!(tab.chosen().unwrap().id, older);
+}
+
 #[test]
 fn deleting_waits_while_a_restore_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -869,6 +913,17 @@ fn a_new_repository_closes_the_batch_confirm() {
     );
 
     switch_repository_and_check_nothing_ran(&mut harness, dir.path());
+}
+
+#[test]
+fn a_cleanup_dropping_the_list_closes_the_batch_confirm() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = planned_batch(dir.path(), Base::XdgData, "<xdgData>/Mix");
+    assert!(harness.query_by_label("Cancel").is_some());
+
+    harness.state_mut().0.drop_listing();
+    harness.step();
+    assert!(harness.query_by_label("Cancel").is_none());
 }
 
 #[test]

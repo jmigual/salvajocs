@@ -741,6 +741,8 @@ pub struct BackupTab {
     cleanup: Option<Cleaned>,
     /// A cleanup forgot snapshots since [`BackupTab::take_removed`] last ran.
     removed: bool,
+    /// A backup saved snapshots since [`BackupTab::take_saved`] last ran.
+    saved: bool,
     /// Back up was clicked; the backup starts once the pending file is written.
     backup_requested: bool,
     /// Checks the repository it was started for for changes made on another PC to what this PC
@@ -831,6 +833,9 @@ impl BackupTab {
                     }
                     self.run_error = error;
                     self.saving = saving;
+                    // A game saved before the run stopped early counts too.
+                    self.saved |= (lock(&self.progress).done.iter())
+                        .any(|game| matches!(game.outcome, Outcome::Saved));
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
                     if let Some(after) = after
@@ -943,6 +948,12 @@ impl BackupTab {
     /// too and would swallow it.
     pub(crate) fn take_removed(&mut self) -> bool {
         std::mem::take(&mut self.removed)
+    }
+
+    /// Whether a finished backup saved snapshots since the last call, so a loaded list of
+    /// backups misses them. A flag for the same reason as [`BackupTab::take_removed`].
+    pub(crate) fn take_saved(&mut self) -> bool {
+        std::mem::take(&mut self.saved)
     }
 
     /// Whether a finished backup saved this PC's Old backups rules, or the question about them
@@ -2103,6 +2114,11 @@ fn files_ui(
 /// Gives the tab a backup that runs until the returned sender is dropped.
 #[cfg(test)]
 impl BackupTab {
+    /// Makes the tab report saved snapshots, as after a backup.
+    pub(crate) fn mark_saved(&mut self) {
+        self.saved = true;
+    }
+
     pub(crate) fn hold_backup(&mut self, ctx: &egui::Context) -> std::sync::mpsc::Sender<()> {
         let (release, job) = crate::job::held(ctx);
         self.running = Some(job);
