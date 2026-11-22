@@ -21,8 +21,8 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use super::{
     Fetched, Label, Labelled, RestoreTab, Restored, WriteTree, blocking, describe_run_error,
-    hover_label, into_line, name_context, nothing_to_restore, own_dir, remove_dir, skipped_ui,
-    snapshot_label, ticked_plan, warnings_ui,
+    hover_label, into_line, name_context, nothing_to_restore, offer_ui, own_dir, remove_dir,
+    skipped_ui, snapshot_label, ticked_plan, warnings_ui,
 };
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
@@ -416,7 +416,7 @@ impl RestoreTab {
             let title = &game.title;
             match &mut game.outcome {
                 Outcome::Planned(game) => {
-                    opened = planned_ui(ui, title, game, !busy).or(opened);
+                    opened = planned_ui(ui, state, title, game, !busy).or(opened);
                     planned += usize::from(game.runs());
                 }
                 Outcome::Skipped => {
@@ -710,8 +710,15 @@ fn remove_stale(parent: &Path) {
 /// One planned game of the confirm: its snapshot with how many ticked files are new, changed or
 /// unchanged, its targets, the ticked writes that will fail or block it, the tree of its files
 /// with a checkbox on each, the plan's warnings, the registry with a checkbox per key and the
-/// skipped items. `enabled` false greys the checkboxes. Returns the folder the user asked to open.
-fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) -> Option<PathBuf> {
+/// skipped items, with [`offer_ui`] from `state`. `enabled` false greys the checkboxes. Returns
+/// the folder the user asked to open.
+fn planned_ui(
+    ui: &mut Ui,
+    state: &State,
+    title: &str,
+    planned: &mut Planned,
+    enabled: bool,
+) -> Option<PathBuf> {
     let ticked = planned.labelled.tree.ticked(&planned.selection);
     let Planned {
         fetched,
@@ -780,6 +787,7 @@ fn planned_ui(ui: &mut Ui, title: &str, planned: &mut Planned, enabled: bool) ->
             tree.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {})
         });
         warnings_ui(ui, plan);
+        offer_ui(ui, state, title);
         if let Some((_, ctx)) = &plan.registry {
             let (name, hover) = name_context(ctx, fetched.prefix_origin.as_ref());
             let text = format!(

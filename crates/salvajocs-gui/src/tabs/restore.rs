@@ -1677,6 +1677,7 @@ impl RestoreTab {
         hover_label(ui, into, hover);
         let error_color = ui.visuals().error_fg_color;
         warnings_ui(ui, &preview.plan);
+        offer_ui(ui, state, &fetched.title);
         let ticked = preview.tree.ticked(&preview.selection);
         let compared: Vec<_> = (preview.labels.iter().zip(&ticked))
             .filter_map(|(label, &ticked)| match label {
@@ -1875,6 +1876,21 @@ fn warnings_ui(ui: &mut Ui, plan: &RestorePlan) {
     }
     for note in &plan.notes {
         theme::status(ui, icons::WARNING, warn, format!("Note: {note}"));
+    }
+}
+
+/// A line pointing to the Custom games tab when another PC's version of the custom game `title`
+/// waits there for review, since its files would otherwise show as skipped with no hint
+/// (ADR-0030). The tab hides an offer whose name has an unsent change, so the line does too.
+fn offer_ui(ui: &mut Ui, state: &State, title: &str) {
+    let unsent = (state.config.iter())
+        .flat_map(|config| &config.custom_games_unsent)
+        .any(|entry| entry.name == title);
+    if state.custom_games.offered(title).is_some() && !unsent {
+        ui.weak(
+            "Another PC's version of this game's custom definition waits for review in Custom \
+             games. This restore uses this PC's definition only.",
+        );
     }
 }
 

@@ -176,8 +176,8 @@ beside the repository's, with a line only one of them has in bold.
   other PCs stop being offered it.
 
 Without an answer the game stays listed and is not used. A restore of such a game uses only this
-PC's definition. Use a game only if you recognise it: anyone who can write to the repository can
-save one. The same choice is made in the Back up question below: **Keep the repository's**
+PC's definition, and its plan in the Restore tab says that another PC's version waits here. Use
+a game only if you recognise it: anyone who can write to the repository can save one. The same choice is made in the Back up question below: **Keep the repository's**
 accepts that version.
 
 The custom games this PC already had before this version stay in use without asking.

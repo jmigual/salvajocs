@@ -2162,6 +2162,54 @@ fn batch_restores_every_ticked_game_behind_its_own_safety_backup() {
     assert_eq!(toggled, Some(Toggled::False), "the ticks are cleared");
 }
 
+/// The Restore tab with Alpha backed up and no custom game for it here, after a read found the
+/// custom game another PC saved for it: an offer, not used here.
+fn alpha_offered(tmp: &TempDir) -> Harness<'static, App> {
+    let (alpha, snapshot) = native(tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, _env) = open_tab(tmp, Vec::new(), &[snapshot]);
+    let stage = tmp.path().join("elsewhere");
+    custom_games::save(&mut open_repo(tmp), "Alpha", None, Some(&alpha), &stage).unwrap();
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    harness.get_by_label("Read repository").click();
+    run_until(&mut harness, "the offer", |h| shows(h, "Alpha (new)"));
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness
+}
+
+/// What the plan says of a game whose custom game from another PC waits for review.
+const OFFER_NOTE: &str = "This restore uses this PC's definition only.";
+
+#[test]
+fn restore_of_a_game_with_an_offer_points_to_custom_games() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = alpha_offered(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(shows(&harness, OFFER_NOTE));
+    // The offer declares nothing here, so the save is skipped, not written.
+    assert!(shows(&harness, "Files to write (0)"));
+    assert!(shows(&harness, "Skipped (1)"));
+}
+
+#[test]
+fn batch_restore_of_a_game_with_an_offer_points_to_custom_games() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = alpha_offered(&tmp);
+    click(&mut harness, "Include Alpha");
+    plan_batch(&mut harness, "Restore 1 game");
+    run_until(&mut harness, "the batch plan", |h| {
+        shows(h, "Alpha, snapshot")
+    });
+    assert!(shows(&harness, OFFER_NOTE));
+    assert!(shows(&harness, "Skipped (1)"));
+    assert!(shows(
+        &harness,
+        "Nothing to restore, so this game will not be restored."
+    ));
+}
+
 #[test]
 fn batch_planning_downloads_nothing() {
     let tmp = tempfile::tempdir().unwrap();

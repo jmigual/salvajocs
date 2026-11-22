@@ -52,6 +52,10 @@ by another PC, is not used on this PC until the user accepts it on this PC.
     through ADR-0029 (`State::keep_this_pcs_custom_game`): an unsent entry based on the offered
     copy, so the next Back up writes this PC's copy, or a tombstone when this PC lacks the game.
     No "declined" state is stored. Without an answer, the offer stays listed.
+- **The Restore tab** says in the plan of a game, alone or in a restore of several, when an
+  offer of its custom game waits for review, since its files would otherwise show as skipped
+  (`UndeclaredRoot`) with no hint. The core restore is unchanged. The read runs in the
+  background, so a restore planned before it ends shows no note.
 - **Tombstones still drop the local game without asking**: a removal only narrows what a restore
   writes, and anyone who can write to the repository can already delete snapshots.
 - **"Keep the repository's" in the Back up conflict dialog is an acceptance**: the user saw both
