@@ -223,10 +223,14 @@ impl RepoLocation {
             .map_err(|err| {
                 // rustic quotes the URL, password included, when it cannot parse it.
                 let text = AsRef::<RusticError>::as_ref(&err).display_log();
-                StorageError::Backend(match &password {
-                    Some(password) => rest_url::mask_password(&text, password),
-                    None => text,
-                })
+                // A password that could not move to the keyring is still in the URL.
+                let in_url = rest_url::split_rest_password(&self.repository);
+                let secrets = password
+                    .iter()
+                    .chain(in_url.iter().map(|(_, secret)| secret));
+                StorageError::Backend(
+                    secrets.fold(text, |text, secret| rest_url::mask_password(&text, secret)),
+                )
             })?;
         Ok((backends, rclone))
     }

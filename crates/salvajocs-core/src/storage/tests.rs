@@ -201,6 +201,24 @@ fn the_rest_password_stays_out_of_the_error_for_a_url_rustic_cannot_parse() {
 }
 
 #[test]
+fn a_password_left_in_the_url_stays_out_of_the_error_for_a_url_rustic_cannot_parse() {
+    // The keyring refused the password, so it is still in the URL and there is no option.
+    for (encoded, password) in [("hunter2", "hunter2"), ("p%40ss%3Aw%2Frd", "p@ss:w/rd")] {
+        let location = RepoLocation {
+            repository: format!("rest:http://user:{encoded}@127.0.0.1:99999/"),
+            options: BTreeMap::new(),
+        };
+        let RepoState::Error(message) = probe(&location, "") else {
+            panic!("the URL is invalid");
+        };
+        for leaked in [password, encoded] {
+            assert!(!message.contains(leaked), "{leaked} in {message}");
+        }
+        assert!(message.contains("***"), "{message}");
+    }
+}
+
+#[test]
 fn a_refused_webdav_login_is_login_refused_not_missing() {
     let location = RepoLocation {
         repository: "opendal:webdav".to_string(),
