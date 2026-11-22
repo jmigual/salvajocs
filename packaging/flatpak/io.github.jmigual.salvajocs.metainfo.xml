@@ -31,27 +31,36 @@
   </categories>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/backup.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.10.0/docs/images/backup.png</image>
       <caption>Backup: scan for games and pick the ones to back up</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/restore.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.10.0/docs/images/restore.png</image>
       <caption>Restore: preview every file and registry key before anything is written</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/mapping-dialog.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.10.0/docs/images/mapping-dialog.png</image>
       <caption>Mapping dialog: where each folder goes on the other build of a game</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/custom-games.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.10.0/docs/images/custom-games.png</image>
       <caption>Custom games: a game's paths, pairs and skipped folders</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/settings.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.10.0/docs/images/settings.png</image>
       <caption>Settings: repository, compression and roots</caption>
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.10.0" date="2026-11-22">
+      <description>
+        <p>Updates install only when signed with the salvajocs release key. A custom game written
+        by another PC is used here only after you accept it in Custom games; Not now sets it aside
+        and you can still use it later. Only one salvajocs runs at a time, Escape closes dialogs
+        that can be cancelled, and the REST password is kept in the keyring. Many restore and
+        backup fixes, among them AppData folders spelled with another case.</p>
+      </description>
+    </release>
     <release version="0.9.1" date="2026-11-21">
       <description>
         <p>The Restore tab's list of games scrolls when it is longer than the window, also while
