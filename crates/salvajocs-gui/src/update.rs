@@ -30,6 +30,8 @@ pub struct Updater {
     ready: Option<PathBuf>,
     /// The replaced AppImage, started by [`Updater::restart`] once the window closed.
     restart: Option<PathBuf>,
+    /// An open form with edits holds the ready update, which no running job does.
+    held_by_form: bool,
 }
 
 impl Updater {
@@ -155,6 +157,10 @@ impl Updater {
             status_bar::status_text(ui, |ui| {
                 ui.label("Downloading the update");
             });
+        } else if ready && self.held_by_form {
+            status_bar::status_text(ui, |ui| {
+                ui.weak("Save or cancel the open form to install the update");
+            });
         } else if ready && replaced {
             status_bar::status_text(ui, |ui| {
                 ui.weak("Restarts when the running task finishes");
@@ -179,9 +185,21 @@ impl Updater {
 
     /// Starts the downloaded installer and closes the window, or closes it for a restart into the
     /// replaced AppImage, unless `busy`: closing would cut a running job, such as a backup, a
-    /// restore or a config save, short.
-    pub fn install_when_idle(&mut self, ctx: &egui::Context, state: &mut State, busy: bool) {
-        if busy {
+    /// restore or a config save, short. A form that `editing` holds unsaved edits would be lost
+    /// the same way; the notice says so.
+    pub fn install_when_idle(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut State,
+        busy: bool,
+        editing: bool,
+    ) {
+        let held = editing && !busy;
+        if held != self.held_by_form {
+            self.held_by_form = held;
+            ctx.request_repaint();
+        }
+        if busy || editing {
             return;
         }
         let Some(installer) = self.ready.take() else {

@@ -92,6 +92,12 @@ impl SettingsTab {
         self.retention.reset();
     }
 
+    /// Whether the repository form holds edits that were not applied, which closing the app
+    /// would lose.
+    pub(crate) fn editing(&self) -> bool {
+        self.connect.as_ref().is_some_and(Connect::edited)
+    }
+
     /// Reads the Old backups rules from the repository again, keeping every other edit.
     pub fn reload_rules(&mut self) {
         self.retention.reset();

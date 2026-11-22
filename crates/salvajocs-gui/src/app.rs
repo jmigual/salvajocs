@@ -200,6 +200,11 @@ impl App {
             || self.settings.busy()
     }
 
+    /// Whether a form holds edits that closing the app would lose.
+    fn editing(&self) -> bool {
+        self.custom_games.editing() || self.settings.editing()
+    }
+
     /// Whether a job runs that writes to the repository, the config, the keyring or the games'
     /// files, and that closing would cut short. Reads and waits, such as scans and the manifest load, are
     /// not in it, and neither are the pending file writes, which `on_exit` flushes.
@@ -597,9 +602,11 @@ impl eframe::App for App {
             self.close_dialog(&ctx);
         }
         title_bar::controls(ui, bar, buttons);
-        // Last, so a job started in this frame holds the update back.
-        let busy = self.busy();
-        self.updater.install_when_idle(&ctx, &mut self.state, busy);
+        // Last, so a job started in this frame holds the update back, and so does a form open
+        // with edits, which the close would lose.
+        let (busy, editing) = (self.busy(), self.editing());
+        self.updater
+            .install_when_idle(&ctx, &mut self.state, busy, editing);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
