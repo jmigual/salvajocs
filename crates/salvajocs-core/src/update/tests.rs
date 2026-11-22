@@ -137,6 +137,85 @@ fn verify_refuses_a_file_missing_from_the_sums() {
     ));
 }
 
+/// A throwaway minisign key, not the release key, and its signature of [`SIGNED_SUMS`].
+const TEST_KEY: &str = "untrusted comment: minisign public key: 48B18882C8FF1DEC
+RWTsHf/IgoixSHpAEqhpX1aCnz9dYRhzoaXm4ZtEN889T7tLo2z44UOg
+";
+const SIGNED_SUMS: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  salvajocs-1.2.3-x86_64-setup.exe\n";
+const SIGNATURE: &str = "untrusted comment: signature from rsign secret key
+RUTsHf/IgoixSCfllwxD9J9Acvn8pKtSJR2k3cJojvdWPW57Q+t8hQbSC3IOIeTA1mM/n2C/sQxOg98ctbriIJI3fIukO7eDDAM=
+trusted comment: timestamp:1795345572\tfile:SHA256SUMS\tprehashed
+0eNMYSAeTzUjbXJ8DUp65ba0NEe3lL4EKXqYokgaxkLpFEpoHzfvnRoN6AwO34HRJuJ2WzjWh22s0D/O9gIVBQ==
+";
+
+#[test]
+fn verify_signature_accepts_the_signed_sums() {
+    verify_signature(TEST_KEY, SIGNED_SUMS.as_bytes(), SIGNATURE.as_bytes()).unwrap();
+}
+
+#[test]
+fn verify_signature_refuses_tampered_sums() {
+    let tampered = SIGNED_SUMS.replace("2cf2", "2cf3");
+    assert!(matches!(
+        verify_signature(TEST_KEY, tampered.as_bytes(), SIGNATURE.as_bytes()),
+        Err(UpdateError::BadSignature(_))
+    ));
+}
+
+#[test]
+fn verify_signature_refuses_a_signature_that_is_not_one() {
+    assert!(matches!(
+        verify_signature(TEST_KEY, SIGNED_SUMS.as_bytes(), b""),
+        Err(UpdateError::BadSignature(_))
+    ));
+    assert!(matches!(
+        verify_signature(TEST_KEY, SIGNED_SUMS.as_bytes(), b"not a signature"),
+        Err(UpdateError::BadSignature(_))
+    ));
+}
+
+#[test]
+fn the_release_key_refuses_another_keys_signature() {
+    // Parses, so a bad embedded key shows up here and not as every update failing.
+    PublicKey::decode(RELEASE_KEY).unwrap();
+    assert!(matches!(
+        verify_signature(RELEASE_KEY, SIGNED_SUMS.as_bytes(), SIGNATURE.as_bytes()),
+        Err(UpdateError::BadSignature(_))
+    ));
+}
+
+#[test]
+fn download_installer_refuses_a_release_without_a_signature() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The installer and `SHA256SUMS` are listed, `SHA256SUMS.minisig` is not.
+    let release = parse_release(RELEASE_JSON).unwrap();
+
+    assert!(matches!(
+        download_installer(&release, "1.0.0", &tmp.path().join("update")),
+        Err(UpdateError::Unsigned)
+    ));
+    assert!(!tmp.path().join("update").exists());
+}
+
+#[test]
+fn download_appimage_refuses_a_release_without_a_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    let appimage = dir.path().join("salvajocs.appimage");
+    fs::write(&appimage, b"old").unwrap();
+    let mut release = parse_release(RELEASE_JSON).unwrap();
+    release.assets[0].name = release.appimage_name();
+    release.assets[0].browser_download_url = format!(
+        "https://github.com/jmigual/salvajocs/releases/download/v1.2.3/{}",
+        release.appimage_name()
+    );
+
+    assert!(matches!(
+        download_appimage(&release, "1.0.0", &appimage),
+        Err(UpdateError::Unsigned)
+    ));
+    assert_eq!(fs::read(&appimage).unwrap(), b"old");
+}
+
 #[test]
 fn installed_by_installer_looks_for_the_uninstaller() {
     let dir = tempfile::tempdir().unwrap();

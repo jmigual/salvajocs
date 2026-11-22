@@ -16,7 +16,7 @@ It needs glibc 2.35 or newer (Ubuntu 22.04 or later), OpenGL and FUSE 2. Without
 with `--appimage-extract-and-run`.
 
 The app offers updates when a newer release exists. When the folder that holds the AppImage is
-writable, **Update now** downloads the new AppImage, checks it against the release's `SHA256SUMS`
+writable, **Update now** downloads the new AppImage, checks it against the release's signed `SHA256SUMS`
 and replaces the file, keeping its name. **Restart now** then starts the new version once no
 backup or restore runs. In a read-only folder the notice links the release page instead.
 

@@ -15,6 +15,7 @@ repository.workspace = true
 dirs.workspace = true
 glob.workspace = true
 keyring-core.workspace = true
+minisign-verify.workspace = true
 opendal.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 rustic_backend.workspace = true
