@@ -264,7 +264,7 @@ impl App {
     /// The dialog of a close request during a job: Wait keeps the window, Close anyway ends it.
     fn close_dialog(&mut self, ctx: &egui::Context) {
         let (mut wait, mut close) = (false, false);
-        theme::modal(ctx, "confirm_close", 480.0, |ui| {
+        let ((), dismissed) = theme::modal_dismissible(ctx, "confirm_close", 480.0, |ui| {
             ui.heading("A job is still running");
             ui.label("Closing now stops it. Wait for it to finish, or close anyway.");
             let error = ui.visuals().error_fg_color;
@@ -278,7 +278,7 @@ impl App {
         if close {
             self.closing = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else if wait {
+        } else if wait || dismissed {
             self.confirm_close = false;
         }
     }

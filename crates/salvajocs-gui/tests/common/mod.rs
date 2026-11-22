@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::accesskit::Role;
-use eframe::egui::{Key, Modifiers, Vec2};
+use eframe::egui::{self, Key, Modifiers, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
 use salvajocs_core::config::{AppConfig, PasswordMode};
@@ -156,6 +156,21 @@ pub fn refusing_server() -> String {
 /// Where the tests keep a second repository.
 pub fn other_repo_dir(tmp: &TempDir) -> String {
     tmp.path().join("other").to_str().unwrap().to_string()
+}
+
+/// Presses and releases the primary button at `pos`, which may be over no widget.
+pub fn click_at(harness: &mut Harness<'static, App>, pos: egui::Pos2) {
+    harness.hover_at(pos);
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+    }
 }
 
 /// Replaces the text of the field named `label`, which `type_text` alone would append to.

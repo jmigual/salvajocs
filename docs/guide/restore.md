@@ -251,8 +251,8 @@ wait while a backup runs.
 
 A dialog names the game and lists the backups that go, as in the **Snapshot** list: `time, host`,
 plus `, pre-restore` for a safety backup. Deleting removes them from the repository for every
-computer that uses it, and cannot be undone. **Cancel** has the keyboard focus. Click **Delete**
-to go ahead.
+computer that uses it, and cannot be undone. **Cancel** has the keyboard focus, and Escape or a
+click outside the dialog also cancels. Click **Delete** to go ahead.
 
 Deleting all backups of a game keeps your file choices for it (see
 [Backup](backup.md#what-is-stored)). The buttons wait while the game manifest loads, the targets

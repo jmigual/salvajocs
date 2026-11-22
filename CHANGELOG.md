@@ -8,6 +8,9 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- Escape or a click outside a dialog cancels it for the delete, close-during-a-job,
+  changed-on-another-PC and file details dialogs. The dialogs that must be answered and the folder
+  mapping dialogs stay open.
 - A new Advanced option ticks **secret** by itself when its key names a secret of a service or has
   `secret`, `password`, `token` or `key` in it, unless the key is one rustic or a non-secret
   field of a service uses, such as `use-password` or `access_key_id`. You can untick it.

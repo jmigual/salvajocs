@@ -1375,7 +1375,7 @@ impl BackupTab {
         let (Some(asking), Some(config)) = (&mut self.asking, &mut state.config) else {
             return;
         };
-        let answer = theme::modal(ctx, "backup_conflicts", 720.0, |ui| {
+        let (answer, dismissed) = theme::modal_dismissible(ctx, "backup_conflicts", 720.0, |ui| {
             ui.heading("Changed on another PC");
             ui.label(
                 "Another PC changed these in the repository since this PC's changes started. \
@@ -1407,6 +1407,7 @@ impl BackupTab {
                 back_up.clicked().then_some(Answer::BackUp)
             })
         });
+        let answer = answer.or(dismissed.then_some(Answer::Cancel));
         match answer {
             Some(Answer::BackUp) => {
                 if let Some(asking) = self.asking.take() {
@@ -1428,6 +1429,8 @@ impl BackupTab {
         let Some((title, entries, dialog)) = &mut self.mapping else {
             return;
         };
+        // Not dismissible: Escape in a target field or a click closing its candidates list would
+        // lose the typed targets.
         let action = theme::modal(ctx, "backup_mapping", 720.0, |ui| {
             dialog.ui(ui, title, false, false, false, None)
         });

@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    back_up_unsent, env, harness, init_repo, local_config, pick, record_opened, replace_text,
-    repo_dir, run_settled, run_until, run_until_ready, save_config, shows, shows_path,
+    back_up_unsent, click_at, env, harness, init_repo, local_config, pick, record_opened,
+    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
+    shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -1878,6 +1879,36 @@ fn cancelling_a_delete_removes_nothing() {
     assert_eq!(snapshots(&tmp, "salvajocs"), before);
 }
 
+#[test]
+fn escape_cancels_a_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let before = snapshots(&tmp, "salvajocs");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(shows(&harness, "It cannot be undone"));
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "It cannot be undone"));
+    assert_eq!(snapshots(&tmp, "salvajocs"), before);
+}
+
+#[test]
+fn clicking_outside_cancels_a_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = two_games(&tmp);
+    let before = snapshots(&tmp, "salvajocs");
+
+    click(&mut harness, "Delete all backups of Alpha");
+    assert!(shows(&harness, "It cannot be undone"));
+    click_at(&mut harness, Pos2::new(5.0, 800.0));
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "It cannot be undone"));
+    assert_eq!(snapshots(&tmp, "salvajocs"), before);
+}
+
 /// A custom game with its saves in `<xdgData>/<name>`, and a scan of it with the `tails` below
 /// `<xdgData>`; each file holds its tail.
 fn native(tmp: &TempDir, name: &str, tails: &[&str]) -> (CustomGame, GameScan) {
@@ -1959,6 +1990,22 @@ fn unmapped(tmp: &TempDir, name: &str) -> (CustomGame, GameScan) {
 fn run_until_dialog(harness: &mut Harness<'static, App>, title: &str) {
     let heading = format!("Where should the saves of {title} go?");
     run_until(harness, "the mapping dialog", move |h| shows(h, &heading));
+}
+
+/// Escape in the mapping dialog of a batch does not drop the batch.
+#[test]
+fn escape_keeps_the_batch_mapping_dialog_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (kilo, kilo_scan) = unmapped(&tmp, "Kilo");
+    let (mut harness, _env) = open_tab(&tmp, vec![kilo], &[kilo_scan]);
+
+    click(&mut harness, "Select all");
+    harness.get_by_label("Restore 1 game").click();
+    run_until_dialog(&mut harness, "Kilo");
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "Where should the saves of Kilo go?"));
 }
 
 #[test]

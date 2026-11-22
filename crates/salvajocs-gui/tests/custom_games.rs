@@ -840,6 +840,19 @@ fn custom_games_first_open_keeps_this_pcs_version_and_back_up_asks() {
 }
 
 #[test]
+fn escape_cancels_the_changed_on_another_pc_question() {
+    let mine = dialog_game("Shared");
+    let (mut harness, _env, tmp) = first_open_with_another_version(&mine, None);
+    let written = settings_snapshots(&tmp);
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, "Changed on another PC"));
+    assert_eq!(settings_snapshots(&tmp), written, "Cancel writes nothing");
+}
+
+#[test]
 fn custom_games_first_open_keeps_a_game_removed_elsewhere_and_back_up_asks() {
     let mut mine = dialog_game("Gone");
     mine.wine_prefix = Some("/prefixes/gone".into());

@@ -283,12 +283,35 @@ pub fn status(ui: &mut Ui, glyph: &'static str, color: Color32, text: impl Into<
 /// Shows `content` in a modal dialog `width` wide, in the window frame: 20 px margins and the
 /// dialog corner radius, rather than the smaller popup frame egui gives modals. The dialog is
 /// narrower than `width` when the window is, and `content` scrolls when the window is too small.
+/// For a dialog that must be answered; [`modal_dismissible`] is for one with a safe way out.
 pub fn modal<R>(
     ctx: &egui::Context,
     id: &str,
     width: f32,
     content: impl FnOnce(&mut Ui) -> R,
 ) -> R {
+    show_modal(ctx, id, width, content).inner
+}
+
+/// Like [`modal`], and also returns whether the user asked to dismiss the dialog: Escape was
+/// pressed or the area outside it clicked. The caller maps that to the dialog's Cancel or Close.
+pub fn modal_dismissible<R>(
+    ctx: &egui::Context,
+    id: &str,
+    width: f32,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> (R, bool) {
+    let response = show_modal(ctx, id, width, content);
+    let dismissed = response.should_close();
+    (response.inner, dismissed)
+}
+
+fn show_modal<R>(
+    ctx: &egui::Context,
+    id: &str,
+    width: f32,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> egui::ModalResponse<R> {
     let frame = Frame::window(&ctx.global_style());
     let margins = frame.total_margin().sum();
     let window = ctx.content_rect();
@@ -311,7 +334,6 @@ pub fn modal<R>(
                 })
                 .inner
         })
-        .inner
 }
 
 /// A row of `end` against the right edge, such as a dialog's or form's buttons with the primary

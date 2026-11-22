@@ -12,7 +12,7 @@ use common::{
     run_until, run_until_ready, save_config, shows,
 };
 use eframe::egui::accesskit::{Role, Toggled};
-use eframe::egui::{OutputCommand, ThemePreference};
+use eframe::egui::{Key, OutputCommand, Pos2, ThemePreference};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::config::{AppConfig, ListSort, PasswordMode, RepoOption, SortKey, ThemeChoice};
@@ -467,6 +467,29 @@ fn startup_prompts_for_missing_secret_option() {
         !shows(&harness, "Encryption password"),
         "only the missing secrets are asked for"
     );
+}
+
+/// The secrets prompt must be answered: Escape and a click outside leave it open.
+#[test]
+fn the_secrets_prompt_ignores_escape_and_a_click_outside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let mut config = local_config(&repo_dir(&tmp));
+    config
+        .repository_options
+        .push(RepoOption::new("access_key".into(), None, true));
+    save_config(&env, &config);
+    let mut harness = harness(env);
+    run_until(&mut harness, "the prompt", |h| {
+        shows(h, "Repository secrets")
+    });
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    common::click_at(&mut harness, Pos2::new(5.0, 400.0));
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "Repository secrets"));
 }
 
 #[test]

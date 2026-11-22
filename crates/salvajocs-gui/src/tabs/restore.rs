@@ -1527,6 +1527,8 @@ impl RestoreTab {
         else {
             return;
         };
+        // Not dismissible: Escape in a target field or a click closing its candidates list would
+        // hide the dialog with the typed targets.
         let action = theme::modal(ctx, "restore_mapping", 720.0, |ui| {
             let offer_prefix = fetched.targets.win.is_none();
             dialog.ui(
@@ -1569,7 +1571,7 @@ impl RestoreTab {
             return;
         };
         let (mut cancel, mut delete) = (false, false);
-        theme::modal(ctx, "restore_delete", 560.0, |ui| {
+        let ((), dismissed) = theme::modal_dismissible(ctx, "restore_delete", 560.0, |ui| {
             let backups = count(deletion.snapshots.len(), "backup");
             ui.heading(format!("Delete {backups} of {}?", deletion.title));
             for snapshot in &deletion.snapshots {
@@ -1598,7 +1600,7 @@ impl RestoreTab {
         });
         if delete {
             self.start_delete(ctx);
-        } else if cancel {
+        } else if cancel || dismissed {
             self.confirm_delete = None;
         }
     }
