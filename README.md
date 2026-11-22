@@ -111,6 +111,26 @@ nothing is restored.
 Requirements and details are in the [installation guide](docs/guide/installation.md). macOS is not
 supported.
 
+### Verify a download
+
+Since 0.10.0, each release has a `SHA256SUMS` file signed with the release key into
+`SHA256SUMS.minisig`. The app checks this signature before it installs an update. To check a
+download by hand, put this public key
+([`salvajocs.pub`](crates/salvajocs-core/src/update/salvajocs.pub), key ID `5370E945B767E3F6`)
+in a file:
+
+```text
+untrusted comment: minisign public key: 5370E945B767E3F6
+RWT242e3RelwU/cL2I7bbLx6t7KEyNkqbMPM3V4eEl7L/AAA3nongAzN
+```
+
+Then download `SHA256SUMS` and `SHA256SUMS.minisig` next to your file, and run:
+
+```sh
+minisign -Vm SHA256SUMS -p salvajocs.pub
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
 ## Quick start
 
 1. Start `salvajocs`. On first run, choose where backups go (a folder is the default) and an optional
