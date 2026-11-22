@@ -1206,6 +1206,56 @@ fn validate_file_rejects_a_backslash_after_a_placeholder() {
 }
 
 #[test]
+fn validate_file_refuses_a_row_without_a_folder_below_its_base() {
+    for (linux, windows, family) in [
+        (Some("<home>"), None, Family::Linux),
+        (Some("<home>/*"), None, Family::Linux),
+        (Some("<home>/**"), None, Family::Linux),
+        (Some("<xdgConfig>/[a-z]*/*"), None, Family::Linux),
+        (Some("/"), None, Family::Linux),
+        (Some("/*"), None, Family::Linux),
+        (Some("/**"), None, Family::Linux),
+        (Some("<home>/<osUserName>*"), None, Family::Linux),
+        (Some("<home>/[!]]*"), None, Family::Linux),
+        (Some("<home>/[]]*"), None, Family::Linux),
+        (Some("<root>"), None, Family::Linux),
+        (Some("<root>/*"), None, Family::Linux),
+        (None, Some("<winDocuments>"), Family::Windows),
+        (None, Some("C:/"), Family::Windows),
+        (None, Some(r"C:\*"), Family::Windows),
+    ] {
+        let error = validate_file(&file_row(linux, windows)).unwrap_err();
+        assert!(
+            matches!(error, FileError::TooWide { family: f, .. } if f == family),
+            "{linux:?} / {windows:?}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn too_wide_needs_a_glob_without_any_literal_name() {
+    for template in [
+        "<home>/.game*",
+        "<home>/*.sav",
+        "<winDocuments>/G/*",
+        "<base>",
+        "<home>/[username]/.config/g/*.dat",
+        "<home>/*/save.dat",
+        "<home>/[!]]a*",
+        "<home>/<game>x/*",
+        "<home>/<osUserName>/*",
+        "<root>/steamapps/common/*",
+    ] {
+        let family = if template.starts_with("<win") {
+            Family::Windows
+        } else {
+            Family::Linux
+        };
+        assert!(!too_wide(template, family), "{template}");
+    }
+}
+
+#[test]
 fn apply_choices_does_not_store_a_pair_a_file_row_declares() {
     let mut config = config();
     config.custom_games.push(CustomGame {

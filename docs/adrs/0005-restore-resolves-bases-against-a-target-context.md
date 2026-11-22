@@ -44,6 +44,15 @@ configured roots (research.md §2).
   only files whose tail (or a parent dir) matches that template's glob.
   Only files under a trusted root and registry keys under the keys the entry declares
   are restored; anything else is skipped with a reason, and without an entry nothing is.
+  Shape rules, defence in depth only: a pair side declares a root only as a glob-free
+  placeholder template with a folder below its base (no bare `<home>`, no real path such as
+  `/`); a file template that is a whole base or a glob with no literal name below one
+  (`<home>`, `<home>/*`, `/`, `C:/`; `crossbuild::too_wide`) declares nothing, and
+  `validate_file` refuses it; a declared registry key must not be `registry::protected_key`
+  (the hive, `Software`, `Environment`, `Control Panel`, and the keys under `Software` that run
+  code at logon or change the shell; not an exhaustive list). They do not stop a precise or
+  absolute path such as `<home>/.bashrc`: a custom game from the repository is accepted on
+  each PC instead (ADR-0030).
   A pre-restore snapshot whose roots came from a per-file override (`Absolute`/`WinAbsolute`)
   is therefore not restorable through the normal flow; its files show as skipped.
 - **Target choice on restore:** one restore has up to two targets,
