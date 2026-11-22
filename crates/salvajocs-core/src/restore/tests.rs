@@ -696,6 +696,34 @@ fn tail_leaving_its_base_is_skipped() {
 }
 
 #[test]
+fn dot_parts_restore_and_a_special_name_beside_a_leaving_part_is_unsafe() {
+    let staged = staged(
+        &[(Base::XdgData, "Game")],
+        &[
+            (Base::XdgData, "Game/./a.sav"),
+            (Base::XdgData, "Game/aux/../../x"),
+        ],
+    );
+    let plan = plan(
+        &staged,
+        &linux_only(),
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        targets_of(&plan),
+        [Path::new("/home/me/.local/share/Game/a.sav")]
+    );
+    assert_eq!(
+        plan.skipped.iter().map(|s| s.reason).collect::<Vec<_>>(),
+        [SkipReason::UnsafePath]
+    );
+}
+
+#[test]
 fn file_outside_recorded_roots_skipped() {
     let staged = staged(
         &[(Base::XdgData, "Game")],
