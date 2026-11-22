@@ -401,6 +401,20 @@ fn map_root(
     source: Family,
     captures_allowed: bool,
 ) -> Option<Mapped> {
+    map_root_as_stored(root, from, to, source, captures_allowed).or_else(|| {
+        // A root stored before `<home>/AppData/..` matched without case, as a template now says it.
+        let root = layout::normalized_win_home(root.0, &root.1)?;
+        map_root_as_stored(&root, from, to, source, captures_allowed)
+    })
+}
+
+fn map_root_as_stored(
+    root: &SnapshotRoot,
+    from: &str,
+    to: &str,
+    source: Family,
+    captures_allowed: bool,
+) -> Option<Mapped> {
     let (base, rest) = classify(from, source)?;
     if base != root.0 {
         return None;
@@ -746,10 +760,14 @@ pub fn apply_choices(games: &mut Vec<CustomGame>, title: &str, choices: &[(Snaps
     let game = &mut games[index];
     let rows = game.file_pairs();
     for (family, root, choice) in choices {
+        let normalized = layout::normalized_win_home(root.0, &root.1);
+        let is_root = |template: &str| {
+            let classified = classify(template, family);
+            classified.is_some() && (classified.as_ref() == Some(root) || classified == normalized)
+        };
         game.pairs
-            .retain(|saved| classify(pair_side(saved, family), family).as_ref() != Some(root));
-        game.skips
-            .retain(|saved| classify(saved, family).as_ref() != Some(root));
+            .retain(|saved| !is_root(pair_side(saved, family)));
+        game.skips.retain(|saved| !is_root(saved));
         let own = root_template(root);
         let pair = match (choice, family) {
             (Choice::Skip, _) => {

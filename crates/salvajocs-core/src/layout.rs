@@ -426,8 +426,14 @@ pub fn win_absolute_target(tail: &str, ctx: &Context) -> Option<PathBuf> {
 }
 
 /// What follows `dir` in `path`, when `dir` ends on a component boundary; `dir` may be empty.
-fn below<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
-    let after = path.strip_prefix(dir)?;
+/// `ignore_case` ignores ASCII case in `dir`.
+fn below<'a>(path: &'a str, dir: &str, ignore_case: bool) -> Option<&'a str> {
+    let after = if ignore_case {
+        let head = path.get(..dir.len())?;
+        &path[head.eq_ignore_ascii_case(dir).then_some(dir.len())?..]
+    } else {
+        path.strip_prefix(dir)?
+    };
     if after.is_empty() {
         Some(after)
     } else {
@@ -435,11 +441,25 @@ fn below<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
     }
 }
 
+/// The base and rest a `WinHome` root under `AppData/<Roaming|Local|LocalLow>`, in any ASCII
+/// case, is classified as since [`classify`] ignores that case (ADR-0004). Snapshots, saved
+/// choices and settings made before hold the `WinHome` form. `None` for any other root.
+pub(crate) fn normalized_win_home(base: Base, rest: &str) -> Option<(Base, String)> {
+    if base != Base::WinHome {
+        return None;
+    }
+    WIN_HOME_SUBDIRS
+        .iter()
+        .find_map(|&(dir, base)| below(rest, dir, true).map(|rest| (base, rest.to_owned())))
+}
+
 /// Splits a template into its base and the path below it. The base comes from the leading
 /// placeholder and the context's family (ADR-0004). `None` for relative paths, unknown leading
 /// placeholders and placeholders the context does not have.
 pub fn classify(template: &str, ctx: &Context) -> Option<(Base, String)> {
-    let (leading, home_subdirs) = if ctx.win().is_some() {
+    // The manifest spells Windows folders in any case (`<home>/Appdata/LocalLow`).
+    let windows = ctx.win().is_some();
+    let (leading, home_subdirs) = if windows {
         (&WIN_LEADING[..], &WIN_HOME_SUBDIRS[..])
     } else {
         (&LINUX_LEADING[..], &LINUX_HOME_SUBDIRS[..])
@@ -448,7 +468,7 @@ pub fn classify(template: &str, ctx: &Context) -> Option<(Base, String)> {
         .iter()
         .chain(&ANY_LEADING)
         .find_map(|&(placeholder, base)| {
-            below(template.strip_prefix(placeholder)?, "").map(|rest| (base, rest))
+            below(template.strip_prefix(placeholder)?, "", false).map(|rest| (base, rest))
         });
     let Some((base, rest)) = found else {
         return if cfg!(windows) {
@@ -462,7 +482,7 @@ pub fn classify(template: &str, ctx: &Context) -> Option<(Base, String)> {
     if matches!(base, Base::WinHome | Base::Home)
         && let Some((base, rest)) = home_subdirs
             .iter()
-            .find_map(|&(dir, base)| below(rest, dir).map(|rest| (base, rest)))
+            .find_map(|&(dir, base)| below(rest, dir, windows).map(|rest| (base, rest)))
     {
         return Some((base, rest.to_owned()));
     }

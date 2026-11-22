@@ -2,6 +2,7 @@
 //! [`GameSettings`] say what is excluded; [`apply`] filters a scan with them before backup.
 //! [`load_all`] and [`save`] keep them in the repository, one settings snapshot per game.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::layout::{self, Base};
 use crate::scan::{FoundFile, GameScan};
 use crate::storage::StorageError;
 
@@ -123,7 +125,7 @@ impl GameSettings {
         self.paths
             .iter()
             .filter(|(node, _)| covers(node, path))
-            .max_by_key(|(node, _)| components(node).count())
+            .max_by_key(|(node, _)| components(&canonical(node)).count())
             .is_none_or(|(_, &included)| included)
     }
 
@@ -225,10 +227,22 @@ fn components(key: &str) -> impl Iterator<Item = &str> {
     key.split('/').filter(|part| !part.is_empty())
 }
 
+/// `key` with a `WinHome/AppData/<Roaming|Local|LocalLow>` start, in any case, as the base the
+/// scan now keys it by ([`layout::normalized_win_home`]); older settings hold the `WinHome` form.
+fn canonical(key: &str) -> Cow<'_, str> {
+    let rest = (key.strip_prefix(Base::WinHome.dir_name())).and_then(|rest| rest.strip_prefix('/'));
+    match rest.and_then(|rest| layout::normalized_win_home(Base::WinHome, rest)) {
+        Some((base, rest)) if rest.is_empty() => Cow::Borrowed(base.dir_name()),
+        Some((base, rest)) => Cow::Owned(format!("{}/{rest}", base.dir_name())),
+        None => Cow::Borrowed(key),
+    }
+}
+
 /// Whether `node` is `path` or one of its ancestors, component by component. Below a
 /// Windows-family base the tail ignores ASCII case, as the scan does in prefixes.
 fn covers(node: &str, path: &str) -> bool {
-    let (mut node, mut path) = (components(node), components(path));
+    let (node, path) = (canonical(node), canonical(path));
+    let (mut node, mut path) = (components(&node), components(&path));
     let (Some(base), Some(path_base)) = (node.next(), path.next()) else {
         return false;
     };

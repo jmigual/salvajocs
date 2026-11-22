@@ -482,35 +482,43 @@ fn declared_roots(entry: Option<&GameEntry>, pairs: &[Pair]) -> Vec<Declared> {
 
 /// The entries of `declared` that `root` equals or lies below (ASCII case ignored for Windows
 /// bases), so a pre-restore snapshot of a mapped root deeper than its pair side stays
-/// restorable; none for a root with a component that is not plain (`..`).
+/// restorable; none for a root with a component that is not plain (`..`). A `WinHome` root
+/// under `AppData/<Roaming|Local|LocalLow>` in any case also counts as the base a template of
+/// today classifies to, as snapshots made before that matched without case hold it.
 fn declaring<'a>(
     root: &'a SnapshotRoot,
     declared: &'a [Declared],
 ) -> impl Iterator<Item = &'a Declared> {
     let windows = crossbuild::base_family(root.0) == Some(Family::Windows);
     let plain = components(&root.1).all(layout::is_plain_component);
-    declared
-        .iter()
-        .filter(move |d| plain && d.prefix.0 == root.0)
-        .filter(move |d| {
-            let mut parts = components(&root.1);
-            components(&d.prefix.1).all(|want| {
-                parts.next().is_some_and(|got| {
-                    if windows {
-                        got.eq_ignore_ascii_case(want)
-                    } else {
-                        got == want
-                    }
-                })
-            })
+    let normalized = layout::normalized_win_home(root.0, &root.1);
+    declared.iter().filter(move |d| {
+        plain
+            && [Some(root), normalized.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|root| d.prefix.0 == root.0 && below_prefix(root, &d.prefix.1, windows))
+    })
+}
+
+/// Whether `root` equals or lies below the directory `prefix` of its own base.
+fn below_prefix(root: &SnapshotRoot, prefix: &str, windows: bool) -> bool {
+    let mut parts = components(&root.1);
+    components(prefix).all(|want| {
+        parts.next().is_some_and(|got| {
+            if windows {
+                got.eq_ignore_ascii_case(want)
+            } else {
+                got == want
+            }
         })
+    })
 }
 
 /// Whether the file `tail` under `root` is declared: `root` lies at or below a declared prefix
 /// and, for a prefix from a globbed template, the tail or one of its parent dirs
 /// (a matched dir's files are saved too) matches that template.
 fn file_declared(root: &SnapshotRoot, tail: &str, declared: &[Declared], vars: &GameVars) -> bool {
-    let parts: Vec<&str> = components(tail).collect();
     // Prefix scans and native Windows ignore case; only native Linux bases keep it.
     let options = glob::MatchOptions {
         case_sensitive: crossbuild::base_family(root.0) == Some(Family::Linux),
@@ -521,6 +529,12 @@ fn file_declared(root: &SnapshotRoot, tail: &str, declared: &[Declared], vars: &
         let Some(glob) = &d.glob else {
             return true;
         };
+        // A glob of a normalized base is relative to that base, so the tail is too.
+        let normalized = (d.prefix.0 != root.0)
+            .then(|| layout::normalized_win_home(root.0, tail))
+            .flatten();
+        let parts: Vec<&str> =
+            components(normalized.as_ref().map_or(tail, |(_, tail)| tail)).collect();
         // The source machine's user is unknown here, so `<osUserName>` matches any component.
         layout::substitute(&glob.replace("<osUserName>", "*"), vars, "")
             .iter()

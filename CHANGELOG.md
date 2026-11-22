@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
+  `AppData`) is now stored under the same folder name as `AppData/LocalLow` and mapped to Linux
+  by the Unity rule. The next **Back up** of each affected game makes one extra snapshot.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed
