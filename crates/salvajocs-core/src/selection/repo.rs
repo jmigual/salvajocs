@@ -77,7 +77,8 @@ pub struct Saved {
 ///
 /// # Errors
 /// [`SelectionError::NewerFormat`] when the newest settings are of a newer format, the parse
-/// error when they are corrupt, [`SelectionError::NotWritten`], or the I/O or repository error.
+/// error when they are corrupt, [`SelectionError::NotWritten`] (also when another machine saved
+/// the game meanwhile: the new snapshot is forgotten, so retry), or the I/O or repository error.
 /// A failed forget is not an error: it is in [`Saved::forget_error`].
 pub fn save(
     storage: &mut Storage,
@@ -140,10 +141,43 @@ fn write(
     let written = storage
         .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], title)?
         .ok_or(SelectionError::NotWritten)?;
-    Ok(Saved {
-        written: Some(written),
-        forget_error: forget_listed(storage, &tag, &read.ids),
-    })
+    match settle(storage, &tag, &read.ids, &written.id)? {
+        Settled::Raced => Err(SelectionError::NotWritten),
+        Settled::Done(forget_error) => Ok(Saved {
+            written: Some(written),
+            forget_error,
+        }),
+    }
+}
+
+/// What [`settle`] did after a save wrote its snapshot.
+pub(crate) enum Settled {
+    /// Another machine saved meanwhile; the save's own snapshot was forgotten.
+    Raced,
+    /// The snapshot stands; holds why the older snapshots the save read could not be forgotten.
+    Done(Option<StorageError>),
+}
+
+/// Lists `tag` once after a save wrote `written`, having read the snapshots `read`. When a
+/// snapshot it did not read is there, another machine saved from the same one, so each lacks the
+/// other's changes: `written` is forgotten and the caller's save must not count as done (keeping
+/// it would let a retry forget the other's snapshot as older). Otherwise forgets those of `read`
+/// still listed.
+///
+/// # Errors
+/// The repository error when listing fails or `written` cannot be forgotten.
+pub(crate) fn settle(
+    storage: &Storage,
+    tag: &str,
+    read: &[String],
+    written: &str,
+) -> Result<Settled, StorageError> {
+    let listed = storage.snapshots(tag)?;
+    if (listed.iter()).any(|snapshot| snapshot.id != written && !read.contains(&snapshot.id)) {
+        storage.forget(&[written])?;
+        return Ok(Settled::Raced);
+    }
+    Ok(Settled::Done(forget_stale(storage, &listed, read)))
 }
 
 /// Forgets those of `ids` still listed under `tag`, so one another machine already forgot is
@@ -156,6 +190,15 @@ pub(crate) fn forget_listed(storage: &Storage, tag: &str, ids: &[String]) -> Opt
         Ok(listed) => listed,
         Err(err) => return Some(err),
     };
+    forget_stale(storage, &listed, ids)
+}
+
+/// Forgets those of `ids` among the `listed` snapshots.
+fn forget_stale(
+    storage: &Storage,
+    listed: &[SnapshotInfo],
+    ids: &[String],
+) -> Option<StorageError> {
     let stale: Vec<&str> = listed
         .iter()
         .map(|snapshot| snapshot.id.as_str())

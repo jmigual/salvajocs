@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Two PCs saving the same game's selection, custom game or Old backups rules at the same time
+  could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
+  counted as saved, so the change stays on this PC and is tried again at the next Back up.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed

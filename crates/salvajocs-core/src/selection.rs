@@ -16,8 +16,8 @@ mod pending;
 mod repo;
 
 pub use pending::Pending;
-pub(crate) use repo::forget_listed;
 pub use repo::{Saved, load_all, save};
+pub(crate) use repo::{Settled, forget_listed, settle};
 
 /// The [`GameSettings`] format this version reads and writes.
 pub const FORMAT: u32 = 1;
@@ -43,7 +43,8 @@ pub enum SelectionError {
     /// The repository failed.
     #[error("repository error")]
     Storage(#[from] StorageError),
-    /// The repository found the new settings unchanged from an older snapshot and stored none.
+    /// The repository found the new settings unchanged from an older snapshot and stored none,
+    /// or another machine saved the game meanwhile and the new snapshot was forgotten.
     #[error("the settings snapshot was not written")]
     NotWritten,
 }

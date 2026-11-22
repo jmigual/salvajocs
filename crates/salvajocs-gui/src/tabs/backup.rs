@@ -1750,7 +1750,9 @@ impl BackupTab {
                 ui,
                 icons::X_CIRCLE,
                 error_color,
-                format!("What to back up was not saved for {failed}"),
+                format!(
+                    "What to back up was not saved for {failed}; it is tried again at the next Back up"
+                ),
             );
         }
         let warn = ui.visuals().warn_fg_color;

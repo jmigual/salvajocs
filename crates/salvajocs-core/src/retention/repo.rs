@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{Retention, SETTINGS_TAG};
-use crate::selection::forget_listed;
+use crate::selection::{Settled, forget_listed, settle};
 use crate::storage::{SnapshotInfo, Storage, StorageError};
 
 /// The format of `retention.json` this version reads and writes.
@@ -41,7 +41,8 @@ pub enum RetentionError {
     /// The repository failed.
     #[error("repository error")]
     Storage(#[from] StorageError),
-    /// The repository found the new policy unchanged from an older snapshot and stored none.
+    /// The repository found the new policy unchanged from an older snapshot and stored none, or
+    /// another machine saved the policy meanwhile and the new snapshot was forgotten.
     #[error("the retention policy snapshot was not written")]
     NotWritten,
 }
@@ -84,7 +85,8 @@ pub struct Saved {
 ///
 /// # Errors
 /// [`RetentionError::NewerFormat`] or the parse error when the newest policy cannot be read,
-/// so it is never overwritten; [`RetentionError::NotWritten`], or the I/O or repository error.
+/// so it is never overwritten; [`RetentionError::NotWritten`] (also when another machine saved
+/// the policy meanwhile: the new snapshot is forgotten, so retry), or the I/O or repository error.
 /// A failed forget is not an error: it is in [`Saved::forget_error`].
 pub fn save(
     storage: &mut Storage,
@@ -98,7 +100,18 @@ pub fn save(
         None => Retention::default(),
     };
     let ids: Vec<String> = listed.into_iter().map(|snapshot| snapshot.id).collect();
-    if current == *policy {
+    write(storage, policy, &current, &ids, stage_root)
+}
+
+/// Writes `policy` when it differs from `current`, the newest of the snapshots `ids`.
+fn write(
+    storage: &mut Storage,
+    policy: &Retention,
+    current: &Retention,
+    ids: &[String],
+    stage_root: &Path,
+) -> Result<Saved, RetentionError> {
+    if current == policy {
         // The newest snapshot already holds the policy; only older leftovers go.
         let older = ids.get(1..).unwrap_or_default();
         return Ok(Saved {
@@ -120,10 +133,13 @@ pub fn save(
     let written = storage
         .backup_dir(&dir, AS_PATH, &[SETTINGS_TAG, POLICY_TAG], LABEL)?
         .ok_or(RetentionError::NotWritten)?;
-    Ok(Saved {
-        written: Some(written),
-        forget_error: forget_listed(storage, POLICY_TAG, &ids),
-    })
+    match settle(storage, POLICY_TAG, ids, &written.id)? {
+        Settled::Raced => Err(RetentionError::NotWritten),
+        Settled::Done(forget_error) => Ok(Saved {
+            written: Some(written),
+            forget_error,
+        }),
+    }
 }
 
 fn read(storage: &mut Storage, snapshot: &SnapshotInfo) -> Result<Retention, RetentionError> {
