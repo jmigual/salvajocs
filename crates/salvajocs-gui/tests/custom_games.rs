@@ -190,6 +190,17 @@ fn first<'a>(harness: &'a Harness<'static, App>, label: &'a str) -> egui_kittest
     harness.query_all_by_label(label).next().unwrap()
 }
 
+/// Clicks **Use on this PC** on the offer of `name` and waits until the saved config holds it.
+fn accept(harness: &mut Harness<'static, App>, env: &Env, name: &str) -> Vec<CustomGame> {
+    harness
+        .get_by_label(&format!("Use {name} on this PC"))
+        .click();
+    run_settled(harness);
+    run_until_saved(harness, env, |games| {
+        games.iter().any(|game| game.name == name)
+    })
+}
+
 /// Clicks Remove game in the confirm dialog of a removal.
 fn confirm_remove(harness: &mut Harness<'static, App>) {
     harness.get_by_label("Remove game").click();
@@ -563,9 +574,12 @@ fn custom_games_edit_keeps_what_the_form_does_not_show_and_remove_deletes() {
     assert_eq!(repository["Game"], Stored::Removed);
     assert_eq!(repository["Renamed"], shared(&renamed));
     let other_pc = tempfile::tempdir().unwrap();
-    let second = start(common::env(&other_pc), &repo_dir(&tmp), Vec::new(), &[]);
-    assert!(shows(&second, "Renamed ("));
+    let second_env = common::env(&other_pc);
+    let mut second = start(second_env.clone(), &repo_dir(&tmp), Vec::new(), &[]);
+    assert!(shows(&second, "Renamed (new)"));
     assert!(!shows(&second, "Game ("));
+    accept(&mut second, &second_env, "Renamed");
+    assert!(shows(&second, "Renamed (custom game)"));
 
     // Removing one game leaves the other as it was.
     first(&harness, "Remove").click();
@@ -699,7 +713,7 @@ fn custom_games_placeholder_help_opens_from_the_keyboard_and_lists_each_side_onc
 }
 
 #[test]
-fn custom_games_added_on_another_pc_show_after_the_repository_opens() {
+fn custom_games_added_on_another_pc_wait_for_review_after_the_repository_opens() {
     let tmp = tempfile::tempdir().unwrap();
     let env = env(&tmp);
     let repository = repo_dir(&tmp);
@@ -709,11 +723,55 @@ fn custom_games_added_on_another_pc_show_after_the_repository_opens() {
 
     let mut harness = start(env.clone(), &repository, Vec::new(), &[]);
 
-    assert!(shows(&harness, "Elsewhere (custom game)"));
-    assert_eq!(
-        run_until_saved(&mut harness, &env, |games| games.len() == 1),
-        [game]
+    assert!(shows(
+        &harness,
+        "wait for review in Custom games: Elsewhere"
+    ));
+    assert!(shows(&harness, "Elsewhere (new)"));
+    assert!(!shows(&harness, "Elsewhere (custom game)"));
+    run_until_read(&mut harness, &env);
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert!(config.custom_games.is_empty());
+    assert_eq!(accept(&mut harness, &env, "Elsewhere"), [game]);
+}
+
+#[test]
+fn custom_games_an_offered_game_is_listed_with_its_rows_and_used_after_accept() {
+    let (mut harness, env, tmp) = open_tab(vec![dialog_game("Shared")], &[]);
+    back_up(&mut harness, "Saved 1 custom game to the repository");
+    let mut theirs = dialog_game("Shared");
+    theirs.skips = vec!["<xdgConfig>/autostart".into()];
+    save_elsewhere(&tmp, "Shared", Some(&dialog_game("Shared")), Some(&theirs));
+    save_elsewhere(&tmp, "Game", None, Some(&kept_rules_game()));
+
+    harness.get_by_label("Read repository").click();
+    run_until(&mut harness, "the offers", |h| {
+        shows(h, "From other PCs, not used here")
+    });
+    assert!(shows(&harness, "Shared (changed on another PC)"));
+    assert!(shows(&harness, "Skipped folder: <xdgConfig>/autostart"));
+    assert!(shows(&harness, "Game (new)"));
+    assert!(shows(&harness, "Old-style file: <home>/.game/config"));
+    assert!(shows(&harness, "Steam id: 42"));
+    let config = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(config.custom_games, [dialog_game("Shared")]);
+
+    let saved = accept(&mut harness, &env, "Shared");
+    assert_eq!(saved, [theirs]);
+    assert!(!shows(&harness, "Shared (changed on another PC)"));
+    assert!(
+        !shows(&harness, "Not backed up yet"),
+        "the copy is the repository's"
     );
+
+    // Removing a game new here waits for the next Back up, like a removal made here.
+    harness
+        .get_by_label("Remove Game from the repository")
+        .click();
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "From other PCs"));
+    back_up(&mut harness, "Saved 1 custom game to the repository");
+    assert_eq!(in_repository(&tmp)["Game"], Stored::Removed);
 }
 
 #[test]
@@ -779,7 +837,9 @@ fn custom_games_remove_on_one_pc_removes_it_on_the_other() {
     run_until_read(&mut first, &first_env);
     back_up(&mut first, "Saved 1 custom game to the repository");
     let other = tempfile::tempdir().unwrap();
-    let mut second = start(env(&other), &repo_dir(&tmp), Vec::new(), &[]);
+    let second_env = env(&other);
+    let mut second = start(second_env.clone(), &repo_dir(&tmp), Vec::new(), &[]);
+    accept(&mut second, &second_env, "Shared");
     assert!(shows(&second, "Shared (custom game)"));
 
     first.get_by_label("Remove").click();
@@ -947,7 +1007,7 @@ fn custom_games_wine_prefix_stays_on_this_pc() {
     let other = tempfile::tempdir().unwrap();
     let other_env = common::env(&other);
     let mut second = start(other_env.clone(), &repo_dir(&tmp), Vec::new(), &[]);
-    let theirs = run_until_saved(&mut second, &other_env, |games| games.len() == 1);
+    let theirs = accept(&mut second, &other_env, "Prefixed");
     assert_eq!(theirs[0].wine_prefix, None);
 
     // A new prefix alone stays on this PC: nothing is left to save.
@@ -1028,12 +1088,15 @@ fn custom_games_form_opened_before_a_read_asks_to_reload() {
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
 
-    // Another PC changes the game, and this PC reads it while the form is open.
+    // Another PC changes the game, and this PC takes it while the form is open.
     let mut theirs = game.clone();
     theirs.skips = vec!["<xdgData>/Theirs".into()];
     save_elsewhere(&tmp, "Game", Some(&game), Some(&theirs));
     harness.get_by_label("Read repository").click();
-    run_settled(&mut harness);
+    run_until(&mut harness, "the offer", |h| {
+        shows(h, "Game (changed on another PC)")
+    });
+    accept(&mut harness, &env, "Game");
     replace_text(&mut harness, "Windows 1", "<winLocalAppData>/Foo");
     harness.get_by_label("Save game").click();
     run_until(&mut harness, "the conflict", |h| {
@@ -1189,7 +1252,7 @@ fn custom_games_only_back_up_writes_them_to_the_repository() {
 
     // This PC's game from before 0.8 meets another PC's in the repository.
     let mut harness = start(env.clone(), &repository, vec![dialog_game("Mine")], &[]);
-    assert!(shows(&harness, "Theirs (custom game)"));
+    assert!(shows(&harness, "Theirs (new)"));
     unchanged(&harness, "the open");
 
     harness.state_mut().set_tab(Tab::Backup);
@@ -1201,6 +1264,10 @@ fn custom_games_only_back_up_writes_them_to_the_repository() {
     harness.get_by_label("Read repository").click();
     run_settled(&mut harness);
     unchanged(&harness, "Read repository");
+
+    accept(&mut harness, &env, "Theirs");
+    assert!(shows(&harness, "Theirs (custom game)"));
+    unchanged(&harness, "Use on this PC");
 
     harness.get_by_label("Add game").click();
     run_settled(&mut harness);

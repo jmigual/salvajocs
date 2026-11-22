@@ -7,6 +7,8 @@ and from a Read repository button; a migration asks instead of the repository wi
 editing; no `config-before-custom-games.yaml` (ADR-0029).
 **Amended:** 2026-11-22: a save that finds another PC's snapshot written meanwhile forgets its
 own and fails with `NotWritten` (see Consequences).
+**Amended:** 2026-11-22: a read never adds or replaces a local game; the repository's new or
+changed games are offered and used only once accepted on each PC (ADR-0030).
 
 ## Context
 

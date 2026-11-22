@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-22: shape rules for declared roots and registry keys are defence in depth;
+a custom game from the repository is used only once accepted on each PC (ADR-0030).
 
 ## Context
 

@@ -24,6 +24,8 @@ use crate::state::{Edit, State};
 use crate::theme::{self, icons};
 use crate::widgets::{guide_url, labelled_edit, named_button};
 
+mod offers;
+
 /// The placeholders section of the guide.
 const PLACEHOLDERS_DOCS: &str = guide_url!("custom-games.md#placeholders");
 
@@ -802,7 +804,7 @@ impl CustomGamesTab {
     /// (ADR-0029).
     pub fn ui(&mut self, ui: &mut Ui, state: &mut State) {
         let ctx = ui.ctx().clone();
-        let (mut edit, mut read) = (None, false);
+        let (mut edit, mut read, mut answer) = (None, false, None);
         theme::page(ui, |ui| {
             let manifest = state.manifest.as_ref();
             let env = &state.env;
@@ -882,6 +884,7 @@ impl CustomGamesTab {
                     removed.join(", ")
                 ));
             }
+            answer = offers::offers_ui(ui, config, jobs);
             ui.weak(
                 "Changes stay on this PC until the next Back up, which saves them to the \
                  repository for your other PCs. The Wine prefix stays on this PC.",
@@ -941,6 +944,11 @@ impl CustomGamesTab {
         }
         if let Some(edit) = edit {
             state.edit_custom_game(&ctx, edit);
+        }
+        match answer {
+            Some(offers::Answer::Accept(shown)) => state.accept_custom_game(&ctx, &shown),
+            Some(offers::Answer::Decline(shown)) => state.keep_this_pcs_custom_game(&ctx, &shown),
+            None => {}
         }
         if read {
             state.read_custom_games(&ctx);

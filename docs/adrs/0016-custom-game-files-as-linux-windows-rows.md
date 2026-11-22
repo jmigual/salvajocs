@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-18
+**Amended:** 2026-11-22: `validate_file` refuses a side that is a whole base or a glob with no
+literal name below one (`FileError::TooWide`, ADR-0030).
 
 ## Context
 
@@ -42,6 +44,9 @@ hold the same file or folder.
     on it only on Windows;
   - wildcards, `<game>`, `<osUserName>` and `<storeUserId>` are allowed; relative paths and
     `.`/`..` components are not.
+  - a side that is a whole base or a glob with no literal name below one (`<home>`, `<home>/*`,
+    `/`, `C:/`; `crossbuild::too_wide`) is refused, since a restore ignores it (amended by
+    ADR-0030).
   - Any two valid sides make a valid row, an absolute one included: the user wants every row to
     hold both paths.
 - **Restore:** each row with two different sides gives a pair of its glob-free prefixes

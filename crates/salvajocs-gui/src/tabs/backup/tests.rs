@@ -1435,6 +1435,22 @@ fn rules_over_a_newer_versions_are_not_saved_and_say_why() {
 }
 
 #[test]
+fn game_lines_list_old_style_files_and_steam_id() {
+    let mut game = custom("Game", "Same");
+    let rule = salvajocs_core::manifest::FileRule::default();
+    game.entry.files.insert("<home>/.game".into(), rule);
+    let mut steam = salvajocs_core::manifest::Steam::default();
+    steam.id = Some(42);
+    game.entry.steam = Some(steam);
+    let lines = unsent::game_lines(Some(&game));
+    assert!(
+        lines.contains(&"Old-style file: <home>/.game".to_owned()),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"Steam id: 42".to_owned()), "{lines:?}");
+}
+
+#[test]
 fn a_difference_the_lines_do_not_show_gets_a_line_of_its_own() {
     let mut here = custom("Game", "Same");
     here.wine_prefix = Some("/prefixes/game".into());

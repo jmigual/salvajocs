@@ -1,7 +1,8 @@
 //! Custom games in the repository (ADR-0028): one settings snapshot per game holding
 //! `/salvajocs-settings/custom-games/<slug>/custom-game.json`, tagged `salvajocs-settings` and
 //! `custom-game:<slug>`, with the name as label. A removed game is a tombstone. The Wine prefix
-//! is never stored: it stays in this PC's config, whose `custom_games` is a copy of these.
+//! is never stored: it stays in this PC's config, whose `custom_games` holds the ones this PC
+//! uses (ADR-0030).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -522,8 +523,12 @@ pub fn after_send(
 #[derive(Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Merged {
-    /// The new local copy: the local order, then the repository's other games by name.
+    /// The new local copy, in the local order. It never gains a game or a change from the
+    /// repository: those are [`Merged::offered`].
     pub games: Vec<CustomGame>,
+    /// The repository's games that are new here or differ from this PC's copy, without a Wine
+    /// prefix, by name; they are used here only once the user accepts them (ADR-0030).
+    pub offered: Vec<CustomGame>,
     /// Local games a migration keeps that the repository lacks or holds otherwise, as unsent
     /// changes based on this PC's copy, so Back up saves them or asks.
     pub new_unsent: Vec<Unsent>,
@@ -533,13 +538,17 @@ pub struct Merged {
 }
 
 /// Merges the repository's custom games `listed` ([`load_all`]) into this PC's `local` copy
-/// (ADR-0029). A name with an entry in `unsent` stays as this PC has it, a removal included.
-/// When `mirrors` (the copy mirrors this repository), each other local game takes the
-/// repository's shared fields and keeps its Wine prefix; a removed one is dropped; an unreadable
-/// one stays, and so does one the repository has no snapshot of, as a new game to send, so a
-/// copy wrongly marked as mirroring loses nothing. Otherwise (a migration) each local
-/// game stays: one equal to the repository's copy as it is, any other as a new unsent change.
-/// Then the repository's games the copy and `unsent` lack are appended by name.
+/// (ADR-0029, ADR-0030). Every game of [`Merged::games`] was edited on this PC, kept from
+/// `local`, or accepted on this PC with its exact shared content: the merge never adds or
+/// replaces a game from the repository, it only drops one the repository removed.
+///
+/// A name with an entry in `unsent` stays as this PC has it, a removal included, and is never
+/// offered. When `mirrors` (the copy mirrors this repository), each other local game stays and
+/// a different repository copy is offered; a removed one is dropped; an unreadable one stays,
+/// and so does one the repository has no snapshot of, as a new game to send, so a copy wrongly
+/// marked as mirroring loses nothing. Otherwise (a migration) each local game stays: one equal
+/// to the repository's copy as it is, any other as a new unsent change. In both, the
+/// repository's games the copy and `unsent` lack are offered.
 pub fn merge(
     local: &[CustomGame],
     unsent: &[Unsent],
@@ -558,10 +567,12 @@ pub fn merge(
             continue;
         }
         match stored {
-            Some(Ok(Stored::Game(stored))) if mirrors => merged.games.push(CustomGame {
-                wine_prefix: game.wine_prefix.clone(),
-                ..(**stored).clone()
-            }),
+            Some(Ok(Stored::Game(stored))) if mirrors => {
+                if shared(game) != **stored {
+                    merged.offered.push((**stored).clone());
+                }
+                merged.games.push(game.clone());
+            }
             Some(Ok(Stored::Removed)) if mirrors => {}
             None if mirrors => {
                 merged.new_unsent.push(Unsent::new(game.name.clone(), None));
@@ -587,9 +598,11 @@ pub fn merge(
             && !local.iter().any(|game| game.name == *name)
             && !is_unsent(name)
         {
-            merged.games.push((**stored).clone());
+            merged.offered.push((**stored).clone());
         }
     }
+    // The first loop offers in the local order.
+    merged.offered.sort_by(|a, b| a.name.cmp(&b.name));
     merged
 }
 

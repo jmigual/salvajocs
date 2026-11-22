@@ -440,17 +440,13 @@ fn listed(
         .collect()
 }
 
-fn names(games: &[CustomGame]) -> Vec<&str> {
-    games.iter().map(|game| game.name.as_str()).collect()
-}
-
 fn stored(game: CustomGame) -> Result<Stored, CustomGameError> {
     Ok(Stored::Game(Box::new(game)))
 }
 
 #[test]
-fn merge_keeps_the_local_order_and_appends_new_games_by_name() {
-    let local = [game("B"), game("A")];
+fn merge_keeps_the_local_copy_and_offers_a_changed_one() {
+    let local = [game("B"), with_prefix(game("A"), "/prefixes/a")];
     let mut changed = game("A");
     changed.skips.clear();
     let listed = listed(vec![
@@ -460,36 +456,64 @@ fn merge_keeps_the_local_order_and_appends_new_games_by_name() {
         ("B", stored(game("B"))),
     ]);
     let merged = merge(&local, &[], &listed, true);
-    assert_eq!(names(&merged.games), ["B", "A", "C", "D"]);
-    assert_eq!(merged.games[1], changed);
+    assert_eq!(merged.games, local);
+    assert_eq!(merged.offered, [changed, game("C"), game("D")]);
     assert!(merged.new_unsent.is_empty());
     assert!(merged.complete);
 }
 
 #[test]
-fn a_mirror_takes_the_repositorys_games_with_each_local_wine_prefix() {
+fn merge_offers_a_game_this_pc_lacks() {
+    let listed = listed(vec![("G", stored(game("G")))]);
+    for mirrors in [true, false] {
+        let merged = merge(&[], &[], &listed, mirrors);
+        assert!(merged.games.is_empty());
+        assert_eq!(merged.offered, [game("G")]);
+    }
+}
+
+#[test]
+fn merge_offers_nothing_for_an_equal_copy_or_an_unsent_name() {
     let local = [
-        with_prefix(game("A"), "/prefixes/a"),
-        game("Removed"),
-        game("Unknown"),
-        game("Unreadable"),
+        with_prefix(game("Equal"), "/prefixes/equal"),
+        game("Edited"),
     ];
-    let mut theirs = game("A");
-    theirs.skips.clear();
+    let unsent = [
+        Unsent::new("Edited".into(), Some(game("Edited"))),
+        Unsent::new("Added".into(), None),
+    ];
+    let mut theirs = game("Edited");
+    theirs.files.clear();
     let listed = listed(vec![
-        ("A", stored(theirs.clone())),
+        ("Equal", stored(game("Equal"))),
+        ("Edited", stored(theirs)),
+        ("Added", stored(game("Added"))),
+    ]);
+    for mirrors in [true, false] {
+        let merged = merge(&local, &unsent, &listed, mirrors);
+        assert_eq!(merged.games, local);
+        assert!(merged.offered.is_empty());
+    }
+}
+
+#[test]
+fn merge_still_drops_a_removed_game() {
+    let local = [game("Removed"), game("Kept")];
+    let listed = listed(vec![("Removed", Ok(Stored::Removed))]);
+    let merged = merge(&local, &[], &listed, true);
+    assert_eq!(merged.games, [game("Kept")]);
+    assert!(merged.offered.is_empty());
+}
+
+#[test]
+fn a_mirror_keeps_each_local_game_it_cannot_compare() {
+    let local = [game("Removed"), game("Unknown"), game("Unreadable")];
+    let listed = listed(vec![
         ("Removed", Ok(Stored::Removed)),
         ("Unreadable", Err(CustomGameError::NewerFormat(2))),
     ]);
     let merged = merge(&local, &[], &listed, true);
-    assert_eq!(
-        merged.games,
-        [
-            with_prefix(theirs, "/prefixes/a"),
-            game("Unknown"),
-            game("Unreadable")
-        ]
-    );
+    assert_eq!(merged.games, [game("Unknown"), game("Unreadable")]);
     // A game the repository has no snapshot of is kept, to be sent as new.
     assert_eq!(merged.new_unsent, [Unsent::new("Unknown".into(), None)]);
     assert!(merged.complete);
@@ -535,11 +559,8 @@ fn a_migration_keeps_every_local_game_and_marks_those_the_repository_differs_on(
         ("Theirs", stored(game("Theirs"))),
     ]);
     let merged = merge(&local, &[], &listed, false);
-    assert_eq!(
-        names(&merged.games),
-        ["Equal", "Lacking", "Other", "Removed", "Theirs"]
-    );
-    assert_eq!(merged.games[..4], local);
+    assert_eq!(merged.games, local);
+    assert_eq!(merged.offered, [game("Theirs")]);
     assert_eq!(
         merged.new_unsent,
         ["Lacking", "Other", "Removed"].map(|name| Unsent::new(name.into(), Some(game(name))))

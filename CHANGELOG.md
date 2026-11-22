@@ -61,6 +61,17 @@ All notable changes to salvajocs. The format follows
 
 ### Security
 
+- A custom game another PC saved to the repository, new here or changed, is no longer used on
+  this PC until you accept it. **Read repository** and opening the repository list it under
+  **From other PCs, not used here** in the Custom games tab, with its files, registry keys,
+  old-style files and Steam id, and a notice names it. **Use on this PC** takes it; **Keep this
+  PC's version** or **Remove from the repository** has the next Back up write this PC's choice.
+  Before, anyone who could write to the repository could make every PC's restores write any
+  file, such as an autostart entry. Custom games this PC already had stay in use. A removal made
+  on another PC still applies without asking. A restore no longer trusts a custom game's file
+  template that is a whole folder such as `<home>`, `<home>/*` or `C:/`, nor a registry key
+  outside `HKEY_CURRENT_USER` or under a system key such as `Software/Microsoft/Windows`; the
+  form refuses such a template.
 - **Update now** installs a release only when its `SHA256SUMS` carries a minisign signature made
   with the release key built into the app; before, the hashes came from the same release as the
   installer and proved no more than a complete download. Releases are signed in the release

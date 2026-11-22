@@ -43,7 +43,7 @@ use unsent::{
 };
 
 mod choices;
-mod unsent;
+pub(crate) mod unsent;
 
 /// What a backup did for one game.
 #[derive(Debug, PartialEq, Eq)]
