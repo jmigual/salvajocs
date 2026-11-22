@@ -4,6 +4,8 @@
 **Date:** 2026-11-16
 **Amended:** 2026-11-20: saved pairs and skips go to the repository with the custom game
 (ADR-0028).
+**Amended:** 2026-11-22: a saved pair whose target side is a whole base (`crossbuild::too_wide`,
+such as `<home>`) still maps, with a note naming it in the mapping dialog and the preview.
 
 ## Context
 

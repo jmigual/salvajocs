@@ -13,6 +13,9 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- A cross-build restore through a saved mapping whose target is a whole folder, such as
+  `<home>` in `<home> / <winDocuments>/x`, now says so in the mapping dialog and the plan: "The
+  saved mapping … writes into the whole … folder". The mapping still applies.
 - After a delete or a restore, the Restore tab keeps the chosen game chosen when it still has
   backups, instead of asking you to pick it again.
 - **Remove** on a custom game asks you to confirm first.
@@ -61,6 +64,17 @@ All notable changes to salvajocs. The format follows
 
 ### Security
 
+- A custom game another PC saved to the repository, new here or changed, is no longer used on
+  this PC until you accept it. **Read repository** and opening the repository list it under
+  **From other PCs, not used here** in the Custom games tab, with its files, registry keys,
+  old-style files and Steam id, and a notice names it. **Use on this PC** takes it; **Keep this
+  PC's version** or **Remove from the repository** has the next Back up write this PC's choice.
+  Before, anyone who could write to the repository could make every PC's restores write any
+  file, such as an autostart entry. Custom games this PC already had stay in use. A removal made
+  on another PC still applies without asking. A restore no longer trusts a custom game's file
+  template that is a whole folder such as `<home>`, `<home>/*` or `C:/`, nor a registry key
+  outside `HKEY_CURRENT_USER` or under a system key such as `Software/Microsoft/Windows`; the
+  form refuses such a template.
 - **Update now** installs a release only when its `SHA256SUMS` carries a minisign signature made
   with the release key built into the app; before, the hashes came from the same release as the
   installer and proved no more than a complete download. Releases are signed in the release
@@ -75,6 +89,9 @@ All notable changes to salvajocs. The format follows
 - Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
   injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
   (RUSTSEC-2026-0592).
+- The Custom games form refuses a registry key a restore never writes: one outside
+  `HKEY_CURRENT_USER`, `Software` itself, or a system key such as `Software/Microsoft/Windows`,
+  `Software/Classes` or `Environment`. The row shows why, and **Save game** stays disabled.
 - A REST password still in the repository URL, because the keyring refused it, is now hidden in
   error messages too.
 - The manifest download accepts HTTPS only and is read up to 64 MiB.

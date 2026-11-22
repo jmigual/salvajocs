@@ -12,7 +12,8 @@ game, a game that extends the manifest entry, or one that overrides it. **Edit**
 change the list; **Remove** asks you to confirm first, and Escape or a click outside that dialog
 cancels it. **Add game** opens the form. Changes stay on this PC until the next [Back
 up](backup.md#custom-games-and-rules), which saves them to the repository, so every PC that uses it
-has the same custom games. **Read repository** reads the changes other PCs saved. The **Wine
+can have the same custom games. **Read repository** reads the changes other PCs saved; this PC
+uses them only once you accept them ([Games from other PCs](#games-from-other-pcs)). The **Wine
 prefix** stays on this PC: each PC sets its own.
 
 ## The form
@@ -108,7 +109,9 @@ characters in a name), `?` (one character) and `[...]` (one character of a set).
 
 Keys under `HKEY_CURRENT_USER` where the Windows build keeps saves or settings, one per row, for
 example `HKEY_CURRENT_USER/Software/My Game`. **Add registry key** and **Remove registry key**
-change the list.
+change the list. A key outside `HKEY_CURRENT_USER`, `HKEY_CURRENT_USER/Software` itself, or a
+system key such as `Software/Microsoft/Windows`, `Software/Classes` or `Environment` cannot be
+saved: a restore never writes it.
 
 ### Install folders
 
@@ -134,7 +137,7 @@ you tick **Skip** on a row (labelled Skip 1, Skip 2, ...).
 
 **Save game** checks the form, then saves the game on this PC and closes the form. It reports an
 error for an empty or taken name, a mapping or skipped folder that is not a path template, and a
-game that changed while the form was open, for example by **Read repository** or a restore
+game that changed while the form was open, for example by **Use on this PC** or a restore
 mapping: click **Reload** to see the game as it is now, then make your change again.
 
 A game changed here shows "Not backed up yet" until a Back up saves it to the repository. A
@@ -144,13 +147,40 @@ take the new name, the old one is not removed either, and the next Back up tries
 Changing only the Wine prefix leaves nothing to back up, as it is never stored.
 
 The repository is read when this PC opens it, after you connect another repository in Settings,
-and when you click **Read repository**. A read never replaces a game you changed here and did not
-back up yet. Without the repository (it is missing, or could not be opened) you can still add,
-edit and remove custom games; they wait for the next Back up. The Backup tab scans them too.
+and when you click **Read repository**. A read never adds or changes a game on this PC: what
+other PCs added or changed waits for you below the list. It only removes a game another PC
+removed, unless you changed it here and did not back up yet. Without the repository (it is
+missing, or could not be opened) you can still add, edit and remove custom games; they wait for
+the next Back up. The Backup tab scans them too.
 
 A game saved by a newer salvajocs shows "Written by a newer salvajocs" and cannot be edited or
 removed here. A game that cannot be read from the repository shows why. Either way this PC keeps
 its own copy of it, if it has one, and backs it up as before.
+
+## Games from other PCs
+
+A custom game decides which files and registry keys a restore may write, so a game another PC
+saved to the repository is not used here until you accept it on this PC. After a read, the
+section **From other PCs, not used here** lists each game that is new here or whose repository
+copy differs from this PC's, and a notice names them. After you switch to another repository in
+Settings, the list waits for that repository's read. Each shows its files, registry keys,
+old-style files, mappings, skipped folders and Steam id; a changed game shows this PC's version
+beside the repository's, with a line only one of them has in bold.
+
+- **Use on this PC** puts the repository's version on this PC, with this PC's Wine prefix. It
+  leaves nothing to back up.
+- **Keep this PC's version** marks this PC's version "Not backed up yet": the next Back up saves
+  it over the other PC's.
+- **Remove from the repository**, for a game new here, has the next Back up remove it from the
+  repository. Every PC that already uses it removes it at its next read, without asking, and
+  other PCs stop being offered it.
+
+Without an answer the game stays listed and is not used. A restore of such a game uses only this
+PC's definition, and its plan in the Restore tab says that another PC's version waits here. Use
+a game only if you recognise it: anyone who can write to the repository can save one. The same choice is made in the Back up question below: **Keep the repository's**
+accepts that version.
+
+The custom games this PC already had before this version stay in use without asking.
 
 ## Changed on another PC
 
@@ -166,14 +196,16 @@ removed it. **Cancel** stops the Back up, and nothing is written.
 The first time a PC opens a repository with this version, it keeps all its custom games. A game
 the repository already has with the same contents is left as it is. Any other game is marked
 "Not backed up yet": the next Back up adds a game the repository does not have, and asks about a
-game the repository holds with other contents or says was removed on another PC. The same
-happens after you connect another repository in Settings: this PC's custom games, and the
-changes it did not back up yet, go along to the new repository.
+game the repository holds with other contents or says was removed on another PC. The
+repository's games this PC does not have wait in [Games from other PCs](#games-from-other-pcs).
+The same happens after you connect another repository in Settings: this PC's custom games, and
+the changes it did not back up yet, go along to the new repository.
 
 salvajocs 0.8.0 saved custom games to the repository at once and may have left a copy of the
 config as `config-before-custom-games.yaml` in the config folder; this version no longer writes
 it. A PC still on 0.8.0 keeps saving its changes at once, and the next Back up here asks about
-any of those games this PC changed too. salvajocs 0.7 and older do not read custom games from
+any of those games this PC changed too. salvajocs 0.9.1 and older use the repository's games
+without asking. salvajocs 0.7 and older do not read custom games from
 the repository. A PC with such a version keeps using its own list, and does not see games added
 on other PCs until it is updated.
 

@@ -932,7 +932,13 @@ fn unsent_custom_games_survive_a_switch_and_back() {
     });
 
     apply_existing_location(&mut harness, &env, &second);
+    // Another PC's game is used here once accepted; it then goes along like this PC's own.
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    harness.get_by_label("Use Theirs on this PC").click();
     run_until_saved(&mut harness, &env, |config| config.custom_games.len() == 2);
+    harness.state_mut().set_tab(Tab::Settings);
+    run_settled(&mut harness);
     let unsent = |config: &AppConfig| -> Vec<String> {
         (config.custom_games_unsent.iter())
             .map(|entry| entry.name.clone())

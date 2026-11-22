@@ -132,6 +132,9 @@ converted". The files of the mapped folder are still restored.
 
 - A wrong pair writes files where the other build does not read them. Nothing is deleted, and the
   safety backup holds what was overwritten.
+- A saved pair whose target is a whole folder, such as `<home>`, puts the mapped folder's files
+  straight into that folder. The dialog and the plan say "The saved mapping … writes into the
+  whole … folder"; check the plan, or change the pair in the Custom games tab.
 - Same paths do not always mean the same file format. Check the game after a cross-build
   restore.
 - Paths saved as plain absolute paths (a custom path on Linux, or a drive-letter path on Windows)

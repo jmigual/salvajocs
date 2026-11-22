@@ -159,6 +159,9 @@ impl State {
             config.ignored_prefixes = old.ignored_prefixes.clone();
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }
+        // The last read's offers are the old repository's: accepted here, they would reach the
+        // new one.
+        self.custom_games.forget_read();
         self.session = Some(Session {
             compression: storage.compression(),
             storage: Arc::new(Mutex::new(*storage)),

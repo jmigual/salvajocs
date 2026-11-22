@@ -127,6 +127,33 @@ fn no_auto_pair_when_ambiguous() {
 }
 
 #[test]
+fn a_saved_pair_onto_a_whole_base_still_maps_with_a_note() {
+    let pairs = [pair("<home>", "<winDocuments>/x")];
+    let mapped = one(propose(
+        &meta(vec![win_root("<winDocuments>/x/y")]),
+        None,
+        &pairs,
+        &[],
+        Family::Linux,
+    ));
+    assert_eq!(mapped.confidence, Confidence::Saved);
+    assert_eq!(mapped.proposed.as_deref(), Some("<home>/y"));
+    assert_eq!(mapped.notes.len(), 1, "{:?}", mapped.notes);
+    assert!(mapped.notes[0].contains("<home> / <winDocuments>/x"));
+
+    // Into Windows, the same pair writes below a folder, which needs no note.
+    let mapped = one(propose(
+        &meta(vec![linux_root("<home>/y")]),
+        None,
+        &pairs,
+        &[],
+        Family::Windows,
+    ));
+    assert_eq!(mapped.proposed.as_deref(), Some("<winDocuments>/x/y"));
+    assert!(mapped.notes.is_empty());
+}
+
+#[test]
 fn custom_pair_maps_tail() {
     let pairs = [pair("<xdgData>/Foo", "<winDocuments>/My Games/Foo")];
     let mapped = one(propose(

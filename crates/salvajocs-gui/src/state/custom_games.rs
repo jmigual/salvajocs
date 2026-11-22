@@ -51,6 +51,9 @@ pub struct CustomGameJobs {
     /// them ended listed the repository before that write.
     sent: u64,
     unreadable: BTreeMap<String, String>,
+    /// The repository's games of the last read that this PC uses only once accepted, by name
+    /// ([`custom_games::Merged::offered`]).
+    offered: BTreeMap<String, CustomGame>,
 }
 
 impl CustomGameJobs {
@@ -72,6 +75,24 @@ impl CustomGameJobs {
     /// The games of the last read whose newest copy cannot be used, with why.
     pub fn all_unreadable(&self) -> &BTreeMap<String, String> {
         &self.unreadable
+    }
+
+    /// The repository's copy of the game `name`, without a Wine prefix, when the last read found
+    /// it new here or different from this PC's and the user has not answered it (ADR-0030).
+    pub fn offered(&self, name: &str) -> Option<&CustomGame> {
+        self.offered.get(name)
+    }
+
+    /// Every game [`CustomGameJobs::offered`] holds, by name.
+    pub fn all_offered(&self) -> &BTreeMap<String, CustomGame> {
+        &self.offered
+    }
+
+    /// Forgets what the last read found, offers and unreadable games, for a repository that is
+    /// no longer the one open.
+    pub(super) fn forget_read(&mut self) {
+        self.offered.clear();
+        self.unreadable.clear();
     }
 }
 
@@ -109,13 +130,23 @@ impl State {
         let old = based_on.as_ref().map(|game| game.name.clone());
         if based_on.as_ref().map(shared) != game.as_ref().map(shared) {
             if let Some(old) = &old {
-                mark(&mut config.custom_games_unsent, old, based_on.clone());
+                mark(
+                    &mut config.custom_games_unsent,
+                    &mut self.custom_games.offered,
+                    old,
+                    based_on.clone(),
+                );
             }
             if let Some(game) = game
                 .as_ref()
                 .filter(|game| Some(&game.name) != old.as_ref())
             {
-                mark(&mut config.custom_games_unsent, &game.name, None);
+                mark(
+                    &mut config.custom_games_unsent,
+                    &mut self.custom_games.offered,
+                    &game.name,
+                    None,
+                );
             }
         }
         let update = match (game, old) {
@@ -146,9 +177,60 @@ impl State {
         let before = find(&config.custom_games);
         crossbuild::apply_choices(&mut config.custom_games, title, choices);
         if find(&config.custom_games) != before {
-            mark(&mut config.custom_games_unsent, title, before);
+            mark(
+                &mut config.custom_games_unsent,
+                &mut self.custom_games.offered,
+                title,
+                before,
+            );
             self.save_config(ctx);
         }
+    }
+
+    /// Uses the offered copy `shown`, as the user saw it, on this PC with this PC's Wine prefix,
+    /// and saves the config (ADR-0030). Nothing is unsent: the copy is the repository's. Nothing
+    /// happens when the offer of its name is gone or is no longer `shown`, as a read that ended
+    /// since may have replaced it.
+    pub fn accept_custom_game(&mut self, ctx: &egui::Context, shown: &CustomGame) {
+        let Some(config) = &mut self.config else {
+            return;
+        };
+        let Some(mut game) = take_offer(&mut self.custom_games.offered, shown) else {
+            return;
+        };
+        let name = &shown.name;
+        let local = config.custom_games.iter().find(|game| game.name == *name);
+        game.wine_prefix = local.and_then(|game| game.wine_prefix.clone());
+        let at = name.clone();
+        apply(
+            &mut config.custom_games,
+            Update::Put {
+                at,
+                game: Box::new(game),
+            },
+        );
+        self.save_config(ctx);
+    }
+
+    /// Declines the offered copy `shown`, as the user saw it: marks its name as unsent from that
+    /// copy, so the next Back up writes this PC's game over it, or removes it from the repository
+    /// when this PC has no game of that name (ADR-0029, ADR-0030). Saves the config. Nothing
+    /// happens when the offer of its name is gone or is no longer `shown`.
+    pub fn keep_this_pcs_custom_game(&mut self, ctx: &egui::Context, shown: &CustomGame) {
+        let Some(config) = &mut self.config else {
+            return;
+        };
+        let offers = &mut self.custom_games.offered;
+        let Some(offered) = take_offer(offers, shown) else {
+            return;
+        };
+        mark(
+            &mut config.custom_games_unsent,
+            offers,
+            &shown.name,
+            Some(offered),
+        );
+        self.save_config(ctx);
     }
 
     /// Takes what a Back up saved to the repository open now: the custom games `sent`
@@ -206,7 +288,8 @@ impl State {
     }
 
     /// Merges `listed`, read from the repository of key `scope`, into this PC's copy as it is
-    /// now, so an edit made while the read ran is kept.
+    /// now, so an edit made while the read ran is kept. Its offers replace the last read's, and
+    /// names not offered before get one notice.
     fn merge_custom_games(&mut self, ctx: &egui::Context, listed: &Listed, scope: String) {
         let Some(config) = &mut self.config else {
             return;
@@ -233,17 +316,48 @@ impl State {
                 Some((name.clone(), why))
             })
             .collect();
+        let new: Vec<&str> = (merged.offered.iter())
+            .filter(|game| self.custom_games.offered.get(&game.name) != Some(*game))
+            .map(|game| game.name.as_str())
+            .collect();
+        if !new.is_empty() {
+            self.notices.push(format!(
+                "New or changed custom games from other PCs wait for review in Custom games: {}",
+                new.join(", ")
+            ));
+        }
+        self.custom_games.offered = (merged.offered.into_iter())
+            .map(|game| (game.name.clone(), game))
+            .collect();
         if changed {
             self.save_config(ctx);
         }
     }
 }
 
-/// Marks `name` as unsent from `based_on`, unless it is already: the earliest base wins.
-fn mark(unsent: &mut Vec<Unsent>, name: &str, based_on: Option<CustomGame>) {
+/// Marks `name` as unsent from `based_on`, unless it is already: the earliest base wins. Drops
+/// its offer from `offered`, as an unsent name is never offered.
+fn mark(
+    unsent: &mut Vec<Unsent>,
+    offered: &mut BTreeMap<String, CustomGame>,
+    name: &str,
+    based_on: Option<CustomGame>,
+) {
+    offered.remove(name);
     if !unsent.iter().any(|entry| entry.name == name) {
         unsent.push(Unsent::new(name.to_owned(), based_on));
     }
+}
+
+/// Removes and returns the offer of `shown`'s name when it is still `shown`.
+fn take_offer(
+    offered: &mut BTreeMap<String, CustomGame>,
+    shown: &CustomGame,
+) -> Option<CustomGame> {
+    if offered.get(&shown.name) != Some(shown) {
+        return None;
+    }
+    offered.remove(&shown.name)
 }
 
 /// `game` as the repository holds it: without its Wine prefix.

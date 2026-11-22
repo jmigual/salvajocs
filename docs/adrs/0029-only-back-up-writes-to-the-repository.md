@@ -2,6 +2,9 @@
 
 **Status:** Accepted
 **Date:** 2026-11-21
+**Amended:** 2026-11-22: a mirror keeps the local game and offers a different repository copy;
+the repository's games this PC lacks are offered, not appended; **Keep the repository's** is an
+acceptance (ADR-0030).
 
 ## Context
 
@@ -71,14 +74,16 @@ What the code allows:
 - **Merge (`custom_games::merge`).** A name with an unsent entry stays as this PC has it, a
   removal included. Every other local game:
   - **mirror** (the marker is the open repository's key): takes the repository's shared fields
-    and keeps its `wine_prefix`; a tombstone drops it; an unreadable copy keeps the local one. A
+    and keeps its `wine_prefix` (amended by ADR-0030: keeps the local game and offers a different
+    repository copy); a tombstone drops it; an unreadable copy keeps the local one. A
     name the repository has no snapshot of stays, with an entry without a base, so a copy wrongly
     marked as mirroring (0.8.0 left the marker after a failed upload) loses nothing.
   - **migrate** (no marker, or another repository's): a copy equal to the repository's changes
     nothing. No snapshot, another copy or a tombstone keeps the local game and adds an entry
     based on this PC's own copy, so Back up uploads it or asks. An unreadable copy keeps the
     local game and leaves the marker unset.
-  - Repository games this PC lacks and has no entry for are appended by name. The marker is set
+  - Repository games this PC lacks and has no entry for are appended by name (amended by
+    ADR-0030: offered, used only once accepted). The marker is set
     once a read compared every local game.
 - **Back up.** When anything is unsent, a check job reads the newest copy of each unsent name and
   the stored rules, writing nothing. An entry conflicts when the repository has a snapshot of

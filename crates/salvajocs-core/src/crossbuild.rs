@@ -631,8 +631,8 @@ pub fn propose(
         .map(|root| {
             let saved = pairs
                 .iter()
-                .filter_map(|pair| through_pair(root, pair))
-                .max_by_key(|mapped| mapped.depth);
+                .filter_map(|pair| through_pair(root, pair).map(|mapped| (pair, mapped)))
+                .max_by_key(|(_, mapped)| mapped.depth);
             let skipped = skips
                 .iter()
                 .filter_map(|skip| map_root(root, skip, skip, source, false))
@@ -649,7 +649,7 @@ pub fn propose(
                 usable(&mapped).then_some((rule, mapped))
             });
             // The note describes the game, so it stays once the mapping is a saved pair.
-            let notes: Vec<String> = engine
+            let mut notes: Vec<String> = engine
                 .as_ref()
                 .and_then(|(rule, mapped)| {
                     let key = mapped
@@ -662,9 +662,18 @@ pub fn propose(
                 })
                 .into_iter()
                 .collect();
-            let (proposed, confidence) = if let Some(mapped) =
-                saved.filter(|mapped| Some(mapped.depth) >= skipped)
+            let (proposed, confidence) = if let Some((pair, mapped)) =
+                saved.filter(|(_, mapped)| Some(mapped.depth) >= skipped)
             {
+                // Kept working (ADR-0011), but such a pair spreads the root over a whole folder.
+                if too_wide(pair_side(pair, target_family), target_family) {
+                    notes.push(format!(
+                        "The saved mapping {} / {} writes into the whole {} folder",
+                        pair.linux,
+                        pair.windows,
+                        pair_side(pair, target_family)
+                    ));
+                }
                 (Some(mapped.target), Confidence::Saved)
             } else if skipped.is_some() {
                 (None, Confidence::Saved)

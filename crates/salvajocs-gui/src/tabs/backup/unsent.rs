@@ -123,8 +123,9 @@ pub(super) fn is_session(source: &Weak<Mutex<Storage>>, state: &State) -> bool {
         .is_some_and(|session| ptr::eq(source.as_ptr(), Arc::as_ptr(&session.storage)))
 }
 
-/// The lines a version of a custom game shows in the conflict dialog; `None` is a removal.
-pub(super) fn game_lines(game: Option<&CustomGame>) -> Vec<String> {
+/// The lines a version of a custom game shows in the conflict dialog and in the Custom games
+/// tab's offers; `None` is a removal.
+pub(crate) fn game_lines(game: Option<&CustomGame>) -> Vec<String> {
     let Some(game) = game else {
         return vec!["Removed".to_owned()];
     };
@@ -138,11 +139,17 @@ pub(super) fn game_lines(game: Option<&CustomGame>) -> Vec<String> {
         (game.files.iter())
             .map(|file| format!("File: {} / {}", side(&file.linux), side(&file.windows))),
     );
+    // The form hides these and keeps them, yet they declare what a restore may write.
+    lines.extend((game.entry.files.keys()).map(|file| format!("Old-style file: {file}")));
     lines.extend((game.entry.registry.keys()).map(|key| format!("Registry key: {key}")));
     lines.extend((game.entry.install_dir.keys()).map(|dir| format!("Install folder: {dir}")));
     lines
         .extend((game.pairs.iter()).map(|pair| format!("Pair: {} / {}", pair.linux, pair.windows)));
     lines.extend((game.skips.iter()).map(|skip| format!("Skipped folder: {skip}")));
+    // The Steam id picks the Proton prefix a restore writes into.
+    if let Some(id) = game.entry.steam.as_ref().and_then(|steam| steam.id) {
+        lines.push(format!("Steam id: {id}"));
+    }
     lines
 }
 
@@ -173,7 +180,7 @@ pub(super) fn rule_lines(policy: &Retention) -> Vec<String> {
 
 /// The lines of this PC's version `here` and the repository's `theirs` of a conflicting game, the
 /// latter without a Wine prefix. A difference the lines do not show gets a line of its own.
-pub(super) fn conflict_lines(
+pub(crate) fn conflict_lines(
     here: Option<&CustomGame>,
     theirs: Option<&CustomGame>,
 ) -> (Vec<String>, Vec<String>) {
@@ -202,6 +209,16 @@ pub(super) fn conflict_ui(
 ) {
     ui.add_space(8.0);
     ui.label(theme::semibold(title));
+    versions_ui(ui, here, theirs);
+    ui.horizontal(|ui| {
+        ui.radio_value(keep, Some(Keep::Here), "Keep this PC's");
+        ui.radio_value(keep, Some(Keep::Repository), "Keep the repository's");
+    });
+}
+
+/// This PC's version `here` and the repository's `theirs` of a custom game side by side, a line
+/// only one side has in bold.
+pub(crate) fn versions_ui(ui: &mut Ui, here: &[String], theirs: &[String]) {
     ui.columns(2, |columns| {
         let sides = [("This PC", here, theirs), ("The repository", theirs, here)];
         for (ui, (heading, lines, other)) in columns.iter_mut().zip(sides) {
@@ -215,10 +232,6 @@ pub(super) fn conflict_ui(
                 }
             }
         }
-    });
-    ui.horizontal(|ui| {
-        ui.radio_value(keep, Some(Keep::Here), "Keep this PC's");
-        ui.radio_value(keep, Some(Keep::Repository), "Keep the repository's");
     });
 }
 
