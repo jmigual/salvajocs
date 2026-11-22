@@ -441,9 +441,8 @@ impl BackendForm {
                 && ui.button("Browse").clicked()
                 && self.picker.is_none()
             {
-                self.picker = Some(Job::spawn(ui.ctx(), || {
-                    Ok(rfd::FileDialog::new().pick_folder())
-                }));
+                let pick = env.pick_folder.clone();
+                self.picker = Some(Job::spawn(ui.ctx(), move || Ok(pick())));
             }
             ui.end_row();
         } else {

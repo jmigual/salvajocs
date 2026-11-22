@@ -1348,9 +1348,8 @@ impl RestoreTab {
         if let Some(pick) = &mut self.pick {
             changed |= pick.ui(ui);
             if pick.windows.is_none() && ui.button("Browse").clicked() {
-                self.picking = Some(Job::spawn(ui.ctx(), || {
-                    Ok(rfd::FileDialog::new().pick_folder())
-                }));
+                let pick = state.env.pick_folder.clone();
+                self.picking = Some(Job::spawn(ui.ctx(), move || Ok(pick())));
             }
         }
         if changed {

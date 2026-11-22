@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use common::{
-    back_up_unsent, env, harness, init_repo, local_config, record_opened, replace_text, repo_dir,
-    run_settled, run_until, run_until_ready, save_config, shows, shows_path,
+    back_up_unsent, env, harness, init_repo, local_config, pick, record_opened, replace_text,
+    repo_dir, run_settled, run_until, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -676,6 +676,21 @@ fn restore_switching_snapshots_shows_only_the_last_plan() {
     click(&mut harness, "Open XdgData/Alpha");
     assert!(shows(&harness, "new.dat"));
     assert!(!shows(&harness, "old.dat"));
+}
+
+#[test]
+fn restore_browse_asks_the_env_for_the_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tmp.path().join("other-pfx");
+    let (mut harness, _env, _) = alpha_with(&tmp, |env| pick(env, other.clone()));
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Browse").click();
+
+    run_until(&mut harness, "the picked prefix", |h| {
+        value(h, "Prefix") == other.to_str().unwrap()
+    });
 }
 
 #[test]

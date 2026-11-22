@@ -301,9 +301,8 @@ impl SettingsTab {
             ui.end_row();
             labelled_edit(ui, "Root folder", &mut self.root_path, false);
             if ui.button("Browse").clicked() && self.root_picker.is_none() {
-                self.root_picker = Some(Job::spawn(ui.ctx(), || {
-                    Ok(rfd::FileDialog::new().pick_folder())
-                }));
+                let pick = state.env.pick_folder.clone();
+                self.root_picker = Some(Job::spawn(ui.ctx(), move || Ok(pick())));
             }
             ui.end_row();
         });
