@@ -49,6 +49,9 @@ All notable changes to salvajocs. The format follows
 - A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
   `AppData`) is now stored under the same folder name as `AppData/LocalLow` and mapped to Linux
   by the Unity rule. The next **Back up** of each affected game makes one extra snapshot.
+- A file or folder you unticked before that change, by a folder above `AppData` such as the home
+  folder, is unticked again. Before, a saved choice on such a folder stopped applying to the
+  `AppData/LocalLow`, `Local` and `Roaming` files and they were backed up.
 - Two PCs saving the same game's selection, custom game or Old backups rules at the same time
   could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
   counted as saved, so the change stays on this PC and is tried again at the next Back up.

@@ -293,3 +293,38 @@ fn a_deeper_new_key_beats_an_older_key_of_an_ancestor_stored_as_win_home() {
     assert!(s.path_included("WinLocalAppDataLow/Co/Game/a.sav"));
     assert!(!s.path_included("WinLocalAppDataLow/Co/Other/a.sav"));
 }
+
+#[test]
+fn an_older_key_on_an_ancestor_of_appdata_still_applies() {
+    // Before, these folders were keyed below `WinHome/AppData/..`; the tree stores a folded
+    // chain by its top folder.
+    for old in ["WinHome", "WinHome/Appdata", "WinHome/APPDATA/localLow"] {
+        let s = settings(&[(old, false)]);
+        assert!(
+            !s.path_included("WinLocalAppDataLow/Co/Game/a.sav"),
+            "{old}"
+        );
+        assert!(!s.path_included("WinLocalAppDataLow"), "{old}");
+    }
+    let s = settings(&[("WinHome/Appdata", false)]);
+    assert!(!s.path_included("WinAppData/Foo/x"));
+    assert!(!s.path_included("WinLocalAppData/Foo/x"));
+    let s = settings(&[("WinHome/Appdata/Local", false)]);
+    assert!(!s.path_included("WinLocalAppData/Foo/x"));
+    assert!(s.path_included("WinLocalAppDataLow/Foo/x"));
+    assert!(s.path_included("WinAppData/Foo/x"));
+}
+
+#[test]
+fn a_new_key_below_an_older_ancestor_key_wins_by_depth() {
+    let mut s = settings(&[("WinHome/Appdata", false)]);
+    s.set_path("WinLocalAppDataLow", true);
+    assert!(s.path_included("WinLocalAppDataLow/Co/Game/a.sav"));
+    assert!(!s.path_included("WinAppData/Foo/x"));
+    let s = settings(&[
+        ("WinHome/Appdata", false),
+        ("WinHome/Appdata/LocalLow", true),
+    ]);
+    assert!(s.path_included("WinLocalAppDataLow/Co/a.sav"));
+    assert!(!s.path_included("WinAppData/Foo/x"));
+}

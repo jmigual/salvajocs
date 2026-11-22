@@ -454,6 +454,17 @@ pub(crate) fn normalized_win_home(base: Base, rest: &str) -> Option<(Base, Strin
         .find_map(|&(dir, base)| below(rest, dir, true).map(|rest| (base, rest.to_owned())))
 }
 
+/// The inverse of [`normalized_win_home`]: `rest` below `base` as the `WinHome` tail it was
+/// stored under before, such as `AppData/LocalLow/<rest>`. `None` for any other base.
+pub(crate) fn legacy_win_home(base: Base, rest: &str) -> Option<String> {
+    let &(dir, _) = WIN_HOME_SUBDIRS.iter().find(|&&(_, known)| known == base)?;
+    Some(if rest.is_empty() {
+        dir.to_owned()
+    } else {
+        format!("{dir}/{rest}")
+    })
+}
+
 /// Splits a template into its base and the path below it. The base comes from the leading
 /// placeholder and the context's family (ADR-0004). `None` for relative paths, unknown leading
 /// placeholders and placeholders the context does not have.
