@@ -17,9 +17,22 @@ All notable changes to salvajocs. The format follows
   `timeout`, `http-cacert`, `http-tls-client-cert`, `http-insecure-tls`, `http-referer`,
   `http-read-timeout` and `http-connect-timeout` now also apply to the storage services, which
   now time out a request after 10 minutes by default; `timeout` raises the limit.
+- **Restore files**, **Restore N games**, **Load backups** and every **Delete** button of the
+  Restore tab are disabled, with a line saying why, while a Back up runs. Before, they waited on
+  the repository without a sign. The list of games stays usable.
+- A downloaded update, **Update now** or **Restart now**, waits while a custom game's form is
+  open or the Settings repository form has edits you have not applied, and the bar says to save
+  or cancel the form. Before, it closed the app over them.
 
 ### Fixed
 
+- The Restore tab reads its list again after a Back up that saved backups, keeping the chosen
+  game, snapshot and plan. Before, new backups and games backed up for the first time were
+  missing until **Load backups**. A cleanup that removes old backups now also drops the plan and
+  the batch confirm of the dropped list, which could name a removed backup.
+- **Retry** and **Dismiss** no longer end up off-screen beside a long error message.
+- A single restore removes the work folders that earlier sessions left in the cache, as a batch
+  restore already did.
 - A file whose name is not valid UTF-8 is reported as a scan problem instead of being copied
   under a changed name; the game keeps all its old backed-up files until it is renamed.
 - A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
