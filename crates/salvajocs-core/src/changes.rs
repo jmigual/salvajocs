@@ -393,8 +393,7 @@ impl<'a> Mapper<'a> {
     ) -> Option<Mapped> {
         let info = restore::game_info(&game.title, self.manifest, &self.config.custom_games);
         let vars = restore::game_vars(&game.title, info.entry.as_ref(), self.config, self.env);
-        let prepare =
-            |choices: &[_]| restore::prepare(&listed.staged, targets, &vars, &info, choices);
+        let prepare = |choices: &[_]| restore::prepare(listed, targets, &vars, &info, choices);
         let mut entries = Vec::new();
         let plan = match prepare(&[]) {
             Err(PrepareError::NeedsMapping(needed)) => {

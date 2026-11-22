@@ -361,6 +361,11 @@ fn read_without_meta_is_no_meta() {
     assert!(matches!(read, Err(FetchError::NoMeta(_))), "{read:?}");
 }
 
+/// `staged` as listed, with no mtimes.
+fn listed_of(staged: &StagedGame) -> Listed {
+    super::super::tests::listed_at(staged.clone(), &[])
+}
+
 #[test]
 fn read_keeps_a_verified_hash_list_and_drops_a_stale_one() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1140,7 +1145,7 @@ fn a_bottle_backup_restores_into_that_bottle_without_cross_build() {
     assert_eq!(found.reason, Some(PrefixReason::Backup));
     let info = game_info("Tower Wizard", &manifest, &[]);
     let vars = game_vars("Tower Wizard", info.entry.as_ref(), &config, &env);
-    let plan = super::super::prepare(&listed.staged, &found.targets, &vars, &info, &[]).unwrap();
+    let plan = super::super::prepare(&listed, &found.targets, &vars, &info, &[]).unwrap();
     assert!(!plan.cross_build);
     let save = roaming.join("Godot/app_userdata/Tower Wizard/save.tres");
     assert_eq!(plan.writes[0].target, save);
@@ -1251,7 +1256,7 @@ fn a_saved_pair_wins_a_tie_with_a_row_pair() {
         ))),
     };
     let vars = GameVars::new("Foo", vec![], &[], None);
-    let plan = super::super::prepare(&staged, &targets, &vars, &info, &[]).unwrap();
+    let plan = super::super::prepare(&listed_of(&staged), &targets, &vars, &info, &[]).unwrap();
     let written: Vec<_> = plan.writes.iter().map(|w| w.target.as_path()).collect();
     assert_eq!(
         written,
@@ -2495,7 +2500,7 @@ fn proton_backup_restores_into_windows_layout() {
     let vars = GameVars::new("Foo", vec![], &[], Some("620".into()));
     let entry = manifest.games.get("Foo");
     let plan = super::super::prepare(
-        &staged,
+        &listed_of(&staged),
         &targets,
         &vars,
         &GameInfo {
@@ -2558,7 +2563,7 @@ fn prefix_registry_restores_into_other_prefix() {
     let vars = GameVars::new("Foo", vec![], &[], None);
     let entry = manifest.games.get("Foo");
     let plan = super::super::prepare(
-        &staged,
+        &listed_of(&staged),
         &targets,
         &vars,
         &GameInfo {

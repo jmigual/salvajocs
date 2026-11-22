@@ -282,13 +282,7 @@ struct Fetched {
 
 impl Fetched {
     fn prepare(&self, choices: &[(SnapshotRoot, Choice)]) -> Result<RestorePlan, PrepareError> {
-        restore::prepare(
-            &self.listed.staged,
-            &self.targets,
-            &self.vars,
-            &self.info,
-            choices,
-        )
+        restore::prepare(&self.listed, &self.targets, &self.vars, &self.info, choices)
     }
 
     /// `plan` with how each write compares with its target, the tree of its writes and the tree

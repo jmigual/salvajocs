@@ -3,6 +3,8 @@
 //! ADR-0011). Nothing here writes to disk.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -116,6 +118,8 @@ pub enum SkipReason {
     NoWindowsTarget,
     /// A registry key outside the keys the game's entry declares.
     UndeclaredRegistryKey,
+    /// Another file with the same target is newer, and a target takes one file.
+    ShadowedByNewer,
 }
 
 impl fmt::Display for SkipReason {
@@ -129,6 +133,7 @@ impl fmt::Display for SkipReason {
             SkipReason::UndeclaredRoot => "save root not declared for this game",
             SkipReason::NoWindowsTarget => "registry: no Windows target",
             SkipReason::UndeclaredRegistryKey => "registry key not declared for this game",
+            SkipReason::ShadowedByNewer => "another file for the same target is newer",
         })
     }
 }
@@ -240,6 +245,69 @@ impl RestorePlan {
         write.target_file = None;
         write.target_root = None;
         Ok(())
+    }
+
+    /// Skips every write but the newest of those whose staged files differ only by ASCII case
+    /// and share a target, by the mtimes of `listed`, the snapshot the plan was made from. A
+    /// backup can hold `Save.dat` and `save.dat`, which land on one file in a prefix that has
+    /// either, and on Windows whatever the case, and the last in sort order would win. A target
+    /// in a Windows base is compared ignoring ASCII case. Writes of other bases to one target (a
+    /// pair) stay, and the first of equal mtimes.
+    pub(crate) fn skip_shadowed(&mut self, listed: &Listed) {
+        let files_dir = listed.staged.root.join(layout::FILES_DIR);
+        // The staged `(base, tail)` of each write; one outside `files/` has none and stays.
+        let keys: Vec<Option<(Base, String)>> = (self.writes.iter())
+            .map(|write| {
+                let key = layout::tail_of(&write.source, &files_dir)?;
+                let (base, tail) = key.split_once('/')?;
+                Some((parse_base(base)?, tail.to_owned()))
+            })
+            .collect();
+        let modified = |write: &Write| listed.source(write).and_then(|entry| entry.modified);
+        let mut newest: HashMap<(String, Base, String), usize> = HashMap::new();
+        let mut shadowed = Vec::new();
+        for (at, (write, key)) in self.writes.iter().zip(&keys).enumerate() {
+            let Some((base, tail)) = key else {
+                continue;
+            };
+            let target = write.target.to_string_lossy();
+            let on_windows = (write.target_file.as_ref())
+                .is_some_and(|(base, _)| crossbuild::base_family(*base) == Some(Family::Windows));
+            let target = if on_windows {
+                target.to_ascii_lowercase()
+            } else {
+                target.into_owned()
+            };
+            match newest.entry((target, *base, tail.to_ascii_lowercase())) {
+                Entry::Vacant(slot) => {
+                    slot.insert(at);
+                }
+                Entry::Occupied(mut slot) => {
+                    let held = *slot.get();
+                    if modified(write) > modified(&self.writes[held]) {
+                        shadowed.push(held);
+                        slot.insert(at);
+                    } else {
+                        shadowed.push(at);
+                    }
+                }
+            }
+        }
+        let mut at = 0;
+        self.writes.retain(|_| {
+            at += 1;
+            let Some((base, tail)) = keys[at - 1]
+                .clone()
+                .filter(|_| shadowed.contains(&(at - 1)))
+            else {
+                return true;
+            };
+            self.skipped.push(Skipped {
+                item: SkippedItem::File(base, tail),
+                reason: SkipReason::ShadowedByNewer,
+            });
+            false
+        });
     }
 }
 
@@ -685,8 +753,10 @@ pub enum PrepareError {
     Plan(#[from] PlanError),
 }
 
-/// Plans a restore, mapping the roots of a base family without a target onto the other family:
-/// [`crossbuild::propose`], then [`crossbuild::resolve`] with `choices`, then [`plan`]. Saved
+/// Plans a restore of `listed`, mapping the roots of a base family without a target onto the
+/// other family: [`crossbuild::propose`], then [`crossbuild::resolve`] with `choices`, then
+/// [`plan`], then a skip of the case variants of one file that share a target, keeping the
+/// newest by the listing's mtimes. Saved
 /// pairs, row pairs, engine rules and auto-pairs apply without choices (ADR-0011, ADR-0016).
 /// `info` is what the manifest and the custom game say about the game ([`game_info`]); its row
 /// pairs are proposed before its saved pairs, so a saved pair wins a tie, and declare no roots.
@@ -696,12 +766,13 @@ pub enum PrepareError {
 /// [`PrepareError::Unclassifiable`] for a chosen template that is not a placeholder template of
 /// the target OS; [`PrepareError::Plan`] when [`plan`] fails.
 pub fn prepare(
-    staged: &StagedGame,
+    listed: &Listed,
     targets: &Targets,
     vars: &GameVars,
     info: &GameInfo,
     choices: &[(SnapshotRoot, Choice)],
 ) -> Result<RestorePlan, PrepareError> {
+    let staged = &listed.staged;
     let (entry, pairs) = (info.entry.as_ref(), &info.pairs);
     let target_family = match (&targets.linux, &targets.win) {
         (Some(_), None) => Some(Family::Linux),
@@ -753,6 +824,7 @@ pub fn prepare(
         };
     }
     let mut plan = plan(staged, targets, vars, entry, pairs, &mappings)?;
+    plan.skip_shadowed(listed);
     plan.notes = notes;
     Ok(plan)
 }
