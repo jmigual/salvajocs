@@ -11,6 +11,12 @@ All notable changes to salvajocs. The format follows
 - A new Advanced option ticks **secret** by itself when its key names a secret of a service or has
   `secret`, `password`, `token` or `key` in it, unless the key is one rustic or a non-secret
   field of a service uses, such as `use-password` or `access_key_id`. You can untick it.
+- The REST and rclone keys `cacert` and `tls-client-cert` are now `http-cacert` and
+  `http-tls-client-cert`, as in `rustic_backend` 0.8.0. A saved configuration with the old names
+  is renamed when it is read, and the new names are written at the next save. The keys
+  `timeout`, `http-cacert`, `http-tls-client-cert`, `http-insecure-tls`, `http-referer`,
+  `http-read-timeout` and `http-connect-timeout` now also apply to the storage services, which
+  now time out a request after 10 minutes by default; `timeout` raises the limit.
 
 ### Fixed
 
@@ -30,6 +36,9 @@ All notable changes to salvajocs. The format follows
   to 0.9.1 after the move needs the URL entered again with its password.
 - Settings warns when an rclone remote has `use-password` set to `false`: its local server then
   has no login, so any program on the PC can read and delete the repository.
+- Updated `opendal` to 0.59.5 and `rustic_backend` to 0.8.0, which fixes the FTP command
+  injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
+  (RUSTSEC-2026-0592).
 
 ## [0.9.1] - 2026-11-21
 

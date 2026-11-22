@@ -332,7 +332,12 @@ fn an_option_key_is_known_when_the_backend_reads_it() {
     );
     assert!(option_key_known(BackendKind::Local, "post-create-command"));
     assert!(!option_key_known(BackendKind::Local, "retry"));
-    assert!(option_key_known(BackendKind::Rest, "tls-client-cert"));
+    assert!(option_key_known(BackendKind::Rest, "http-tls-client-cert"));
+    assert!(!option_key_known(BackendKind::Rest, "tls-client-cert"));
+    assert!(
+        option_key_known(s3, "http-cacert"),
+        "services build an HTTP client too"
+    );
     assert!(option_key_known(BackendKind::Rclone, "use-password"));
     assert!(
         option_key_known(BackendKind::Rclone, "timeout"),
@@ -446,6 +451,72 @@ fn secret_scope_differs_per_bucket_and_ignores_option_order() {
     let mut with_secret = sample();
     with_secret.repository_options[1].value = Some("hunter2".into());
     assert_eq!(with_secret.secret_scope(), sample().secret_scope());
+}
+
+#[test]
+fn rest_and_rclone_keys_of_0_9_1_load_under_their_new_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    for repository in ["rest:https://host/repo", "rclone:remote:repo"] {
+        let mut old = sample();
+        old.repository = repository.into();
+        old.repository_options = vec![
+            option("cacert", Some("/ca.pem"), false),
+            option("tls-client-cert", Some("/client.pem"), false),
+        ];
+        let scope = old.secret_scope();
+        old.save(tmp.path()).unwrap();
+
+        let loaded = AppConfig::load(tmp.path()).unwrap().unwrap();
+        let keys: Vec<_> = loaded
+            .repository_options
+            .iter()
+            .map(|o| &o.key[..])
+            .collect();
+        assert_eq!(keys, ["http-cacert", "http-tls-client-cert"]);
+        assert_eq!(
+            loaded.secret_scope(),
+            scope,
+            "secrets stay under the old scope"
+        );
+    }
+}
+
+#[test]
+fn an_old_key_next_to_its_new_name_and_other_backends_are_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut both = sample();
+    both.repository = "rest:https://host/repo".into();
+    both.repository_options = vec![
+        option("cacert", Some("/old.pem"), false),
+        option("http-cacert", Some("/new.pem"), false),
+    ];
+    both.save(tmp.path()).unwrap();
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(both));
+
+    let mut service = sample();
+    service.repository_options = vec![option("cacert", Some("/ca.pem"), false)];
+    service.save(tmp.path()).unwrap();
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(service));
+}
+
+#[test]
+fn the_scope_keeps_a_new_http_key_next_to_its_old_name_and_on_services() {
+    let mut both = sample();
+    both.repository = "rest:https://host/repo".into();
+    both.repository_options = vec![
+        option("cacert", Some("A"), false),
+        option("http-cacert", Some("B"), false),
+    ];
+    let mut reversed = both.clone();
+    reversed.repository_options.reverse();
+    let mut only_new = both.clone();
+    only_new.repository_options.remove(0);
+    assert_eq!(both.secret_scope(), reversed.secret_scope());
+    assert_ne!(both.secret_scope(), only_new.secret_scope());
+
+    let mut service = sample();
+    service.repository_options = vec![option("http-cacert", Some("B"), false)];
+    assert!(service.secret_scope().contains("http-cacert"));
 }
 
 #[test]

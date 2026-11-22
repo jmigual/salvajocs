@@ -214,21 +214,52 @@ pub fn backend_kinds() -> Vec<BackendKind> {
         .collect()
 }
 
+/// REST and rclone keys that rustic_backend 0.8.0 renamed, as (old, new). salvajocs 0.9.1 and
+/// earlier saved the old names.
+const RENAMED_HTTP_KEYS: [(&str, &str); 2] = [
+    ("cacert", "http-cacert"),
+    ("tls-client-cert", "http-tls-client-cert"),
+];
+
 /// The keys rustic itself reads for a backend, matched exactly: rustic does not lowercase them.
 fn rustic_keys(kind: BackendKind) -> &'static [&'static str] {
     match kind {
         BackendKind::Local => &["post-create-command", "post-delete-command"],
-        BackendKind::Rest => &["retry", "timeout", "cacert", "tls-client-cert"],
+        BackendKind::Rest => &[
+            "retry",
+            "timeout",
+            "http-cacert",
+            "http-tls-client-cert",
+            "http-insecure-tls",
+            "http-referer",
+            "http-read-timeout",
+            "http-connect-timeout",
+        ],
         BackendKind::Rclone => &[
             "retry",
             "timeout",
-            "cacert",
-            "tls-client-cert",
+            "http-cacert",
+            "http-tls-client-cert",
+            "http-insecure-tls",
+            "http-referer",
+            "http-read-timeout",
+            "http-connect-timeout",
             "rclone-command",
             "use-password",
             "rest-url",
         ],
-        BackendKind::OpenDal(_) => &["retry", "connections", "throttle"],
+        BackendKind::OpenDal(_) => &[
+            "retry",
+            "connections",
+            "throttle",
+            "timeout",
+            "http-cacert",
+            "http-tls-client-cert",
+            "http-insecure-tls",
+            "http-referer",
+            "http-read-timeout",
+            "http-connect-timeout",
+        ],
     }
 }
 
@@ -409,7 +440,11 @@ impl AppConfig {
     /// Reads `dir/config.yaml`; `None` means it does not exist, so this is the first run.
     pub fn load(dir: &Path) -> Result<Option<Self>, ConfigError> {
         match fs::read_to_string(dir.join(CONFIG_FILE)) {
-            Ok(yaml) => Ok(Some(serde_saphyr::from_str(&yaml)?)),
+            Ok(yaml) => {
+                let mut config: Self = serde_saphyr::from_str(&yaml)?;
+                config.rename_legacy_http_keys();
+                Ok(Some(config))
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err.into()),
         }
@@ -433,14 +468,50 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Whether the repository is a REST server or an rclone remote.
+    fn is_rest_or_rclone(&self) -> bool {
+        self.repository.starts_with("rest:") || self.repository.starts_with("rclone:")
+    }
+
+    /// Renames the REST and rclone keys of salvajocs 0.9.1 and earlier to those of
+    /// rustic_backend 0.8.0, so the next save writes the new names. An old key is left alone when
+    /// the new one is also set.
+    fn rename_legacy_http_keys(&mut self) {
+        if !self.is_rest_or_rclone() {
+            return;
+        }
+        for (old, new) in RENAMED_HTTP_KEYS {
+            if self
+                .repository_options
+                .iter()
+                .any(|option| option.key == new)
+            {
+                continue;
+            }
+            for option in self.repository_options.iter_mut().filter(|o| o.key == old) {
+                option.key = new.to_string();
+            }
+        }
+    }
+
     /// The keyring scope of this repository: JSON of the repository string and its sorted
-    /// non-secret options, so two buckets on one service never share a password.
+    /// non-secret options, so two buckets on one service never share a password. A renamed REST
+    /// or rclone key counts under its old name, unless the old key is also set, so a rename keeps
+    /// the scope and the secrets stored under it.
     pub fn secret_scope(&self) -> String {
+        let rest_or_rclone = self.is_rest_or_rclone();
+        let has_key = |key: &str| self.repository_options.iter().any(|o| o.key == key);
         let options: BTreeMap<_, _> = self
             .repository_options
             .iter()
             .filter(|option| !option.secret)
-            .filter_map(|option| Some((&option.key, option.value.as_ref()?)))
+            .filter_map(|option| {
+                let key = RENAMED_HTTP_KEYS
+                    .iter()
+                    .find(|(old, new)| rest_or_rclone && option.key == *new && !has_key(old))
+                    .map_or(&option.key[..], |(old, _)| old);
+                Some((key, option.value.as_ref()?))
+            })
             .collect();
         serde_json::to_string(&(&self.repository, options))
             .expect("strings and string maps always serialize")

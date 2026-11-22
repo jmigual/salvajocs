@@ -3,7 +3,7 @@
 Reference for the **Advanced options** key and value list of the repository form. Back to the
 [guide index](README.md).
 
-Checked against opendal 0.58.2 and rustic_backend 0.7.0, the versions in `Cargo.lock`. A newer
+Checked against opendal 0.59.5 and rustic_backend 0.8.0, the versions in `Cargo.lock`. A newer
 build may add, rename or drop keys. Maintainers re-check this page when either is bumped
 ([Releasing](releasing.md)).
 
@@ -61,15 +61,26 @@ lowercase, and they must be typed in lowercase: unlike the service keys, `Retry`
 | Services | `connections` | A whole number, at least 1. Default: no limit. | The most requests at the same time. |
 | Services | `throttle` | `bandwidth,burst`, each a size such as `10MiB`. Both are needed, neither can be `0`, and each must be under 4 GiB. | Limits the upload speed, in bytes per second. Reads are not limited. A single write larger than the burst fails, and a pack is written in one call, so the burst must be at least the largest pack: tens of MiB. For example `10MiB,256MiB`. |
 | REST server, rclone remote | `retry` | As above. | As above, for the REST requests. |
-| REST server, rclone remote | `timeout` | A duration: `30s`, `10m`, `2h 30m` or `PT30S`. Default `10m`. | How long one request may take. A negative value sets a timeout of zero, so every request fails. |
-| REST server, rclone remote | `cacert` | A path to a PEM file. | Adds a certificate authority to trust. |
-| REST server, rclone remote | `tls-client-cert` | A path to a PEM file with the certificate and the private key. | The client certificate to present. |
+| Services, REST server, rclone remote | `timeout` | A duration: `30s`, `10m`, `2h 30m` or `PT30S`. Default `10m`. | How long one HTTP request may take. A negative value sets a timeout of zero, so every request fails. |
+| Services, REST server, rclone remote | `http-read-timeout` | A duration, as above. | How long to wait between two reads of one response. Unlike `timeout`, a slow transfer that keeps moving is not cut off. |
+| Services, REST server, rclone remote | `http-connect-timeout` | A duration, as above. | How long to wait for a connection to be made. Default: the system's. |
+| Services, REST server, rclone remote | `http-cacert` | A path to a PEM file. | Adds a certificate authority to trust. |
+| Services, REST server, rclone remote | `http-tls-client-cert` | A path to a PEM file with the certificate and the private key. | The client certificate to present. |
+| Services, REST server, rclone remote | `http-insecure-tls` | `true` or `false`. Default `false`. | Accept any server certificate. Do not use this on an untrusted network. |
+| Services, REST server, rclone remote | `http-referer` | `true` or `false`. | Whether to send a `Referer` header when following a redirect. |
 
-An invalid `retry`, `connections`, `throttle` or `timeout` value, or a `cacert` or
-`tls-client-cert` file that cannot be read, is an error. An unknown key is ignored.
+An invalid `retry`, `connections`, `throttle` or `timeout` value, a `http-read-timeout` or
+`http-connect-timeout` that is not a duration, or an `http-cacert` or `http-tls-client-cert` file
+that cannot be read, is an error. A negative `http-read-timeout` or `http-connect-timeout`, and an
+invalid `http-insecure-tls` or `http-referer` value, are only logged, and the key does nothing.
+An unknown key is ignored.
 
-The service tables below do not repeat `retry`, `connections` and `throttle`. They are not
-service keys: rustic reads them and passes the rows on, and the service ignores them.
+salvajocs 0.9.1 and earlier called `http-cacert` `cacert` and `http-tls-client-cert`
+`tls-client-cert`. When the app opens a REST or rclone configuration with the old names, it
+renames them, and the next save writes the new names. Other keys are not renamed.
+
+The service tables below do not repeat `retry`, `connections`, `throttle`, `timeout` or the
+`http-` keys. They are not service keys: rustic reads them and passes the rows on, and the service ignores them.
 
 ### What you see on a wrong value
 
@@ -94,7 +105,7 @@ A command that fails is only logged. It does not fail the backup.
 
 ## REST server
 
-The keys are `retry`, `timeout`, `cacert` and `tls-client-cert` from the table
+The keys are `retry` and the `timeout` and `http-` keys from the table
 [above](#keys-that-rustic-reads).
 
 The password of the server's login is the secret field **REST password**, stored as the option
@@ -339,7 +350,7 @@ Service `webdav`. The form has `endpoint`, `username`, `password` and `root`.
 | --- | --- | --- | --- |
 | **`token`** | Text, secret | Not set | Sign in with a bearer token instead of a user name and password. |
 | **`disable_create_dir`** | Yes or no | `false` | Do not create parent folders before writing. For servers without PROPFIND support. |
-| `enable_conditional_read` | Yes or no | `true` | Send `If-Match` and similar headers on reads. Set `false` for servers that ignore them, such as nginx-dav. |
+| `enable_conditional_read` | Yes or no | `true` | Has no effect since opendal 0.59. Deprecated. |
 | `user_metadata_prefix` | Text | `opendal` | The XML prefix of the custom properties. |
 | `user_metadata_uri` | Text | `https://opendal.apache.org/ns` | The XML namespace of the custom properties. |
 
