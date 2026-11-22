@@ -8,7 +8,8 @@ result, `LoginRefused`. 2026-11-19: a `theme` setting. 2026-11-20: the `backup_s
 `restore_sort` of the game lists (ADR-0027). 2026-11-20: `custom_games` is this PC's copy of the
 repository's custom games, with `custom_games_read_from` (alias `custom_games_repository`,
 ADR-0028). 2026-11-22: the password of a `rest:` URL is the secret option
-`rest-password`.
+`rest-password`. 2026-11-22: `custom_games_not_now`, the offers set aside with **Not now**
+(ADR-0030).
 
 ## Context
 
@@ -37,6 +38,8 @@ secrets (access keys, tokens) must not sit in the config in plain text.
     `wine_prefix` (ADR-0028);
   - `custom_games_read_from` (alias `custom_games_repository`): the key (`secret_scope`) of
     the repository that copy mirrors, left out when unset (ADR-0028);
+  - `custom_games_not_now`: the repository copies of custom games set aside with **Not now**
+    and the key of their repository, left out when none (ADR-0030);
   - `ignored_prefixes`: launcher prefixes left out of scans and restores (ADR-0017);
   - `theme: system | light | dark`, left out when `system`;
   - `backup_sort` and `restore_sort`: `{ by: name | last_backup | last_backup_size |

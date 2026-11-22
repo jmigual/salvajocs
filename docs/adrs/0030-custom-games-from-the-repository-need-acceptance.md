@@ -1,6 +1,6 @@
 # ADR-0030: Custom games from the repository need acceptance on each PC
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-22
 
 ## Context
@@ -17,7 +17,10 @@ next restore of the game on any PC writes it. The cheapest attack edits a game t
 uses.
 
 The user decided "Ask on each PC": a custom game that comes from the repository, written there
-by another PC, is not used on this PC until the user accepts it on this PC.
+by another PC, is not used on this PC until the user accepts it on this PC. The user must be told
+that a game waits, and a game turned down must stay acceptable later. For turning one down, the
+user chose "Not now, remembered": one **Not now** button, nothing written to the repository, and
+no notice again for that exact copy.
 
 ## Decision
 
@@ -35,27 +38,45 @@ by another PC, is not used on this PC until the user accepts it on this PC.
   (`edit_custom_game`, `apply_mapping_choices`) never need acceptance.
 - **The offers live in memory** (`CustomGameJobs::offered`), rebuilt by every read, as
   `CustomGameJobs::unreadable` is, and forgotten when Settings switches to another repository.
-  A restore needs an open repository, so a read has started. No `config.yaml` field is added.
-  Marking a name unsent (an edit here, a mapping choice, a decline) drops its offer, since an
-  unsent name is never offered; otherwise a declined copy would come back once Back up clears
-  the entry.
+  A restore needs an open repository, so a read has started. Marking a name unsent (an edit
+  here, a mapping choice) drops its offer, since an unsent name is never offered.
+- **Not now is remembered per copy.** One optional `config.yaml` field, left out when empty,
+  holds the copies set aside and the key of the repository they come from:
+
+  ```yaml
+  custom_games_not_now:
+    repository: <secret_scope>  # moves with the key as custom_games_read_from does
+    games:                      # the offered copies, without wine_prefix, one per name
+      - { name: Foo, ... }
+  ```
+
+  An offer equal to a stored copy, from that repository (`AppConfig::set_aside`), is set aside.
+  A read of that repository keeps the stored copies it offered again or could not read (an
+  error may pass), so another copy of the name, a removal or a name now unsent drops the entry;
+  accepting drops it too. A read of another repository leaves the field alone, so switching
+  back sets the same copies aside. The copy itself is stored, not a hash: the offer compares by
+  content, as `merge` does, and a hash would need a canonical serialization.
 - **An answer applies to the copy drawn.** The tab passes the offer it drew to
-  `accept_custom_game` or `keep_this_pcs_custom_game`, which do nothing when a read that ended
+  `accept_custom_game` or `set_custom_game_aside`, which do nothing when a read that ended
   since replaced it; the next frame draws the new copy.
 - **The Custom games tab** lists the offers whose name has no unsent entry under **From other
   PCs, not used here**, each with every line that matters (`game_lines`: rows, registry keys,
   old-style `entry.files` templates, install folders, pairs, skips and the Steam id); a changed
   game shows this PC's version beside the repository's, like the Back up conflict dialog. A read
-  that offers a game the last read did not, or another copy of one, adds one notice.
+  that offers a game the last read did not, or another copy of one, adds one notice naming the
+  offers not set aside; the first read after a start names every offer not set aside. The tab
+  label counts the offers that wait: **Custom games (N)**.
   - **Use on this PC** accepts (`State::accept_custom_game`).
-  - **Keep this PC's version**, or **Remove from the repository** for a game new here, declines
-    through ADR-0029 (`State::keep_this_pcs_custom_game`): an unsent entry based on the offered
-    copy, so the next Back up writes this PC's copy, or a tombstone when this PC lacks the game.
-    No "declined" state is stored. Without an answer, the offer stays listed.
+  - **Not now** sets the copy aside (`State::set_custom_game_aside`). It writes nothing to the
+    repository and marks nothing unsent. The offer moves to a collapsed **Set aside (N)** part
+    of the section, which keeps **Use on this PC**.
+  - Without an answer, the offer stays listed and counted. To change or remove this PC's own
+    game, the user edits it in the list, which marks it unsent (ADR-0029).
 - **The Restore tab** says in the plan of a game, alone or in a restore of several, when an
-  offer of its custom game waits for review, since its files would otherwise show as skipped
-  (`UndeclaredRoot`) with no hint. The core restore is unchanged. The read runs in the
-  background, so a restore planned before it ends shows no note.
+  offer of its custom game waits for review, or is set aside and can be used from Custom games,
+  since its files would otherwise show as skipped (`UndeclaredRoot`) with no hint. The core
+  restore is unchanged. The read runs in the background, so a restore planned before it ends
+  shows no note.
 - **Tombstones still drop the local game without asking**: a removal only narrows what a restore
   writes, and anyone who can write to the repository can already delete snapshots.
 - **"Keep the repository's" in the Back up conflict dialog is an acceptance**: the user saw both
@@ -86,8 +107,11 @@ by another PC, is not used on this PC until the user accepts it on this PC.
   without its rows.
 - **Re-asking once on upgrade:** needs a `custom_games_offered` field and asks about the user's
   own games, as no provenance exists.
-- **A persisted "declined" list:** declining through an unsent entry reuses ADR-0029 and tells
-  the other PCs.
+- **Declining through an unsent entry** (**Keep this PC's version**, **Remove from the
+  repository**): the next Back up overwrites or removes the other PC's game, so a click meant as
+  "not now" changes every PC, and the game cannot be accepted later on any of them.
+- **Not now in memory only:** every read after a start would notify again about a game the user
+  already turned down.
 - **"Accept all":** defeats the review.
 
 ## Consequences
@@ -99,6 +123,9 @@ by another PC, is not used on this PC until the user accepts it on this PC.
   only unsent entries.
 - The shape rules do not stop precise or absolute paths; only acceptance does.
 - Offers are not shown offline.
+- After a downgrade to salvajocs 0.9.1 or older, a set-aside game is in use: that version
+  merges the repository's copy without asking. It also drops `custom_games_not_now` on its next
+  rewrite of `config.yaml`.
 - A saved pair with a bare side (`{linux: "<home>", windows: "<winDocuments>/x"}`) still maps a
   declared Windows root onto the whole Linux home in a cross-build restore; the pair-side rule
   only stops that side from declaring a root. The user chose to warn only: the mapping dialog

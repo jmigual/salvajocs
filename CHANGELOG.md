@@ -67,8 +67,10 @@ All notable changes to salvajocs. The format follows
 - A custom game another PC saved to the repository, new here or changed, is no longer used on
   this PC until you accept it. **Read repository** and opening the repository list it under
   **From other PCs, not used here** in the Custom games tab, with its files, registry keys,
-  old-style files and Steam id, and a notice names it. **Use on this PC** takes it; **Keep this
-  PC's version** or **Remove from the repository** has the next Back up write this PC's choice.
+  old-style files and Steam id, a notice names it, and the tab label counts it, as in
+  **Custom games (1)**. **Use on this PC** takes it. **Not now** moves it to a collapsed **Set
+  aside** list without a notice, where **Use on this PC** stays, until another PC changes it
+  again; nothing is written to the repository.
   Before, anyone who could write to the repository could make every PC's restores write any
   file, such as an autostart entry. Custom games this PC already had stay in use. A removal made
   on another PC still applies without asking. A restore no longer trusts a custom game's file

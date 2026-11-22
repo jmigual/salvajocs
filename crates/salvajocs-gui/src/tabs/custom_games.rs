@@ -947,7 +947,7 @@ impl CustomGamesTab {
         }
         match answer {
             Some(offers::Answer::Accept(shown)) => state.accept_custom_game(&ctx, &shown),
-            Some(offers::Answer::Decline(shown)) => state.keep_this_pcs_custom_game(&ctx, &shown),
+            Some(offers::Answer::NotNow(shown)) => state.set_custom_game_aside(&ctx, &shown),
             None => {}
         }
         if read {

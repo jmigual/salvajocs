@@ -263,8 +263,14 @@ fn accepting_keeps_this_pcs_wine_prefix() {
     poll_until_idle(&mut state, &ctx);
 }
 
+/// The copies `state` set aside with **Not now**.
+fn not_now(state: &State) -> Vec<CustomGame> {
+    let not_now = config(state).custom_games_not_now.as_ref();
+    not_now.map_or_else(Vec::new, |not_now| not_now.games.clone())
+}
+
 #[test]
-fn keeping_this_pcs_copy_marks_it_unsent_from_the_offer() {
+fn a_copy_set_aside_stays_offered_without_a_notice_until_another_copy_comes() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = egui::Context::default();
     let mut state = state(tmp.path());
@@ -273,18 +279,87 @@ fn keeping_this_pcs_copy_marks_it_unsent_from_the_offer() {
     let mut theirs = mine.clone();
     theirs.integration = Integration::Override;
     read_elsewhere(&mut state, tmp.path(), &ctx, std::slice::from_ref(&theirs));
+    assert_eq!(state.notices.len(), 1);
 
-    state.keep_this_pcs_custom_game(&ctx, &theirs);
-    assert!(state.custom_games.offered("Game").is_none());
+    state.set_custom_game_aside(&ctx, &theirs);
+    assert_eq!(state.custom_games.offered("Game"), Some(&theirs));
+    assert_eq!(not_now(&state), [theirs.clone()]);
+    assert_eq!(state.custom_games.waiting(config(&state)), 0);
     assert_eq!(config(&state).custom_games, [mine]);
-    let unsent = &config(&state).custom_games_unsent;
-    assert_eq!(unsent, &[Unsent::new("Game".into(), Some(theirs))]);
-    // Back up then writes this PC's copy without asking.
-    let storage = state.session.as_ref().unwrap().storage.clone();
-    let games = &config(&state).custom_games;
-    let found = custom_games::conflicts(&mut storage.lock().unwrap(), games, unsent).unwrap();
-    assert!(found.is_empty());
+    assert!(
+        config(&state).custom_games_unsent.is_empty(),
+        "nothing to send"
+    );
+
+    // The first read after a restart is news for every offer but the one set aside.
+    state.custom_games = CustomGameJobs::default();
+    read_elsewhere(&mut state, tmp.path(), &ctx, &[game("Other", None)]);
+    assert_eq!(state.notices.len(), 2);
+    assert!(state.notices[1].ends_with(": Other"), "{:?}", state.notices);
+    assert_eq!(state.custom_games.offered("Game"), Some(&theirs));
+    assert_eq!(not_now(&state), [theirs.clone()]);
+    assert_eq!(state.custom_games.waiting(config(&state)), 1);
+
+    // Another copy of it is offered again, with a notice, and is no longer set aside.
+    let mut newer = theirs.clone();
+    newer.skips = vec!["<xdgData>/Newer".into()];
+    resave_elsewhere(&state, tmp.path(), &theirs, &newer);
+    state.read_custom_games(&ctx);
     poll_until_idle(&mut state, &ctx);
+    assert_eq!(state.notices.len(), 3);
+    assert!(state.notices[2].ends_with(": Game"), "{:?}", state.notices);
+    assert_eq!(state.custom_games.offered("Game"), Some(&newer));
+    assert_eq!(config(&state).custom_games_not_now, None);
+    assert_eq!(state.custom_games.waiting(config(&state)), 2);
+    let saved = AppConfig::load(&tmp.path().join("config"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.custom_games_not_now, None);
+}
+
+#[test]
+fn accepting_a_copy_set_aside_uses_it_and_drops_it_from_the_set_aside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    let theirs = game("Theirs", None);
+    let kept = game("Kept", None);
+    read_elsewhere(
+        &mut state,
+        tmp.path(),
+        &ctx,
+        &[theirs.clone(), kept.clone()],
+    );
+    state.set_custom_game_aside(&ctx, &theirs);
+    state.set_custom_game_aside(&ctx, &kept);
+
+    state.accept_custom_game(&ctx, &theirs);
+    assert_eq!(config(&state).custom_games, std::slice::from_ref(&theirs));
+    assert_eq!(not_now(&state), std::slice::from_ref(&kept));
+    state.accept_custom_game(&ctx, &kept);
+    assert_eq!(config(&state).custom_games_not_now, None);
+    poll_until_idle(&mut state, &ctx);
+}
+
+#[test]
+fn a_game_the_repository_removed_drops_its_copy_set_aside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    let theirs = game("Theirs", None);
+    read_elsewhere(&mut state, tmp.path(), &ctx, std::slice::from_ref(&theirs));
+    state.set_custom_game_aside(&ctx, &theirs);
+    assert_eq!(not_now(&state), std::slice::from_ref(&theirs));
+
+    let storage = state.session.as_ref().unwrap().storage.clone();
+    let stage = tmp.path().join("elsewhere");
+    let mut storage = storage.lock().unwrap();
+    custom_games::save(&mut storage, "Theirs", Some(&theirs), None, &stage).unwrap();
+    drop(storage);
+    state.read_custom_games(&ctx);
+    poll_until_idle(&mut state, &ctx);
+    assert!(state.custom_games.all_offered().is_empty());
+    assert_eq!(config(&state).custom_games_not_now, None);
 }
 
 #[test]
@@ -364,9 +439,10 @@ fn an_answer_to_an_offer_a_read_replaced_does_nothing() {
     poll_until_idle(&mut state, &ctx);
 
     state.accept_custom_game(&ctx, &drawn);
-    state.keep_this_pcs_custom_game(&ctx, &drawn);
+    state.set_custom_game_aside(&ctx, &drawn);
     assert!(config(&state).custom_games.is_empty());
     assert!(config(&state).custom_games_unsent.is_empty());
+    assert_eq!(config(&state).custom_games_not_now, None);
     assert_eq!(state.custom_games.offered("Theirs"), Some(&newer));
     poll_until_idle(&mut state, &ctx);
 }
@@ -392,4 +468,76 @@ fn adopting_another_repository_forgets_the_last_reads_offers() {
     assert!(state.custom_games.all_offered().is_empty());
     poll_until_idle(&mut state, &ctx);
     assert!(state.custom_games.all_offered().is_empty());
+}
+
+/// Makes the repository `repository`, opened as `storage`, the one `state` uses, and reads it.
+fn switch_to(state: &mut State, ctx: &egui::Context, repository: String, storage: Storage) {
+    let connected = crate::first_run::Connected {
+        config: AppConfig::new(repository, PasswordMode::Ask),
+        credentials: Default::default(),
+        storage: Box::new(storage),
+        warnings: Vec::new(),
+    };
+    state.adopt(connected, ctx);
+    poll_until_idle(state, ctx);
+}
+
+#[test]
+fn a_copy_set_aside_in_one_repository_does_not_hide_another_ones_offer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    let theirs = game("Theirs", None);
+    read_elsewhere(&mut state, tmp.path(), &ctx, std::slice::from_ref(&theirs));
+    state.set_custom_game_aside(&ctx, &theirs);
+    let set_aside = config(&state).custom_games_not_now.clone();
+    let first = config(&state).repository.clone();
+    let notices = state.notices.len();
+
+    let other = tmp.path().join("other").to_str().unwrap().to_owned();
+    let location = RepoLocation::new(other.clone(), Default::default());
+    let mut storage = Storage::init(&location, "", Compression::Default).unwrap();
+    let stage = tmp.path().join("elsewhere");
+    custom_games::save(&mut storage, "Theirs", None, Some(&theirs), &stage).unwrap();
+    switch_to(&mut state, &ctx, other, storage);
+    assert_eq!(state.custom_games.offered("Theirs"), Some(&theirs));
+    assert_eq!(state.custom_games.waiting(config(&state)), 1);
+    assert_eq!(state.notices.len(), notices + 1);
+    assert_eq!(config(&state).custom_games_not_now, set_aside);
+
+    // Back on the first repository, the copy is still set aside.
+    let location = RepoLocation::new(first.clone(), Default::default());
+    let storage = Storage::open(&location, "").unwrap();
+    switch_to(&mut state, &ctx, first, storage);
+    assert_eq!(state.custom_games.offered("Theirs"), Some(&theirs));
+    assert_eq!(state.custom_games.waiting(config(&state)), 0);
+    assert_eq!(state.notices.len(), notices + 1);
+    assert_eq!(config(&state).custom_games_not_now, set_aside);
+}
+
+#[test]
+fn a_read_that_fails_for_a_copy_set_aside_keeps_it_set_aside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut state = state(tmp.path());
+    let theirs = game("Theirs", None);
+    read_elsewhere(&mut state, tmp.path(), &ctx, std::slice::from_ref(&theirs));
+    state.set_custom_game_aside(&ctx, &theirs);
+    let set_aside = config(&state).custom_games_not_now.clone();
+    let notices = state.notices.len();
+
+    let failed = CustomGameError::Io {
+        path: tmp.path().join("custom-game.json"),
+        source: std::io::ErrorKind::Interrupted.into(),
+    };
+    let listed = Listed::from([("Theirs".to_owned(), Err(failed))]);
+    let scope = config(&state).secret_scope();
+    state.merge_custom_games(&ctx, &listed, scope);
+    assert_eq!(config(&state).custom_games_not_now, set_aside);
+
+    state.read_custom_games(&ctx);
+    poll_until_idle(&mut state, &ctx);
+    assert_eq!(state.custom_games.offered("Theirs"), Some(&theirs));
+    assert_eq!(state.custom_games.waiting(config(&state)), 0);
+    assert_eq!(state.notices.len(), notices);
 }

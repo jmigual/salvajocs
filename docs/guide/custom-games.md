@@ -162,21 +162,24 @@ its own copy of it, if it has one, and backs it up as before.
 A custom game decides which files and registry keys a restore may write, so a game another PC
 saved to the repository is not used here until you accept it on this PC. After a read, the
 section **From other PCs, not used here** lists each game that is new here or whose repository
-copy differs from this PC's, and a notice names them. After you switch to another repository in
-Settings, the list waits for that repository's read. Each shows its files, registry keys,
-old-style files, mappings, skipped folders and Steam id; a changed game shows this PC's version
-beside the repository's, with a line only one of them has in bold.
+copy differs from this PC's, a notice names them, and the tab label counts them, as in
+**Custom games (2)**. Each start of the app names again the games that still wait. After you
+switch to another repository in Settings, the list waits for that repository's read. Each shows
+its files, registry keys, old-style files, mappings, skipped folders and Steam id; a changed
+game shows this PC's version beside the repository's, with a line only one of them has in bold.
 
 - **Use on this PC** puts the repository's version on this PC, with this PC's Wine prefix. It
   leaves nothing to back up.
-- **Keep this PC's version** marks this PC's version "Not backed up yet": the next Back up saves
-  it over the other PC's.
-- **Remove from the repository**, for a game new here, has the next Back up remove it from the
-  repository. Every PC that already uses it removes it at its next read, without asking, and
-  other PCs stop being offered it.
+- **Not now** moves the game to **Set aside**, a collapsed part of the section below the games
+  that wait. It is still not used, but no notice names it and the tab label does not count it.
+  **Use on this PC** stays there, so you can accept it later. Nothing is written to the
+  repository or backed up. When another PC changes the game again, the new version waits for
+  you like a new game.
 
 Without an answer the game stays listed and is not used. A restore of such a game uses only this
-PC's definition, and its plan in the Restore tab says that another PC's version waits here. Use
+PC's definition, and its plan in the Restore tab says that another PC's version waits here, or
+that it is set aside here. To change or remove your own version of a game, edit or remove it in
+the list above; the next Back up saves that to the repository. Use
 a game only if you recognise it: anyone who can write to the repository can save one. The same choice is made in the Back up question below: **Keep the repository's**
 accepts that version.
 

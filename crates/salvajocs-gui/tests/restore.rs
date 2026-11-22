@@ -2194,6 +2194,22 @@ fn restore_of_a_game_with_an_offer_points_to_custom_games() {
 }
 
 #[test]
+fn restore_of_a_game_whose_offer_is_set_aside_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = alpha_offered(&tmp);
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    click(&mut harness, "Not now for Alpha");
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(shows(&harness, "is set aside in Custom games"));
+    assert!(shows(&harness, OFFER_NOTE));
+    assert!(!shows(&harness, "waits for review"));
+}
+
+#[test]
 fn batch_restore_of_a_game_with_an_offer_points_to_custom_games() {
     let tmp = tempfile::tempdir().unwrap();
     let mut harness = alpha_offered(&tmp);

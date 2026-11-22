@@ -431,13 +431,22 @@ pub(super) fn warnings_ui(ui: &mut Ui, plan: &RestorePlan) {
 }
 
 /// A line pointing to the Custom games tab when another PC's version of the custom game `title`
-/// waits there for review, since its files would otherwise show as skipped with no hint
-/// (ADR-0030). The tab hides an offer whose name has an unsent change, so the line does too.
+/// waits there for review or is set aside, since its files would otherwise show as skipped with
+/// no hint (ADR-0030). The tab hides an offer whose name has an unsent change, so the line does
+/// too.
 pub(super) fn offer_ui(ui: &mut Ui, state: &State, title: &str) {
-    let unsent = (state.config.iter())
-        .flat_map(|config| &config.custom_games_unsent)
-        .any(|entry| entry.name == title);
-    if state.custom_games.offered(title).is_some() && !unsent {
+    let Some(config) = &state.config else {
+        return;
+    };
+    let Some(offered) = (state.custom_games.listed(config)).find(|game| game.name == title) else {
+        return;
+    };
+    if config.set_aside(offered) {
+        ui.weak(
+            "Another PC's version of this game's custom definition is set aside in Custom games, \
+             where you can still use it. This restore uses this PC's definition only.",
+        );
+    } else {
         ui.weak(
             "Another PC's version of this game's custom definition waits for review in Custom \
              games. This restore uses this PC's definition only.",
