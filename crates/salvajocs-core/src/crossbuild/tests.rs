@@ -1288,3 +1288,41 @@ fn apply_choices_does_not_store_a_pair_a_file_row_declares() {
     assert_eq!(game.pairs, [pair("<xdgData>/h", "<winDocuments>/H")]);
     assert!(game.skips.is_empty(), "the choice still clears the skip");
 }
+
+#[test]
+fn saved_choices_still_apply_to_a_root_stored_before_appdata_matched_without_case() {
+    // Before, `<home>/Appdata/LocalLow/..` was stored as a `WinHome` root.
+    let old = (Base::WinHome, "Appdata/LocalLow/Co/Game/slot".to_owned());
+    let template = "<home>/Appdata/LocalLow/Co/Game";
+    let skips = [template.to_owned()];
+    let skipped = one(propose(
+        &meta(vec![old.clone()]),
+        None,
+        &[],
+        &skips,
+        Family::Linux,
+    ));
+    assert_eq!(skipped.confidence, Confidence::Saved);
+    assert_eq!(skipped.proposed, None);
+    let pairs = [pair("<xdgData>/Game", template)];
+    let paired = one(propose(&meta(vec![old]), None, &pairs, &[], Family::Linux));
+    assert_eq!(paired.proposed.as_deref(), Some("<xdgData>/Game/slot"));
+
+    // A new choice for the old root replaces the saved skip instead of adding a second entry.
+    let mut games = vec![CustomGame {
+        name: "Game".into(),
+        files: Vec::new(),
+        entry: GameEntry::default(),
+        integration: Integration::Extend,
+        wine_prefix: None,
+        pairs: Vec::new(),
+        skips: vec![template.to_owned()],
+    }];
+    let root = (Base::WinHome, "Appdata/LocalLow/Co/Game".to_owned());
+    apply_choices(
+        &mut games,
+        "Game",
+        &[(root, Choice::Template("<xdgData>/Game".into()))],
+    );
+    assert!(games[0].skips.is_empty());
+}

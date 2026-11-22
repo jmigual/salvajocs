@@ -22,6 +22,9 @@ All notable changes to salvajocs. The format follows
 
 - A file whose name is not valid UTF-8 is reported as a scan problem instead of being copied
   under a changed name; the game keeps all its old backed-up files until it is renamed.
+- A Windows save folder the manifest spells `<home>/Appdata/LocalLow/...` (or another case of
+  `AppData`) is now stored under the same folder name as `AppData/LocalLow` and mapped to Linux
+  by the Unity rule. The next **Back up** of each affected game makes one extra snapshot.
 
 ### Security
 

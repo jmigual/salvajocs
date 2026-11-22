@@ -269,3 +269,27 @@ fn only_windows_bases_fold_case() {
     assert!(!folds_case("winappdata"));
     assert!(!folds_case("NotABase"));
 }
+
+#[test]
+fn a_key_stored_before_appdata_matched_without_case_still_applies() {
+    // Before, `<home>/Appdata/LocalLow/..` was keyed as `WinHome/Appdata/LocalLow/..`.
+    let mut s = settings(&[
+        ("WinHome/Appdata/LocalLow/Co/Game/a.sav", false),
+        ("WinHome/APPDATA/roaming", false),
+    ]);
+    assert!(!s.path_included("WinLocalAppDataLow/Co/Game/a.sav"));
+    assert!(s.path_included("WinLocalAppDataLow/Co/Game/b.sav"));
+    assert!(!s.path_included("WinAppData/Foo/x"));
+    // Setting the new key replaces the old one.
+    s.set_path("WinLocalAppDataLow/Co/Game/a.sav", true);
+    assert!(s.path_included("WinLocalAppDataLow/Co/Game/a.sav"));
+    assert!(s.paths.keys().all(|key| !key.contains("LocalLow")));
+}
+
+#[test]
+fn a_deeper_new_key_beats_an_older_key_of_an_ancestor_stored_as_win_home() {
+    let mut s = settings(&[("WinHome/Appdata/LocalLow/Co", false)]);
+    s.set_path("WinLocalAppDataLow/Co/Game", true);
+    assert!(s.path_included("WinLocalAppDataLow/Co/Game/a.sav"));
+    assert!(!s.path_included("WinLocalAppDataLow/Co/Other/a.sav"));
+}

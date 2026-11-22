@@ -66,6 +66,23 @@ fn home_appdata_locallow_normalizes_to_win_local_app_data_low() {
 }
 
 #[test]
+fn home_appdata_normalizes_whatever_the_case() {
+    assert_eq!(
+        classified("<home>/Appdata/LocalLow/Co/Game", &prefix_ctx()),
+        (Base::WinLocalAppDataLow, "Co/Game".into())
+    );
+    assert_eq!(
+        classified("<home>/APPDATA/local/Foo", &native_win_ctx()),
+        (Base::WinLocalAppData, "Foo".into())
+    );
+    // Linux folders stay case-sensitive.
+    assert_eq!(
+        classified("<home>/.Config/Foo", &linux_ctx()),
+        (Base::Home, ".Config/Foo".into())
+    );
+}
+
+#[test]
 fn home_dot_config_normalizes_to_xdg_config() {
     let ctx = linux_ctx();
     assert_eq!(

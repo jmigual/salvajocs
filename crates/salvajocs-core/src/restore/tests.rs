@@ -1359,6 +1359,38 @@ fn plan_of(staged: &StagedGame, entry: Option<&GameEntry>, pairs: &[Pair]) -> Re
 }
 
 #[test]
+fn a_root_stored_before_appdata_was_matched_without_case_still_restores() {
+    // Before, `<home>/Appdata/LocalLow/...` was stored as a `WinHome` root; the template now
+    // classifies as `WinLocalAppDataLow`.
+    let staged = staged(
+        &[(Base::WinHome, "Appdata/LocalLow/Co/Game")],
+        &[(Base::WinHome, "Appdata/LocalLow/Co/Game/save.dat")],
+    );
+    let entry = templates(&["<home>/Appdata/LocalLow/Co/Game"]);
+    // A globbed template is relative to the normalized base, so the tail is too.
+    let globbed = templates(&["<home>/Appdata/LocalLow/Co/Game/*.dat"]);
+    let ctx = win_only(native_win());
+    let globbed_plan = plan(&staged, &ctx, &vars(), Some(&globbed), &[], &[]).unwrap();
+    assert_eq!(globbed_plan.skipped, []);
+    assert_eq!(globbed_plan.writes.len(), 1);
+    let prefix = tempfile::tempdir().unwrap();
+    let folders = WinFolders::for_prefix(prefix.path(), "steamuser");
+    let wine = Context::WinePrefix {
+        prefix: prefix.path().into(),
+        folders,
+    };
+    for ctx in [native_win(), wine] {
+        let plan = plan(&staged, &win_only(ctx), &vars(), Some(&entry), &[], &[]).unwrap();
+        assert_eq!(plan.skipped, []);
+        assert_eq!(plan.writes.len(), 1);
+        assert_eq!(
+            plan.writes[0].source,
+            Path::new("/stage/game/files/WinHome/Appdata/LocalLow/Co/Game/save.dat")
+        );
+    }
+}
+
+#[test]
 fn declared_root_still_restores() {
     // Roots are the classified glob-free prefixes of the entry's templates, in either family,
     // plus the engine-rule targets of those (a pre-restore snapshot of a cross-build restore).

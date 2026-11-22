@@ -36,9 +36,12 @@ machine and OS.
     `<winLocalAppData>`→`WinLocalAppData`, `<winLocalAppDataLow>`→`WinLocalAppDataLow`,
     `<winPublic>`→`WinPublic`, `<winProgramData>`→`WinProgramData`, `<winDir>`→`WinDir`.
     `<home>/AppData/Roaming`, `<home>/AppData/Local` and `<home>/AppData/LocalLow` are normalized
-    to `WinAppData`, `WinLocalAppData` and `WinLocalAppDataLow`. The manifest writes Unity's
+    to `WinAppData`, `WinLocalAppData` and `WinLocalAppDataLow`, ignoring ASCII case (the manifest
+    also writes `<home>/Appdata/LocalLow/...`). The manifest writes Unity's
     `LocalLow` as `<home>/AppData/LocalLow/...`. One name per folder lets ADR-0011's rules
     match on the base. These normalizations change only the base and tail split, not the path.
+    Snapshots, settings and saved choices made before that matched without case hold such a root
+    as `WinHome`; the declared-root check, the mappings and the selection also match that form.
   - Linux-native context: `<home>`→`Home`, `<xdgData>`→`XdgData`, `<xdgConfig>`→`XdgConfig`.
     `<home>/.config` and `<home>/.local/share` are normalized to `XdgConfig` and `XdgData`. The
     manifest writes Unity's Linux path as `<home>/.config/unity3d/...` 1 021 times and as
