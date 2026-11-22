@@ -1156,11 +1156,14 @@ fn restore_fetch_preview_restore_reports() {
         .join(salvajocs_core::slug::slug("Alpha"));
     assert!(!mirror.exists());
 
-    // The reloaded list offers the safety backup, but not as the default.
+    // The reloaded list offers the safety backup, but not as the default, and the game stays
+    // chosen without a click.
     run_until(&mut harness, "the list to reload", |h| {
         !disabled(h, "Load backups")
     });
-    select(&mut harness, "Alpha");
+    run_until(&mut harness, "the game to stay chosen", |h| {
+        shows(h, "Restore into:")
+    });
     assert!(!value(&harness, "Snapshot").contains("pre-restore"));
     click(&mut harness, "Snapshot");
     assert!(shows(&harness, ", pre-restore"));
@@ -1838,7 +1841,11 @@ fn deleting_a_snapshot_removes_only_it() {
 
     assert_eq!(backups_of(&tmp, "Alpha"), alpha[..1]);
     assert_eq!(backups_of(&tmp, "Beta"), beta);
-    select(&mut harness, "Alpha");
+    // The game stays chosen, and the count of the delete stays shown.
+    run_until(&mut harness, "the game to stay chosen", |h| {
+        shows(h, "Restore into:")
+    });
+    assert!(shows(&harness, "Removed 1 backup"));
     click(&mut harness, "Snapshot");
     // The open list holds the one snapshot left.
     assert_eq!(harness.query_all_by_label_contains(" UTC, ").count(), 1);

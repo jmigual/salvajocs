@@ -257,8 +257,9 @@ click outside the dialog also cancels. Click **Delete** to go ahead.
 Deleting all backups of a game keeps your file choices for it (see
 [Backup](backup.md#what-is-stored)). The buttons wait while the game manifest loads, the targets
 are detected, or a restore runs. When the delete is done, the tab says how many
-backups it removed and lists the games again. If it stops partway, the error says how many were
-removed before it.
+backups it removed and lists the games again; the game stays chosen if it still has backups. A
+restore lists the games again the same way and keeps its game chosen. If a delete stops partway,
+the error says how many were removed before it.
 
 As with [old backups](settings.md#old-backups), the disk space comes back at a later cleanup, at
 least 23 hours later. In an append-only repository nothing is deleted, and the tab says so.

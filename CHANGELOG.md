@@ -13,6 +13,8 @@ All notable changes to salvajocs. The format follows
 
 ### Changed
 
+- After a delete or a restore, the Restore tab keeps the chosen game chosen when it still has
+  backups, instead of asking you to pick it again.
 - **Remove** on a custom game asks you to confirm first.
 - Escape or a click outside a dialog cancels it for the delete, close-during-a-job,
   changed-on-another-PC and file details dialogs. The dialogs that must be answered and the folder

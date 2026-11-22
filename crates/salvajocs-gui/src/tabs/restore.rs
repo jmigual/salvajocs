@@ -724,6 +724,9 @@ pub struct RestoreTab {
     backing_up: bool,
     /// The slug of the chosen game.
     selected: Option<String>,
+    /// The slug of the game chosen before a restore or delete, which the listing it started
+    /// chooses again if it still lists it.
+    reselect: Option<String>,
     /// The slugs of the games ticked for a batch restore.
     checked: BTreeSet<String>,
     /// The chosen snapshot's index in the game's `snapshots`. It starts as the game's default, so
@@ -821,6 +824,7 @@ impl RestoreTab {
         self.space = None;
         self.list_changes += 1;
         self.selected = None;
+        self.reselect = None;
         self.checked.clear();
         self.snapshot = None;
     }
@@ -964,8 +968,16 @@ impl RestoreTab {
                             .and_then(|game| game.snapshots.iter().position(|s| s.id == chosen));
                     }
                     self.start_space(ctx, state);
+                    let chosen = self.reselect.take();
+                    let game = (self.games.iter()).find(|game| Some(&game.slug) == chosen.as_ref());
+                    if let Some(game) = game.cloned() {
+                        self.select(ctx, state, &game);
+                    }
                 }
-                Err(err) => self.error = Some(format!("The backups cannot be listed: {err:#}")),
+                Err(err) => {
+                    self.reselect = None;
+                    self.error = Some(format!("The backups cannot be listed: {err:#}"));
+                }
             }
         }
         if let Some(job) = &mut self.detecting
@@ -1034,7 +1046,7 @@ impl RestoreTab {
                     self.restored = Some(restored);
                     // The list gains the safety backup.
                     self.forget_plan();
-                    self.start_listing(ctx, state);
+                    self.list_keeping_choice(ctx, state);
                 }
                 // Nothing was written, so the plan stays for another try.
                 Err(err) => self.error = Some(describe_run_error(&err)),
@@ -1055,7 +1067,7 @@ impl RestoreTab {
             }
             // A plan may be of a deleted snapshot, and the list may have lost some.
             self.forget_plan();
-            self.start_listing(ctx, state);
+            self.list_keeping_choice(ctx, state);
         }
     }
 
@@ -1129,6 +1141,7 @@ impl RestoreTab {
     fn start_listing(&mut self, ctx: &egui::Context, state: &State) {
         if self.read_list(ctx, state) {
             self.selected = None;
+            self.reselect = None;
             self.pick = None;
         }
     }
@@ -1155,6 +1168,16 @@ impl RestoreTab {
             Ok(restore::list(&*lock_storage(&storage)?)?)
         }));
         true
+    }
+
+    /// Lists again after a restore or delete, then chooses the game that was chosen if it is
+    /// still listed.
+    fn list_keeping_choice(&mut self, ctx: &egui::Context, state: &State) {
+        let chosen = self.selected.clone();
+        self.start_listing(ctx, state);
+        if self.listing.is_some() {
+            self.reselect = chosen;
+        }
     }
 
     /// Before the first listing: what the tab is for and the listing as its one action.
@@ -1382,11 +1405,17 @@ impl RestoreTab {
         if state.config.is_none() {
             return;
         }
+        self.error = None;
+        self.removed = None;
+        self.select(ctx, state, game);
+    }
+
+    /// [`Self::choose`] without clearing the error and the removed count, which a relisting
+    /// after a delete must keep showing.
+    fn select(&mut self, ctx: &egui::Context, state: &State, game: &GameBackups) {
         self.selected = Some(game.slug.clone());
         self.snapshot = game.default;
         self.pick = None;
-        self.error = None;
-        self.removed = None;
         self.forget_plan();
         self.detect(ctx, state, game);
     }
