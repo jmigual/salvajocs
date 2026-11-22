@@ -11,10 +11,10 @@
       Wine or Proton prefix on Linux restores on native Windows, and the other way round.
     </p>
     <p>
-      It finds saves with the ludusavi game manifest, in native folders, Steam Proton prefixes and
-      Wine prefixes you configure, and also backs up registry keys. The repository can be a local
-      folder, a REST server, an rclone remote or an OpenDAL service, and you can read it with the
-      restic command line.
+      It finds saves with the ludusavi game manifest, in native folders, Steam Proton prefixes,
+      the Heroic, Lutris and Bottles prefixes on Linux, and Wine prefixes you configure. It also
+      backs up registry keys. The repository can be a local folder, a REST server, an rclone
+      remote or an OpenDAL service, and you can read it with the restic command line.
     </p>
   </description>
   <developer id="io.github.jmigual">
@@ -31,23 +31,23 @@
   </categories>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.3.0/docs/images/backup.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/backup.png</image>
       <caption>Backup: scan for games and pick the ones to back up</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.3.0/docs/images/restore.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/restore.png</image>
       <caption>Restore: preview every file and registry key before anything is written</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.3.0/docs/images/mapping-dialog.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/mapping-dialog.png</image>
       <caption>Mapping dialog: where each folder goes on the other build of a game</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.3.0/docs/images/custom-games.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/custom-games.png</image>
       <caption>Custom games: a game's paths, pairs and skipped folders</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.3.0/docs/images/settings.png</image>
+      <image>https://raw.githubusercontent.com/jmigual/salvajocs/v0.9.1/docs/images/settings.png</image>
       <caption>Settings: repository, compression and roots</caption>
     </screenshot>
   </screenshots>
