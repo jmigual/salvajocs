@@ -76,6 +76,9 @@ All notable changes to salvajocs. The format follows
 - A restore no longer writes a registry key that a snapshot and a game spell with an empty part,
   such as `Software//Microsoft/Windows/CurrentVersion/Run`, to get past the protected system
   keys.
+- The saved choices, custom games and Old backups rules of a repository, and the file compared in
+  a backup's details, are read up to a size limit counted while reading. Before, a crafted
+  repository could make the app read a very large file into memory.
 
 ## [0.9.1] - 2026-11-21
 

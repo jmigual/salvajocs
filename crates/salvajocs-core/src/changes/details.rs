@@ -169,7 +169,8 @@ pub struct FileDetails {
 /// is the usual one) or the file at `local` cannot be statted. `slug` is the game's.
 ///
 /// # Errors
-/// The repository error when the file cannot be read from it.
+/// The repository error when the file cannot be read from it, [`StorageError::TooLarge`] when it
+/// holds more than `cap` bytes (or more bytes than it lists, with no cap) whatever size it lists.
 pub fn read_backed_up(
     storage: &mut Storage,
     slug: &str,
@@ -183,7 +184,11 @@ pub fn read_backed_up(
         return Ok(None);
     }
     let path = format!("/salvajocs/{slug}/{FILES_DIR}/{}", backed_up.path);
-    storage.read_file(&backed_up.snapshot.id, &path).map(Some)
+    // With the cap lifted, the size the snapshot lists still bounds the read, as it can lie.
+    let limit = cap.unwrap_or(backed_up.size);
+    storage
+        .read_file(&backed_up.snapshot.id, &path, limit)
+        .map(Some)
 }
 
 /// How this PC's file at `local` differs from `backed_up`, whose content `backup` is as

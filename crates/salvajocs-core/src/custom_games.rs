@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::manifest::{CustomFile, CustomGame, GameEntry, Integration, Pair};
+use crate::restore::MAX_JSON_BYTES;
 use crate::selection::{Settled, forget_listed, settle};
 use crate::slug::slug;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
@@ -338,7 +339,7 @@ fn read(
     slug: &str,
 ) -> Result<File, CustomGameError> {
     let path = format!("{}/{GAME_FILE}", as_path(slug));
-    File::parse(&storage.read_file(&snapshot.id, &path)?)
+    File::parse(&storage.read_file(&snapshot.id, &path, MAX_JSON_BYTES)?)
 }
 
 /// A custom game changed on this PC and not yet saved to the repository (ADR-0029). The change

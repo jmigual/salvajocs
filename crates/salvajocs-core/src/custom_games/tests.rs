@@ -111,7 +111,7 @@ fn loaded(storage: &mut Storage) -> BTreeMap<String, Stored> {
 
 fn raw(storage: &mut Storage, snapshot: &SnapshotInfo, name: &str) -> Value {
     let path = format!("{}/{GAME_FILE}", as_path(&slug(name)));
-    serde_json::from_slice(&storage.read_file(&snapshot.id, &path).unwrap()).unwrap()
+    serde_json::from_slice(&storage.read_file(&snapshot.id, &path, u64::MAX).unwrap()).unwrap()
 }
 
 fn ids(storage: &Storage) -> Vec<String> {
