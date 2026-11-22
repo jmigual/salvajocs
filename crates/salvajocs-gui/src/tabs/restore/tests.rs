@@ -112,6 +112,36 @@ fn a_cleanup_dropping_the_list_closes_the_delete_dialog() {
     assert!(harness.query_by_label("Cancel").is_none());
 }
 
+#[test]
+fn a_running_backup_disables_every_delete_and_leaves_the_list_browsable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    harness.step();
+    harness.get_by_label("Delete all backups of Mix").click();
+    harness.step();
+    harness.step();
+    assert!(!is_disabled(&harness, "Delete"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Delete"), "the confirm's button");
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    harness.get_by_label("Cancel").click();
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Delete all backups of Mix"));
+    assert!(is_disabled(&harness, "Load backups"));
+    let mut rows = harness.query_all_by_label("Mix").peekable();
+    assert!(rows.peek().is_some());
+    assert!(
+        rows.all(|row| !row.accesskit_node().is_disabled()),
+        "the game list stays usable"
+    );
+}
+
 /// A state whose repository, in `dir`, is open.
 fn state(dir: &Path) -> State {
     fn offline(_: &Path) -> Result<Freshness, FetchError> {
@@ -677,6 +707,26 @@ fn the_plan_stays_when_a_wineserver_blocks_the_restore() {
     assert!(!is_disabled(&harness, "Restore files"));
 }
 
+#[test]
+fn a_running_backup_disables_restore_files_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = registry_restore(dir.path(), || false);
+    assert!(!is_disabled(&harness, "Restore files"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+
+    assert!(is_disabled(&harness, "Restore files"));
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    harness.state_mut().0.set_backing_up(false);
+    harness.step();
+    harness.step();
+    assert!(!is_disabled(&harness, "Restore files"));
+}
+
 /// The tab previewing a registry restore into a prefix under `dir`, where the wineserver check
 /// answers `wineserver_running`.
 fn registry_restore(dir: &Path, wineserver_running: fn() -> bool) -> TabHarness {
@@ -924,6 +974,31 @@ fn a_cleanup_dropping_the_list_closes_the_batch_confirm() {
     harness.state_mut().0.drop_listing();
     harness.step();
     assert!(harness.query_by_label("Cancel").is_none());
+}
+
+#[test]
+fn a_running_backup_disables_the_batch_restore_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = planned_batch(dir.path(), Base::XdgData, "<xdgData>/Mix");
+    assert!(!is_disabled(&harness, "Restore 1 game"));
+
+    harness.state_mut().0.set_backing_up(true);
+    harness.step();
+    harness.step();
+
+    assert!(is_disabled(&harness, "Restore 1 game"));
+    let reason = harness.query_all_by_label_contains("Waiting for the running backup");
+    assert!(reason.count() > 0);
+
+    // Without the confirm, the sidebar's button that plans the batch waits too.
+    harness.state_mut().0.batch.close();
+    harness.step();
+    harness.step();
+    assert!(is_disabled(&harness, "Restore 1 game"));
+    harness.state_mut().0.set_backing_up(false);
+    harness.step();
+    harness.step();
+    assert!(!is_disabled(&harness, "Restore 1 game"));
 }
 
 #[test]

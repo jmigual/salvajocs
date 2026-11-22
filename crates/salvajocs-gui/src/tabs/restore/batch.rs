@@ -231,7 +231,7 @@ impl RestoreTab {
         }
         let ticked = self.ticked().count();
         let label = format!("Restore {}", count(ticked, "game"));
-        let enabled = ticked > 0 && state.session.is_some();
+        let enabled = ticked > 0 && state.session.is_some() && !self.backing_up;
         ui.add_space(8.0);
         let glyph = Some(icons::CLOCK_COUNTER_CLOCKWISE);
         if theme::primary(ui, enabled, glyph, &label).clicked() {
@@ -432,8 +432,12 @@ impl RestoreTab {
         }
         let (mut cancel, mut run) = (false, false);
         let label = format!("Restore {}", count(planned, "game"));
-        let enabled = planned > 0 && state.session.is_some();
+        let enabled = planned > 0 && state.session.is_some() && !self.backing_up;
+        let backing_up = self.backing_up;
         theme::row_end(ui, |ui| {
+            if backing_up {
+                ui.weak("Waiting for the running backup to end.");
+            }
             cancel |= ui.button("Cancel").clicked();
             let glyph = Some(icons::CLOCK_COUNTER_CLOCKWISE);
             run |= theme::primary(ui, enabled, glyph, &label).clicked();

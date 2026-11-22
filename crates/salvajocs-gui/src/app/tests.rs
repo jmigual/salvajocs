@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::Vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::storage::{Compression, RepoLocation};
@@ -317,6 +317,29 @@ fn a_backup_ending_as_the_repository_is_replaced_keeps_nothing_of_the_old_list()
 
     let empty = harness.query_by_label_contains("See the games");
     assert!(empty.is_some(), "the old list is dropped, not listed again");
+}
+
+#[test]
+fn the_restore_tab_waits_while_a_backup_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = ready_app(dir.path());
+    let ctx = harness.ctx.clone();
+    let end_backup = harness.state_mut().backup.hold_backup(&ctx);
+    harness.state_mut().set_tab(Tab::Restore);
+    harness.step();
+    harness.step();
+
+    let load = harness.get_by_label("Load backups");
+    assert!(load.accesskit_node().is_disabled());
+    assert!(harness.query_by_label("A backup is running.").is_some());
+
+    drop(end_backup);
+    step_until(&mut harness, "the backup to end", |app| {
+        !app.backup.backing_up()
+    });
+    harness.step();
+    let load = harness.get_by_label("Load backups");
+    assert!(!load.accesskit_node().is_disabled());
 }
 
 #[test]

@@ -228,6 +228,7 @@ impl App {
             self.settings.reload_rules();
         }
         self.settings.set_backing_up(self.backup.backing_up());
+        self.restore.set_backing_up(self.backup.backing_up());
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
         // After the poll, which drops the state of a repository Settings replaced: `relist` would

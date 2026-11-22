@@ -743,6 +743,9 @@ pub struct RestoreTab {
     lines: Vec<Option<Line>>,
     /// A restore, batch restore or delete ended since [`RestoreTab::take_written`] last ran.
     written: bool,
+    /// A Back up checks, asks, waits to start or runs; it holds the repository's lock, so the
+    /// tab's controls wait for it.
+    backing_up: bool,
     /// The slug of the chosen game.
     selected: Option<String>,
     /// The slugs of the games ticked for a batch restore.
@@ -851,6 +854,11 @@ impl RestoreTab {
     /// too and would swallow it.
     pub(crate) fn take_written(&mut self) -> bool {
         mem::take(&mut self.written)
+    }
+
+    /// Tells the tab whether a Back up runs, which keeps its controls disabled until it ends.
+    pub(crate) fn set_backing_up(&mut self, backing_up: bool) {
+        self.backing_up = backing_up;
     }
 
     /// Whether a listing, restore or other job of this tab is running. A plan job only reads,
@@ -1180,7 +1188,8 @@ impl RestoreTab {
             ui.weak("See the games in your repository and their snapshots.");
             ui.add_space(8.0);
             let session = state.session.is_some();
-            if theme::primary(ui, session, None, "Load backups").clicked() {
+            let enabled = session && !self.backing_up;
+            if theme::primary(ui, enabled, None, "Load backups").clicked() {
                 self.load(ui.ctx(), state);
             }
             if !session {
@@ -1188,6 +1197,9 @@ impl RestoreTab {
             }
             if manifest_loading {
                 ui.weak("The game manifest is loading.");
+            }
+            if self.backing_up {
+                ui.weak("A backup is running.");
             }
         });
     }
@@ -1230,8 +1242,12 @@ impl RestoreTab {
     /// Returns the sort to list by, or `None` while there are no games.
     fn sidebar_header_ui(&mut self, ui: &mut Ui, state: &mut State) -> Option<ListSort> {
         let load = egui::Button::new("Load backups").min_size(Vec2::new(ui.available_width(), 0.0));
-        if ui.add_enabled(state.session.is_some(), load).clicked() {
+        let enabled = state.session.is_some() && !self.backing_up;
+        if ui.add_enabled(enabled, load).clicked() {
             self.load(ui.ctx(), state);
+        }
+        if self.backing_up {
+            ui.weak("A backup is running.");
         }
         if state.session.is_none() {
             ui.weak("The repository is not open.");
@@ -1331,7 +1347,8 @@ impl RestoreTab {
                 .response
                 .labelled_by(label.id);
             let chosen = self.snapshot.and_then(|index| game.snapshots.get(index));
-            let delete = ui.add_enabled(chosen.is_some(), egui::Button::new("Delete snapshot"));
+            let deletable = chosen.is_some() && !self.backing_up;
+            let delete = ui.add_enabled(deletable, egui::Button::new("Delete snapshot"));
             if delete.clicked()
                 && let Some(snapshot) = chosen
             {
@@ -1369,11 +1386,12 @@ impl RestoreTab {
         if manifest_loading {
             ui.weak("The game manifest is loading.");
         }
+        if self.backing_up {
+            ui.weak("A backup is running.");
+        }
         ui.add_space(16.0);
-        if ui
-            .button(format!("Delete all backups of {}", game.title))
-            .clicked()
-        {
+        let delete_all = egui::Button::new(format!("Delete all backups of {}", game.title));
+        if ui.add_enabled(!self.backing_up, delete_all).clicked() {
             self.confirm_delete = Some(Deletion {
                 title: game.title.clone(),
                 snapshots: game.snapshots.clone(),
@@ -1570,6 +1588,7 @@ impl RestoreTab {
 
     /// The confirm dialog of a delete; Delete starts it in the listed repository.
     fn delete_ui(&mut self, ctx: &egui::Context) {
+        let backing_up = self.backing_up;
         let Some(deletion) = &mut self.confirm_delete else {
             return;
         };
@@ -1594,9 +1613,11 @@ impl RestoreTab {
                     button.request_focus();
                 }
                 cancel |= button.clicked();
-                delete |= ui
-                    .button(RichText::new("Delete").color(error).strong())
-                    .clicked();
+                if backing_up {
+                    ui.weak("Waiting for the running backup to end.");
+                }
+                let button = egui::Button::new(RichText::new("Delete").color(error).strong());
+                delete |= ui.add_enabled(!backing_up, button).clicked();
             });
         });
         if delete {
@@ -1717,14 +1738,22 @@ impl RestoreTab {
         }
         let blocked = !blocking.is_empty();
         let nothing = writes == 0 && !preview.keys.any_ticked();
-        let ready = !busy && state.session.is_some() && unapplied.is_none() && !blocked && !nothing;
+        let ready = !busy
+            && !self.backing_up
+            && state.session.is_some()
+            && unapplied.is_none()
+            && !blocked
+            && !nothing;
         let restoring = self.restoring.is_some();
         let empty = nothing_to_restore(&preview.plan);
         let has_registry = preview.plan.registry.is_some();
         let mut retry = false;
+        let backing_up = self.backing_up;
         let start = |ui: &mut Ui| {
             if restoring {
                 ui.weak("Downloading and restoring…");
+            } else if backing_up {
+                ui.weak("Waiting for the running backup to end.");
             } else if blocked {
                 ui.weak("Untick them, or make them readable and check again.");
                 retry |= ui.button("Try again").clicked();
