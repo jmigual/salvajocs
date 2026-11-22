@@ -20,7 +20,7 @@ use crate::layout::{
     expand, glob_free_prefix, tail_of,
 };
 use crate::manifest::{GameEntry, Manifest, Os, When, merge_custom};
-use crate::prefix::{PrefixError, proton_prefix, steam_roots, wine_user};
+use crate::prefix::{PrefixError, compat_app_ids, proton_prefix, steam_roots, wine_user};
 use crate::registry::HKCU;
 use crate::registry::wine::RegFile;
 
@@ -353,6 +353,8 @@ struct Shared<'a> {
     env: &'a Environment,
     /// Steam roots and configured roots, deduplicated.
     roots: Vec<Root>,
+    /// Each Steam root with the app ids that have a `compatdata` entry, listed once per scan.
+    proton_ids: Vec<(PathBuf, HashSet<u64>)>,
     /// `WinePrefix` roots, in configured order.
     wine_roots: Vec<PathBuf>,
     /// Launcher prefixes of one game, by title.
@@ -463,11 +465,10 @@ fn contexts(
     shared: &Shared,
 ) -> Vec<(Context, GameVars)> {
     let steam_id = entry.steam.as_ref().and_then(|steam| steam.id);
-    let proton = shared
-        .roots
-        .iter()
-        .filter(|root| root.kind == RootKind::Steam)
-        .filter_map(|root| proton_prefix(&root.path, u64::from(steam_id?)));
+    let proton = shared.proton_ids.iter().filter_map(|(root, ids)| {
+        let id = u64::from(steam_id?);
+        ids.contains(&id).then(|| proton_prefix(root, id))?
+    });
     let own = shared.own_prefixes.get(title).into_iter().flatten();
     let launcher_shared = shared.shared_prefixes.iter();
     let mut prefixes: Vec<PathBuf> = Vec::new();
@@ -730,9 +731,15 @@ pub fn scan(
         .map(|root| root.path.clone())
         .collect();
     let (own_prefixes, shared_prefixes) = launcher_prefixes(manifest, config, env);
+    let proton_ids = roots
+        .iter()
+        .filter(|root| root.kind == RootKind::Steam)
+        .map(|root| (root.path.clone(), compat_app_ids(&root.path)))
+        .collect();
     let shared = Shared {
         env,
         roots,
+        proton_ids,
         wine_roots,
         own_prefixes,
         shared_prefixes,

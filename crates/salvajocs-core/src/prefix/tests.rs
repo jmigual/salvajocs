@@ -23,6 +23,17 @@ fn proton_prefix_picks_steamuser() {
 }
 
 #[test]
+fn compat_app_ids_lists_numbered_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let compat = dir.path().join("steamapps/compatdata");
+    for name in ["620", "1245620", "pfx", "12x"] {
+        fs::create_dir_all(compat.join(name)).unwrap();
+    }
+    assert_eq!(compat_app_ids(dir.path()), HashSet::from([620, 1_245_620]));
+    assert!(compat_app_ids(&dir.path().join("missing")).is_empty());
+}
+
+#[test]
 fn enclosing_prefix_finds_the_prefix_above_a_pick() {
     let dir = tempfile::tempdir().unwrap();
     let prefix = make_prefix(dir.path(), &["steamuser"]);

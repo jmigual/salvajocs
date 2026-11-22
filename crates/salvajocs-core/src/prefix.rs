@@ -1,5 +1,6 @@
 //! Wine prefix validation, Wine user choice and Steam root discovery (ADR-0007).
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -162,6 +163,19 @@ pub fn proton_prefix(steam_root: &Path, app_id: u64) -> Option<PathBuf> {
         .join(app_id.to_string())
         .join("pfx");
     validate_prefix(&pfx).ok().map(|()| pfx)
+}
+
+/// The app ids with an entry in `<steam_root>/steamapps/compatdata`; unreadable gives none.
+pub(crate) fn compat_app_ids(steam_root: &Path) -> HashSet<u64> {
+    fs::read_dir(steam_root.join("steamapps/compatdata")).map_or_else(
+        |_| HashSet::new(),
+        |entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+                .collect()
+        },
+    )
 }
 
 /// Whether any process is named `wineserver*` (Debian/Ubuntu use `wineserver64`). Reads `/proc/*/comm`, so it is `false` where
