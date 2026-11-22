@@ -74,6 +74,23 @@ impl Pending {
         self.repositories.entry(config.secret_scope()).or_default()
     }
 
+    /// Moves the changes kept under the repository key `from` to the key `to`, for a repository
+    /// whose key changed; returns whether there were any. Where both have changes for a game,
+    /// those under `to` stay.
+    pub fn rescope(&mut self, from: &str, to: &str) -> bool {
+        if from == to {
+            return false;
+        }
+        let Some(games) = self.repositories.remove(from) else {
+            return false;
+        };
+        let target = self.repositories.entry(to.to_string()).or_default();
+        for (title, changes) in games {
+            target.entry(title).or_insert(changes);
+        }
+        true
+    }
+
     /// Drops the changes of `title` for the repository of `config`, once they are saved to it.
     pub fn remove(&mut self, config: &AppConfig, title: &str) {
         let key = config.secret_scope();

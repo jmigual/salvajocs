@@ -1,6 +1,7 @@
 //! Repository storage over `rustic_core` (ADR-0003). The only module that names rustic types.
 
 mod rclone;
+mod rest_url;
 
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
@@ -20,6 +21,9 @@ use rustic_core::{
 };
 
 use rclone::Rclone;
+pub use rest_url::{
+    REST_PASSWORD_KEY, join_rest_password, redact_rest_password, split_rest_password,
+};
 
 /// The Windows process creation flag that gives a console program no window.
 #[cfg(windows)]
@@ -145,7 +149,8 @@ fn refused_status(text: &str) -> bool {
 }
 
 /// Where a repository lives: a rustic repository string (a plain path, `local:`, `rest:`,
-/// `rclone:`, `opendal:<service>`) and the backend options for it.
+/// `rclone:`, `opendal:<service>`) and the backend options for it. The password of a `rest:`
+/// URL is the option [`REST_PASSWORD_KEY`], not part of the string.
 #[derive(Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct RepoLocation {
@@ -155,11 +160,12 @@ pub struct RepoLocation {
     pub options: BTreeMap<String, String>,
 }
 
-/// Debug output lists only the option keys: the values may be secrets.
+/// Debug output lists only the option keys: the values may be secrets. A password in a `rest:`
+/// URL is hidden too.
 impl fmt::Debug for RepoLocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RepoLocation")
-            .field("repository", &self.repository)
+            .field("repository", &redact_rest_password(&self.repository))
             .field("option_keys", &self.options.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -197,18 +203,31 @@ impl RepoLocation {
     /// The backends for rustic. An `rclone:` location is served by an rclone started here, which
     /// is returned too: rustic reaches it as a REST server and it stops when dropped.
     fn backends(&self) -> Result<(RepositoryBackends, Option<Rclone>), StorageError> {
-        let (repository, rclone) = match location_to_type_and_path(&self.repository) {
-            Ok((SupportedBackend::Rclone, remote)) => {
-                let (rclone, url) = Rclone::start(remote.as_str(), &self.options)?;
+        let mut options = self.options.clone();
+        let password = options.remove(REST_PASSWORD_KEY);
+        let (repository, rclone) = match (location_to_type_and_path(&self.repository), &password) {
+            (Ok((SupportedBackend::Rclone, remote)), _) => {
+                let (rclone, url) = Rclone::start(remote.as_str(), &options)?;
                 (format!("rest:{url}"), Some(rclone))
             }
+            (Ok((SupportedBackend::Rest, _)), Some(password)) => (
+                rest_url::join_rest_password(&self.repository, password),
+                None,
+            ),
             _ => (self.repository.clone(), None),
         };
         let backends = BackendOptions::default()
             .repository(repository)
-            .options(self.options.clone())
+            .options(options)
             .to_backends()
-            .map_err(backend)?;
+            .map_err(|err| {
+                // rustic quotes the URL, password included, when it cannot parse it.
+                let text = AsRef::<RusticError>::as_ref(&err).display_log();
+                StorageError::Backend(match &password {
+                    Some(password) => rest_url::mask_password(&text, password),
+                    None => text,
+                })
+            })?;
         Ok((backends, rclone))
     }
 }

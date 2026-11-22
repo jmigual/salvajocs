@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendField, BackendKind, RepoOption};
+use salvajocs_core::storage::{REST_PASSWORD_KEY, split_rest_password};
 
 use super::{field_hint, field_status, guide_url, labelled_edit};
 use crate::env::Env;
@@ -27,6 +28,28 @@ struct OptionRow {
     /// Whether the backend does not read the key. Kept here because working it out is too slow
     /// for every frame; it is redone when the key or the backend changes.
     unknown: bool,
+    /// Whether the secret flag still follows the key: set on a row the user added, cleared when
+    /// they click the checkbox. A loaded row never follows, as flipping its flag would change the
+    /// keyring scope.
+    follows_key: bool,
+}
+
+impl OptionRow {
+    /// A row the user just added, which ticks "secret" for a key that looks like one.
+    fn added() -> Self {
+        Self {
+            follows_key: true,
+            ..Self::default()
+        }
+    }
+
+    /// Redoes what depends on the key, after it or the backend changed.
+    fn key_changed(&mut self, kind: BackendKind) {
+        self.unknown = is_unknown_key(kind, &self.key);
+        if self.follows_key {
+            self.secret = config::looks_secret(&self.key);
+        }
+    }
 }
 
 /// An option the form would save, as typed.
@@ -74,16 +97,20 @@ impl Default for BackendForm {
     }
 }
 
-/// The named fields of a kind; only opendal services have them.
+/// The named fields of a kind; only REST and the opendal services have them.
 fn fields_of(kind: BackendKind) -> &'static [BackendField] {
     match kind {
         BackendKind::OpenDal(service) => config::opendal_fields(service),
+        BackendKind::Rest => config::rest_fields(),
         _ => &[],
     }
 }
 
 /// The warning under an Advanced key the backend does not read.
 const UNKNOWN_KEY: &str = "Not an option of this backend, so it probably does nothing. Check the spelling in the option reference.";
+
+/// The warning for an rclone remote served without a login.
+const RCLONE_NO_LOGIN: &str = "use-password is false, so the local rclone server has no login. Any program on this PC can read and delete the repository while salvajocs runs.";
 
 /// Whether an Advanced key is typed but is not one the backend reads. Allowed, but a typo would
 /// otherwise be ignored without a word.
@@ -165,10 +192,11 @@ impl BackendForm {
                     value,
                     secret: option.secret,
                     unknown: is_unknown_key(kind, &option.key),
+                    follows_key: false,
                 });
             }
         }
-        Self {
+        let mut form = Self {
             kind,
             location: location.to_string(),
             named,
@@ -177,6 +205,24 @@ impl BackendForm {
             options,
             remotes: Remotes::Unasked,
             picker: None,
+        };
+        form.take_pasted_password();
+        form
+    }
+
+    /// Moves a password in the REST URL into the Password field, so it is never part of the
+    /// repository string, the config or the keyring scope. A password in the URL wins over one
+    /// already in the field.
+    fn take_pasted_password(&mut self) {
+        if self.kind != BackendKind::Rest {
+            return;
+        }
+        if let Some((url, password)) =
+            split_rest_password(&format!("rest:{}", self.location.trim()))
+            && let Some(location) = url.strip_prefix("rest:")
+        {
+            self.location = location.to_string();
+            self.named.insert(REST_PASSWORD_KEY.to_string(), password);
         }
     }
 
@@ -301,6 +347,16 @@ impl BackendForm {
         }
     }
 
+    /// Whether the rclone server salvajocs starts would run without a login: `use-password` is
+    /// `false`, which is the only value rustic reads as off.
+    fn rclone_without_login(&self) -> bool {
+        self.kind == BackendKind::Rclone
+            && self
+                .entries()
+                .iter()
+                .any(|entry| entry.key == "use-password" && entry.value == "false")
+    }
+
     /// The options as the config keeps them: a secret option has no value.
     pub fn options(&self) -> Vec<RepoOption> {
         self.entries()
@@ -327,6 +383,7 @@ impl BackendForm {
     /// Draws the picker as rows of a two-column grid. `env` lists the rclone remotes, once, the
     /// first time that kind is shown.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) {
+        self.take_pasted_password();
         if let Some(job) = &mut self.picker
             && let Some(result) = job.take_result()
         {
@@ -369,7 +426,9 @@ impl BackendForm {
                 ui,
                 match self.kind {
                     BackendKind::Local => "A folder on this machine or a mounted drive.",
-                    BackendKind::Rest => "The URL of a rustic or restic REST server.",
+                    BackendKind::Rest => {
+                        "The URL of a rustic or restic REST server, with the user name if it has a login: https://user@host/. The password goes in the field below."
+                    }
                     _ => "remote:path. Needs the rclone binary on the PATH.",
                 },
             );
@@ -393,9 +452,9 @@ impl BackendForm {
                 field_hint(ui, config::opendal_hint(service).unwrap_or_default());
                 ui.end_row();
             }
-            for field in fields_of(self.kind) {
-                self.field_ui(ui, field);
-            }
+        }
+        for field in fields_of(self.kind) {
+            self.field_ui(ui, field);
         }
         self.duplicate_ui(ui);
         self.advanced_ui(ui);
@@ -505,6 +564,12 @@ impl BackendForm {
     /// The toggle row and, when open, the option reference and the option list. A toggle row
     /// because a `CollapsingHeader` cannot span the rows of a grid.
     fn advanced_ui(&mut self, ui: &mut Ui) {
+        if self.rclone_without_login() {
+            ui.label("");
+            let color = ui.visuals().warn_fg_color;
+            field_status(ui, icons::WARNING, color, RCLONE_NO_LOGIN);
+            ui.end_row();
+        }
         ui.label("");
         // A framed button, so it reads as a button while closed; selected while open.
         let toggle = egui::Button::new("Advanced options").selected(self.advanced_open);
@@ -528,7 +593,7 @@ impl BackendForm {
             let number = index + 1;
             let key_edit = labelled_edit(ui, &format!("Option {number} key"), &mut row.key, false);
             if key_edit.changed() {
-                row.unknown = is_unknown_key(kind, &row.key);
+                row.key_changed(kind);
             }
             if ui.button("Remove").clicked() {
                 remove = Some(index);
@@ -546,7 +611,9 @@ impl BackendForm {
                 &mut row.value,
                 row.secret,
             );
-            ui.checkbox(&mut row.secret, "secret");
+            if ui.checkbox(&mut row.secret, "secret").clicked() {
+                row.follows_key = false;
+            }
             ui.end_row();
         }
         if let Some(index) = remove {
@@ -554,7 +621,7 @@ impl BackendForm {
         }
         ui.label("");
         if ui.button("Add option").clicked() {
-            self.options.push(OptionRow::default());
+            self.options.push(OptionRow::added());
         }
         ui.end_row();
     }
@@ -567,6 +634,7 @@ impl BackendForm {
             value: value.to_string(),
             secret,
             unknown: is_unknown_key(self.kind, key),
+            follows_key: false,
         });
     }
 
@@ -1027,5 +1095,94 @@ mod tests {
         form.push_option("retry", "1", false);
         form.push_option("retry", "2", false);
         assert!(!form.is_complete(), "two Advanced rows clash too");
+    }
+
+    #[test]
+    fn an_added_row_ticks_secret_for_a_key_that_looks_secret() {
+        let mut row = OptionRow::added();
+        for (key, secret) in [("api_token", true), ("api_toke", false), ("Password", true)] {
+            row.key = key.to_string();
+            row.key_changed(BackendKind::Local);
+            assert_eq!(row.secret, secret, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_row_the_user_set_keeps_its_secret_flag() {
+        let mut added = OptionRow::added();
+        added.key = "api_key".to_string();
+        added.key_changed(BackendKind::Local);
+        added.secret = false;
+        added.follows_key = false;
+        added.key = "api_keys".to_string();
+        added.key_changed(BackendKind::Local);
+        assert!(!added.secret, "unticked by the user");
+
+        let loaded = config("opendal:s3", vec![option("my_token", Some("x"), false)]);
+        let mut form = BackendForm::from_config(&loaded, &BTreeMap::new());
+        form.options[0].key_changed(BackendKind::OpenDal("s3"));
+        assert!(!form.options[0].secret, "a loaded row never flips");
+    }
+
+    #[test]
+    fn only_an_rclone_remote_with_use_password_false_warns_of_no_login() {
+        let mut form =
+            BackendForm::from_config(&config("rclone:remote:games", Vec::new()), &BTreeMap::new());
+        assert!(
+            !form.rclone_without_login(),
+            "no option, so the default of true"
+        );
+        form.push_option("use-password", "true", false);
+        assert!(!form.rclone_without_login());
+        form.options[0].value = "false".to_string();
+        assert!(form.rclone_without_login());
+
+        form.switch_kind(BackendKind::Rest);
+        assert!(!form.rclone_without_login(), "only rclone starts a server");
+    }
+
+    #[test]
+    fn a_password_in_the_rest_url_moves_to_the_password_field() {
+        let loaded = config("rest:https://user:p%40ss@host/repo", Vec::new());
+        let mut form = BackendForm::from_config(&loaded, &BTreeMap::new());
+        assert_eq!(form.repository(), "rest:https://user@host/repo");
+        assert_eq!(
+            form.secrets(),
+            BTreeMap::from([("rest-password".to_string(), "p@ss".to_string())])
+        );
+        assert_eq!(
+            option_set(form.options()),
+            option_set(vec![option("rest-password", None, true)])
+        );
+
+        // Pasting a URL with a password later does the same, and replaces the field's value.
+        form.location = " https://other:new@host2/ ".to_string();
+        form.take_pasted_password();
+        assert_eq!(form.repository(), "rest:https://other@host2/");
+        assert_eq!(form.secrets()["rest-password"], "new");
+    }
+
+    #[test]
+    fn the_rest_password_field_keeps_the_scope_and_stays_with_rest() {
+        let saved = config(
+            "rest:https://user@host/",
+            vec![option("rest-password", None, true)],
+        );
+        let secrets = BTreeMap::from([("rest-password".to_string(), "hunter2".to_string())]);
+        let mut form = BackendForm::from_config(&saved, &secrets);
+        assert!(form.options.is_empty(), "the secret option is in the field");
+        assert_eq!(form.secrets(), secrets);
+
+        let mut applied = config(&form.repository(), Vec::new());
+        applied.repository_options = form.options();
+        assert_eq!(applied.secret_scope(), saved.secret_scope());
+
+        form.switch_kind(BackendKind::Local);
+        assert!(form.secrets().is_empty(), "never saved for another kind");
+        form.switch_kind(BackendKind::Rest);
+        assert_eq!(form.secrets(), secrets);
+
+        form.push_option("rest-password", "again", true);
+        assert!(!form.is_complete(), "set in the field and in Advanced");
     }
 }

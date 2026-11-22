@@ -3,6 +3,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::storage::REST_PASSWORD_KEY;
+
 /// One named field of an opendal service in the connect form. `key` is the opendal option key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -378,6 +380,16 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
     },
 ];
 
+/// The named fields of the REST server kind: the password, kept apart from the URL.
+const REST_FIELDS: &[BackendField] = &[BackendField::new(REST_PASSWORD_KEY, "REST password")
+    .secret()
+    .hint("Of the user name in the URL, if the server has a login.")];
+
+/// The named fields of the REST server kind.
+pub fn rest_fields() -> &'static [BackendField] {
+    REST_FIELDS
+}
+
 fn service(name: &str) -> Option<&'static Service> {
     OPENDAL_SERVICES.iter().find(|service| service.name == name)
 }
@@ -396,6 +408,19 @@ pub fn opendal_label(service_name: &str) -> Option<&'static str> {
 /// One line saying what an opendal service is; `None` for a service the picker does not offer.
 pub fn opendal_hint(service_name: &str) -> Option<&'static str> {
     service(service_name).map(|service| service.hint)
+}
+
+/// Whether the table makes `key` (lowercase) a secret: `Some(true)` when it, or an alias of it,
+/// is a secret field of any service, `Some(false)` when it only names non-secret fields, `None`
+/// when no field has it.
+pub(super) fn field_is_secret(key: &str) -> Option<bool> {
+    let mut named = OPENDAL_SERVICES
+        .iter()
+        .flat_map(|service| service.fields)
+        .filter(|field| field.key == key || field.aliases.contains(&key))
+        .peekable();
+    named.peek()?;
+    Some(named.any(|field| field.secret))
 }
 
 /// What opendal's config struct for `service` reads from the JSON `input`, serialized back to

@@ -89,6 +89,9 @@ pub struct State {
     pub notices: Vec<String>,
     /// The reads of the custom games in the repository (ADR-0028, ADR-0029).
     pub custom_games: CustomGameJobs,
+    /// The config's REST password came out of its URL at load and is not yet in the keyring, so
+    /// a save writes it back into the URL rather than lose it.
+    pub keep_legacy_rest_url: bool,
     saving: Option<Job<()>>,
     save_again: bool,
     remembering: Option<Job<()>>,
@@ -106,6 +109,7 @@ impl State {
             stale: None,
             notices: Vec::new(),
             custom_games: CustomGameJobs::default(),
+            keep_legacy_rest_url: false,
             saving: None,
             save_again: false,
             remembering: None,
@@ -162,9 +166,12 @@ impl State {
             self.save_again = true;
             return;
         }
-        let Some(config) = self.config.clone() else {
+        let Some(mut config) = self.config.clone() else {
             return;
         };
+        if self.keep_legacy_rest_url {
+            config.put_back_rest_password();
+        }
         let dir = self.env.config_dir.clone();
         self.saving = Some(Job::spawn(ctx, move || Ok(config.save(&dir)?)));
     }

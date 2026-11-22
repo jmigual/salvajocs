@@ -8,19 +8,24 @@ use crate::startup::Credentials;
 use crate::theme::{self, icons};
 use crate::widgets::labelled_edit;
 
-/// What the prompt calls a secret: a secret option of an opendal service by the label of its
-/// field, else by its key.
+/// What the prompt calls a secret: a secret option of a REST server or an opendal service by the
+/// label of its field, else by its key.
 fn secret_label(repository: &str, key: &SecretKey) -> String {
     match key {
         SecretKey::Password => "Encryption password".to_string(),
-        SecretKey::Option(key) => repository
-            .strip_prefix("opendal:")
-            .and_then(|service| {
-                config::opendal_fields(service)
-                    .iter()
-                    .find(|f| f.key == *key)
-            })
-            .map_or_else(|| format!("Option {key}"), |field| field.label.to_string()),
+        SecretKey::Option(key) => {
+            let fields = if repository.starts_with("rest:") {
+                config::rest_fields()
+            } else {
+                repository
+                    .strip_prefix("opendal:")
+                    .map_or(&[][..], config::opendal_fields)
+            };
+            fields
+                .iter()
+                .find(|f| f.key == *key)
+                .map_or_else(|| format!("Option {key}"), |field| field.label.to_string())
+        }
     }
 }
 

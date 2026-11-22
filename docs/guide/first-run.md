@@ -18,7 +18,7 @@ The **Backend** list offers:
 | Backend | Location field | Notes |
 | --- | --- | --- |
 | Local folder | A folder on this machine or a mounted drive. | The default. **Browse** opens a folder picker. |
-| REST server | The URL of a rustic or restic REST server. | |
+| REST server | The URL of a rustic or restic REST server, with the user name if it has a login: `https://user@host:8000/`. | A **REST password** field holds the password. It is a secret field, so it is kept in the keyring or asked each session. Do not put the password in the URL: a password pasted there moves to the field. |
 | rclone remote | `remote:path` | Needs the `rclone` program on your `PATH`. A **Remote** list shows the remotes from `rclone listremotes`; picking one fills the start of the location. |
 | A service by name | None. Fill in the fields of the service. | Alibaba Cloud OSS, Amazon S3 (or compatible), Azure Blob Storage, Azure Data Lake Storage, Azure Files, Backblaze B2, Dropbox, FTP, Google Cloud Storage, Google Drive, Hadoop WebHDFS, Huawei Cloud OBS, IPFS (MFS), OneDrive, OpenStack Swift, pCloud, SFTP, Tencent Cloud COS, WebDAV and Yandex Disk. |
 

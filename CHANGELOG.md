@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A new Advanced option ticks **secret** by itself when its key names a secret of a service or has
+  `secret`, `password`, `token` or `key` in it, unless the key is one rustic or a non-secret
+  field of a service uses, such as `use-password` or `access_key_id`. You can untick it.
+
 ### Fixed
 
 - A file whose name is not valid UTF-8 is reported as a scan problem instead of being copied
@@ -17,6 +23,13 @@ All notable changes to salvajocs. The format follows
   with the release key built into the app; before, the hashes came from the same release as the
   installer and proved no more than a complete download. Releases are signed in the release
   workflow, and a release without `SHA256SUMS.minisig` is refused.
+- The password of a REST server is its own secret field, **REST password**, kept in the keyring or
+  asked each session. It is no longer in `config.yaml`, in the keyring entry's name or in the
+  repository string. A password in the URL of an existing config moves there when the app starts.
+  If the keyring refuses it, it stays in the config file's URL until it can be stored. Going back
+  to 0.9.1 after the move needs the URL entered again with its password.
+- Settings warns when an rclone remote has `use-password` set to `false`: its local server then
+  has no login, so any program on the PC can read and delete the repository.
 
 ## [0.9.1] - 2026-11-21
 

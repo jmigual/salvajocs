@@ -671,3 +671,155 @@ fn unknown_fields_are_accepted() {
     .unwrap();
     assert!(AppConfig::load(tmp.path()).unwrap().is_some());
 }
+
+#[test]
+fn a_password_in_a_rest_url_becomes_a_secret_option_and_the_scope_follows() {
+    let mut config = AppConfig::new(
+        "rest:https://user:p%40ss@host:8000/r".into(),
+        PasswordMode::Ask,
+    );
+    config.custom_games_repository = Some(config.secret_scope());
+    let old_scope = config.secret_scope();
+    assert!(old_scope.contains("p%40ss"), "the scope held the password");
+
+    assert_eq!(config.take_rest_password(), Some(old_scope));
+    assert_eq!(config.repository, "rest:https://user@host:8000/r");
+    assert_eq!(
+        config.repository_options,
+        [option("rest-password", Some("p@ss"), true)]
+    );
+    assert!(!config.secret_scope().contains("p%40ss"));
+    assert_eq!(
+        config.custom_games_repository.as_deref(),
+        Some(config.secret_scope().as_str())
+    );
+    assert_eq!(config.take_rest_password(), None, "nothing left to move");
+
+    let tmp = tempfile::tempdir().unwrap();
+    config.save(tmp.path()).unwrap();
+    let yaml = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+    assert!(!yaml.contains("p@ss") && !yaml.contains("p%40ss"), "{yaml}");
+
+    let secrets = BTreeMap::from([("rest-password".to_string(), "p@ss".to_string())]);
+    let location = config.location(&secrets).unwrap();
+    assert_eq!(location.repository, "rest:https://user@host:8000/r");
+    assert_eq!(location.options, secrets);
+}
+
+#[test]
+fn a_rest_password_put_back_survives_a_save_and_a_restart() {
+    let mut config = AppConfig::new("rest:https://user:p%40ss@host/r".into(), PasswordMode::Ask);
+    config.custom_games_repository = Some(config.secret_scope());
+    let before = config.clone();
+    let old_scope = config.take_rest_password().unwrap();
+
+    // The keyring could not keep it, so the save writes the URL as it was.
+    let mut saved = config.clone();
+    saved.put_back_rest_password();
+    assert_eq!(saved.repository, before.repository);
+    assert_eq!(
+        saved.custom_games_repository,
+        before.custom_games_repository
+    );
+    assert!(saved.repository_options.is_empty());
+    let tmp = tempfile::tempdir().unwrap();
+    saved.save(tmp.path()).unwrap();
+
+    let mut reloaded = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(reloaded.take_rest_password(), Some(old_scope));
+    assert_eq!(
+        reloaded.repository_options,
+        [option("rest-password", Some("p@ss"), true)]
+    );
+
+    let mut without_value = AppConfig::new("rest:https://user@host/".into(), PasswordMode::Ask);
+    without_value.repository_options = vec![option("rest-password", None, true)];
+    let unchanged = without_value.clone();
+    without_value.put_back_rest_password();
+    assert_eq!(without_value, unchanged, "no value to put back");
+}
+
+#[test]
+fn a_rest_url_without_a_password_is_left_alone() {
+    for repository in ["rest:https://user@host/", "/backups", "rclone:remote:a:b@c"] {
+        let mut config = AppConfig::new(repository.into(), PasswordMode::None);
+        assert_eq!(config.take_rest_password(), None);
+        assert_eq!(config.repository, repository);
+        assert!(config.repository_options.is_empty());
+    }
+}
+
+#[test]
+fn the_rest_password_is_a_known_key_of_the_rest_kind_only() {
+    assert!(option_key_known(BackendKind::Rest, "rest-password"));
+    assert!(!option_key_known(BackendKind::Local, "rest-password"));
+    assert!(rest_fields().iter().all(|field| field.secret));
+}
+
+#[test]
+fn every_secret_field_key_and_alias_looks_secret() {
+    for service in OPENDAL_SERVICES {
+        for field in service.fields.iter().filter(|field| field.secret) {
+            for key in std::iter::once(&field.key).chain(field.aliases) {
+                assert!(looks_secret(key), "{} of {}", key, service.name);
+                assert!(looks_secret(&key.to_ascii_uppercase()), "{key} in capitals");
+            }
+        }
+    }
+}
+
+#[test]
+fn names_with_a_secret_word_look_secret_and_plain_ones_do_not() {
+    for key in [
+        "my_Secret",
+        "db-PASSWORD",
+        "api_token",
+        "My_Key",
+        " sas_key ",
+    ] {
+        assert!(looks_secret(key), "{key}");
+    }
+    for key in ["bucket", "region", "root", "retry", "endpoint", ""] {
+        assert!(!looks_secret(key), "{key}");
+    }
+}
+
+#[test]
+fn keys_that_name_no_secret_do_not_look_secret_whatever_they_contain() {
+    // rustic's own keys, and the non-secret fields of services.
+    for key in [
+        "use-password",
+        "tls-client-cert",
+        "access_key_id",
+        "application_key_id",
+        "secret_id",
+        "key",
+        "ACCESS_KEY_ID",
+    ] {
+        assert!(!looks_secret(key), "{key}");
+    }
+    for key in ["rest-password", "secret_key", "application_key"] {
+        assert!(looks_secret(key), "{key}");
+    }
+}
+
+#[test]
+fn no_non_secret_field_key_looks_secret() {
+    for service in OPENDAL_SERVICES {
+        for field in service.fields {
+            // The same key can be a secret in one service and not in another.
+            let secret_elsewhere = OPENDAL_SERVICES
+                .iter()
+                .flat_map(|s| s.fields)
+                .any(|f| f.secret && (f.key == field.key || f.aliases.contains(&field.key)));
+            if !field.secret && !secret_elsewhere {
+                assert!(
+                    !looks_secret(field.key),
+                    "{} of {}",
+                    field.key,
+                    service.name
+                );
+            }
+        }
+    }
+}

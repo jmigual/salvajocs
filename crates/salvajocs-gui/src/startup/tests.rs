@@ -160,3 +160,127 @@ fn a_cached_manifest_survives_a_failed_download() {
     assert!(load.manifest.is_some());
     assert!(load.error.is_some(), "the failure still reaches the banner");
 }
+
+/// A config whose REST URL had a password, as loaded and moved out, and the scope it had.
+fn legacy_rest(password: PasswordMode) -> (AppConfig, String) {
+    let mut config = AppConfig::new("rest:https://user:hunter2@host/".to_string(), password);
+    let old_scope = config.take_rest_password().unwrap();
+    (config, old_scope)
+}
+
+#[test]
+fn the_legacy_rest_password_is_stored_and_the_old_scope_emptied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let mut env = env(secrets.clone());
+    env.config_dir = tmp.path().to_path_buf();
+    let (config, old_scope) = legacy_rest(PasswordMode::Keyring);
+    assert!(old_scope.contains("hunter2"));
+    secrets
+        .set(&old_scope, &SecretKey::Password, "repo-pw")
+        .unwrap();
+
+    assert!(move_legacy_rest_password(&env, &config, &old_scope));
+
+    let scope = config.secret_scope();
+    assert!(!scope.contains("hunter2"));
+    let rest = SecretKey::Option("rest-password".to_string());
+    assert_eq!(
+        secrets.get(&scope, &rest).unwrap().as_deref(),
+        Some("hunter2")
+    );
+    assert_eq!(
+        secrets
+            .get(&scope, &SecretKey::Password)
+            .unwrap()
+            .as_deref(),
+        Some("repo-pw")
+    );
+    assert_eq!(secrets.get(&old_scope, &SecretKey::Password).unwrap(), None);
+    assert!(
+        !tmp.path().join("pending-selection.json").exists(),
+        "nothing pending, nothing written"
+    );
+
+    let resolved = resolve(&env, &config);
+    assert!(resolved.missing.is_empty());
+    assert_eq!(resolved.found.options["rest-password"], "hunter2");
+}
+
+#[test]
+fn the_legacy_rest_password_is_used_this_session_when_the_keyring_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (config, old_scope) = legacy_rest(PasswordMode::None);
+    let mut env = env(Arc::new(Unreadable));
+    env.config_dir = tmp.path().to_path_buf();
+    assert!(
+        !move_legacy_rest_password(&env, &config, &old_scope),
+        "not stored, so the config file must keep it"
+    );
+
+    let resolved = resolve(&env, &config);
+    assert!(resolved.missing.is_empty());
+    assert_eq!(resolved.found.options["rest-password"], "hunter2");
+}
+
+/// A keyring that reads and deletes but refuses every write, as one that is full does.
+struct WriteRefused(MemorySecrets);
+
+impl SecretStore for WriteRefused {
+    fn get(&self, scope: &str, key: &SecretKey) -> Result<Option<String>, SecretError> {
+        self.0.get(scope, key)
+    }
+
+    fn set(&self, _: &str, _: &SecretKey, _: &str) -> Result<(), SecretError> {
+        Err(SecretError::TooLong)
+    }
+
+    fn delete(&self, scope: &str, key: &SecretKey) -> Result<(), SecretError> {
+        self.0.delete(scope, key)
+    }
+}
+
+#[test]
+fn an_old_entry_survives_when_its_copy_cannot_be_stored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (config, old_scope) = legacy_rest(PasswordMode::Keyring);
+    let store = MemorySecrets::new();
+    store
+        .set(&old_scope, &SecretKey::Password, "repo-pw")
+        .unwrap();
+    let store = Arc::new(WriteRefused(store));
+    let mut env = env(store.clone());
+    env.config_dir = tmp.path().to_path_buf();
+
+    assert!(!move_legacy_rest_password(&env, &config, &old_scope));
+
+    let kept = store.get(&old_scope, &SecretKey::Password).unwrap();
+    assert_eq!(kept.as_deref(), Some("repo-pw"));
+}
+
+#[test]
+fn pending_changes_follow_the_legacy_rest_scope() {
+    use salvajocs_core::selection::Change;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut env = env(Arc::new(MemorySecrets::new()));
+    env.config_dir = tmp.path().to_path_buf();
+    let (config, old_scope) = legacy_rest(PasswordMode::None);
+    let mut pending = Pending::default();
+    pending
+        .repositories
+        .entry(old_scope.clone())
+        .or_default()
+        .insert("Game".to_string(), vec![Change::Skip(true)]);
+    pending.save(tmp.path()).unwrap();
+
+    move_legacy_rest_password(&env, &config, &old_scope);
+
+    let saved = Pending::load(tmp.path()).unwrap();
+    assert_eq!(
+        saved.repositories.keys().collect::<Vec<_>>(),
+        [&config.secret_scope()]
+    );
+    let file = std::fs::read_to_string(tmp.path().join("pending-selection.json")).unwrap();
+    assert!(!file.contains("hunter2"));
+}

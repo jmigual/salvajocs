@@ -15,12 +15,13 @@ use crate::layout::Root;
 use crate::manifest::CustomGame;
 use crate::retention;
 use crate::secret::SecretKey;
-use crate::storage::RepoLocation;
+use crate::storage::{REST_PASSWORD_KEY, RepoLocation};
 
+mod rest;
 mod services;
 
-pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label};
-use services::{OPENDAL_SERVICES, opendal_reads_key};
+pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label, rest_fields};
+use services::{OPENDAL_SERVICES, field_is_secret, opendal_reads_key};
 
 /// The config file name inside the config directory.
 const CONFIG_FILE: &str = "config.yaml";
@@ -237,10 +238,36 @@ pub fn is_rustic_key(kind: BackendKind, key: &str) -> bool {
     rustic_keys(kind).contains(&key)
 }
 
-/// Whether the backend reads the option `key`: one of rustic's own keys, or for an opendal
-/// service a key of its config or an alias of one. An unknown key is allowed but does nothing.
+/// Whether an Advanced option named `key` should start out secret. A key of rustic's own or of a
+/// non-secret field of a service, such as `use-password` or `access_key_id`, is not; a secret
+/// field's key or alias is; any other name is when it has `secret`, `password`, `token` or `key`
+/// in it. Letter case does not matter.
+pub fn looks_secret(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    let rustic = [
+        BackendKind::Local,
+        BackendKind::Rest,
+        BackendKind::Rclone,
+        BackendKind::OpenDal(""),
+    ]
+    .into_iter()
+    .any(|kind| is_rustic_key(kind, &key));
+    if rustic {
+        return false;
+    }
+    field_is_secret(&key).unwrap_or_else(|| {
+        ["secret", "password", "token", "key"]
+            .iter()
+            .any(|word| key.contains(word))
+    })
+}
+
+/// Whether the backend reads the option `key`: one of rustic's own keys, the password of a REST
+/// server, or for an opendal service a key of its config or an alias of one. An unknown key is
+/// allowed but does nothing.
 pub fn option_key_known(kind: BackendKind, key: &str) -> bool {
     is_rustic_key(kind, key)
+        || (kind == BackendKind::Rest && key == REST_PASSWORD_KEY)
         || matches!(kind, BackendKind::OpenDal(service) if opendal_reads_key(service, key))
 }
 

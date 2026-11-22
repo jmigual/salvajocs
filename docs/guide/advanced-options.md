@@ -16,7 +16,11 @@ the way, so the rules below are those of the code that reads the value.
 - Rows with an empty key are ignored. The key is trimmed. The value is **not**: a space before or
   after it is part of the value, so `true ` is not `true`.
 - Tick **secret** on a row that holds a key or token. It is then kept in the keyring, not in the
-  config file.
+  config file. A new row ticks it for you when its key is a secret field of a service, or has
+  `secret`, `password`, `token` or `key` in it, in any letter case, unless the key is one rustic
+  or a non-secret field of a service uses, such as `use-password` or `access_key_id`. You can
+  untick it. A row
+  loaded from the config keeps the flag it was saved with.
 - A key with no meaning for the backend gets a warning under the row: "Not an option of this
   backend". It is still saved and passed on, and it does nothing.
 - A key set in a form field and again in Advanced options is refused, and so is a key set twice.
@@ -93,6 +97,15 @@ A command that fails is only logged. It does not fail the backup.
 The keys are `retry`, `timeout`, `cacert` and `tls-client-cert` from the table
 [above](#keys-that-rustic-reads).
 
+The password of the server's login is the secret field **REST password**, stored as the option
+`rest-password`, and the user name goes in the URL: `https://user@host:8000/`. salvajocs puts the
+password into the URL only when it opens the repository, so it is not in the config file, the
+keyring entry's name or an error message. A password in the URL, as older versions saved it, is
+moved to the field when the config is loaded: it is stored in the keyring and the config file is
+rewritten without it. If the keyring refuses it, salvajocs shows a warning and keeps it in the
+URL of the config file until it can be stored. A salvajocs older than this version does not know
+the field, so after the move the URL must be entered again with its password.
+
 ## rclone remote
 
 The REST keys above apply to the connection to the `rclone` program. salvajocs starts the
@@ -108,7 +121,7 @@ These keys are for the program:
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `rclone-command` | Text | `rclone serve restic --addr localhost:0` | The command that starts the server. The location is added at the end. |
-| `use-password` | `true` or `false` | `true` | Whether a random user and password are set on the local server. |
+| `use-password` | `true` or `false` | `true` | Whether a random user and password are set on the local server. With `false` any program on this PC can read and delete the repository through it, so Settings shows a warning. |
 | `rest-url` | Text | Read from the output of rclone | Use this URL, and do not read it from the output of rclone. With `use-password` it must start with `http://`. |
 
 ## Alibaba Cloud OSS
