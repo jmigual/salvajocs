@@ -467,14 +467,22 @@ pub(crate) fn root_of<'a>(
 
 /// The path `tail` restores to below `base` in `ctx`. Every path goes through `target_path` or
 /// `win_absolute_target`, which refuse a tail that leaves its base; a name Windows cannot store
-/// is refused first, on Windows, to say so.
+/// is refused first, on Windows, to say so, unless the tail also leaves its base.
 fn resolve_path(
     base: Base,
     tail: &str,
     ctx: &Context,
     vars: &GameVars,
 ) -> Result<PathBuf, SkipReason> {
-    if cfg!(windows) && tail.split('/').any(layout::is_windows_special) {
+    // `target_path` skips empty and `.` parts; `..` is "special" to Windows (trailing dot).
+    let parts = || {
+        tail.split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+    };
+    if cfg!(windows)
+        && parts().all(layout::is_plain_component)
+        && parts().any(layout::is_windows_special)
+    {
         return Err(SkipReason::UnstorableName);
     }
     if base == Base::WinAbsolute {
