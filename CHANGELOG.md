@@ -6,6 +6,14 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The password of a REST server is its own secret field, **REST password**, kept in the keyring or
+  asked each session. It is no longer in `config.yaml`, in the keyring entry's name or in the
+  repository string. A password in the URL of an existing config moves there when the app starts.
+  If the keyring refuses it, it stays in the config file's URL until it can be stored. Going back
+  to 0.9.1 after the move needs the URL entered again with its password.
+
 ## [0.9.1] - 2026-11-21
 
 ### Fixed

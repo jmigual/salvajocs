@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, TextEdit, Ui};
 use salvajocs_core::config::{self, AppConfig, BackendField, BackendKind, RepoOption};
+use salvajocs_core::storage::{REST_PASSWORD_KEY, split_rest_password};
 
 use super::{field_hint, field_status, guide_url, labelled_edit};
 use crate::env::Env;
@@ -74,10 +75,11 @@ impl Default for BackendForm {
     }
 }
 
-/// The named fields of a kind; only opendal services have them.
+/// The named fields of a kind; only REST and the opendal services have them.
 fn fields_of(kind: BackendKind) -> &'static [BackendField] {
     match kind {
         BackendKind::OpenDal(service) => config::opendal_fields(service),
+        BackendKind::Rest => config::rest_fields(),
         _ => &[],
     }
 }
@@ -168,7 +170,7 @@ impl BackendForm {
                 });
             }
         }
-        Self {
+        let mut form = Self {
             kind,
             location: location.to_string(),
             named,
@@ -177,6 +179,24 @@ impl BackendForm {
             options,
             remotes: Remotes::Unasked,
             picker: None,
+        };
+        form.take_pasted_password();
+        form
+    }
+
+    /// Moves a password in the REST URL into the Password field, so it is never part of the
+    /// repository string, the config or the keyring scope. A password in the URL wins over one
+    /// already in the field.
+    fn take_pasted_password(&mut self) {
+        if self.kind != BackendKind::Rest {
+            return;
+        }
+        if let Some((url, password)) =
+            split_rest_password(&format!("rest:{}", self.location.trim()))
+            && let Some(location) = url.strip_prefix("rest:")
+        {
+            self.location = location.to_string();
+            self.named.insert(REST_PASSWORD_KEY.to_string(), password);
         }
     }
 
@@ -327,6 +347,7 @@ impl BackendForm {
     /// Draws the picker as rows of a two-column grid. `env` lists the rclone remotes, once, the
     /// first time that kind is shown.
     pub fn ui(&mut self, ui: &mut Ui, env: &Env) {
+        self.take_pasted_password();
         if let Some(job) = &mut self.picker
             && let Some(result) = job.take_result()
         {
@@ -369,7 +390,9 @@ impl BackendForm {
                 ui,
                 match self.kind {
                     BackendKind::Local => "A folder on this machine or a mounted drive.",
-                    BackendKind::Rest => "The URL of a rustic or restic REST server.",
+                    BackendKind::Rest => {
+                        "The URL of a rustic or restic REST server, with the user name if it has a login: https://user@host/. The password goes in the field below."
+                    }
                     _ => "remote:path. Needs the rclone binary on the PATH.",
                 },
             );
@@ -393,9 +416,9 @@ impl BackendForm {
                 field_hint(ui, config::opendal_hint(service).unwrap_or_default());
                 ui.end_row();
             }
-            for field in fields_of(self.kind) {
-                self.field_ui(ui, field);
-            }
+        }
+        for field in fields_of(self.kind) {
+            self.field_ui(ui, field);
         }
         self.duplicate_ui(ui);
         self.advanced_ui(ui);
@@ -1027,5 +1050,50 @@ mod tests {
         form.push_option("retry", "1", false);
         form.push_option("retry", "2", false);
         assert!(!form.is_complete(), "two Advanced rows clash too");
+    }
+
+    #[test]
+    fn a_password_in_the_rest_url_moves_to_the_password_field() {
+        let loaded = config("rest:https://user:p%40ss@host/repo", Vec::new());
+        let mut form = BackendForm::from_config(&loaded, &BTreeMap::new());
+        assert_eq!(form.repository(), "rest:https://user@host/repo");
+        assert_eq!(
+            form.secrets(),
+            BTreeMap::from([("rest-password".to_string(), "p@ss".to_string())])
+        );
+        assert_eq!(
+            option_set(form.options()),
+            option_set(vec![option("rest-password", None, true)])
+        );
+
+        // Pasting a URL with a password later does the same, and replaces the field's value.
+        form.location = " https://other:new@host2/ ".to_string();
+        form.take_pasted_password();
+        assert_eq!(form.repository(), "rest:https://other@host2/");
+        assert_eq!(form.secrets()["rest-password"], "new");
+    }
+
+    #[test]
+    fn the_rest_password_field_keeps_the_scope_and_stays_with_rest() {
+        let saved = config(
+            "rest:https://user@host/",
+            vec![option("rest-password", None, true)],
+        );
+        let secrets = BTreeMap::from([("rest-password".to_string(), "hunter2".to_string())]);
+        let mut form = BackendForm::from_config(&saved, &secrets);
+        assert!(form.options.is_empty(), "the secret option is in the field");
+        assert_eq!(form.secrets(), secrets);
+
+        let mut applied = config(&form.repository(), Vec::new());
+        applied.repository_options = form.options();
+        assert_eq!(applied.secret_scope(), saved.secret_scope());
+
+        form.switch_kind(BackendKind::Local);
+        assert!(form.secrets().is_empty(), "never saved for another kind");
+        form.switch_kind(BackendKind::Rest);
+        assert_eq!(form.secrets(), secrets);
+
+        form.push_option("rest-password", "again", true);
+        assert!(!form.is_complete(), "set in the field and in Advanced");
     }
 }

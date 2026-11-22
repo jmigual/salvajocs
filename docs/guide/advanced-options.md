@@ -93,6 +93,15 @@ A command that fails is only logged. It does not fail the backup.
 The keys are `retry`, `timeout`, `cacert` and `tls-client-cert` from the table
 [above](#keys-that-rustic-reads).
 
+The password of the server's login is the secret field **REST password**, stored as the option
+`rest-password`, and the user name goes in the URL: `https://user@host:8000/`. salvajocs puts the
+password into the URL only when it opens the repository, so it is not in the config file, the
+keyring entry's name or an error message. A password in the URL, as older versions saved it, is
+moved to the field when the config is loaded: it is stored in the keyring and the config file is
+rewritten without it. If the keyring refuses it, salvajocs shows a warning and keeps it in the
+URL of the config file until it can be stored. A salvajocs older than this version does not know
+the field, so after the move the URL must be entered again with its password.
+
 ## rclone remote
 
 The REST keys above apply to the connection to the `rclone` program. salvajocs starts the

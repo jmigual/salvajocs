@@ -57,6 +57,9 @@ pub struct App {
     settings: SettingsTab,
     custom_games: CustomGamesTab,
     started: bool,
+    /// The keyring scope the loaded config had while its REST URL held the password, until the
+    /// config is saved without it.
+    legacy_rest_scope: Option<String>,
     manifest: Option<Job<ManifestLoad>>,
     manifest_error: Option<String>,
     updater: Updater,
@@ -70,8 +73,12 @@ impl App {
     /// An app that starts from the config in `env`. The first frame starts the background work.
     pub fn new(env: Env) -> Self {
         let mut state = State::new(env);
+        let mut legacy_rest_scope = None;
         let stage = match AppConfig::load(&state.env.config_dir) {
-            Ok(Some(config)) => {
+            Ok(Some(mut config)) => {
+                legacy_rest_scope = config.take_rest_password();
+                // Until it is in the keyring, a save must not drop it from the file.
+                state.keep_legacy_rest_url = legacy_rest_scope.is_some();
                 state.config = Some(config);
                 Stage::Starting
             }
@@ -89,6 +96,7 @@ impl App {
             settings: SettingsTab::default(),
             custom_games: CustomGamesTab::default(),
             started: false,
+            legacy_rest_scope,
             manifest: None,
             manifest_error: None,
             updater: Updater::default(),
@@ -120,10 +128,34 @@ impl App {
 
     fn resolve(&self, ctx: &egui::Context) -> Stage {
         let (env, config) = (self.state.env.clone(), self.state.config.clone());
+        let legacy = self.legacy_rest_scope.clone();
         Stage::Resolving(Job::spawn(ctx, move || {
             let config = config.ok_or_else(|| anyhow::anyhow!("no config to resolve"))?;
-            Ok(startup::resolve(&env, &config))
+            let unstored = match legacy {
+                Some(old_scope) => !startup::move_legacy_rest_password(&env, &config, &old_scope),
+                None => false,
+            };
+            Ok(Resolved {
+                rest_password_unstored: unstored,
+                ..startup::resolve(&env, &config)
+            })
         }))
+    }
+
+    /// After the legacy REST password was moved to the keyring: lets saves drop it from the URL
+    /// when it is stored, else keeps it there and tells the user once.
+    fn keep_or_release_legacy_rest_url(&mut self, unstored: bool) {
+        if !self.state.keep_legacy_rest_url {
+            return;
+        }
+        if !unstored {
+            self.state.keep_legacy_rest_url = false;
+            return;
+        }
+        let notice = "Could not store the REST password in the keyring; it stays in the config file until it can be stored.".to_string();
+        if !self.state.notices.contains(&notice) {
+            self.state.notices.push(notice);
+        }
     }
 
     fn open(&self, ctx: &egui::Context, credentials: Credentials, remember: bool) -> Stage {
@@ -265,12 +297,15 @@ impl App {
             Stage::Resolving(mut job) => match job.take_result() {
                 None => Stage::Resolving(job),
                 Some(Err(err)) => Stage::OpenFailed(format!("{err:#}")),
-                Some(Ok(Resolved { found, missing })) if missing.is_empty() => {
-                    self.open(&ctx, found, false)
-                }
-                Some(Ok(Resolved { found, missing })) => {
-                    let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
-                    Stage::Prompt(SecretPrompt::new(found, missing, repository))
+                Some(Ok(resolved)) => {
+                    self.keep_or_release_legacy_rest_url(resolved.rest_password_unstored);
+                    let Resolved { found, missing, .. } = resolved;
+                    if missing.is_empty() {
+                        self.open(&ctx, found, false)
+                    } else {
+                        let repository = self.state.config.as_ref().map_or("", |c| &c.repository);
+                        Stage::Prompt(SecretPrompt::new(found, missing, repository))
+                    }
                 }
             },
             Stage::Prompt(mut prompt) => {
@@ -334,6 +369,10 @@ impl App {
                         space: Default::default(),
                     });
                     self.state.read_custom_games(&ctx);
+                    // The file still has the password in its URL until a save without it.
+                    if self.legacy_rest_scope.take().is_some() {
+                        self.state.save_config(&ctx);
+                    }
                     self.settings.reset();
                     Stage::Ready
                 }

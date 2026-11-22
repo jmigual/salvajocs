@@ -10,7 +10,8 @@ use salvajocs_core::config::{self, AppConfig, PasswordMode};
 use salvajocs_core::manifest::Manifest;
 use salvajocs_core::manifest::fetch;
 use salvajocs_core::secret::SecretKey;
-use salvajocs_core::storage::Storage;
+use salvajocs_core::selection::Pending;
+use salvajocs_core::storage::{REST_PASSWORD_KEY, Storage};
 
 use crate::env::{Env, RefreshManifest};
 
@@ -58,6 +59,9 @@ pub struct Resolved {
     pub found: Credentials,
     /// The secrets to ask for, as `config::missing_secrets` lists them.
     pub missing: Vec<SecretKey>,
+    /// Whether the REST password moved out of the config's URL is not in the keyring, so the
+    /// config file must keep it. Set by the caller that moved it, never by [`resolve`].
+    pub rest_password_unstored: bool,
 }
 
 /// Looks up the keyring secrets of `config`. A keyring that fails reads as "not stored", so the
@@ -82,6 +86,16 @@ pub fn resolve(env: &Env, config: &AppConfig) -> Resolved {
             }
         })
         .collect();
+    // A secret option holding a value was just moved out of the config file (see
+    // `move_legacy_rest_password`); the keyring may not have it.
+    let held: Vec<_> = config
+        .repository_options
+        .iter()
+        .filter(|option| option.secret)
+        .filter_map(|option| Some((SecretKey::Option(option.key.clone()), option.value.clone()?)))
+        .filter(|(key, _)| !looked_up.iter().any(|(found, _)| found == key))
+        .collect();
+    let looked_up: Vec<_> = looked_up.into_iter().chain(held).collect();
     let missing = config::missing_secrets(config, |key| {
         looked_up
             .iter()
@@ -96,7 +110,48 @@ pub fn resolve(env: &Env, config: &AppConfig) -> Resolved {
         ..Credentials::default()
     };
     found.answer(looked_up);
-    Resolved { found, missing }
+    Resolved {
+        found,
+        missing,
+        rest_password_unstored: false,
+    }
+}
+
+/// Carries over what a config that had its password in a `rest:` URL left under `old_scope`, the
+/// keyring scope that held the password (`AppConfig::take_rest_password`): the secrets move to the
+/// scope of `config`, each old entry is deleted once its copy is stored (the account names hold
+/// the password, but a failed copy must not lose the secret), the REST password itself is stored,
+/// and the pending selection changes follow the new scope. Each step is best effort: what fails
+/// is asked for or re-read later. Returns whether every secret option holding a value, the REST
+/// password, is in the keyring now; when not, the config file must keep it.
+pub fn move_legacy_rest_password(env: &Env, config: &AppConfig, old_scope: &str) -> bool {
+    let scope = config.secret_scope();
+    let keys = config
+        .repository_options
+        .iter()
+        .filter(|option| option.secret && option.key != REST_PASSWORD_KEY)
+        .map(|option| SecretKey::Option(option.key.clone()))
+        .chain([SecretKey::Password]);
+    for key in keys {
+        if let Ok(Some(value)) = env.secrets.get(old_scope, &key)
+            && env.secrets.set(&scope, &key, &value).is_ok()
+        {
+            let _ = env.secrets.delete(old_scope, &key);
+        }
+    }
+    let mut stored = true;
+    for option in config.repository_options.iter().filter(|o| o.secret) {
+        if let Some(value) = &option.value {
+            let key = SecretKey::Option(option.key.clone());
+            stored &= env.secrets.set(&scope, &key, value).is_ok();
+        }
+    }
+    if let Ok(mut pending) = Pending::load(&env.config_dir)
+        && pending.rescope(old_scope, &scope)
+    {
+        let _ = pending.save(&env.config_dir);
+    }
+    stored
 }
 
 /// Opens the repository of `config`; this runs scrypt, so it belongs in a job. Boxed because a

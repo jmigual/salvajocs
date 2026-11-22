@@ -120,6 +120,86 @@ fn a_refused_rest_login_is_not_a_missing_repo() {
     ));
 }
 
+/// A rest location at `url` with the user's password as the option, not in the URL.
+fn rest_with_password(url: &str, password: &str) -> RepoLocation {
+    RepoLocation {
+        repository: format!("rest:{url}"),
+        options: BTreeMap::from([(REST_PASSWORD_KEY.to_string(), password.to_string())]),
+    }
+}
+
+#[test]
+fn the_rest_password_option_is_sent_as_the_login() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, requests) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            use std::io::{Read, Write};
+            let mut request = [0; 2048];
+            let read = stream.read(&mut request).unwrap_or(0);
+            let _ = sender.send(String::from_utf8_lossy(&request[..read]).into_owned());
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    let location = rest_with_password(&format!("http://user@127.0.0.1:{port}/"), "p@ss:w/rd");
+    assert_eq!(probe(&location, ""), RepoState::Missing);
+    let request = requests.recv().unwrap();
+    // Base64 of `user:p@ss:w/rd`.
+    assert!(
+        request.contains("authorization: Basic dXNlcjpwQHNzOncvcmQ="),
+        "{request}"
+    );
+}
+
+#[test]
+fn the_rest_password_stays_out_of_debug_and_errors() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut location = rest_with_password(&format!("http://user@127.0.0.1:{port}/"), "p@ss:w/rd");
+    // Without this rustic retries for a minute.
+    location
+        .options
+        .insert("retry".to_string(), "false".to_string());
+    let RepoState::Error(message) = probe(&location, "") else {
+        panic!("nothing listens there");
+    };
+    let legacy = RepoLocation {
+        repository: format!("rest:http://user:hunter2@127.0.0.1:{port}/"),
+        options: location.options.clone(),
+    };
+    for text in [
+        message,
+        format!("{location:?}"),
+        format!("{legacy:?}"),
+        format!("{:?}", probe(&legacy, "")),
+    ] {
+        for leaked in ["p@ss", "p%40ss", "w/rd", "hunter2"] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+        }
+    }
+}
+
+#[test]
+fn the_rest_password_stays_out_of_the_error_for_a_url_rustic_cannot_parse() {
+    // Port 99999 does not exist, so rustic fails to parse the URL and quotes it.
+    for password in ["p@ss:w/rd", "hunter2"] {
+        let location = rest_with_password("http://user@127.0.0.1:99999/", password);
+        let RepoState::Error(message) = probe(&location, "") else {
+            panic!("the URL is invalid");
+        };
+        assert!(!message.contains(password), "{message}");
+        assert!(!message.contains("p%40ss"), "{message}");
+        assert!(
+            message.contains("***"),
+            "the masked password shows: {message}"
+        );
+    }
+}
+
 #[test]
 fn a_refused_webdav_login_is_login_refused_not_missing() {
     let location = RepoLocation {

@@ -93,6 +93,25 @@ fn repositories_are_kept_apart() {
 }
 
 #[test]
+fn rescope_moves_a_repositorys_changes_to_its_new_key() {
+    let mut old = config("rest:https://u:pw@host/", &[]);
+    let mut pending = Pending::default();
+    pending.games_mut(&old).insert(GAME.into(), changes());
+    let old_key = old.secret_scope();
+    assert!(old.take_rest_password().is_some());
+
+    assert!(pending.rescope(&old_key, &old.secret_scope()));
+    assert_eq!(pending.games_mut(&old)[GAME], changes());
+    assert!(!pending.repositories.contains_key(&old_key));
+    assert!(!pending.rescope(&old_key, &old.secret_scope()));
+    assert_eq!(
+        pending.repositories.len(),
+        1,
+        "a second move changes nothing"
+    );
+}
+
+#[test]
 fn same_repository_string_with_other_options_is_another_repository() {
     let tmp = tempfile::tempdir().unwrap();
     let saves = config(

@@ -6,7 +6,8 @@
 list; compression is a dropdown. 2026-11-19: a login the server refuses has its own probe
 result, `LoginRefused`. 2026-11-19: a `theme` setting. 2026-11-20: the `backup_sort` and
 `restore_sort` of the game lists (ADR-0027). 2026-11-20: `custom_games` is this PC's copy of the
-repository's custom games, with `custom_games_repository` (ADR-0028).
+repository's custom games, with `custom_games_repository` (ADR-0028). 2026-11-22: the password
+of a `rest:` URL is the secret option `rest-password`.
 
 ## Context
 
@@ -90,6 +91,16 @@ secrets (access keys, tokens) must not sit in the config in plain text.
   marks that case and the caller treats the secret as "ask every session". At startup,
   `config::missing_secrets` lists the password and every secret option not found in the keyring. The GUI prompts for exactly those before opening the
   repository.
+- **REST password:** the REST kind has one named secret field, option key `rest-password`,
+  stored percent-decoded. The URL keeps the user name only, so the password is not in
+  `config.yaml`, the scope or the keyring account. `RepoLocation::backends` puts it back into the
+  URL for rustic. A password pasted into the URL moves to the field. A config saved with the
+  password in its URL is split when loaded: `AppConfig::take_rest_password` returns the old scope,
+  and the first startup copies the keyring entries to the new scope and deletes each old one (its
+  account name held the password) once its copy is stored, follows the pending selection and
+  `custom_games_repository` to the new scope, and stores the password. Until the keyring has the
+  password, every save writes it back into the URL (`AppConfig::put_back_rest_password`), so a
+  keyring that refuses it loses nothing; later saves drop it.
 - **Keyring crates (verified in step 8):** `keyring-core` 1.x plus one store crate per OS, each
   behind a target `cfg`. The `keyring` crate is not used: its `v1` feature pulls the zbus
   Secret Service store, and its `cli` feature pulls every store.

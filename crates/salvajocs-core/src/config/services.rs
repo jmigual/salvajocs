@@ -3,6 +3,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::storage::REST_PASSWORD_KEY;
+
 /// One named field of an opendal service in the connect form. `key` is the opendal option key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -377,6 +379,16 @@ pub(super) const OPENDAL_SERVICES: &[Service] = &[
         ],
     },
 ];
+
+/// The named fields of the REST server kind: the password, kept apart from the URL.
+const REST_FIELDS: &[BackendField] = &[BackendField::new(REST_PASSWORD_KEY, "REST password")
+    .secret()
+    .hint("Of the user name in the URL, if the server has a login.")];
+
+/// The named fields of the REST server kind.
+pub fn rest_fields() -> &'static [BackendField] {
+    REST_FIELDS
+}
 
 fn service(name: &str) -> Option<&'static Service> {
     OPENDAL_SERVICES.iter().find(|service| service.name == name)

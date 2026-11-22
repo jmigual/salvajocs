@@ -108,3 +108,44 @@ fn a_store_that_refuses_the_password_falls_back_to_asking() {
     assert_eq!(state.config.unwrap().password, PasswordMode::Ask);
     assert_eq!(state.notices.len(), 1);
 }
+
+/// Saves the config of `state` and waits for the file to be written.
+fn save_and_wait(state: &mut State, ctx: &egui::Context) {
+    state.save_config(ctx);
+    for _ in 0..1000 {
+        state.poll(ctx);
+        if !state.writing() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the config was never saved");
+}
+
+#[test]
+fn a_rest_password_not_in_the_keyring_stays_in_the_saved_url_across_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let mut legacy = AppConfig::new("rest:https://u:hunter2@host/".into(), PasswordMode::Ask);
+    legacy.take_rest_password().unwrap();
+    let mut state = state_with(crate::env::MemorySecrets::new());
+    state.env.config_dir = tmp.path().to_path_buf();
+    state.config = Some(legacy);
+    state.keep_legacy_rest_url = true;
+
+    save_and_wait(&mut state, &ctx);
+    let mut reloaded = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert!(reloaded.take_rest_password().is_some(), "still in the URL");
+    assert_eq!(
+        reloaded.repository_options[0].value.as_deref(),
+        Some("hunter2")
+    );
+
+    // Once the keyring has it, a save drops it from the file.
+    state.keep_legacy_rest_url = false;
+    save_and_wait(&mut state, &ctx);
+    let yaml = std::fs::read_to_string(tmp.path().join("config.yaml")).unwrap();
+    assert!(!yaml.contains("hunter2"), "{yaml}");
+    let mut reloaded = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(reloaded.take_rest_password(), None);
+}

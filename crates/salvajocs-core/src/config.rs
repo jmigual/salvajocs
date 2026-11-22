@@ -15,11 +15,12 @@ use crate::layout::Root;
 use crate::manifest::CustomGame;
 use crate::retention;
 use crate::secret::SecretKey;
-use crate::storage::RepoLocation;
+use crate::storage::{REST_PASSWORD_KEY, RepoLocation};
 
+mod rest;
 mod services;
 
-pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label};
+pub use services::{BackendField, opendal_fields, opendal_hint, opendal_label, rest_fields};
 use services::{OPENDAL_SERVICES, opendal_reads_key};
 
 /// The config file name inside the config directory.
@@ -237,10 +238,12 @@ pub fn is_rustic_key(kind: BackendKind, key: &str) -> bool {
     rustic_keys(kind).contains(&key)
 }
 
-/// Whether the backend reads the option `key`: one of rustic's own keys, or for an opendal
-/// service a key of its config or an alias of one. An unknown key is allowed but does nothing.
+/// Whether the backend reads the option `key`: one of rustic's own keys, the password of a REST
+/// server, or for an opendal service a key of its config or an alias of one. An unknown key is
+/// allowed but does nothing.
 pub fn option_key_known(kind: BackendKind, key: &str) -> bool {
     is_rustic_key(kind, key)
+        || (kind == BackendKind::Rest && key == REST_PASSWORD_KEY)
         || matches!(kind, BackendKind::OpenDal(service) if opendal_reads_key(service, key))
 }
 
