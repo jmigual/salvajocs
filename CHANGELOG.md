@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Only one salvajocs runs at a time per cache folder. A second one shows "Salvajocs is already
+  running" with a **Close** button, instead of sharing the backup staging files with the first.
+
 ### Changed
 
 - Escape or a click outside a dialog cancels it for the delete, close-during-a-job,

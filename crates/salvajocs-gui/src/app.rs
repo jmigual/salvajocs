@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Margin, Rect, RichText, Ui};
 use salvajocs_core::config::{AppConfig, PasswordMode, ThemeChoice};
+use salvajocs_core::instance::InstanceLock;
 use salvajocs_core::storage::{Storage, StorageError};
 
 use crate::env::Env;
@@ -67,6 +68,8 @@ pub struct App {
     confirm_close: bool,
     /// The user chose to close despite a running job, so the next close request goes through.
     closing: bool,
+    /// The lock that keeps a second instance out; dropped on exit, before an AppImage restart.
+    instance_lock: Option<InstanceLock>,
 }
 
 impl App {
@@ -102,7 +105,14 @@ impl App {
             updater: Updater::default(),
             confirm_close: false,
             closing: false,
+            instance_lock: None,
         }
+    }
+
+    /// Makes the app hold `lock` until it exits (`instance::lock`).
+    pub fn with_instance_lock(mut self, lock: Option<InstanceLock>) -> Self {
+        self.instance_lock = lock;
+        self
     }
 
     /// Brings a tab to the front.
@@ -614,6 +624,8 @@ impl eframe::App for App {
         if let Err(err) = self.backup.flush(&self.state.env.config_dir) {
             eprintln!("salvajocs: could not write the unsaved choices: {err:#}");
         }
+        // Free the lock first: the restarted app takes it at once.
+        self.instance_lock = None;
         self.updater.restart(&self.state);
     }
 }

@@ -3,6 +3,7 @@
 pub mod app;
 pub mod env;
 pub mod first_run;
+pub mod instance;
 pub mod job;
 pub mod prompt;
 pub mod startup;
@@ -31,10 +32,29 @@ pub fn run() -> eframe::Result {
     let env = Env::system().ok_or_else(|| {
         eframe::Error::AppCreation("this OS has no config or cache directory".into())
     })?;
+    // A cache directory that cannot take the lock file cannot take a backup either, which the
+    // app reports itself; the lock is not a reason to refuse to start.
+    let lock = match salvajocs_core::instance::lock(&env.cache_dir) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            return eframe::run_native(
+                "Salvajocs",
+                already_running_options(app_id())?,
+                Box::new(|cc| {
+                    theme::apply(&cc.egui_ctx);
+                    Ok(Box::new(instance::AlreadyRunning))
+                }),
+            );
+        }
+        Err(err) => {
+            eprintln!("salvajocs: could not take the instance lock: {err}");
+            None
+        }
+    };
     eframe::run_native(
         "Salvajocs",
         native_options(app_id())?,
-        Box::new(move |_cc| Ok(Box::new(App::new(env)))),
+        Box::new(move |_cc| Ok(Box::new(App::new(env).with_instance_lock(lock)))),
     )
 }
 
@@ -137,6 +157,22 @@ fn native_options(app_id: String) -> eframe::Result<eframe::NativeOptions> {
         .with_decorations(false)
         .with_inner_size(WINDOW_SIZE)
         .with_min_inner_size(MIN_WINDOW_SIZE);
+    options.centered = true;
+    Ok(options)
+}
+
+/// The window options of the notice that another instance runs: a small, fixed-size window with
+/// the OS decorations, and the same app id and icon.
+fn already_running_options(app_id: String) -> eframe::Result<eframe::NativeOptions> {
+    let icon = eframe::icon_data::from_png_bytes(ICON_PNG)
+        .map_err(|e| eframe::Error::AppCreation(Box::new(e)))?;
+    let mut options = eframe::NativeOptions::default();
+    options.viewport = options
+        .viewport
+        .with_app_id(app_id)
+        .with_icon(icon)
+        .with_inner_size([440.0, 150.0])
+        .with_resizable(false);
     options.centered = true;
     Ok(options)
 }

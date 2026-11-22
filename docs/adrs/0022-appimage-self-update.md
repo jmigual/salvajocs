@@ -34,7 +34,9 @@ replaces the directory entry while the open file stays readable.
   with the same arguments (`Env::restart_appimage`) after writing the unsaved choices, which the
   new instance reads at start. Unlike the installer, the new AppImage does not wait for the old
   process to exit. When the close dialog's **Wait** cancels that close, the restart goes back to
-  waiting for the jobs, so a later quit does not restart.
+  waiting for the jobs, so a later quit does not restart. Only one app runs per cache directory
+  (`core::instance`, a lock on `instance.lock`), so `on_exit` drops the lock before the spawn;
+  otherwise the new app would find the old one running.
 - Other Linux builds (tarball, `cargo install`, mise) still do not check.
 
 ## Alternatives considered
