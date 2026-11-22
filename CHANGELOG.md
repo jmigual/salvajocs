@@ -73,6 +73,9 @@ All notable changes to salvajocs. The format follows
   injection through CRLF in `suppaftp` (RUSTSEC-2026-0271), and `url` to 2.5.9
   (RUSTSEC-2026-0592).
 - The manifest download accepts HTTPS only and is read up to 64 MiB.
+- A restore no longer writes a registry key that a snapshot and a game spell with an empty part,
+  such as `Software//Microsoft/Windows/CurrentVersion/Run`, to get past the protected system
+  keys.
 
 ## [0.9.1] - 2026-11-21
 

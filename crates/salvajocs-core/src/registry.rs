@@ -27,14 +27,19 @@ const PROTECTED_KEYS: [&str; 6] = [
 /// or equals, contains or lies below a system key: `Software/Microsoft/Windows`, `.../Windows
 /// NT`, `.../Command Processor`, `Software/Policies`, `Software/Classes` (but not
 /// `Classes/VirtualStore`), `Environment` and `Control Panel`. Ignores case, takes `\` and `/`
-/// alike and reads `Software/Wow6432Node/...` as `Software/...`. The list is not exhaustive.
+/// alike, drops empty parts below the hive (the OS may read `Software//Foo` as `Software/Foo`)
+/// and reads `Software/Wow6432Node/...` as `Software/...`. The list is not exhaustive.
 pub fn protected_key(key: &str) -> bool {
     let key = key.replace('\\', "/").to_ascii_lowercase();
-    let key = key.trim_end_matches('/');
-    let Some(rest) = (key.strip_prefix("hkey_current_user/")).filter(|rest| !rest.is_empty())
-    else {
+    let (hive, below) = key.split_once('/').unwrap_or((&key, ""));
+    let rest = below
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    if hive != "hkey_current_user" || rest.is_empty() {
         return true;
-    };
+    }
     let rest = match rest.strip_prefix("software/wow6432node") {
         Some(below) if below.is_empty() || below.starts_with('/') => format!("software{below}"),
         _ => rest.to_owned(),
@@ -357,6 +362,12 @@ mod tests {
             "HKEY_CURRENT_USER/Software",
             "HKEY_CURRENT_USER",
             "HKEY_CURRENT_USER/",
+            "HKEY_CURRENT_USER/Software//Microsoft/Windows/CurrentVersion/Run",
+            r"HKEY_CURRENT_USER\\Software\\Microsoft\Windows",
+            "HKEY_CURRENT_USER//Software/Microsoft/Windows",
+            "HKEY_CURRENT_USER/Software//",
+            "HKEY_CURRENT_USER//Software",
+            "/HKEY_CURRENT_USER/Software/Foo",
             "HKEY_LOCAL_MACHINE/Software/Foo",
             "Software/Foo",
         ] {
@@ -369,6 +380,7 @@ mod tests {
             "HKEY_CURRENT_USER/Software/Classes/VirtualStore/MACHINE/SOFTWARE/Foo",
             "HKEY_CURRENT_USER/Software/Wow6432Node/Foo",
             "HKEY_CURRENT_USER/Software/Windows Foo",
+            "HKEY_CURRENT_USER//Software/Foo",
         ] {
             assert!(!protected_key(key), "{key}");
         }
