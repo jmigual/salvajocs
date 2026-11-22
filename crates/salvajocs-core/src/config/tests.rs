@@ -865,11 +865,13 @@ fn keys_that_name_no_secret_do_not_look_secret_whatever_they_contain() {
         "access_key_id",
         "application_key_id",
         "secret_id",
-        "key",
         "ACCESS_KEY_ID",
     ] {
         assert!(!looks_secret(key), "{key}");
     }
+    // `key` is only SFTP's private key file, and SFTP has no service on Windows. There it names
+    // nothing known, so it looks secret by its word.
+    assert_eq!(looks_secret("key"), cfg!(windows));
     for key in ["rest-password", "secret_key", "application_key"] {
         assert!(looks_secret(key), "{key}");
     }
