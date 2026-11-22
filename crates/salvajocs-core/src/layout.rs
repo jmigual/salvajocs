@@ -614,13 +614,42 @@ pub fn is_plain_component(part: &str) -> bool {
     )
 }
 
+/// Whether Windows treats the file name `part` specially: a device name (`CON`, `aux.txt`,
+/// `COM1`), an alternate data stream (`a:b`), or a trailing `.` or space, which it drops.
+/// Plain so it is tested on every OS; only a Windows host refuses these ([`target_path`]).
+pub(crate) fn is_windows_special(part: &str) -> bool {
+    let stem = part
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    let numbered = |digit: &str| {
+        let mut chars = digit.chars();
+        matches!(
+            (chars.next(), chars.next()),
+            (Some('1'..='9' | '¹' | '²' | '³'), None)
+        )
+    };
+    part.contains(':')
+        || part.ends_with(['.', ' '])
+        || matches!(
+            stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        )
+        || ["COM", "LPT"]
+            .iter()
+            .any(|device| stem.strip_prefix(device).is_some_and(numbered))
+}
+
 /// The path `tail` maps to below `base_dir`. With `case_insensitive`, each component reuses an
 /// existing entry that differs only by ASCII case, so `My Games` never sits next to `my games`.
-/// `None` if the tail (read from a snapshot) would escape `base_dir`.
+/// `None` if the tail (read from a snapshot) would escape `base_dir`, or, on Windows, names a
+/// device, a data stream or a name Windows would rewrite.
 pub fn target_path(base_dir: &Path, tail: &str, case_insensitive: bool) -> Option<PathBuf> {
     let mut path = base_dir.to_path_buf();
     for part in tail.split('/').filter(|p| !p.is_empty() && *p != ".") {
-        if !is_plain_component(part) {
+        if !is_plain_component(part) || (cfg!(windows) && is_windows_special(part)) {
             return None;
         }
         let existing = if case_insensitive && !path.join(part).exists() {

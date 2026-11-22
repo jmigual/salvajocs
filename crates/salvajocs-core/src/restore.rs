@@ -120,6 +120,8 @@ pub enum SkipReason {
     UndeclaredRegistryKey,
     /// Another file with the same target is newer, and a target takes one file.
     ShadowedByNewer,
+    /// The name is one Windows cannot store, such as `aux.txt` or `a:b`.
+    UnstorableName,
 }
 
 impl fmt::Display for SkipReason {
@@ -134,6 +136,7 @@ impl fmt::Display for SkipReason {
             SkipReason::NoWindowsTarget => "registry: no Windows target",
             SkipReason::UndeclaredRegistryKey => "registry key not declared for this game",
             SkipReason::ShadowedByNewer => "another file for the same target is newer",
+            SkipReason::UnstorableName => "a name Windows cannot store",
         })
     }
 }
@@ -463,13 +466,17 @@ pub(crate) fn root_of<'a>(
 }
 
 /// The path `tail` restores to below `base` in `ctx`. Every path goes through `target_path` or
-/// `win_absolute_target`, which refuse a tail that leaves its base.
+/// `win_absolute_target`, which refuse a tail that leaves its base; a name Windows cannot store
+/// is refused first, on Windows, to say so.
 fn resolve_path(
     base: Base,
     tail: &str,
     ctx: &Context,
     vars: &GameVars,
 ) -> Result<PathBuf, SkipReason> {
+    if cfg!(windows) && tail.split('/').any(layout::is_windows_special) {
+        return Err(SkipReason::UnstorableName);
+    }
     if base == Base::WinAbsolute {
         return match ctx {
             Context::WindowsNative(_) => {

@@ -1785,3 +1785,32 @@ fn writes_to_different_targets_are_all_kept() {
     assert_eq!(plan.writes.len(), 2);
     assert!(plan.skipped.is_empty());
 }
+
+#[cfg(windows)]
+#[test]
+fn names_windows_cannot_store_are_skipped_with_their_own_reason() {
+    let staged = staged(
+        &[(Base::WinAppData, "Foo")],
+        &[
+            (Base::WinAppData, "Foo/aux.txt"),
+            (Base::WinAppData, "Foo/a.dat"),
+        ],
+    );
+    let plan = plan(
+        &staged,
+        &win_only(native_win()),
+        &vars(),
+        Some(&entry_of(&staged)),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(plan.writes.len(), 1);
+    assert_eq!(
+        plan.skipped,
+        [Skipped {
+            item: SkippedItem::File(Base::WinAppData, "Foo/aux.txt".into()),
+            reason: SkipReason::UnstorableName,
+        }]
+    );
+}

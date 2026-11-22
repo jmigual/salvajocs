@@ -779,3 +779,53 @@ fn below_home_records_nothing_for_a_home_of_root() {
     let home = PrefixOrigin::below_home(pfx, Path::new("/games"));
     assert_eq!(home, Some(PrefixOrigin::Home("<home>/wine".into())));
 }
+
+#[test]
+fn windows_special_names_are_found_on_every_os() {
+    for name in [
+        "CON",
+        "con",
+        "Prn",
+        "AUX",
+        "nul",
+        "COM1",
+        "com9",
+        "LPT1",
+        "lpt9",
+        "COM\u{b9}",
+        "aux.txt",
+        "NUL.tar.gz",
+        "CONIN$",
+        "foo:bar",
+        "save.dat:stream",
+        "save.",
+        "save ",
+        "dir.",
+    ] {
+        assert!(is_windows_special(name), "{name}");
+    }
+    for name in [
+        "save.dat",
+        "console",
+        "COM0",
+        "COM10",
+        "LPT",
+        "auxiliary.txt",
+        "my.aux",
+        "a b",
+        ".hidden",
+        "COM1x",
+    ] {
+        assert!(!is_windows_special(name), "{name}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn target_path_refuses_windows_special_names() {
+    let dir = Path::new("C:/Games");
+    for tail in ["a/CON", "aux.txt", "a/b:c", "a/b.", "a/b ", "NUL/x"] {
+        assert_eq!(target_path(dir, tail, false), None, "{tail}");
+    }
+    assert!(target_path(dir, "a/b.dat", false).is_some());
+}
