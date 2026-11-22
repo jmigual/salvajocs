@@ -2111,6 +2111,41 @@ fn tmp_of(target: &Path) -> PathBuf {
     tmp.into()
 }
 
+#[cfg(windows)]
+#[test]
+#[allow(clippy::permissions_set_readonly_false)]
+fn a_failed_replace_of_a_read_only_file_leaves_no_temp_file() {
+    use std::io::Write;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = write(&dir.path().join("save.sav"), "old");
+    let set_read_only = |read_only| {
+        let mut permissions = fs::metadata(&target).unwrap().permissions();
+        permissions.set_readonly(read_only);
+        fs::set_permissions(&target, permissions).unwrap();
+    };
+    set_read_only(true);
+    // Open without sharing, so the rename over it fails after the temp file was made.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&target)
+        .unwrap();
+    assert!(replace(&target, |out| out.write_all(b"new")).is_err());
+    assert!(!tmp_of(&target).exists());
+    drop(held);
+
+    // A temp file left read-only by an older version does not stop the next restore.
+    write(&tmp_of(&target), "left");
+    let mut permissions = fs::metadata(tmp_of(&target)).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(tmp_of(&target), permissions).unwrap();
+    set_read_only(false);
+    replace(&target, |out| out.write_all(b"new")).unwrap();
+    assert_eq!(read(&target), "new");
+}
+
 #[test]
 fn leftover_temp_file_is_replaced() {
     let mut f = fixture();

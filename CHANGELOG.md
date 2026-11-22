@@ -55,6 +55,9 @@ All notable changes to salvajocs. The format follows
 - Two PCs saving the same game's selection, custom game or Old backups rules at the same time
   could lose one PC's change. A save that finds the other's snapshot written meanwhile is not
   counted as saved, so the change stays on this PC and is tried again at the next Back up.
+- On Windows, a restore of a read-only file that failed halfway left a read-only `.salvajocs-tmp`
+  file beside it that made every later restore of that file fail. It is now removed, and one an
+  earlier version left is replaced.
 
 ### Security
 
