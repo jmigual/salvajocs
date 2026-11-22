@@ -56,7 +56,8 @@ snapshot per game (ADR-0010) and `pre-restore` snapshots as their own retention 
 - **Run: `restore::run` once per game**, in one job, in list order. Each game gets its own
   `pre-restore` safety backup and its own result. A game that fails, including a refused safety
   backup or a running wineserver for a restore of registry keys into a prefix, writes nothing
-  and the next game goes on. The result shows `Restored N of M games` and each game's lines,
+  and the next game goes on (the wineserver is checked again after the safety backup). The result
+  shows `Restored N of M games` and each game's lines,
   built by the function the single restore uses. Afterwards the backups are listed again and the
   ticks cleared.
 

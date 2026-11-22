@@ -515,7 +515,7 @@ fn collect_tails(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), 
     Ok(())
 }
 
-/// Why [`run`] wrote nothing.
+/// Why [`run`] wrote no file or registry key.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RunError {
@@ -612,7 +612,9 @@ impl RestoreReport {
 }
 
 /// Runs `plan` for the game `title`; the only way a restore writes (ADR-0005):
-/// 1. a registry restore into a Wine prefix is refused while `wineserver_running` (ADR-0006);
+/// 1. a registry restore into a Wine prefix is refused while `wineserver_running` says so
+///    (ADR-0006); it is asked again after the safety backup, which can take long, and before
+///    the first write;
 /// 2. whatever the plan overwrites is backed up as a snapshot of `title` tagged
 ///    [`PRE_RESTORE_TAG`], with `roots` for the target roots it covers: existing target files
 ///    (an overridden one by its full path under `Absolute`/`WinAbsolute`) and the registry
@@ -626,15 +628,18 @@ impl RestoreReport {
 ///
 /// # Errors
 /// [`RunError::WineserverRunning`], [`RunError::UnstageableTarget`] or
-/// [`RunError::SafetyBackup`]; then nothing was written.
+/// [`RunError::SafetyBackup`]; then nothing was written but, after the second check, the
+/// safety backup.
 pub fn run(
     storage: &mut Storage,
     title: &str,
     plan: &RestorePlan,
     stage_root: &Path,
-    wineserver_running: bool,
+    wineserver_running: impl Fn() -> bool,
 ) -> Result<RestoreReport, RunError> {
-    if wineserver_running && matches!(plan.registry, Some((_, Context::WinePrefix { .. }))) {
+    let blocked =
+        || matches!(plan.registry, Some((_, Context::WinePrefix { .. }))) && wineserver_running();
+    if blocked() {
         return Err(RunError::WineserverRunning);
     }
     let checks: Vec<_> = plan.writes.iter().map(check).collect();
@@ -683,6 +688,10 @@ pub fn run(
         }
     };
 
+    // The safety backup can take long enough for a game to start since the first check.
+    if blocked() {
+        return Err(RunError::WineserverRunning);
+    }
     let files = (plan.writes.iter().zip(checks))
         .map(|(write, check)| check.and_then(|_| apply_file(write)))
         .collect();

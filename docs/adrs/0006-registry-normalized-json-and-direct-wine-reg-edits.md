@@ -45,6 +45,8 @@ for Proton, which cannot restore to Windows.
   to a temp file and renamed into place.
 - **wineserver guard:** registry writes are refused while **any** `wineserver` process runs for
   the user (`/proc/*/comm`). Reads during backup are allowed; they can be up to 30 s stale.
+  `restore::run` asks again after the safety backup and before the first write, since a game can
+  start meanwhile; it then refuses with nothing written but that backup.
   Upgrade path: match the specific prefix through the wineserver's server directory (dev/inode of
   the prefix). That mechanism is not in research, so verify it before adopting.
 - **Escaping (verified in plan step 4):** wineserver writes every UTF-16 unit above 127 as

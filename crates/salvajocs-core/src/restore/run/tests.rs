@@ -1422,6 +1422,14 @@ impl Fixture {
         plan: &RestorePlan,
         wineserver_running: bool,
     ) -> Result<RestoreReport, RunError> {
+        self.run_probing(plan, || wineserver_running)
+    }
+
+    fn run_probing(
+        &mut self,
+        plan: &RestorePlan,
+        wineserver_running: impl Fn() -> bool,
+    ) -> Result<RestoreReport, RunError> {
         let stage_root = self.tmp.path().join("pre-restore");
         run(
             &mut self.storage,
@@ -1502,6 +1510,27 @@ fn registry_restore_refused_while_wineserver_runs() {
     let report = f.run(&plan_of(writes, None), true).unwrap();
     assert!(report.files.iter().all(Result::is_ok), "{report:?}");
     assert_eq!(read(&target), "new");
+}
+
+#[test]
+fn nothing_is_written_when_a_wineserver_starts_during_the_safety_backup() {
+    let mut f = fixture();
+    user_reg(&f.prefix, "old");
+    let target = write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let writes = vec![f.planned("Game/save.sav", "new")];
+    let plan = plan_of(writes, Some((foo_registry("new"), f.ctx())));
+
+    // Quiet at the early check, running once the safety backup is made.
+    let asked = std::cell::Cell::new(0);
+    let result = f.run_probing(&plan, || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    });
+    assert!(matches!(result, Err(RunError::WineserverRunning)));
+    assert_eq!(read(&target), "old");
+    assert_eq!(reg(&f.prefix, FOO), foo_registry("old"));
+    // The backup it made stays.
+    assert_eq!(f.storage.snapshots("salvajocs").unwrap().len(), 1);
 }
 
 #[test]
@@ -2478,7 +2507,7 @@ fn proton_backup_restores_into_windows_layout() {
     .unwrap();
     assert!(plan.skipped.is_empty(), "{plan:?}");
     let stage_root = tmp.path().join("pre-restore");
-    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+    let report = run(&mut storage, "Foo", &plan, &stage_root, || false).unwrap();
 
     assert_applied(&report);
     // Nothing existed at the targets.
@@ -2540,7 +2569,7 @@ fn prefix_registry_restores_into_other_prefix() {
     )
     .unwrap();
     let stage_root = tmp.path().join("pre-restore");
-    let report = run(&mut storage, "Foo", &plan, &stage_root, false).unwrap();
+    let report = run(&mut storage, "Foo", &plan, &stage_root, || false).unwrap();
 
     assert_applied(&report);
     assert!(report.registry.is_some());
