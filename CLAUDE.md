@@ -7,6 +7,11 @@ dirs as `CARGO_TARGET_DIR=<repo>/tmp/<name>`). A worktree's normal build stays i
 `target/`. Never put builds or large files in the `/tmp` scratchpad: it is RAM. Tell every agent
 this in its prompt.
 
+## Decisions
+
+An ADR that changes what is kept, deleted or synced needs the user's explicit OK. Until then its
+status is Proposed.
+
 ## GUI tests (crates/salvajocs-gui)
 
 - Drive the harness with `run_until`, `run_settled` or `harness.step()` (helpers in
