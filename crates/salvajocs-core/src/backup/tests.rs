@@ -443,6 +443,7 @@ fn rehash(stage_dir: &Path) -> Hashes {
         meta: sha256(&stage_dir.join(META_FILE)).unwrap(),
         registry: sha256(&stage_dir.join(REGISTRY_FILE)),
         files,
+        selection: BTreeMap::new(),
     }
 }
 

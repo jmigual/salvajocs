@@ -68,6 +68,7 @@ fn hashes(files: &[(&str, &[u8])]) -> Hashes {
                 ((*path).to_owned(), file)
             })
             .collect::<BTreeMap<_, _>>(),
+        selection: BTreeMap::new(),
     }
 }
 

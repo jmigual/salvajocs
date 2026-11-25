@@ -15,8 +15,10 @@ use crate::layout::{self, Base, Context, GameVars, LinuxFolders, SnapshotMeta};
 use crate::manifest::{GameEntry, Pair, RegistryRule};
 use crate::registry::{RegistryExport, protected_key};
 
+mod delete;
 mod run;
 
+pub use delete::{Delete, Deletions, UnlistedDir, deletions, lowered};
 pub use run::{
     ApplyError, DefaultTargets, FetchError, GameBackups, GameInfo, Listed, PRE_RESTORE_TAG,
     PrefixReason, RestoreReport, RunError, SafetyBackup, UnreadableTarget, WriteState,
@@ -185,6 +187,25 @@ pub struct RestorePlan {
     /// Facts about the mapping the preview shows, such as the Unity `PlayerPrefs` note; filled
     /// by [`prepare`].
     pub notes: Vec<String>,
+    /// Each snapshot root [`plan`] placed a write under, for [`deletions`]; empty from
+    /// [`Self::new`].
+    placed: Vec<Placed>,
+}
+
+/// A snapshot root that [`plan`] placed a write under, with the concrete paths of the write it
+/// placed first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Placed {
+    /// The snapshot root, raw.
+    root: SnapshotRoot,
+    /// The root as the snapshot holds it: the base and the staged tail's parts the root covers.
+    staged: (Base, String),
+    /// The raw root or mapping target the writes go under.
+    target_root: SnapshotRoot,
+    /// `target_root` with its placeholders substituted, as the write's `target_file` starts.
+    target: (Base, String),
+    /// The context `target` resolves in.
+    ctx: Context,
 }
 
 /// Why [`plan`] failed.
@@ -227,6 +248,7 @@ impl RestorePlan {
             skipped,
             cross_build,
             notes,
+            placed: Vec::new(),
         }
     }
 
@@ -688,6 +710,7 @@ pub fn plan(
         skipped: Vec::new(),
         cross_build: false,
         notes: Vec::new(),
+        placed: Vec::new(),
     };
     let files_dir = staged.root.join(layout::FILES_DIR);
     for (base, tail) in &staged.files {
@@ -729,17 +752,34 @@ pub fn plan(
             let target = resolve_path(*target_base, &target_tail, ctx, vars)?;
             let source = layout::target_path(&files_dir.join(base.dir_name()), tail, false)
                 .ok_or(SkipReason::UnsafePath)?;
-            Ok(Write {
+            // Both tails end in the file's path below the root; what comes before is the root.
+            let below = components(&covering.below).count();
+            let at_root = |tail: &str| {
+                let parts: Vec<&str> = components(tail).collect();
+                parts[..parts.len() - below].join("/")
+            };
+            let placed = Placed {
+                root: covering.root.clone(),
+                staged: (*base, at_root(tail)),
+                target_root: (*target_base, target_rest.clone()),
+                target: (*target_base, at_root(&target_tail)),
+                ctx: ctx.clone(),
+            };
+            let write = Write {
                 source,
                 target,
                 target_file: Some((*target_base, target_tail)),
                 target_root: Some((*target_base, target_rest.clone())),
-            })
+            };
+            Ok((write, placed))
         });
         match write {
-            Ok(write) => {
+            Ok((write, placed)) => {
                 plan.cross_build |= mapped;
                 plan.writes.push(write);
+                if !plan.placed.iter().any(|known| known.root == placed.root) {
+                    plan.placed.push(placed);
+                }
             }
             Err(reason) => plan.skipped.push(Skipped {
                 item: SkippedItem::File(*base, tail.clone()),

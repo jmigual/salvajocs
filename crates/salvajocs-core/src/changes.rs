@@ -486,6 +486,7 @@ impl<'a> Mapper<'a> {
             files: (files.iter().zip(&keys))
                 .filter_map(|((old, _), key)| Some((key.clone(), hashes.files.get(*old)?.clone())))
                 .collect(),
+            selection: hashes.selection.clone(),
         });
         let mut unplaced_roots: Vec<SnapshotRoot> = Vec::new();
         for skipped in &plan.skipped {

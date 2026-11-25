@@ -748,6 +748,7 @@ fn hash_list(files: &[(&str, FileHash)]) -> Hashes {
             .iter()
             .map(|(path, file)| ((*path).to_owned(), file.clone()))
             .collect(),
+        selection: BTreeMap::new(),
     }
 }
 
@@ -787,6 +788,59 @@ fn a_hash_list_of_a_newer_format_is_not_read() {
         None
     );
     assert_eq!(Hashes::from_json(b"not json"), None);
+}
+
+#[test]
+fn hashes_with_only_another_selection_are_same_content() {
+    let list = hash_list(&[("Home/a", file_hash("aa", 1, 1))]);
+    let unticked = Hashes {
+        selection: BTreeMap::from([("Home/b".to_owned(), false)]),
+        ..list.clone()
+    };
+    assert!(list.same_content(&unticked));
+    assert!(unticked.same_content(&list));
+}
+
+#[test]
+fn hashes_without_selection_serialize_as_before() {
+    let list = hash_list(&[("Home/a", file_hash("aa", 1, 1))]);
+    let expected = r#"{
+  "format": 1,
+  "meta": "meta",
+  "files": {
+    "Home/a": {
+      "sha256": "aa",
+      "size": 1,
+      "modified": {
+        "secs": 1,
+        "nanos": 0
+      }
+    }
+  }
+}"#;
+    assert_eq!(serde_json::to_string_pretty(&list).unwrap(), expected);
+    let unticked = Hashes {
+        selection: BTreeMap::from([("Home/b".to_owned(), false)]),
+        ..list
+    };
+    let json = serde_json::to_string_pretty(&unticked).unwrap();
+    assert!(
+        json.contains("\"selection\": {\n    \"Home/b\": false\n  }"),
+        "{json}"
+    );
+}
+
+#[test]
+fn hashes_with_an_unknown_field_still_parse() {
+    // A list of a newer version of the same format: its own fields are ignored.
+    let json = br#"{"format": 1, "meta": "meta", "files": {}, "selection": {"Home/b": false},
+        "newer": {"anything": true}}"#;
+    let list = Hashes::from_json(json).unwrap();
+    assert_eq!(
+        list.selection,
+        BTreeMap::from([("Home/b".to_owned(), false)])
+    );
+    assert_eq!(list.files, BTreeMap::new());
 }
 
 #[test]

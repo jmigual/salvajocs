@@ -1508,6 +1508,7 @@ fn plan_of(writes: Vec<Write>, registry: Option<(RegistryExport, Context)>) -> R
         skipped: vec![],
         cross_build: false,
         notes: vec![],
+        placed: vec![],
     }
 }
 

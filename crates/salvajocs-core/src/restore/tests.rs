@@ -9,7 +9,7 @@ use crate::manifest::{CustomFile, CustomGame, FileRule, Integration, Manifest, R
 use crate::registry::HKCU;
 use crate::storage::{EntryKind, SnapshotFile, SnapshotInfo};
 
-fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
+pub(super) fn staged(roots: &[(Base, &str)], files: &[(Base, &str)]) -> StagedGame {
     let owned = |list: &[(Base, &str)]| {
         list.iter()
             .map(|&(base, path)| (base, path.to_owned()))
@@ -436,7 +436,7 @@ fn declaring(staged: &StagedGame, keys: &[&str]) -> GameEntry {
 }
 
 /// An entry with a file template for every root of `staged`, so all of them are declared.
-fn entry_of(staged: &StagedGame) -> GameEntry {
+pub(super) fn entry_of(staged: &StagedGame) -> GameEntry {
     templates(
         &staged
             .meta
@@ -447,7 +447,7 @@ fn entry_of(staged: &StagedGame) -> GameEntry {
     )
 }
 
-fn info(entry: Option<&GameEntry>, pairs: &[Pair], skips: &[String]) -> GameInfo {
+pub(super) fn info(entry: Option<&GameEntry>, pairs: &[Pair], skips: &[String]) -> GameInfo {
     GameInfo {
         entry: entry.cloned(),
         pairs: pairs.to_vec(),
@@ -456,7 +456,7 @@ fn info(entry: Option<&GameEntry>, pairs: &[Pair], skips: &[String]) -> GameInfo
     }
 }
 
-fn templates(templates: &[impl AsRef<str>]) -> GameEntry {
+pub(super) fn templates(templates: &[impl AsRef<str>]) -> GameEntry {
     GameEntry {
         files: templates
             .iter()

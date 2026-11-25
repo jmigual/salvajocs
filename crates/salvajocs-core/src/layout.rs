@@ -805,6 +805,10 @@ pub struct Hashes {
     pub registry: Option<String>,
     /// Each file below `files/`, by its `<Base>/<tail>` path.
     pub files: BTreeMap<String, FileHash>,
+    /// The game's path rules (`GameSettings::paths`) this backup was made with, which a restore
+    /// that deletes must not override (ADR-0036); outside [`Self::same_content`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub selection: BTreeMap<String, bool>,
 }
 
 /// One file of [`Hashes`].

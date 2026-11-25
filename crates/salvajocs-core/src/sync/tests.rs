@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::time::{Duration, SystemTime};
 
@@ -43,6 +43,7 @@ fn list_at(files: Files, modified: Option<Duration>) -> Hashes {
                 ((*key).to_owned(), file)
             })
             .collect(),
+        selection: BTreeMap::new(),
     }
 }
 
