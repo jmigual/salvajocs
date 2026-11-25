@@ -141,12 +141,13 @@ its backup's files is not used, so there the modification time decides.
 
 To see what makes a file differ, click the **Details** button after a file with the changed
 icon. A line at the top says how the content compares: `The text differs: 1 line removed, 1
-added.`, `Only the line endings differ.` or `Same content.`. Below it, the dialog shows this PC's
-copy and the backup's side by side: where the file is (the backup's path below `files/`, which
-for a backup of the other build is its own folder), its size, its modification time to the second
-(UTC) and its SHA-256, which wraps in its column. A mark after each label says whether the two
-are the same or differ. The backup's hash comes from its list of hashes, said under it; a backup
-without one gets it from the downloaded file.
+added.`, `Only the line endings differ.` or `Same content.`. Below it, the dialog has two columns, **This PC** and **Backup** (with the backup's host and date
+under it), and one row per fact: where the file is (the backup's path below `files/`, which for a
+backup of the other build is its own folder), its size, its modification time to the second (UTC)
+and its SHA-256, which wraps in its column. An equals sign or a pencil after each row's label,
+except Location, says whether the two are the same; hover it to read `Same` or `Differs`. The
+backup's hash comes from its list of hashes, said under it; a backup without one gets it from the
+downloaded file.
 
 ![The Details dialog of a changed text file](../images/details.png)
 
