@@ -548,6 +548,49 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
     );
 }
 
+/// Types `password` into the Settings form and applies it, then waits for the wrong-password
+/// message.
+fn apply_password(harness: &mut Harness<'static, App>, password: &str) {
+    fill(harness, "Encryption password", password);
+    harness.get_by_label("Apply").click();
+    run_until(harness, "the wrong password message", |h| {
+        shows(h, "Wrong encryption password")
+    });
+}
+
+#[test]
+fn a_password_typed_for_the_repository_without_one_says_salvajocs_cannot_add_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env.clone());
+
+    apply_password(&mut harness, "x");
+
+    assert!(shows(&harness, "cannot add one"));
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.password, PasswordMode::None);
+}
+
+#[test]
+fn a_wrong_password_for_another_repository_stays_plain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let other = other_repo_dir(&tmp);
+    init_repo_with(&other, "right", Compression::Default);
+    let mut harness = open_settings(env);
+
+    replace_text(&mut harness, "Location", &other);
+    apply_password(&mut harness, "x");
+
+    assert!(!shows(&harness, "cannot add one"));
+}
+
 const REMEMBER: &str = "Remember passwords in the system keyring";
 
 /// A repository at `repository` without encryption password whose secret option `access_key`

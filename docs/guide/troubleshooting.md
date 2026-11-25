@@ -31,6 +31,29 @@ in the keyring and later changed it, the prompt asks again and stores the new on
 If you lost the encryption password, the repository cannot be opened. Without it the data is
 unreadable.
 
+## "This repository was set up without one"
+
+A repository without a password is opened with the empty password, the same as restic's
+`--insecure-no-password`. When [Settings](settings.md#repository) says the repository has none and
+you type a password for it, the check fails with "Wrong encryption password. This repository was
+set up without one; salvajocs cannot add one." salvajocs cannot add a password or change one.
+Nothing is written, so the repository is not changed or broken, and you can clear the field and
+keep using it.
+
+To add a password, use restic outside salvajocs:
+
+```
+restic -r <repository> --insecure-no-password key passwd
+```
+
+`<repository>` is the location in restic's own syntax (a local path, `rest:`, `rclone:`, `s3:`
+and so on) with restic's own credentials, not salvajocs's `opendal:` strings and options. This
+needs restic 0.17 or newer. The project does not test this step, so copy the repository first.
+
+Then, on every PC that uses the repository, open [Settings](settings.md#repository), type the new
+password and click **Apply**. The prompt at startup does not change the saved mode, which stays
+**None**, so it would ask again every session.
+
 ## "The repository could not be opened"
 
 The red message in the window includes the reason: a folder that is unreadable, a network error,

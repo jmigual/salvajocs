@@ -22,6 +22,11 @@ use crate::widgets::{field_hint, field_status, form_grid, labelled_edit};
 /// What the app says when the storage server refuses the login (HTTP 401 or 403).
 const LOGIN_REFUSED: &str = "The server refused the login. Check the user name and password.";
 
+/// What the app says when the probe rejects a password typed for the repository whose config
+/// says it has none.
+const WRONG_PASSWORD_NONE_SET: &str = "Wrong encryption password. This repository was set up \
+     without one; salvajocs cannot add one, see the guide.";
+
 /// What to show for a failure to open or create a repository: its error chain, or for a
 /// refused login, what to check.
 pub(crate) fn failure_message(err: &anyhow::Error) -> String {
@@ -50,6 +55,8 @@ struct Attempt {
     credentials: Credentials,
     remember: bool,
     location: RepoLocation,
+    /// A password was typed for the current repository, whose config says it has none.
+    adds_password: bool,
 }
 
 enum Step {
@@ -80,6 +87,8 @@ pub struct Connect {
     remember: bool,
     submit: &'static str,
     step: Step,
+    /// The [`AppConfig::secret_scope`] of the current repository when its config has no password.
+    unencrypted: Option<String>,
     /// The form as built, which [`Connect::edited`] compares with.
     baseline: Typed,
 }
@@ -94,6 +103,7 @@ impl Connect {
             remember: true,
             submit: "Continue",
             step: Step::Editing(None),
+            unencrypted: None,
             baseline: Typed::default(),
         })
     }
@@ -121,6 +131,7 @@ impl Connect {
             password: credentials.password.clone(),
             remember: config.password == PasswordMode::Keyring || credentials.options_remembered,
             submit: "Apply",
+            unencrypted: (config.password == PasswordMode::None).then(|| config.secret_scope()),
             ..Self::first_run()
         })
     }
@@ -279,8 +290,8 @@ impl Connect {
         }
     }
 
-    /// Reads the form and starts probing its location.
-    fn begin(&self, ctx: &egui::Context) -> Step {
+    /// The config the form describes, with the password mode its password and keyring box give.
+    fn form_config(&self) -> AppConfig {
         let password = match (self.password.is_empty(), self.remember) {
             (true, _) => PasswordMode::None,
             (false, true) => PasswordMode::Keyring,
@@ -288,6 +299,19 @@ impl Connect {
         };
         let mut config = AppConfig::new(self.form.repository(), password);
         config.repository_options = self.form.options();
+        config
+    }
+
+    /// Whether `config` sets a password on the current repository, whose config has none.
+    fn adds_password(&self, config: &AppConfig) -> bool {
+        config.password != PasswordMode::None
+            && self.unencrypted.as_deref() == Some(config.secret_scope().as_str())
+    }
+
+    /// Reads the form and starts probing its location.
+    fn begin(&self, ctx: &egui::Context) -> Step {
+        let config = self.form_config();
+        let adds_password = self.adds_password(&config);
         let options = self.form.secrets();
         let credentials = Credentials {
             password: self.password.clone(),
@@ -307,6 +331,7 @@ impl Connect {
                 credentials,
                 remember: self.remember,
                 location,
+                adds_password,
             },
         )
     }
@@ -318,10 +343,21 @@ fn next_after_probe(state: RepoState, attempt: Attempt, ctx: &egui::Context, env
     match state {
         RepoState::Ready => finishing(ctx, env, attempt, None),
         RepoState::Missing => Step::Confirm(attempt),
-        RepoState::WrongPassword => Step::Editing(Some("Wrong encryption password.".to_string())),
+        RepoState::WrongPassword => {
+            Step::Editing(Some(wrong_password_message(&attempt).to_string()))
+        }
         RepoState::LoginRefused => Step::Editing(Some(LOGIN_REFUSED.to_string())),
         RepoState::Error(message) => Step::Editing(Some(message)),
         _ => Step::Editing(Some("The repository cannot be opened.".to_string())),
+    }
+}
+
+/// What to say when the probe rejects the typed password.
+fn wrong_password_message(attempt: &Attempt) -> &'static str {
+    if attempt.adds_password {
+        WRONG_PASSWORD_NONE_SET
+    } else {
+        "Wrong encryption password."
     }
 }
 
@@ -349,6 +385,7 @@ fn finish(env: &Env, attempt: Attempt, create: Option<Compression>) -> Result<Co
         credentials,
         remember,
         location,
+        ..
     } = attempt;
     let storage = Box::new(match create {
         Some(compression) => Storage::init(&location, &credentials.password, compression)?,

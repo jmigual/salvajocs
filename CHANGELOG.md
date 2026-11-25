@@ -10,6 +10,9 @@ All notable changes to salvajocs. The format follows
 
 - The custom games list says "extends the manifest entry" and "overrides the manifest entry"
   instead of "extends the manifest game" and "overrides the manifest game".
+- Typing a password in Settings for a repository that was set up without one now adds that
+  salvajocs cannot add one to "Wrong encryption password."; the guide shows how to add one with
+  restic.
 
 ## [0.10.0] - 2026-11-22
 
