@@ -8,6 +8,7 @@ use salvajocs_core::backup::{self, ByState, GameBackup, Stored};
 use salvajocs_core::changes::Mapper;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::custom_games;
+use salvajocs_core::manifest::Manifest;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ScanReport};
 use salvajocs_core::selection::{self, Pending};
@@ -275,21 +276,21 @@ impl BackupTab {
                 ),
                 None => (SaveProblems::default(), None),
             };
-            let reloaded = choices::load(&storage)
-                .map(|games| choices::replay(games, pending.as_ref(), &config.secret_scope()));
-            let filter = match &reloaded {
-                Ok(games) => games,
-                Err(err) => {
-                    saving.warnings.push(format!(
-                        "What to back up could not be read again, so the choices shown are \
-                         used: {err:#}"
-                    ));
-                    &settings
-                }
-            };
             let environment = environment.unwrap_or_else(Environment::detect);
-            let report = scan::scan(&manifest, &config, &environment, scanned);
-            let mut games = chosen_files(&report, filter);
+            let (reloaded, report, mut games) = to_stage(
+                choices::load(&storage),
+                pending.as_ref(),
+                &settings,
+                (&manifest, &config, &environment),
+                |_| true,
+                scanned,
+            );
+            if let Err(err) = &reloaded {
+                saving.warnings.push(format!(
+                    "What to back up could not be read again, so the choices shown are used: \
+                     {err:#}"
+                ));
+            }
             if let Some(only) = &only {
                 games.retain(|game| slug(&game.title) == *only);
             }
@@ -478,6 +479,25 @@ fn save_selection(
         }
     }
     (problems, written)
+}
+
+/// What a Back up stages now (ADR-0014): the scan of the games whose title `keep` accepts, each
+/// filtered by its settings. They are `read`, the repository's settings read again, with
+/// `pending`, this PC's unsaved changes, replayed for the repository of `config`; when `read`
+/// failed, `fallback`. Returns the replayed settings or why they could not be read, the scan,
+/// and its games as [`chosen_files`] filters them.
+pub(crate) fn to_stage(
+    read: anyhow::Result<Games>,
+    pending: Option<&Pending>,
+    fallback: &Games,
+    (manifest, config, environment): (&Manifest, &AppConfig, &Environment),
+    keep: impl Fn(&str) -> bool,
+    progress: impl FnMut(usize, usize),
+) -> (anyhow::Result<Games>, ScanReport, Vec<GameScan>) {
+    let reloaded = read.map(|games| choices::replay(games, pending, &config.secret_scope()));
+    let report = scan::scan_where(manifest, config, environment, keep, progress);
+    let games = chosen_files(&report, reloaded.as_ref().unwrap_or(fallback));
+    (reloaded, report, games)
 }
 
 /// The games of `report` as `settings` filter them; a game skipped or with nothing left is

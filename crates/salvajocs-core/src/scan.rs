@@ -751,6 +751,19 @@ pub fn scan(
     manifest: &Manifest,
     config: &AppConfig,
     env: &Environment,
+    progress: impl FnMut(usize, usize),
+) -> ScanReport {
+    scan_where(manifest, config, env, |_| true, progress)
+}
+
+/// Like [`scan`], for only the games whose title `keep` accepts. Each is found exactly as by
+/// [`scan`]: the launcher prefixes are still matched against every game of `manifest`, which
+/// decides which prefixes are a game's own and which are shared.
+pub fn scan_where(
+    manifest: &Manifest,
+    config: &AppConfig,
+    env: &Environment,
+    keep: impl Fn(&str) -> bool,
     mut progress: impl FnMut(usize, usize),
 ) -> ScanReport {
     let roots = roots(config, env);
@@ -809,6 +822,7 @@ pub fn scan(
             .iter()
             .map(|(title, entry)| (title.as_str(), entry)),
     );
+    games.retain(|title, _| keep(title));
 
     let total = games.len();
     let games = games

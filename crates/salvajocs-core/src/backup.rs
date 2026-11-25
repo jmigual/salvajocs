@@ -492,6 +492,19 @@ pub struct ByState<'a> {
 /// report instead of storing it with the base to record then; `None` to store it.
 type Decided = (Hashes, Option<(Stored, Option<sync::Base>)>);
 
+/// Stages `game` in `stage_root/<slug>` as [`backup_games`] does, with its registry keys read
+/// fresh from the scan's `registry_source`, and returns the staged hash list.
+///
+/// # Errors
+/// [`BackupError`] when the registry cannot be read or the game cannot be staged.
+pub fn stage_game(game: &GameScan, stage_root: &Path) -> Result<Hashes, BackupError> {
+    stage(
+        game,
+        &read_registry(game)?,
+        &stage_root.join(slug(&game.title)),
+    )
+}
+
 /// Backs up each of `games` as its own snapshot (ADR-0010), one after another: the game is
 /// staged in `stage_root/<slug>` with its registry keys read fresh from the scan's
 /// `registry_source`, then stored as `/salvajocs/<slug>` with label = title and tags
@@ -524,7 +537,7 @@ pub fn backup_games(
     let decided: Vec<Result<Decided, BackupError>> = (games.iter())
         .map(|game| {
             let slug = slug(&game.title);
-            let staged = stage(game, &read_registry(game)?, &stage_root.join(&slug))?;
+            let staged = stage_game(game, stage_root)?;
             let skip = match by_state {
                 Some(by_state) => {
                     decide(storage, by_state, game, &slug, &staged, &snapshots, &host)

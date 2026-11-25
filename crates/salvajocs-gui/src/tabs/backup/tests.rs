@@ -418,6 +418,25 @@ fn the_preview_says_what_the_next_backup_would_do() {
     assert_eq!(preview_text(&game, &preview, &skipped), None);
 }
 
+/// After an undo the base is the safety backup, made after the newest backup: its time is not
+/// when this PC last synced before that backup.
+#[test]
+fn changed_on_both_with_a_base_later_than_the_newest_backup_gives_no_sync_date() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let mut preview = compared_on(FileState::Changed, Some(forgotten_base()));
+    if let Ok(Some(baseline)) = &mut preview {
+        baseline.base_time = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(3600));
+    }
+    let date = "1970-01-01 00:00 UTC";
+    assert_eq!(
+        preview_text(&game, &preview, &all).unwrap(),
+        format!(
+            "Changed on this PC and on there since this PC last synced: 1 changed against the \
+             backup from there, {date}. Back up asks what to do."
+        )
+    );
+}
+
 #[test]
 fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     let game = game(&[1], false, 0);

@@ -500,8 +500,9 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             base_time,
         } => {
             let (host, date) = since(newest);
-            let synced =
-                base_time.map_or(String::new(), |time| format!(" ({})", format_time(time)));
+            // After an undo the base is a safety backup made after the newest one.
+            let synced = (base_time.filter(|time| *time <= newest.time))
+                .map_or(String::new(), |time| format!(" ({})", format_time(time)));
             let differs = counted(&counts);
             let against = if differs.is_empty() {
                 format!("no file differs from the backup from {host}, {date}")

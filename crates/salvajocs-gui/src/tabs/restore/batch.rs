@@ -27,7 +27,7 @@ use super::plan::{
     Fetched, Label, Labelled, WriteTree, blocking, hover_label, into_line, name_context,
     nothing_to_restore, offer_ui, skipped_ui, ticked_plan, warnings_ui,
 };
-use super::run::{Restored, describe_run_error};
+use super::run::{BaseUpdate, Restored, describe_run_error};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::count;
@@ -504,7 +504,7 @@ impl RestoreTab {
         let wineserver_running = state.env.wineserver_running;
         let waker = ctx.clone();
         let cache_dir = state.env.cache_dir.clone();
-        let (config_dir, scope) = (state.env.config_dir.clone(), config.secret_scope());
+        let base_update = BaseUpdate::new(state, config);
         self.batch.running = Some(Job::spawn(ctx, move || {
             remove_stale_restore_dirs(&cache_dir);
             remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
@@ -534,7 +534,8 @@ impl RestoreTab {
                             wineserver_running,
                         )?;
                         let mut restored = Restored::new(title.clone(), &plan, report);
-                        restored.update_base(&config_dir, &scope, &fetched.listed.snapshot);
+                        let snapshot = &fetched.listed.snapshot;
+                        base_update.apply(&mut storage, &mut restored, snapshot);
                         Ok(restored)
                     });
                     done.fetch_add(1, Ordering::Relaxed);

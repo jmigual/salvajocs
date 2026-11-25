@@ -63,8 +63,9 @@ pub enum SyncError {
 pub struct Base {
     /// The snapshot's full hex id.
     pub snapshot: String,
-    /// The staged hash list (`hashes.json`) of this PC's saves then, when a Back up set the
-    /// base; `None` when a restore set it, or for a seed. With it, the base still compares once
+    /// The staged hash list (`hashes.json`) of this PC's saves right after the sync, as Back up
+    /// stages them; `None` for a seed, or when after a restore the scan does not find the game,
+    /// its settings skip it or its saves cannot be staged. With it, the base still compares once
     /// the snapshot is forgotten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saves: Option<Hashes>,
@@ -74,7 +75,7 @@ pub struct Base {
 }
 
 impl Base {
-    /// The base `snapshot`, with this PC's staged `saves` when a Back up sets it.
+    /// The base `snapshot`, with this PC's staged `saves` after the sync when known.
     pub fn new(snapshot: String, saves: Option<Hashes>) -> Self {
         Self {
             snapshot,

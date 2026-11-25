@@ -1,9 +1,18 @@
-use std::path::Path;
+use std::cell::OnceCell;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Ui};
+use salvajocs_core::backup;
+use salvajocs_core::config::AppConfig;
+use salvajocs_core::layout::Hashes;
+use salvajocs_core::manifest::Manifest;
 use salvajocs_core::restore::{self, RestorePlan, RestoreReport, RunError, SafetyBackup};
-use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::scan::Environment;
+use salvajocs_core::selection::Pending;
+use salvajocs_core::slug::slug;
+use salvajocs_core::storage::{SnapshotInfo, Storage};
 use salvajocs_core::sync::{self, Base};
 
 use super::RestoreTab;
@@ -12,6 +21,8 @@ use super::dirs::{own_dir, remove_dir};
 use super::plan::ticked_plan;
 use crate::job::Job;
 use crate::state::{State, lock_storage};
+use crate::tabs::backup::choices::{self, Games};
+use crate::tabs::backup::run::to_stage;
 use crate::theme::{self, icons};
 
 /// What a finished restore shows.
@@ -19,7 +30,7 @@ pub(super) struct Restored {
     pub(super) title: String,
     pub(super) safety_backup: String,
     /// One line per write and for the registry, with whether it failed, and one when the base
-    /// could not be updated.
+    /// could not be updated or was updated without this PC's saves.
     pub(super) lines: Vec<(String, bool)>,
 }
 
@@ -59,22 +70,6 @@ impl Restored {
         }
     }
 
-    /// Updates this PC's base of the game of `snapshot`, which this restore wrote, in the
-    /// repository `scope` (ADR-0035) when no write failed: `snapshot` becomes the base, a
-    /// pre-restore safety backup too. A failed update adds a line and leaves the restore as it
-    /// is. Call it while holding the repository's storage lock.
-    pub(super) fn update_base(&mut self, config_dir: &Path, scope: &str, snapshot: &SnapshotInfo) {
-        let slug = (snapshot.tags.iter()).find_map(|tag| tag.strip_prefix("game:"));
-        let Some(slug) = slug.filter(|_| self.lines.iter().all(|(_, failed)| !failed)) else {
-            return;
-        };
-        let base = Base::new(snapshot.id.clone(), None);
-        if let Err(err) = sync::record(config_dir, scope, [(slug.to_owned(), base)]) {
-            let line = format!("This PC's sync state was not updated: {:#}", anyhow!(err));
-            self.lines.push((line, true));
-        }
-    }
-
     /// Draws the safety backup line and each of `lines`.
     pub(super) fn lines_ui(&self, ui: &mut Ui) {
         ui.label(&self.safety_backup);
@@ -87,6 +82,98 @@ impl Restored {
             }
         }
     }
+}
+
+/// What a restore job needs to update this PC's base of the game it restored (ADR-0035): the
+/// restored backup, with this PC's saves after it as Back up stages them.
+pub(super) struct BaseUpdate {
+    manifest: Arc<Manifest>,
+    config: AppConfig,
+    environment: Option<Environment>,
+    config_dir: PathBuf,
+    /// Back up's staging mirror, so the list is the one a Back up would stage.
+    stage_root: PathBuf,
+    /// What Back up would filter by, read by the first game that needs it and kept for the job:
+    /// a later game's list is at worst stale, which shows it changed.
+    choices: OnceCell<Result<(Pending, Games), String>>,
+}
+
+impl BaseUpdate {
+    /// The update for the repository of `config`, with `state`'s manifest, environment and dirs.
+    pub(super) fn new(state: &State, config: &AppConfig) -> Self {
+        Self {
+            manifest: state.manifest_or_empty(),
+            config: config.clone(),
+            environment: state.env.environment.clone(),
+            config_dir: state.env.config_dir.clone(),
+            stage_root: state.env.cache_dir.join("stage"),
+            choices: OnceCell::new(),
+        }
+    }
+
+    /// Makes `snapshot`, which `restored` wrote (a pre-restore safety backup too), this PC's
+    /// base of its game when no write failed. Its saves are this PC's now, as Back up stages
+    /// them; none when the scan does not find the game or its settings skip it, nor when they
+    /// cannot be listed, which adds a line. A failed record adds a line and leaves the restore
+    /// as it is. Call it while holding the repository's storage lock, taken for the restore, so
+    /// no save made since is listed.
+    pub(super) fn apply(
+        &self,
+        storage: &mut Storage,
+        restored: &mut Restored,
+        snapshot: &SnapshotInfo,
+    ) {
+        let slug = (snapshot.tags.iter()).find_map(|tag| tag.strip_prefix("game:"));
+        let Some(slug) = slug.filter(|_| restored.lines.iter().all(|(_, failed)| !failed)) else {
+            return;
+        };
+        let saves = self.saves(storage, slug).unwrap_or_else(|err| {
+            let line = format!("This PC's saves were not listed in its sync state: {err:#}");
+            restored.lines.push((line, true));
+            None
+        });
+        let base = Base::new(snapshot.id.clone(), saves);
+        let scope = self.config.secret_scope();
+        if let Err(err) = sync::record(&self.config_dir, &scope, [(slug.to_owned(), base)]) {
+            let line = format!("This PC's sync state was not updated: {:#}", anyhow!(err));
+            restored.lines.push((line, true));
+        }
+    }
+
+    /// Stages the game `game_slug` as Back up would now ([`to_stage`]), scanning only it, and
+    /// returns its staged list; `None` when the scan does not find it or its settings skip it.
+    /// Fails, without scanning, when the pending changes or the settings cannot be read: Back up
+    /// would then use the choices it shows, which this job does not have.
+    fn saves(&self, storage: &mut Storage, game_slug: &str) -> anyhow::Result<Option<Hashes>> {
+        let choices = self
+            .choices
+            .get_or_init(|| read_choices(storage, &self.config_dir));
+        let (pending, games) = choices.as_ref().map_err(|err| anyhow!(err.clone()))?;
+        let environment = (self.environment.clone()).unwrap_or_else(Environment::detect);
+        let (_, _, scanned) = to_stage(
+            Ok(games.clone()),
+            Some(pending),
+            &Games::new(),
+            (&self.manifest, &self.config, &environment),
+            |title| slug(title) == game_slug,
+            |_, _| {},
+        );
+        let Some(game) = scanned.first() else {
+            return Ok(None);
+        };
+        Ok(Some(backup::stage_game(game, &self.stage_root)?))
+    }
+}
+
+/// This PC's pending changes and the repository's settings, or why they cannot be read.
+fn read_choices(storage: &mut Storage, config_dir: &Path) -> Result<(Pending, Games), String> {
+    let pending = Pending::load(config_dir)
+        .context("the pending choices of what to back up cannot be read")
+        .map_err(|err| format!("{err:#}"))?;
+    let games = choices::read(storage)
+        .context("what to back up cannot be read")
+        .map_err(|err| format!("{err:#}"))?;
+    Ok((pending, games))
 }
 
 impl RestoreTab {
@@ -109,7 +196,7 @@ impl RestoreTab {
         let fetched = preview.fetched.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         let cache_dir = state.env.cache_dir.clone();
-        let (config_dir, scope) = (state.env.config_dir.clone(), config.secret_scope());
+        let base_update = BaseUpdate::new(state, config);
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {
             // Each session makes dirs of its own, and an earlier one may have left its.
@@ -124,7 +211,7 @@ impl RestoreTab {
             let report =
                 restore::run(&mut storage, &title, &plan, &stage_root, wineserver_running)?;
             let mut restored = Restored::new(title, &plan, report);
-            restored.update_base(&config_dir, &scope, &fetched.listed.snapshot);
+            base_update.apply(&mut storage, &mut restored, &fetched.listed.snapshot);
             Ok(restored)
         }));
     }

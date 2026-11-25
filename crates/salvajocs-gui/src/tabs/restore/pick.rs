@@ -458,7 +458,7 @@ impl RestoreTab {
                             && let Some(newest) = game.default.and_then(|i| game.snapshots.get(i))
                         {
                             let hover = format!(
-                                "Newer saves than this PC last synced: from {}, {}",
+                                "The newest backup is not the one this PC last synced: from {}, {}",
                                 newest.host,
                                 format_date(newest.time)
                             );

@@ -69,8 +69,14 @@ parallel branch.
       "<slug>": { "snapshot": "<64 hex>", "saves": { …hashes.json object… } } } } }
   ```
 
-  `saves` is the staged `hashes.json` list when a Back up set the base, so a base snapshot
-  forgotten by the rules still compares; it is absent when a restore set it. `sync::load` reads
+  `saves` is this PC's saves as Back up stages them right after the sync: after a Back up, the
+  staged `hashes.json` list; after a restore, the restored game staged into Back up's mirror
+  (`backup::stage_game`), right after it under the same storage lock, from a scan of only that
+  game filtered as Back up filters it (the settings read again, the pending file's changes
+  replayed). With it a base snapshot forgotten by the rules still compares. It is absent for a
+  seed, or when the scan does not find the game, its settings skip it, or the settings, the
+  pending file or the staging fail (Back up would then filter by the choices it shows, which a
+  restore does not have); L = B then falls back to reading the snapshot. `sync::load` reads
   a file that is missing, cannot be read, does not parse or is of a newer format as empty (the
   worst case is an unknown base, which asks). `sync::record` rewrites it atomically
   (`fsutil::write_atomic`) from a strict read: a missing file starts empty and one that does not
@@ -79,14 +85,11 @@ parallel branch.
   game's base. The GUI jobs call it while they hold the session's storage lock.
 - **Set by:** a Back up that stored a snapshot → `{ new id, staged }`; a Back up that found
   L = N → `{ N, staged }`; behind or "don't back up" → unchanged; a restore of S that wrote every
-  planned write (ticks allowed) → `{ S, none }`; a restore with a failed write or a failed
-  safety backup → unchanged; the preview never writes. A ticked restore sets the base to S on
-  purpose: the unticked files are this PC's choice, so the next Back up stores the mix.
-  A restore of a `pre-restore` safety backup (an undo) is a restore like any other: it records
-  the safety backup as the base, so the game reads behind (the newest regular backup is not the
-  base) and Back up asks only after the user changes the saves (2026-11-25, approved by the
-  user). An earlier rule cleared the record on an undo so the next Back up asked; it is
-  replaced.
+  planned write (ticks allowed, an undo too) → `{ S, saves after it }`; a restore with a failed
+  write or a failed safety backup → unchanged; the preview never writes. A ticked restore sets
+  the base to S on purpose: the unticked files are this PC's choice, so the next Back up stores
+  the mix. Once another PC backs up first, the mix reads behind (accepted by the user); Back up
+  anyway still stores it.
 - **Seed** (upgrade, or a lost file): with no record, the base is this PC's own newest regular
   snapshot of the game, by hostname, without a list. It is used, never written, so the reported
   case reads "behind" on the first preview after the upgrade. A seed never makes a game ahead:
@@ -106,9 +109,18 @@ parallel branch.
   - `pre-restore` safety backups keep their own retention list, same rules, newest kept
     (ADR-0034). A restore always stores this PC's files that way first (ADR-0005).
   - The base is stored with its hash list in `sync-base.json`.
-  - ~~Restoring a `pre-restore` safety backup clears the game's base, so the next Back up asks.~~
-    Replaced the same day, with the user's approval: it records the safety backup as the base
-    like any restore, which reads behind, and Back up asks only after the saves change.
+  - Restoring a `pre-restore` safety backup records it as the base like any restore, with this
+    PC's saves after it, so the game reads behind until its saves change, then Back up asks
+    (2026-11-25; replaces clearing the base).
+  - **List after every restore** (2026-11-25): after a restore or an undo, salvajocs scans the
+    game once and stores this PC's file list with the base in `sync-base.json`, as Back up does.
+    After a restore that leaves files the backup lacks (a partial restore, or saves this PC never
+    backed up), the game reads behind once another PC backs up, with no question; Back up anyway
+    can still store the mix.
+  - **Files the restored backup lacks** (2026-11-25, accepted by the user, no change): they are
+    in the recorded list, so when another PC backs up first the game reads behind and Back up
+    skips it. A save this PC never backed up stays on disk but is in no backup until this PC's
+    saves change or the user presses Back up anyway; the guide says so.
   - **Back up anyway** (2026-11-25, approved by the user for behind, changed-on-both and
     unknown-base games): a button under such a game on the Backup tab backs up only that game,
     now, with no question: this PC's saves become the newest, and the other PC's stay in the
@@ -136,6 +148,8 @@ parallel branch.
   repository format change, which is what the user wants gone.
 - **Base without its hash list** (only the id): a PC whose base snapshot the rules removed can
   no longer tell behind from changed on both, and asks.
+- **Compare a safety-backup base without its meta:** a safety backup holds only the overwritten
+  files, so untouched and created files never compare.
 - **Base in `config.yaml`:** hash lists are bulky machine data, and `State::save_config` is the
   only config writer, on the GUI thread; the base is written by the backup and restore jobs.
   **In the cache dir:** clearing caches must not reset sync state. **In the repository:** only
@@ -152,6 +166,10 @@ parallel branch.
   the newest; every PC should be upgraded.
 - The preview reads one more snapshot listing and list per game whose base has no list and is
   not the newest, the cost it paid for the "parent" before.
+- A restore scans each restored game once more and stages it into Back up's mirror, holding
+  the storage lock. The settings and the pending choices it filters by are read once per
+  restore job, so a later game of a batch may be listed by settings that changed meanwhile: its
+  list is then stale, and the game reads changed.
 - Each upgraded PC asks once about every game it changed since its own last backup, which it
   made the newest: its seed is that backup, which reads unknown base, not ahead.
 - `secret_scope()` also holds non-secret option values of the repository, so editing one of

@@ -35,10 +35,10 @@ use results::{GameResult, Outcome};
 use unsent::{Asking, Checked, Shared, is_session};
 
 mod bar;
-mod choices;
+pub(crate) mod choices;
 mod preview;
 mod results;
-mod run;
+pub(crate) mod run;
 pub(crate) mod unsent;
 
 fn describe_problem(problem: &ScanProblem) -> String {

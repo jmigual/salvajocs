@@ -1787,6 +1787,155 @@ fn undoing_a_restore_of_another_pcs_backup_reads_behind_and_back_up_stores_nothi
     assert_eq!(backups_of_g(&tmp), stored);
 }
 
+/// Backs up G on the other PC, `there`, where it is ahead, and waits for the repository of `tmp`
+/// to hold the new backup: `there` still shows its last backup's result.
+fn back_up_there_again(there: &mut Harness<'static, App>, tmp: &TempDir) {
+    let before = backups_of_g(tmp);
+    scan(there, "1 game found");
+    run_until_compared(there);
+    there.get_by_label("Back up 1 game").click();
+    run_until(there, "the new backup", |_| backups_of_g(tmp) > before);
+    run_until_backed_up(there, "G: backed up");
+}
+
+/// Scans and presses Back up on `harness`, where G reads behind: the preview says so, Back up
+/// asks nothing and the repository of `tmp` gains no backup of G.
+fn back_up_reads_g_behind(harness: &mut Harness<'static, App>, tmp: &TempDir) {
+    let stored = backups_of_g(tmp);
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(harness);
+    scan(harness, "1 game found");
+    run_until_compared(harness);
+    assert!(shows(harness, " has newer saves, from "));
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(harness, "G: not backed up: ");
+    assert!(!shows(harness, DIFFERS));
+    assert_eq!(backups_of_g(tmp), stored);
+}
+
+/// An app on the repository `repository` whose manifest game G, holding `content`, is found in
+/// a Lutris prefix under `tmp`, so its saves have a prefix origin. Returns the prefix too.
+fn lutris_g(tmp: &TempDir, repository: &str, content: &str) -> (Harness<'static, App>, PathBuf) {
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", content);
+    let mut env = env(tmp);
+    let mut game = LauncherGame::default();
+    game.title = Some("G".to_owned());
+    let mut found = LauncherPrefix::new(Launcher::Lutris, prefix.clone(), Some(game));
+    found.name = "g".to_owned();
+    env.environment
+        .as_mut()
+        .unwrap()
+        .launcher_prefixes
+        .push(found);
+    fs::create_dir_all(&env.cache_dir).unwrap();
+    let manifest = parse_yaml("G:\n  files:\n    <winAppData>/G: {}\n").unwrap();
+    fs::write(
+        env.cache_dir.join(JSON_FILE),
+        manifest::to_json(&manifest).unwrap(),
+    )
+    .unwrap();
+    save_config(&env, &local_config(repository));
+    let mut harness = harness(env);
+    run_until_ready(&mut harness);
+    run_settled(&mut harness);
+    (harness, prefix)
+}
+
+#[test]
+fn undoing_a_restore_of_a_lutris_game_reads_behind_and_back_up_stores_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let (mut harness, prefix) = lutris_g(&tmp, &repository, "one");
+    scan(&mut harness, "1 game found");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: backed up");
+    let other = tempfile::tempdir().unwrap();
+    let (mut there, _) = lutris_g(&other, &repository, "two!");
+    back_up_there_anyway(&mut there);
+
+    restore_newest_g(&mut harness, &prefix, "two!");
+    undo_g(&mut harness, &prefix, "one");
+
+    // The safety backup has no prefix origin; this PC's saves after the undo do.
+    back_up_reads_g_behind(&mut harness, &tmp);
+}
+
+#[test]
+fn undoing_a_restore_that_created_a_file_reads_behind() {
+    let Pcs {
+        here: mut harness,
+        tmp,
+        prefix,
+        mut there,
+        there_prefix,
+        _other,
+        ..
+    } = behind_another_pc();
+    fs::write(save_dir(&there_prefix, "G").join("new.dat"), "new").unwrap();
+    back_up_there_again(&mut there, &tmp);
+
+    restore_newest_g(&mut harness, &prefix, "two!");
+    undo_g(&mut harness, &prefix, "one");
+
+    // The safety backup holds only the file the restore replaced; the one it created stays.
+    assert!(save_dir(&prefix, "G").join("new.dat").exists());
+    back_up_reads_g_behind(&mut harness, &tmp);
+}
+
+#[test]
+fn an_undone_restore_reads_behind_after_its_safety_backup_is_forgotten() {
+    let Pcs {
+        here: mut harness,
+        tmp,
+        prefix,
+        ..
+    } = behind_another_pc();
+    restore_newest_g(&mut harness, &prefix, "two!");
+    let safety = open_repo(&tmp).snapshots("pre-restore").unwrap();
+    assert_eq!(safety.len(), 1);
+    undo_g(&mut harness, &prefix, "one");
+    open_repo(&tmp).forget(&[&safety[0].id]).unwrap();
+
+    back_up_reads_g_behind(&mut harness, &tmp);
+}
+
+#[test]
+fn a_ticked_restore_then_a_newer_backup_elsewhere_reads_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    let (prefix, games) = game_g(&tmp, "one");
+    fs::write(save_dir(&prefix, "G").join("b.dat"), "b1").unwrap();
+    let (mut harness, _) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), games, true);
+    scan(&mut harness, "1 game found");
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: backed up");
+    let other = tempfile::tempdir().unwrap();
+    let (there_prefix, games) = game_g(&other, "two!");
+    fs::write(save_dir(&there_prefix, "G").join("b.dat"), "b2").unwrap();
+    let (mut there, _) = open_app(&other, &repo_dir(&tmp), Vec::new(), games, true);
+    back_up_there_anyway(&mut there);
+
+    // Only save.dat is restored: this PC's saves become a mix of both PCs'.
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(&mut harness);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the list", |h| shows(h, "G"));
+    harness.get_by_label("G").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+    click(&mut harness, "Open WinAppData/G");
+    click(&mut harness, "b.dat, changed");
+    restore_planned_g(&mut harness, &prefix, "two!");
+    let b = save_dir(&prefix, "G").join("b.dat");
+    assert_eq!(fs::read_to_string(b).unwrap(), "b1");
+
+    write_save(&there_prefix, "G", "three");
+    back_up_there_again(&mut there, &tmp);
+
+    back_up_reads_g_behind(&mut harness, &tmp);
+}
+
 #[test]
 fn the_question_about_unsent_custom_games_and_the_question_about_saves_are_one_dialog() {
     let Pcs {

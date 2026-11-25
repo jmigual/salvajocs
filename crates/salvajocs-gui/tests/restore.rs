@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use common::{
     back_up_unsent, click_at, env, harness, init_repo, local_config, pick, record_opened,
-    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
-    shows_path,
+    replace_text, repo_dir, run_settled, run_until, run_until_backed_up, run_until_ready,
+    save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
@@ -28,7 +28,7 @@ use salvajocs_core::manifest::{
     self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
 };
 use salvajocs_core::scan::{Environment, FoundFile, GameScan, RegistrySource};
-use salvajocs_core::selection::{self, Change};
+use salvajocs_core::selection::{self, Change, Pending};
 use salvajocs_core::storage::{RepoLocation, SnapshotInfo, Storage};
 use salvajocs_core::sync::{self, Base as SyncBase};
 use salvajocs_gui::tabs::Tab;
@@ -1200,13 +1200,15 @@ fn restore_fetch_preview_restore_reports() {
         !saves.with_file_name("Stray").exists(),
         "a skipped file stays out"
     );
-    // The safety backup was staged apart from the backup mirror.
+    // The safety backup was staged apart from the backup mirror, which holds this PC's saves
+    // after the restore, staged for the base (ADR-0035).
     assert!(env.cache_dir.join("restore-stage").exists());
     let mirror = env
         .cache_dir
         .join("stage")
         .join(salvajocs_core::slug::slug("Alpha"));
-    assert!(!mirror.exists());
+    let staged = under(&mirror, "files/WinAppData/Alpha/save.dat");
+    assert_eq!(fs::read_to_string(staged).unwrap(), "Alpha/save.dat");
 
     // The reloaded list offers the safety backup, but not as the default, and the game stays
     // chosen without a click.
@@ -4023,9 +4025,174 @@ fn a_batch_game_whose_backup_cannot_be_fetched_records_no_base() {
     let beta = backups_of(&tmp, "Beta");
     assert_eq!(recorded_base(&tmp, &env, "Beta"), Some(beta[0].clone()));
 }
+/// This PC's recorded base of the game `title` in the tests' repository, if any.
+fn recorded(tmp: &TempDir, env: &Env, title: &str) -> Option<SyncBase> {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let bases = sync::load(&env.config_dir);
+    bases
+        .get(&scope, &salvajocs_core::slug::slug(title))
+        .cloned()
+}
+
+/// Restores Alpha's default snapshot and waits for the list to reload.
+fn restore_alpha(harness: &mut Harness<'static, App>) {
+    select(harness, "Alpha");
+    preview(harness);
+    harness.get_by_label("Restore files").click();
+    run_until(harness, "the restore", |h| shows(h, "Restored Alpha"));
+    run_until(harness, "the list to reload", |h| {
+        !disabled(h, "Load backups")
+    });
+}
+
+/// Scans and backs up on the Backup tab, where Alpha is up to date.
+fn back_up_alpha_up_to_date(harness: &mut Harness<'static, App>) {
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(harness);
+    harness.get_by_label("Scan for games").click();
+    run_until(harness, "the scan", |h| {
+        shows(h, "1 game found") && !shows(h, "Scanning") && !shows(h, "Checked")
+    });
+    run_settled(harness);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(harness, "Alpha: up to date");
+}
+
+#[test]
+fn a_restore_records_this_pcs_saves_as_back_up_stages_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    restore_alpha(&mut harness);
+    let restored = recorded(&tmp, &env, "Alpha").unwrap().saves;
+    let restored = restored.expect("the restore records this PC's saves");
+
+    back_up_alpha_up_to_date(&mut harness);
+
+    assert_eq!(backups_of(&tmp, "Alpha").len(), 1);
+    let backed_up = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+    assert!(restored.same_content(&backed_up));
+}
+
+#[test]
+fn a_restore_lists_this_pcs_saves_without_a_file_a_pending_choice_excludes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    put(
+        &xdg_data(&tmp).join("Alpha").join("slot.dat"),
+        "not backed up",
+    );
+    let excluded = Change::Path {
+        node: "XdgData/Alpha/slot.dat".into(),
+        included: false,
+    };
+    let mut pending = Pending::default();
+    pending
+        .games_mut(&local_config(&repo_dir(&tmp)))
+        .insert("Alpha".into(), vec![excluded]);
+    pending.save(&env(&tmp).config_dir).unwrap();
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    restore_alpha(&mut harness);
+    let restored = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+
+    back_up_alpha_up_to_date(&mut harness);
+
+    let backed_up = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+    assert!(restored.same_content(&backed_up));
+}
+
+#[test]
+fn a_restored_game_the_scan_does_not_find_records_no_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    // Outside Deep's save folder, where no scan looks.
+    apply_folder_override(&mut harness, DEEP, &under(tmp.path(), "elsewhere"));
+    restore_deep(&mut harness);
+
+    let env = env(&tmp);
+    let deep = recorded(&tmp, &env, "Deep").unwrap();
+    assert_eq!(deep.snapshot, backups_of(&tmp, "Deep")[0]);
+    assert_eq!(deep.saves, None);
+    assert!(!shows(&harness, "were not listed"));
+}
+
+#[test]
+fn saves_that_cannot_be_staged_record_the_base_without_them_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    // A file where Back up's staging mirror belongs.
+    put(&env.cache_dir.join("stage"), "not a folder");
+    restore_alpha(&mut harness);
+
+    assert!(shows(&harness, "were not listed"));
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn pending_choices_that_cannot_be_read_record_the_base_without_saves_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    // A newer version's file: Back up would filter by the choices it shows instead.
+    let newer = r#"{"format": 999, "repositories": {}}"#;
+    put(&env.config_dir.join("pending-selection.json"), newer);
+    restore_alpha(&mut harness);
+
+    assert!(shows(&harness, "were not listed"));
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn settings_that_cannot_be_read_record_the_base_without_saves_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    // A snapshot file that is not one: the repository's snapshots cannot be listed again.
+    let snapshots = Path::new(&repo_dir(&tmp)).join("snapshots");
+    let garbage = snapshots.join("0".repeat(64));
+    put(&garbage, "garbage");
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "were not listed"));
+    fs::remove_file(garbage).unwrap();
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn a_batch_restore_records_this_pcs_saves_of_each_game_back_up_stores() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    // Back up stores nothing of a skipped game, so its base gets no list.
+    let skip = [Change::Skip(true)];
+    let settings = tmp.path().join("settings");
+    selection::save(&mut open_repo(&tmp), "Beta", &skip, &settings).unwrap();
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert!(alpha.saves.is_some());
+    let beta = recorded(&tmp, &env, "Beta").unwrap();
+    assert_eq!(beta.snapshot, backups_of(&tmp, "Beta")[0]);
+    assert_eq!(beta.saves, None);
+    assert!(!shows(&harness, "were not listed"));
+}
 
 /// What the sidebar's marker says, up to the host and the date.
-const NEWER_SAVES: &str = "Newer saves than this PC last synced";
+const NEWER_SAVES: &str = "The newest backup is not the one this PC last synced";
 
 #[test]
 fn the_sidebar_marks_a_game_whose_base_is_not_its_newest_backup() {

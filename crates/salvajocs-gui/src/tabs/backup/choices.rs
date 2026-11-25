@@ -19,11 +19,16 @@ use crate::state::{SharedStorage, State, lock_storage};
 use crate::theme::{self, icons};
 
 /// Each game's settings by title, or why they cannot be read.
-pub(super) type Games = BTreeMap<String, Result<GameSettings, String>>;
+pub(crate) type Games = BTreeMap<String, Result<GameSettings, String>>;
 
 /// Reads every game's settings from the repository; [`selection::load_all`] reindexes first.
 pub(super) fn load(storage: &SharedStorage) -> anyhow::Result<Games> {
-    let games = selection::load_all(&mut *lock_storage(storage)?)?;
+    read(&mut *lock_storage(storage)?)
+}
+
+/// [`load`] from a `storage` whose lock the caller holds.
+pub(crate) fn read(storage: &mut Storage) -> anyhow::Result<Games> {
+    let games = selection::load_all(storage)?;
     Ok(games
         .into_iter()
         .map(|(title, settings)| (title, settings.map_err(|err| chain(&err))))
