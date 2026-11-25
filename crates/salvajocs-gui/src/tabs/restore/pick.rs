@@ -1,8 +1,9 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, TextEdit, Ui, Vec2};
-use salvajocs_core::config::{ListSort, SortKey};
+use salvajocs_core::config::{AppConfig, ListSort, SortKey};
 use salvajocs_core::layout::{Context, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
@@ -11,6 +12,7 @@ use salvajocs_core::restore::{
 use salvajocs_core::scan::Environment;
 use salvajocs_core::stats::{self, BackupStats};
 use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::sync;
 
 use super::delete::Deletion;
 use super::dirs::own_dir;
@@ -19,8 +21,8 @@ use super::{RestoreTab, batch};
 use crate::job::Job;
 use crate::state::{State, lock_storage};
 use crate::tabs::space::Space;
-use crate::tabs::{format_time, sort};
-use crate::theme;
+use crate::tabs::{format_date, format_time, sort};
+use crate::theme::{self, icons};
 
 /// How a snapshot shows in the picker: time, host and the `pre-restore` label.
 pub(super) fn snapshot_label(snapshot: &SnapshotInfo) -> String {
@@ -29,6 +31,19 @@ pub(super) fn snapshot_label(snapshot: &SnapshotInfo) -> String {
         label += ", pre-restore";
     }
     label
+}
+
+/// The slugs of the `games` whose newest regular snapshot is not this PC's recorded base of them
+/// in the repository `scope`. A game without a record is not among them: a seed is no record.
+fn newer_than_base(games: &[GameBackups], bases: &sync::Bases, scope: &str) -> BTreeSet<String> {
+    (games.iter())
+        .filter(|game| {
+            let newest = game.default.and_then(|index| game.snapshots.get(index));
+            let base = bases.get(scope, &game.slug);
+            matches!((base, newest), (Some(base), Some(newest)) if base.snapshot != newest.id)
+        })
+        .map(|game| game.slug.clone())
+        .collect()
 }
 
 /// The build the user restores into, preselected from `restore::default_targets` (ADR-0005).
@@ -284,8 +299,14 @@ impl RestoreTab {
         };
         let storage = session.storage.clone();
         self.repository = Some(storage.clone());
+        let config_dir = state.env.config_dir.clone();
+        let scope = (state.config.as_ref()).map(AppConfig::secret_scope);
         self.listing = Some(Job::spawn(ctx, move || {
-            Ok(restore::list(&*lock_storage(&storage)?)?)
+            let games = restore::list(&*lock_storage(&storage)?)?;
+            let newer = scope.map_or_else(BTreeSet::new, |scope| {
+                newer_than_base(&games, &sync::load(&config_dir), &scope)
+            });
+            Ok((games, newer))
         }));
         true
     }
@@ -433,6 +454,17 @@ impl RestoreTab {
                     ui.horizontal(|ui| {
                         let indent = title.inner - ui.cursor().left();
                         ui.add_space(indent + ui.spacing().button_padding.x);
+                        if self.newer.contains(&game.slug)
+                            && let Some(newest) = game.default.and_then(|i| game.snapshots.get(i))
+                        {
+                            let hover = format!(
+                                "Newer saves than this PC last synced: from {}, {}",
+                                newest.host,
+                                format_date(newest.time)
+                            );
+                            let accent = theme::palette(ui).accent;
+                            theme::labeled_mark(ui, icons::ARROW_DOWN, accent, &hover);
+                        }
                         if line.compact_ui(ui).clicked() && !selected {
                             chosen = Some(game.clone());
                         }

@@ -466,6 +466,9 @@ impl RestoreTab {
     /// (ADR-0003, ADR-0020), then runs `restore::run` for each, behind its own safety backup
     /// staged under the cache dir. Then the downloads are removed.
     fn start_batch_run(&mut self, ctx: &egui::Context, state: &State) {
+        let Some(config) = &state.config else {
+            return;
+        };
         let Some(games) = self.batch.games.take() else {
             return;
         };
@@ -501,6 +504,7 @@ impl RestoreTab {
         let wineserver_running = state.env.wineserver_running;
         let waker = ctx.clone();
         let cache_dir = state.env.cache_dir.clone();
+        let (config_dir, scope) = (state.env.config_dir.clone(), config.secret_scope());
         self.batch.running = Some(Job::spawn(ctx, move || {
             remove_stale_restore_dirs(&cache_dir);
             remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
@@ -520,19 +524,23 @@ impl RestoreTab {
                     let title = fetched.title.clone();
                     let fetch = fetch.context("the backup cannot be fetched");
                     let storage = fetch.and_then(|()| lock_storage(&fetched.storage));
-                    let report = storage.and_then(|mut storage| {
-                        Ok(restore::run(
+                    // The base is updated under the storage lock, as a Back up does.
+                    let restored = storage.and_then(|mut storage| {
+                        let report = restore::run(
                             &mut storage,
                             &title,
                             &plan,
                             &stage_root,
                             wineserver_running,
-                        )?)
+                        )?;
+                        let mut restored = Restored::new(title.clone(), &plan, report);
+                        restored.update_base(&config_dir, &scope, &fetched.listed.snapshot);
+                        Ok(restored)
                     });
                     done.fetch_add(1, Ordering::Relaxed);
                     waker.request_repaint();
-                    match report {
-                        Ok(report) => GameRestored::Restored(Restored::new(title, &plan, report)),
+                    match restored {
+                        Ok(restored) => GameRestored::Restored(restored),
                         Err(err) => GameRestored::Failed {
                             error: describe_run_error(&err),
                             title,

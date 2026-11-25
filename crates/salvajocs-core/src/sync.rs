@@ -24,7 +24,7 @@ const BASE_FILE: &str = "sync-base.json";
 /// The [`Bases`] format this version reads and writes.
 const BASE_FORMAT: u32 = 1;
 
-/// [`record`] could not update `sync-base.json`; the file is left as it was.
+/// [`record`] or [`forget`] could not update `sync-base.json`; the file is left as it was.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
@@ -167,10 +167,35 @@ pub fn record(
     let mut bases = read_to_record(&path)?;
     (bases.repositories.entry(scope.to_owned()).or_default())
         .extend(updates.into_iter().filter(|(_, base)| !base.seed));
-    let json = serde_json::to_vec(&bases).expect("string-keyed maps always serialize");
+    write_bases(dir, &path, &bases)
+}
+
+/// Removes the base of the game `slug` in the repository `scope`, keeping every other record, so
+/// the game falls back to its seed. Reads and writes as [`record`] does; a missing file, scope
+/// or game is nothing to do and writes nothing.
+///
+/// # Errors
+/// [`SyncError`] when the file exists but cannot be read, is of a newer format, or cannot be
+/// written; nothing is written then.
+pub fn forget(dir: &Path, scope: &str, slug: &str) -> Result<(), SyncError> {
+    let path = dir.join(BASE_FILE);
+    let mut bases = read_to_record(&path)?;
+    let removed = (bases.repositories.get_mut(scope)).and_then(|games| games.remove(slug));
+    if removed.is_none() {
+        return Ok(());
+    }
+    write_bases(dir, &path, &bases)
+}
+
+/// Writes `bases` to `path` in `dir` through a temp file and a rename, creating `dir`.
+fn write_bases(dir: &Path, path: &Path, bases: &Bases) -> Result<(), SyncError> {
+    let json = serde_json::to_vec(bases).expect("string-keyed maps always serialize");
     fs::create_dir_all(dir)
-        .and_then(|()| write_atomic(&path, &json))
-        .map_err(|source| SyncError::Write { path, source })
+        .and_then(|()| write_atomic(path, &json))
+        .map_err(|source| SyncError::Write {
+            path: path.to_owned(),
+            source,
+        })
 }
 
 /// The bases at `path` for [`record`] to update: empty when the file is missing or does not

@@ -1,6 +1,12 @@
+use std::path::Path;
+
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Ui};
-use salvajocs_core::restore::{self, RestorePlan, RestoreReport, RunError, SafetyBackup};
+use salvajocs_core::restore::{
+    self, PRE_RESTORE_TAG, RestorePlan, RestoreReport, RunError, SafetyBackup,
+};
+use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::sync::{self, Base};
 
 use super::RestoreTab;
 use super::batch::remove_stale_restore_dirs;
@@ -14,7 +20,8 @@ use crate::theme::{self, icons};
 pub(super) struct Restored {
     pub(super) title: String,
     pub(super) safety_backup: String,
-    /// One line per write and for the registry, with whether it failed.
+    /// One line per write and for the registry, with whether it failed, and one when the base
+    /// could not be updated.
     pub(super) lines: Vec<(String, bool)>,
 }
 
@@ -54,7 +61,29 @@ impl Restored {
         }
     }
 
-    /// Draws the safety backup line and a line per write and for the registry.
+    /// Updates this PC's base of the game of `snapshot`, which this restore wrote, in the
+    /// repository `scope` (ADR-0035) when no write failed: `snapshot` becomes the base, except a
+    /// pre-restore safety backup, which clears it, so the game falls back to its seed and the
+    /// next Back up asks. A failed update adds a line and leaves the restore as it is. Call it
+    /// while holding the repository's storage lock.
+    pub(super) fn update_base(&mut self, config_dir: &Path, scope: &str, snapshot: &SnapshotInfo) {
+        let slug = (snapshot.tags.iter()).find_map(|tag| tag.strip_prefix("game:"));
+        let Some(slug) = slug.filter(|_| self.lines.iter().all(|(_, failed)| !failed)) else {
+            return;
+        };
+        let result = if snapshot.tags.iter().any(|tag| tag == PRE_RESTORE_TAG) {
+            sync::forget(config_dir, scope, slug)
+        } else {
+            let base = Base::new(snapshot.id.clone(), None);
+            sync::record(config_dir, scope, [(slug.to_owned(), base)])
+        };
+        if let Err(err) = result {
+            let line = format!("This PC's sync state was not updated: {:#}", anyhow!(err));
+            self.lines.push((line, true));
+        }
+    }
+
+    /// Draws the safety backup line and each of `lines`.
     pub(super) fn lines_ui(&self, ui: &mut Ui) {
         ui.label(&self.safety_backup);
         let (accent, error_color) = (theme::palette(ui).accent, ui.visuals().error_fg_color);
@@ -73,7 +102,7 @@ impl RestoreTab {
     /// plan behind a safety backup staged in its own dir under the cache dir. A failed download
     /// writes nothing, not even the safety backup.
     pub(super) fn start_restore(&mut self, ctx: &egui::Context, state: &State) {
-        let Some(preview) = &self.preview else {
+        let (Some(preview), Some(config)) = (&self.preview, &state.config) else {
             return;
         };
         self.error = None;
@@ -88,6 +117,7 @@ impl RestoreTab {
         let fetched = preview.fetched.clone();
         let stage_root = own_dir(&state.env.cache_dir, "restore-stage");
         let cache_dir = state.env.cache_dir.clone();
+        let (config_dir, scope) = (state.env.config_dir.clone(), config.secret_scope());
         let wineserver_running = state.env.wineserver_running;
         self.restoring = Some(Job::spawn(ctx, move || {
             // Each session makes dirs of its own, and an earlier one may have left its.
@@ -101,7 +131,9 @@ impl RestoreTab {
             let title = fetched.title.clone();
             let report =
                 restore::run(&mut storage, &title, &plan, &stage_root, wineserver_running)?;
-            Ok(Restored::new(title, &plan, report))
+            let mut restored = Restored::new(title, &plan, report);
+            restored.update_base(&config_dir, &scope, &fetched.listed.snapshot);
+            Ok(restored)
         }));
     }
 

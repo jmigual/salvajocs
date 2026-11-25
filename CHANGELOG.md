@@ -19,6 +19,8 @@ All notable changes to salvajocs. The format follows
   Before, only single files could be overridden.
 - Right-click a value in the file Details dialog (a path, a hash, a size) and choose **Copy** to
   copy all of it.
+- A restore remembers which backup this PC last synced a game with, and the Restore tab marks a
+  game whose newest backup is a different one, with the PC and date of the newer saves.
 
 ### Changed
 

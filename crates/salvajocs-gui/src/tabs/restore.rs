@@ -49,8 +49,12 @@ const PLAN_WIDTH: f32 = 600.0;
 pub struct RestoreTab {
     /// The repository the list came from.
     repository: Option<SharedStorage>,
-    listing: Option<Job<Vec<GameBackups>>>,
+    /// The listed games and their `newer` slugs.
+    listing: Option<Job<(Vec<GameBackups>, BTreeSet<String>)>>,
     games: Vec<GameBackups>,
+    /// The slugs of `games` whose newest regular snapshot is not this PC's recorded base of them
+    /// (ADR-0035).
+    newer: BTreeSet<String>,
     /// The backup figures of each of `games`, in its order, built with `order` (ADR-0027).
     figures: Vec<BackupStats>,
     /// Works out the space of each listed game's backups.
@@ -170,6 +174,7 @@ impl RestoreTab {
         self.repository = None;
         self.listing = None;
         self.games.clear();
+        self.newer.clear();
         self.space = None;
         self.list_changes += 1;
         self.selected = None;
@@ -304,7 +309,8 @@ impl RestoreTab {
         {
             self.listing = None;
             match result {
-                Ok(games) => {
+                Ok((games, newer)) => {
+                    self.newer = newer;
                     // A delete may have taken a ticked game's last regular backup, or the game.
                     self.checked.retain(|slug| {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())

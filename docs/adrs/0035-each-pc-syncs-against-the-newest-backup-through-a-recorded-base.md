@@ -79,6 +79,9 @@ parallel branch.
   planned write (ticks allowed) → `{ S, none }`; a restore with a failed write or a failed
   safety backup → unchanged; the preview never writes. A ticked restore sets the base to S on
   purpose: the unticked files are this PC's choice, so the next Back up stores the mix.
+  A restore of a `pre-restore` safety backup clears the game's record (`sync::forget`) instead:
+  with no list it would read behind, and the saves the user went back to could never be backed up;
+  the game falls back to its seed, so the next Back up asks.
 - **Seed** (upgrade, or a lost file): with no record, the base is this PC's own newest regular
   snapshot of the game, by hostname, without a list. It is used, never written, so the reported
   case reads "behind" on the first preview after the upgrade. A seed never makes a game ahead:
@@ -98,6 +101,8 @@ parallel branch.
   - `pre-restore` safety backups keep their own retention list, same rules, newest kept
     (ADR-0034). A restore always stores this PC's files that way first (ADR-0005).
   - The base is stored with its hash list in `sync-base.json`.
+  - Restoring a `pre-restore` safety backup clears the game's base, so the next Back up asks
+    (2026-11-25, approved by the user, who asked that the guide and the UI explain it very well).
 - **Restore tab:** the default snapshot stays the newest regular one; a game whose recorded base
   (no seed) is not its newest gets a marker.
 

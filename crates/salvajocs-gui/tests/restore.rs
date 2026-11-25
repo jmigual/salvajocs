@@ -30,6 +30,7 @@ use salvajocs_core::manifest::{
 use salvajocs_core::scan::{Environment, FoundFile, GameScan, RegistrySource};
 use salvajocs_core::selection::{self, Change};
 use salvajocs_core::storage::{RepoLocation, SnapshotInfo, Storage};
+use salvajocs_core::sync::{self, Base as SyncBase};
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -3899,4 +3900,204 @@ fn a_folder_override_keeps_the_case_the_target_has_on_disk() {
         &harness,
         &format!("{} {overridden}", moved.display())
     ));
+}
+
+/// The id this PC's recorded base of the game `title` holds in the tests' repository, if any.
+fn recorded_base(tmp: &TempDir, env: &Env, title: &str) -> Option<String> {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let bases = sync::load(&env.config_dir);
+    let base = bases.get(&scope, &salvajocs_core::slug::slug(title))?;
+    Some(base.snapshot.clone())
+}
+
+/// Records `snapshot` as this PC's base of the game `title`, as an earlier Back up did.
+fn record_base(tmp: &TempDir, env: &Env, title: &str, snapshot: &str) {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let update = (
+        salvajocs_core::slug::slug(title),
+        SyncBase::new(snapshot.to_owned(), None),
+    );
+    sync::record(&env.config_dir, &scope, [update]).unwrap();
+}
+
+#[test]
+fn a_restore_records_the_restored_snapshot_as_the_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    let alpha = backups_of(&tmp, "Alpha");
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(alpha[0].clone()));
+    assert!(!shows(&harness, "sync state was not updated"));
+}
+
+#[test]
+fn a_restore_with_a_failed_write_records_no_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    let dir = under(tmp.path(), "elsewhere/slot2.dat");
+    fs::create_dir_all(&dir).unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    apply_override(&mut harness, ALPHA_SLOT2, &dir);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows_path(&harness, "failed"));
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+}
+
+#[test]
+fn a_base_that_cannot_be_updated_does_not_fail_the_restore() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    // A directory where the file belongs cannot be read as one.
+    fs::create_dir_all(env.config_dir.join("sync-base.json")).unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "sync state was not updated"));
+    assert!(saves.join("save.dat").exists());
+}
+
+#[test]
+fn a_restore_with_a_file_unticked_still_records_the_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    let alpha = backups_of(&tmp, "Alpha");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    click(&mut harness, "slot2.dat, new");
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(saves.join("save.dat").exists());
+    assert!(
+        !saves.join("slot2.dat").exists(),
+        "the unticked file is left out"
+    );
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(alpha[0].clone()));
+}
+
+#[test]
+fn a_batch_restore_records_the_base_of_each_game_it_restored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    for title in ["Alpha", "Beta"] {
+        let newest = backups_of(&tmp, title)[0].clone();
+        assert_eq!(recorded_base(&tmp, &env, title), Some(newest));
+    }
+}
+
+#[test]
+fn a_batch_game_whose_backup_cannot_be_fetched_records_no_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    let alpha = backups_of(&tmp, "Alpha");
+    open_repo(&tmp).forget(&[&alpha[0]]).unwrap();
+    run_batch(&mut harness, "Restore 2 games", "Restored 1 of 2 games");
+
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    let beta = backups_of(&tmp, "Beta");
+    assert_eq!(recorded_base(&tmp, &env, "Beta"), Some(beta[0].clone()));
+}
+
+/// What the sidebar's marker says, up to the host and the date.
+const NEWER_SAVES: &str = "Newer saves than this PC last synced";
+
+#[test]
+fn the_sidebar_marks_a_game_whose_base_is_not_its_newest_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let names = ["Alpha", "Beta", "Gamma"];
+    let (games, scans): (Vec<_>, Vec<_>) = (names.iter())
+        .map(|name| native(&tmp, name, &[&format!("{name}/save.dat")]))
+        .unzip();
+    let (mut harness, env) = open_tab(&tmp, games, &scans);
+    assert!(!shows(&harness, NEWER_SAVES), "no record, no marker");
+
+    // Alpha's base is an older backup, Beta's the newest, and Gamma has none.
+    record_base(&tmp, &env, "Alpha", &"0".repeat(64));
+    let beta = backups_of(&tmp, "Beta");
+    record_base(&tmp, &env, "Beta", &beta[0]);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the marker", |h| shows(h, NEWER_SAVES));
+    run_settled(&mut harness);
+    assert_eq!(
+        harness.query_all_by_label_contains(NEWER_SAVES).count(),
+        1,
+        "only Alpha is marked"
+    );
+    // The newest backup's host, and its date as the snapshot picker shows it.
+    select(&mut harness, "Alpha");
+    let host = snapshots(&tmp, "salvajocs")[0].host.clone();
+    let picked = value(&harness, "Snapshot");
+    let tooltip = format!("{NEWER_SAVES}: from {host}, {}", &picked[..10]);
+    assert!(shows(&harness, &tooltip), "{tooltip}");
+
+    let alpha = backups_of(&tmp, "Alpha");
+    record_base(&tmp, &env, "Alpha", &alpha[0]);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the list", |h| {
+        !disabled(h, "Load backups") && !shows(h, NEWER_SAVES)
+    });
+}
+
+#[test]
+fn restoring_a_safety_backup_clears_the_base_instead_of_recording_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), "old").unwrap();
+    let regular = backups_of(&tmp, "Alpha")[0].clone();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(regular));
+    // Another game's base stays.
+    let other = "1".repeat(64);
+    record_base(&tmp, &env, "Other", &other);
+
+    // The safety backup holds the files the restore replaced: going back to them is deliberate.
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups") && shows(h, "Restore into:")
+    });
+    click(&mut harness, "Snapshot");
+    harness.get_by_label_contains(", pre-restore").click();
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    let save = saves.join("save.dat");
+    run_until(&mut harness, "the second restore", |h| {
+        shows(h, "Restored Alpha") && fs::read_to_string(&save).is_ok_and(|text| text == "old")
+    });
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups")
+    });
+
+    assert_eq!(fs::read_to_string(saves.join("save.dat")).unwrap(), "old");
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    assert_eq!(recorded_base(&tmp, &env, "Other"), Some(other));
+    assert!(!shows(&harness, NEWER_SAVES));
 }
