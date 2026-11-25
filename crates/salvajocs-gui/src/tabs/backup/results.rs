@@ -84,7 +84,8 @@ impl Outcome {
             }
             Self::Behind { host, date } => format!(
                 "{title}: not backed up: {host} has newer saves, from {date}, and this PC has not \
-                 changed them since it last synced. Restore them on the Restore tab."
+                 changed them since it last synced. To use them, restore them on the Restore \
+                 tab. To keep this PC's saves instead, use Back up anyway under the game."
             ),
             Self::ChangedOnBoth(host) => format!(
                 "{title}: not backed up: both this PC and {host} changed the saves since this PC \

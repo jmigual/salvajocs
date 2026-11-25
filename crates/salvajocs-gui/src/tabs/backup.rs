@@ -25,6 +25,7 @@ use crate::tabs::mapping::Dialog;
 use crate::tabs::sort::{self, Line};
 use crate::tabs::space::{Polled, Space};
 use crate::theme::{self, icons};
+use crate::widgets::named_button;
 use choices::{AfterBackup, Choices};
 use preview::{
     FileAction, Listed, Preview, badges, change_count, files_ui, header_of, preview_ui, to_choose,
@@ -169,6 +170,10 @@ pub struct BackupTab {
     /// The slugs of the games the user chose to back up although their saves differ from the
     /// newest backup's; for the next backup only, never saved (ADR-0035).
     back_up_anyway: BTreeSet<String>,
+    /// The slug of the one game the requested backup is for, from its **Back up anyway**; that
+    /// game is backed up whatever its state, with no question, and no other. For the next backup
+    /// only, never saved (ADR-0035).
+    only: Option<String>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
     /// A backup saved this PC's rules, or the question about them was answered, since
@@ -630,6 +635,7 @@ impl BackupTab {
             });
         }
         self.choices.status_ui(ui, state);
+        let can_anyway = self.can_start(state, manifest_loading) && self.previewing.is_none();
         let Some(report) = &self.report else {
             return;
         };
@@ -638,6 +644,7 @@ impl BackupTab {
         // The game's index and what was clicked in its tree.
         let mut clicked: Option<(usize, FileAction)> = None;
         let mut choose = None;
+        let mut anyway = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
                 if self
@@ -742,6 +749,12 @@ impl BackupTab {
                                 }
                             });
                         }
+                        if header.offers_anyway() {
+                            let name = format!("Back up {} anyway", game.title);
+                            if named_button(ui, can_anyway, "Back up anyway", &name).clicked() {
+                                anyway = Some(index);
+                            }
+                        }
                         let tree = &mut listed.tree;
                         let mut action = None;
                         let change =
@@ -793,6 +806,10 @@ impl BackupTab {
         {
             let title = report.games[index].title.clone();
             self.mapping = Some((title, entries.to_vec(), Dialog::new(entries.to_vec())));
+        }
+        if let Some(index) = anyway {
+            let slug = self.slugs[index].clone();
+            self.request_anyway(ui.ctx(), state, slug);
         }
     }
 }

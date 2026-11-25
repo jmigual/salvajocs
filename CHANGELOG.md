@@ -8,6 +8,8 @@ All notable changes to salvajocs. The format follows
 
 ### Added
 
+- A game that is behind, changed on both PCs or of unknown base has a **Back up anyway** button
+  on the Backup tab. It backs up only that game, now, so this PC's saves become the newest.
 - The Restore plan has a **Manifest paths** button that lists the game's save path templates and
   registry keys from the manifest or your custom game, with where each applies; right-click one to
   copy it.

@@ -1312,8 +1312,7 @@ fn press_back_up_in_dialog(harness: &mut Harness<'static, App>) {
 
 /// How many backups of G the repository of `tmp` holds.
 fn backups_of_g(tmp: &TempDir) -> usize {
-    let tag = format!("game:{}", slug("G"));
-    open_repo(tmp).snapshots(&tag).unwrap().len()
+    backups_of(tmp, "G")
 }
 
 /// A game `G` whose one save holds `content`, in a prefix under `tmp`.
@@ -1352,12 +1351,26 @@ fn back_up_there_anyway(there: &mut Harness<'static, App>) {
 /// This PC's app backed up G holding "one" and so has a base; then another PC's app backed up G
 /// holding "two!", the newest backup now. Here G still holds "one".
 fn behind_another_pc() -> Pcs {
+    behind_with_games(false)
+}
+
+/// [`behind_another_pc`]; with `with_h`, this PC also has a game H, backed up once and not on
+/// the other PC.
+fn behind_with_games(with_h: bool) -> Pcs {
     let tmp = tempfile::tempdir().unwrap();
     init_repo(&repo_dir(&tmp));
-    let (prefix, games) = game_g(&tmp, "one");
+    let (prefix, mut games) = game_g(&tmp, "one");
+    if with_h {
+        write_save(&prefix, "H", "h1");
+        games.push(custom_game("H", false, &prefix));
+    }
     let (mut here, env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), games, true);
-    scan(&mut here, "1 game found");
-    here.get_by_label("Back up 1 game").click();
+    let (found, button) = match with_h {
+        true => ("2 games found", "Back up 2 games"),
+        false => ("1 game found", "Back up 1 game"),
+    };
+    scan(&mut here, found);
+    here.get_by_label(button).click();
     run_until_backed_up(&mut here, "G: backed up");
 
     let other = tempfile::tempdir().unwrap();
@@ -1532,6 +1545,176 @@ fn the_choice_to_back_up_is_not_remembered_for_the_next_back_up() {
     press_back_up_in_dialog(&mut pcs.here);
     run_until_backed_up(&mut pcs.here, "G: not backed up: both this PC and ");
     assert_eq!(backups_of_g(&pcs.tmp), 4);
+}
+
+/// How many backups of the game `title` the repository of `tmp` holds.
+fn backups_of(tmp: &TempDir, title: &str) -> usize {
+    let tag = format!("game:{}", slug(title));
+    open_repo(tmp).snapshots(&tag).unwrap().len()
+}
+
+#[test]
+fn back_up_anyway_makes_a_behind_game_the_newest_and_leaves_the_others() {
+    let mut pcs = behind_with_games(true);
+    // H changed here, so a plain Back up would store it too.
+    write_save(&pcs.prefix, "H", "h2!");
+    scan(&mut pcs.here, "2 games found");
+    run_until_compared(&mut pcs.here);
+    assert!(shows(&pcs.here, " has newer saves, from "));
+
+    pcs.here.get_by_label("Back up G anyway").click();
+    run_until_backed_up(
+        &mut pcs.here,
+        "G: backed up; this PC's saves are now the newest",
+    );
+
+    assert!(!shows(&pcs.here, DIFFERS), "no question is asked");
+    assert!(!shows(&pcs.here, "H: "), "H is not part of the backup");
+    assert_eq!(backups_of_g(&pcs.tmp), 3);
+    assert_eq!(backups_of(&pcs.tmp, "H"), 1);
+    run_until_compared(&mut pcs.here);
+    assert!(shows(&pcs.here, "Up to date with the backup from "));
+    assert!(pcs.here.query_by_label("Back up G anyway").is_none());
+}
+
+#[test]
+fn back_up_anyway_backs_up_a_game_changed_on_both_pcs_without_asking() {
+    let mut pcs = changed_on_both();
+    pcs.here.get_by_label("Back up G anyway").click();
+    run_until_backed_up(
+        &mut pcs.here,
+        "G: backed up; this PC's saves are now the newest",
+    );
+    assert!(!shows(&pcs.here, DIFFERS));
+    assert_eq!(backups_of_g(&pcs.tmp), 3);
+}
+
+#[test]
+fn back_up_anyway_is_not_offered_for_a_game_a_back_up_stores() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (prefix, games) = game_g(&scratch, "one");
+    let (mut harness, _env, tmp) = open_tab(Vec::new(), games);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    // No backup yet.
+    assert!(harness.query_by_label("Back up G anyway").is_none());
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: backed up");
+    run_until_compared(&mut harness);
+    // Up to date.
+    assert!(shows(&harness, "Up to date with the backup from "));
+    assert!(harness.query_by_label("Back up G anyway").is_none());
+
+    // Ahead: only this PC changed G since it last synced.
+    write_save(&prefix, "G", "ahead");
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    assert!(shows(&harness, "1 changed since the backup from "));
+    assert!(harness.query_by_label("Back up G anyway").is_none());
+    assert_eq!(backups_of_g(&tmp), 1);
+}
+
+#[test]
+fn back_up_anyway_is_offered_for_a_game_of_unknown_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    let game = like_factorio(&prefix);
+    let (mut harness, _env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), vec![game], true);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    harness.get_by_label("Back up G anyway").click();
+    run_until_backed_up(
+        &mut harness,
+        "G: backed up; this PC's saves are now the newest",
+    );
+    assert!(!shows(&harness, DIFFERS));
+    assert_eq!(backups_of_g(&tmp), 2);
+}
+
+#[test]
+fn back_up_anyway_waits_for_the_comparison_and_for_a_running_backup() {
+    let mut pcs = behind_another_pc();
+    pcs.here.get_by_label("Scan for games").click();
+    run_until(&mut pcs.here, "the comparison to start", |h| {
+        shows(h, "Comparing with the last backups")
+    });
+    // The comparison has not told yet whether the game is behind.
+    assert!(
+        (pcs.here.query_by_label("Back up G anyway"))
+            .is_none_or(|b| b.accesskit_node().is_disabled())
+    );
+    run_until_compared(&mut pcs.here);
+    let button = pcs.here.get_by_label("Back up G anyway");
+    assert!(!button.accesskit_node().is_disabled());
+
+    button.click();
+    pcs.here.step();
+    pcs.here.step();
+    assert!(
+        pcs.here
+            .get_by_label("Back up G anyway")
+            .accesskit_node()
+            .is_disabled(),
+        "a backup is running"
+    );
+    run_until_backed_up(
+        &mut pcs.here,
+        "G: backed up; this PC's saves are now the newest",
+    );
+}
+
+#[test]
+fn a_cancelled_back_up_anyway_does_not_narrow_the_next_back_up() {
+    let mut pcs = behind_with_games(true);
+    // A custom game added here and, meanwhile, by another PC: a conflict the check finds.
+    pcs.here.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut pcs.here);
+    pcs.here.get_by_label("Add game").click();
+    run_settled(&mut pcs.here);
+    replace_text(&mut pcs.here, "Name", "C");
+    pcs.here.get_by_label("Save game").click();
+    run_settled(&mut pcs.here);
+    let config_dir = pcs.env.config_dir.clone();
+    run_until(&mut pcs.here, "the unsent game to be saved", move |_| {
+        AppConfig::load(&config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.custom_games_unsent.len() == 1)
+    });
+    let mut theirs = CustomGame::new("C".into(), Default::default(), Integration::Extend);
+    theirs.skips = vec!["<xdgData>/Theirs".into()];
+    let stage = pcs.tmp.path().join("elsewhere");
+    custom_games::save(&mut open_repo(&pcs.tmp), "C", None, Some(&theirs), &stage).unwrap();
+    write_save(&pcs.prefix, "H", "h2!");
+    pcs.here.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut pcs.here);
+    scan(&mut pcs.here, "2 games found");
+    run_until_compared(&mut pcs.here);
+
+    pcs.here.get_by_label("Back up G anyway").click();
+    run_until(&mut pcs.here, "the conflict question", |h| {
+        shows(h, "Changed on another PC")
+    });
+    assert!(!shows(&pcs.here, DIFFERS));
+    pcs.here.get_by_label("Cancel").click();
+    run_settled(&mut pcs.here);
+
+    pcs.here.get_by_label("Back up 2 games").click();
+    run_until(&mut pcs.here, "the conflict question", |h| {
+        shows(h, "Changed on another PC")
+    });
+    pcs.here.get_by_label("Keep this PC's").click();
+    run_settled(&mut pcs.here);
+    press_back_up_in_dialog(&mut pcs.here);
+    run_until_backed_up(&mut pcs.here, "G: not backed up");
+
+    assert_eq!(backups_of(&pcs.tmp, "H"), 2);
+    assert_eq!(backups_of_g(&pcs.tmp), 2, "G is behind and stays unsent");
 }
 
 /// Selects G in the Restore tab and restores its default snapshot, the newest regular one, and

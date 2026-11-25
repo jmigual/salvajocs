@@ -1083,6 +1083,34 @@ fn behind_makes_no_snapshot_even_once_the_base_is_forgotten() {
 }
 
 #[test]
+fn behind_is_backed_up_as_the_newest_when_the_user_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    let newer = newer_from_there(&mut there, tmp.path(), &theirs);
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    assert_eq!(outcome, Stored::Behind { newest: newer });
+
+    let stage_root = tmp.path().join("here");
+    let slug = slug("Foo");
+    let outcomes = backup_by_state(&mut here, &mine, &stage_root, &mapper(), &[&slug]);
+    let Ok(Stored::New(snapshot)) = &outcomes[0].result else {
+        panic!("{outcomes:?}");
+    };
+    let staged = hash_list(&stage_root.join(&slug));
+    let base = sync::Base::new(snapshot.id.clone(), Some(staged));
+    assert_eq!(outcomes[0].base, Some(base));
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 3);
+
+    // The newest now, so the next backup is up to date rather than behind.
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    assert!(matches!(outcome, Stored::UpToDate { .. }), "{outcome:?}");
+}
+
+#[test]
 fn changed_on_both_is_backed_up_only_when_the_user_says_so() {
     let tmp = tempfile::tempdir().unwrap();
     let mut here = init_repo(tmp.path());

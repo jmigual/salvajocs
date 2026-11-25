@@ -33,13 +33,14 @@ parallel branch.
   | No backup yet | no N | backs up; base := it |
   | Up to date | L = N | nothing; base := N |
   | Ahead | L ≠ N, N = B | backs up (the new newest); base := it |
-  | Behind | L = B, N ≠ B | nothing, never; base unchanged; the preview offers the restore |
+  | Behind | L = B, N ≠ B | nothing, unless Back up anyway; base unchanged; the preview offers the restore |
   | Changed on both | L ≠ N, L ≠ B, N ≠ B | asks |
   | Unknown base | no B, L ≠ N | asks, as changed on both |
 
-  Behind never backs up: storing L would make older saves the newest and put every other PC
-  behind them, a silent revert. Changed on both and unknown base ask, since a silent backup is
-  "last writer wins" and a silent skip leaves this PC's changes in no backup.
+  Behind never backs up by itself (only by Back up anyway, below): storing L would make older
+  saves the newest and put every other PC behind them, a silent revert. Changed on both and
+  unknown base ask, since a silent backup is "last writer wins" and a silent skip leaves this
+  PC's changes in no backup.
 - **Equalities.** L = N is rule (B) at Back up, and in the preview counts all zero with no
   `skip_blocker`; a newest without a verified list is never equal. N = B is the same snapshot
   id, else the base's hash list against N (`Baseline::same_content`). L = B is the base's hash
@@ -108,6 +109,10 @@ parallel branch.
   - ~~Restoring a `pre-restore` safety backup clears the game's base, so the next Back up asks.~~
     Replaced the same day, with the user's approval: it records the safety backup as the base
     like any restore, which reads behind, and Back up asks only after the saves change.
+  - **Back up anyway** (2026-11-25, approved by the user for behind, changed-on-both and
+    unknown-base games): a button under such a game on the Backup tab backs up only that game,
+    now, with no question: this PC's saves become the newest, and the other PC's stay in the
+    history. The consent is in memory for that backup only, as in the dialog.
 - **Restore tab:** the default snapshot stays the newest regular one; a game whose recorded base
   (no seed) is not its newest gets a marker.
 

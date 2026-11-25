@@ -489,7 +489,9 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             };
             format!(
                 "{host} has newer saves, from {date}{differs}. This PC has not changed them \
-                 since it last synced, so no backup will be made. Restore them on the Restore tab."
+                 since it last synced, so no backup will be made. To use them, restore them on \
+                 the Restore tab. To keep this PC's saves instead, use Back up anyway under the \
+                 game."
             )
         }
         Next::ChangedOnBoth {
@@ -604,6 +606,20 @@ pub(super) fn header_of(
         }
     } else {
         Header::Nothing
+    }
+}
+
+impl Header {
+    /// Whether Back up would not store the game (behind, changed on both PCs or of unknown
+    /// base), so **Back up anyway** is offered for it.
+    pub(super) fn offers_anyway(&self) -> bool {
+        matches!(
+            self,
+            Header::Mark {
+                tone: Tone::Warn,
+                ..
+            }
+        )
     }
 }
 

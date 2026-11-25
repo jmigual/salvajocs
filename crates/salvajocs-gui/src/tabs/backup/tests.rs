@@ -219,7 +219,8 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
     assert_eq!(
         behind.line("Game"),
         "Game: not backed up: there has newer saves, from 2026-11-25, and this PC has not changed \
-         them since it last synced. Restore them on the Restore tab."
+         them since it last synced. To use them, restore them on the Restore tab. To keep this \
+         PC's saves instead, use Back up anyway under the game."
     );
     let both = Outcome::ChangedOnBoth("there".into()).line("Game");
     assert!(
@@ -395,7 +396,8 @@ fn the_preview_says_what_the_next_backup_would_do() {
         }),
         format!(
             "there has newer saves, from {date}: 1 changed. This PC has not changed them since \
-             it last synced, so no backup will be made. Restore them on the Restore tab."
+             it last synced, so no backup will be made. To use them, restore them on the \
+             Restore tab. To keep this PC's saves instead, use Back up anyway under the game."
         )
     );
     let none = Next::Behind {
@@ -1490,7 +1492,8 @@ fn saves_this_pc_has_not_changed_since_a_newer_backup_elsewhere_are_behind() {
     assert!(shown.warns);
     let text = shown.text;
     assert!(text.contains(" has newer saves, from "), "{text}");
-    assert!(text.ends_with("no backup will be made. Restore them on the Restore tab."));
+    assert!(text.contains("no backup will be made. To use them, restore them on the Restore tab."));
+    assert!(text.ends_with("use Back up anyway under the game."));
     assert_eq!(shown.count, Some(1));
     assert!(shown.read_base, "a base without a list needs its backup");
 }

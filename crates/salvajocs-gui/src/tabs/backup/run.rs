@@ -11,6 +11,7 @@ use salvajocs_core::custom_games;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ScanReport};
 use salvajocs_core::selection::{self, Pending};
+use salvajocs_core::slug::slug;
 use salvajocs_core::sync::{self, SyncError};
 
 use super::choices::{self, AfterBackup, Games};
@@ -101,6 +102,16 @@ impl BackupTab {
         }
     }
 
+    /// Requests a backup of only the game `slug`, whatever its state, with no question about it:
+    /// **Back up anyway**. It goes the way of Back up otherwise: unsent custom games and rules
+    /// are checked and saved first, pending selection changes are saved, and the repository's
+    /// cleanup runs after.
+    pub(super) fn request_anyway(&mut self, ctx: &egui::Context, state: &State, slug: String) {
+        self.only = Some(slug);
+        self.backup_requested = true;
+        self.start_requested(ctx, state);
+    }
+
     /// Starts the requested backup once no pending file write runs, so the backup saves every
     /// change and is the file's only writer. With unsent custom games or rules, the repository
     /// is checked first for changes made on another PC to them, and the backup starts once the
@@ -141,10 +152,11 @@ impl BackupTab {
     }
 
     /// The chosen games that, by their preview, are changed on both this PC and another or have
-    /// an unknown base (ADR-0035). Reads nothing; a game with no preview yet is left to the
-    /// backup, which does not back it up either.
+    /// an unknown base (ADR-0035); none for a backup of `only` one game, which is not asked.
+    /// Reads nothing; a game with no preview yet is left to the backup, which does not back it
+    /// up either.
     pub(super) fn sync_asks(&self) -> Vec<SyncAsk> {
-        let Some(report) = &self.report else {
+        let Some(report) = self.report.as_ref().filter(|_| self.only.is_none()) else {
             return Vec::new();
         };
         let games = report.games.iter().zip(&self.slugs).zip(&self.previews);
@@ -194,12 +206,12 @@ impl BackupTab {
         self.checking = Some((Arc::downgrade(&session.storage), job));
     }
 
-    /// Backs up the chosen games in a job, with the staging mirrors under the cache dir
-    /// (ADR-0004). The job first saves this PC's unsent custom games and rules (ADR-0029), then
-    /// the pending selection changes, and reads every game's settings again, so another
-    /// machine's newer choices count. Then it scans again, so a save made since the last scan
-    /// is included, and filters each game by its settings. Last, it removes old backups by the
-    /// repository's retention policy. With no game chosen it only saves the unsent changes.
+    /// Backs up the chosen games, or only `only`, in a job, with the staging mirrors under the
+    /// cache dir (ADR-0004). The job first saves this PC's unsent custom games and rules
+    /// (ADR-0029), then the pending selection changes, and reads every game's settings again, so
+    /// another machine's newer choices count. Then it scans again, so a save made since the last
+    /// scan is included, and filters each game by its settings. Last, it removes old backups by
+    /// the repository's retention policy. With no game chosen it only saves the unsent changes.
     pub(super) fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
@@ -213,7 +225,7 @@ impl BackupTab {
             },
         };
         let progress = Arc::new(Mutex::new(Progress {
-            total: chosen,
+            total: if self.only.is_some() { 1 } else { chosen },
             done: Vec::new(),
             cleaning: false,
             sending: has_unsent(Some(config)),
@@ -233,7 +245,9 @@ impl BackupTab {
         );
         let config_dir = state.env.config_dir.clone();
         let environment = state.env.environment.clone();
-        let back_up_anyway = std::mem::take(&mut self.back_up_anyway);
+        let only = self.only.take();
+        let mut back_up_anyway = std::mem::take(&mut self.back_up_anyway);
+        back_up_anyway.extend(only.clone());
         self.running = Some(Job::spawn(ctx, move || {
             let source = Arc::downgrade(&storage);
             // First, so the scan and the cleanup go by this PC's custom games and rules.
@@ -275,7 +289,10 @@ impl BackupTab {
             };
             let environment = environment.unwrap_or_else(Environment::detect);
             let report = scan::scan(&manifest, &config, &environment, scanned);
-            let games = chosen_files(&report, filter);
+            let mut games = chosen_files(&report, filter);
+            if let Some(only) = &only {
+                games.retain(|game| slug(&game.title) == *only);
+            }
             lock(&progress).total = games.len();
             let mapper = Mapper::new(&manifest, &config, &environment);
             let scope = config.secret_scope();
@@ -330,9 +347,9 @@ impl BackupTab {
 /// Backs up `games` into `storage` by each one's state on this PC, from its newest backup read
 /// through `mapper` and its base in the `sync-base.json` of `config_dir` under the repository's
 /// `scope`, calling `progress` as each game is done, then records the new bases there. A game
-/// whose slug is in `back_up_anyway` is backed up even when changed on both PCs or of unknown
-/// base. Returns the ids of the new snapshots, and why the bases were not recorded when they
-/// were not.
+/// whose slug is in `back_up_anyway` is backed up even when behind, changed on both PCs or of
+/// unknown base. Returns the ids of the new snapshots, and why the bases were not recorded when
+/// they were not.
 pub(super) fn back_up(
     storage: &SharedStorage,
     games: &[GameScan],

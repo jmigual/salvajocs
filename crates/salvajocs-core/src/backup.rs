@@ -415,16 +415,16 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Stored {
-    /// A snapshot was written: the game had no backup yet, was ahead, or was changed on both
-    /// sides or of unknown base and in [`ByState::back_up_anyway`]; or it is a safety backup.
+    /// A snapshot was written: the game had no backup yet, was ahead, or was behind, changed on
+    /// both sides or of unknown base and in [`ByState::back_up_anyway`]; or it is a safety backup.
     New(SnapshotInfo),
     /// The saves equal the game's newest backup, so none was made.
     UpToDate {
         /// The newest backup, when another host made it.
         elsewhere: Option<SnapshotInfo>,
     },
-    /// Another PC made a newer backup and this PC's saves are still its base, so none was made:
-    /// it would make older saves the newest.
+    /// Another PC made a newer backup and this PC's saves are still its base, and the game is not
+    /// in [`ByState::back_up_anyway`], so none was made: it would make older saves the newest.
     Behind {
         /// The newest backup.
         newest: SnapshotInfo,
@@ -483,8 +483,8 @@ pub struct ByState<'a> {
     pub bases: &'a Bases,
     /// The repository's key in `bases` ([`crate::config::AppConfig::secret_scope`]).
     pub scope: &'a str,
-    /// The slugs of the games the user chose to back up even when changed on both sides or of
-    /// unknown base.
+    /// The slugs of the games the user chose to back up even when behind, changed on both sides
+    /// or of unknown base.
     pub back_up_anyway: &'a BTreeSet<String>,
 }
 
@@ -498,8 +498,8 @@ type Decided = (Hashes, Option<(Stored, Option<sync::Base>)>);
 /// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas).
 ///
 /// With `by_state`, the game's [`State`] on this PC decides ([`sync::state`] on the staged list):
-/// it is stored when it has no backup yet or is ahead, and when changed on both sides or of
-/// unknown base only if in [`ByState::back_up_anyway`]; otherwise its [`Stored`] says why not.
+/// it is stored when it has no backup yet or is ahead, and when behind, changed on both sides or
+/// of unknown base only if in [`ByState::back_up_anyway`]; otherwise its [`Stored`] says why not.
 /// Its newest snapshot that is not a pre-restore one, from any host, is read through the mapper;
 /// so is its base snapshot, only when [`sync::Base::to_read`] names it and the repository still
 /// has it. A base not recorded is seeded from this host's newest backup of the game. Without
@@ -598,7 +598,7 @@ fn decide(
     let back_up_anyway = by_state.back_up_anyway.contains(slug);
     match state {
         State::NoBackupYet | State::Ahead => None,
-        State::ChangedOnBoth | State::UnknownBase if back_up_anyway => None,
+        State::Behind | State::ChangedOnBoth | State::UnknownBase if back_up_anyway => None,
         State::UpToDate => {
             let base = sync::Base::new(newest.snapshot.id.clone(), Some(staged.clone()));
             let elsewhere = (newest.snapshot.host != host).then_some(newest.snapshot);
