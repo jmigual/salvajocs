@@ -3720,6 +3720,22 @@ fn a_folder_override_sends_every_file_below_it_into_the_new_folder() {
 }
 
 #[test]
+fn a_long_override_target_keeps_clear_and_restore_files_inside_the_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), &"a_long_folder_name".repeat(10));
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+
+    // The harness window is 1000 px wide, and a click lands on a widget's center.
+    let width = 1000.0;
+    for label in ["Clear the override of XdgData/Deep/a.sav", "Restore files"] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(rect.max.x <= width, "{label} reaches {}", rect.max.x);
+    }
+}
+
+#[test]
 fn clearing_a_folder_override_restores_to_the_planned_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let mut harness = deep_planned(&tmp, &[]);

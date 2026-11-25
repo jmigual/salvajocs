@@ -561,14 +561,22 @@ impl Preview {
                 return;
             }
             if write.target_file.is_none() {
-                ui.horizontal(|ui| {
-                    let text = format!("{target} (overridden for this restore)");
-                    theme::icon_label(ui, icons::ARROW_RIGHT, muted, text);
-                    let label = format!("Clear the override of {name}");
-                    if named_button(ui, !locked, "Clear", &label).clicked() {
-                        action = Some(RowAction::Clear(index));
-                    }
-                });
+                let label = format!("Clear the override of {name}");
+                let clear = theme::row(
+                    ui,
+                    |ui| {
+                        // Truncated, so a long path does not push Clear and the Restore button
+                        // past the window's edge.
+                        theme::mark(ui, icons::ARROW_RIGHT, 16.0, muted);
+                        let text = format!("{target} (overridden for this restore)");
+                        let text = egui::RichText::new(text).color(muted);
+                        ui.add(egui::Label::new(text).truncate());
+                    },
+                    |ui| named_button(ui, !locked, "Clear", &label).clicked(),
+                );
+                if clear {
+                    action = Some(RowAction::Clear(index));
+                }
             }
             if let Some(text) = editing.get_mut(&index) {
                 ui.horizontal(|ui| {
