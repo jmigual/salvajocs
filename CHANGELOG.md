@@ -6,6 +6,11 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The custom games list says "extends the manifest entry" and "overrides the manifest entry"
+  instead of "extends the manifest game" and "overrides the manifest game".
+
 ## [0.10.0] - 2026-11-22
 
 ### Added

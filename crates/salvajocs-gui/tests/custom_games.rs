@@ -619,7 +619,10 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     // What the mapping dialog leaves behind for a manifest game the user never added.
     let (mut harness, env, _tmp) = open_tab(vec![dialog_game("Manifest Game")], &["Manifest Game"]);
 
-    assert!(shows(&harness, "Manifest Game (extends the manifest game)"));
+    assert!(shows(
+        &harness,
+        "Manifest Game (extends the manifest entry)"
+    ));
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
     assert_eq!(
