@@ -472,6 +472,41 @@ pub(super) fn unknown(entries: &[MappingEntry]) -> usize {
         .count()
 }
 
+/// ` It differs from this PC's saves: this PC has 2 files it does not have, 1 changed, and it
+/// has 1 file this PC does not have.`, naming only the kinds there are, from the side of this PC
+/// (`new` is on this PC only, `removed` in the backup only); empty when none differs.
+fn differs_from_newest(counts: &Counts) -> String {
+    let files = |count: usize| format!("{count} file{}", if count == 1 { "" } else { "s" });
+    let parts = [
+        (
+            counts.new,
+            format!("this PC has {} it does not have", files(counts.new)),
+        ),
+        (counts.changed, format!("{} changed", counts.changed)),
+        (
+            counts.removed,
+            format!("it has {} this PC does not have", files(counts.removed)),
+        ),
+        (
+            counts.unknown,
+            format!("{} could not be compared", counts.unknown),
+        ),
+    ];
+    let mut parts: Vec<_> = (parts.into_iter())
+        .filter(|&(count, _)| count > 0)
+        .map(|(_, part)| part)
+        .collect();
+    let Some(last) = parts.pop() else {
+        return String::new();
+    };
+    let list = match parts.len() {
+        0 => last,
+        1 => format!("{} and {last}", parts[0]),
+        _ => format!("{}, and {last}", parts.join(", ")),
+    };
+    format!(" It differs from this PC's saves: {list}.")
+}
+
 /// `next` as the sentence its header shows on hover.
 pub(super) fn sentence(next: &Next<'_>) -> String {
     let since = |newest: &SnapshotInfo| (newest.host.clone(), format_time(newest.time));
@@ -505,25 +540,20 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             own,
         } => {
             let (host, date) = since(newest);
-            let differs = counted(&counts);
-            let differs = if differs.is_empty() {
-                String::new()
-            } else {
-                format!(": {differs}")
-            };
+            let differs = differs_from_newest(&counts);
             if own {
                 return format!(
-                    "This PC has a newer backup, from {date}{differs}. You restored an older one \
+                    "This PC has a newer backup, from {date}.{differs} You restored an older one \
                      and have not changed the saves since, so no backup will be made. To go back \
                      to the newer one, restore it on the Restore tab. To keep these saves, use \
                      Back up anyway under the game."
                 );
             }
             format!(
-                "{host} has newer saves, from {date}{differs}. This PC has not changed them \
-                 since it last synced, so no backup will be made. To use them, restore them on \
-                 the Restore tab. To keep this PC's saves instead, use Back up anyway under the \
-                 game."
+                "A newer backup exists, from {host}, {date}.{differs} This PC has not changed its \
+                 saves since it last synced, so no backup will be made. To use the newer backup, \
+                 restore it on the Restore tab. To keep this PC's saves instead, use Back up \
+                 anyway under the game."
             )
         }
         Next::ChangedOnBoth {

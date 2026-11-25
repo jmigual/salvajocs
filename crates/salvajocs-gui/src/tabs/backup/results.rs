@@ -97,9 +97,10 @@ impl Outcome {
                  the Restore tab or use Back up anyway under the game."
             ),
             Self::Behind { host, date, .. } => format!(
-                "{title}: not backed up: {host} has newer saves, from {date}, and this PC has not \
-                 changed them since it last synced. To use them, restore them on the Restore \
-                 tab. To keep this PC's saves instead, use Back up anyway under the game."
+                "{title}: not backed up: a newer backup exists, from {host}, {date}, and this PC has \
+                 not changed its saves since it last synced. To use the newer backup, restore it \
+                 on the Restore tab. To keep this PC's saves instead, use Back up anyway under \
+                 the game."
             ),
             Self::ChangedOnBoth {
                 date, own: true, ..

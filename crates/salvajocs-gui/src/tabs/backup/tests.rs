@@ -229,9 +229,9 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
     };
     assert_eq!(
         behind.line("Game"),
-        "Game: not backed up: there has newer saves, from 2026-11-25, and this PC has not changed \
-         them since it last synced. To use them, restore them on the Restore tab. To keep this \
-         PC's saves instead, use Back up anyway under the game."
+        "Game: not backed up: a newer backup exists, from there, 2026-11-25, and this PC has not \
+         changed its saves since it last synced. To use the newer backup, restore it on the \
+         Restore tab. To keep this PC's saves instead, use Back up anyway under the game."
     );
     let both = Outcome::ChangedOnBoth {
         host: "there".into(),
@@ -285,10 +285,10 @@ fn the_newest_backup_of_this_pc_is_not_named_like_another_pc() {
     assert_eq!(
         sentence(&behind),
         format!(
-            "This PC has a newer backup, from {date}: 1 changed. You restored an older one and \
-             have not changed the saves since, so no backup will be made. To go back to the \
-             newer one, restore it on the Restore tab. To keep these saves, use Back up anyway \
-             under the game."
+            "This PC has a newer backup, from {date}. It differs from this PC's saves: 1 \
+             changed. You restored an older one and have not changed the saves since, so no \
+             backup will be made. To go back to the newer one, restore it on the Restore tab. \
+             To keep these saves, use Back up anyway under the game."
         )
     );
 
@@ -345,7 +345,7 @@ fn the_result_of_this_pcs_own_newest_backup_says_this_pc() {
     assert!(
         outcome_of(there)
             .line("Game")
-            .contains("there has newer saves")
+            .contains("a newer backup exists, from there")
     );
 }
 
@@ -499,9 +499,10 @@ fn the_preview_says_what_the_next_backup_would_do() {
             own: false
         }),
         format!(
-            "there has newer saves, from {date}: 1 changed. This PC has not changed them since \
-             it last synced, so no backup will be made. To use them, restore them on the \
-             Restore tab. To keep this PC's saves instead, use Back up anyway under the game."
+            "A newer backup exists, from there, {date}. It differs from this PC's saves: 1 \
+             changed. This PC has not changed its saves since it last synced, so no backup will \
+             be made. To use the newer backup, restore it on the Restore tab. To keep this PC's \
+             saves instead, use Back up anyway under the game."
         )
     );
     let none = Next::Behind {
@@ -509,7 +510,9 @@ fn the_preview_says_what_the_next_backup_would_do() {
         counts: changes::Counts::default(),
         own: false,
     };
-    assert!(sentence(&none).starts_with(&format!("there has newer saves, from {date}. This PC")));
+    assert!(sentence(&none).starts_with(&format!(
+        "A newer backup exists, from there, {date}. This PC has not changed"
+    )));
     assert_eq!(text(&Ok(None)).unwrap(), "No backup yet");
     assert_eq!(
         text(&Err("offline".into())).unwrap(),
@@ -521,6 +524,48 @@ fn the_preview_says_what_the_next_backup_would_do() {
     assert_eq!(preview_text(&game, &Ok(None), &skipped), None);
     let preview = compared(FileState::Changed);
     assert_eq!(preview_text(&game, &preview, &skipped), None);
+}
+
+/// The hover counts are from this PC's side: `new` is on this PC only, `removed` in the backup
+/// only, with each kind named only when there is one, singular or plural.
+#[test]
+fn behind_describes_the_counts_from_this_pcs_side() {
+    let newest = snapshot_from("there");
+    let differs = |new, changed, removed, unknown, own| {
+        let mut counts = changes::Counts::default();
+        (counts.new, counts.changed) = (new, changed);
+        (counts.removed, counts.unknown) = (removed, unknown);
+        sentence(&Next::Behind {
+            newest: &newest,
+            counts,
+            own,
+        })
+    };
+    let date = "1970-01-01 00:00 UTC";
+    let head =
+        format!("A newer backup exists, from there, {date}. It differs from this PC's saves: ");
+    assert!(differs(1, 0, 0, 0, false).starts_with(&format!(
+        "{head}this PC has 1 file it does not have. This PC has not changed"
+    )));
+    assert!(differs(0, 0, 2, 0, false).starts_with(&format!(
+        "{head}it has 2 files this PC does not have. This PC has not changed"
+    )));
+    assert!(differs(20, 2, 1, 0, false).starts_with(&format!(
+        "{head}this PC has 20 files it does not have, 2 changed, and it has 1 file this PC does \
+         not have. This PC has not changed"
+    )));
+    assert!(differs(1, 0, 1, 0, false).starts_with(&format!(
+        "{head}this PC has 1 file it does not have and it has 1 file this PC does not have. \
+         This PC has not changed"
+    )));
+    assert!(differs(0, 0, 0, 3, false).starts_with(&format!(
+        "{head}3 could not be compared. This PC has not changed"
+    )));
+    // The same sentence, after this PC's own newer backup.
+    assert!(differs(0, 1, 0, 0, true).starts_with(&format!(
+        "This PC has a newer backup, from {date}. It differs from this PC's saves: 1 changed. \
+         You restored"
+    )));
 }
 
 /// After an undo the base is the safety backup, made after the newest backup: its time is not
