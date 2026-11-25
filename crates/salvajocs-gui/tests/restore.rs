@@ -14,7 +14,8 @@ use common::{
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
 use eframe::egui::{
-    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2,
+    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, OutputCommand, Pos2, Rect, TouchPhase,
+    Vec2,
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
@@ -1117,6 +1118,54 @@ fn restore_needs_mapping_waits_behind_choose_folders() {
 
     click(&mut harness, "Choose folders…");
     assert!(shows(&harness, "Where should the saves of Mix go?"));
+}
+
+#[test]
+fn manifest_paths_lists_the_templates_and_copies_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _saves) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(!shows(&harness, "Save paths of Alpha"));
+
+    click(&mut harness, "Manifest paths");
+    assert!(shows(&harness, "Save paths of Alpha"));
+    assert!(shows(&harness, "Custom game."));
+    assert!(shows(&harness, "Files (1)"));
+    assert!(shows(&harness, "Holds save"));
+
+    let template = "<winAppData>/Alpha";
+    harness.get_by_label(template).click_secondary();
+    run_settled(&mut harness);
+    harness.get_by_label("Copy").click();
+    // The command lasts one frame, so read it right after the click is handled.
+    harness.step();
+    let copied: Vec<_> = (harness.output().platform_output.commands.iter())
+        .filter_map(|command| match command {
+            OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied, [template]);
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Save paths of Alpha"));
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Save paths of Alpha"));
+}
+
+#[test]
+fn manifest_paths_is_offered_beside_choose_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env) = mix(&tmp);
+    click(&mut harness, "Cancel");
+
+    click(&mut harness, "Manifest paths");
+    assert!(shows(&harness, "Save paths of Mix"));
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Save paths of Mix"));
 }
 
 #[test]

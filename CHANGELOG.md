@@ -8,6 +8,9 @@ All notable changes to salvajocs. The format follows
 
 ### Added
 
+- The Restore plan has a **Manifest paths** button that lists the game's save path templates and
+  registry keys from the manifest or your custom game, with where each applies; right-click one to
+  copy it.
 - The Backup tab can sort its games by **Changes**: the number of files the next backup would
   add, change or remove, most first by default, so the games with changes are on top or at the
   bottom.

@@ -16,6 +16,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use super::dirs::own_dir;
 use super::keys::KeyTree;
+use super::manifest_paths::Source;
 use super::pick::TargetPick;
 use super::{RestoreTab, batch};
 use crate::job::Job;
@@ -40,6 +41,8 @@ pub(super) struct Fetched {
     pub(super) reason: Option<PrefixReason>,
     pub(super) vars: GameVars,
     pub(super) info: GameInfo,
+    /// Where `info.entry` comes from, worked out from the same manifest and custom games.
+    pub(super) source: Option<Source>,
 }
 
 impl Fetched {
@@ -884,6 +887,7 @@ impl RestoreTab {
             let fetched = Fetched {
                 storage,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
+                source: Source::of(&title, &manifest, &config.custom_games),
                 title,
                 listed,
                 targets,
@@ -946,15 +950,17 @@ impl RestoreTab {
     pub(super) fn preview_ui(&mut self, ui: &mut Ui, state: &mut State) {
         let busy = self.busy();
         let Some(preview) = &mut self.preview else {
-            let mut choose = false;
-            let mut retry = false;
+            let (mut choose, mut retry, mut paths) = (false, false, false);
             theme::row(
                 ui,
-                |ui| self.status_ui(ui, &mut choose, &mut retry),
+                |ui| self.status_ui(ui, &mut choose, &mut retry, &mut paths),
                 |ui| restore_button(ui, false),
             );
             if choose {
                 self.dialog_hidden = false;
+            }
+            if paths {
+                self.manifest_paths = self.mapping.as_ref().map(|(fetched, _)| fetched.clone());
             }
             if retry {
                 self.error = None;
@@ -1058,7 +1064,7 @@ impl RestoreTab {
         let restoring = self.restoring.is_some();
         let empty = nothing_to_restore(&preview.plan);
         let has_registry = preview.plan.registry.is_some();
-        let mut retry = false;
+        let (mut retry, mut paths) = (false, false);
         let backing_up = self.backing_up;
         let start = |ui: &mut Ui| {
             if restoring {
@@ -1077,8 +1083,13 @@ impl RestoreTab {
             } else if nothing {
                 ui.weak("Tick at least one file to restore.");
             }
+            paths |= ui.button("Manifest paths").clicked();
         };
-        if theme::row(ui, start, |ui| restore_button(ui, ready)).clicked() {
+        let restore = theme::row(ui, start, |ui| restore_button(ui, ready)).clicked();
+        if paths {
+            self.manifest_paths = Some(preview.fetched.clone());
+        }
+        if restore {
             self.start_restore(ui.ctx(), state);
         }
         if retry {
@@ -1094,9 +1105,9 @@ impl RestoreTab {
 
     /// Why there is no plan to restore yet, next to the disabled "Restore files": what to choose
     /// next, the running plan job, the "Choose folders…" button of a plan that needs mapping, or
-    /// "Try again" after a failed plan, whose error shows above. Sets `choose` or `retry` when
-    /// their button is clicked.
-    fn status_ui(&self, ui: &mut Ui, choose: &mut bool, retry: &mut bool) {
+    /// "Try again" after a failed plan, whose error shows above. Sets `choose`, `retry` or `paths`
+    /// when their button ("Manifest paths" beside "Choose folders…") is clicked.
+    fn status_ui(&self, ui: &mut Ui, choose: &mut bool, retry: &mut bool, paths: &mut bool) {
         if self.selected.is_none() || self.detecting.is_some() || self.batch.open() {
             return;
         }
@@ -1107,6 +1118,7 @@ impl RestoreTab {
                 "This backup has {folders} from the other build without a place here."
             ));
             *choose |= ui.button("Choose folders…").clicked();
+            *paths |= ui.button("Manifest paths").clicked();
         } else if self.preparing.is_some() {
             ui.spinner();
             ui.weak("Reading the backup's file list…");

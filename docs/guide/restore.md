@@ -118,6 +118,11 @@ The Plan shows:
 - **Note** lines, for example about Unity settings. See
   [Cross-OS restore](cross-os-restore.md#the-unity-playerprefs-limit).
 
+**Manifest paths**, beside **Restore files** (or beside **Choose folders…**), opens the save
+path templates and registry keys the game has in the Ludusavi manifest or your custom game, such
+as `<winAppData>/Game`, with where each applies (system, store) and what it holds. It says where
+the entry comes from. Right-click a template and choose **Copy** to copy it.
+
 ### Why an item is skipped
 
 | Reason shown | Meaning |

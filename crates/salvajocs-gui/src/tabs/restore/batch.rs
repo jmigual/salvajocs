@@ -21,6 +21,7 @@ use salvajocs_core::storage::SnapshotInfo;
 
 use super::RestoreTab;
 use super::dirs::{own_dir, remove_dir};
+use super::manifest_paths::Source;
 use super::pick::snapshot_label;
 use super::plan::{
     Fetched, Label, Labelled, WriteTree, blocking, hover_label, into_line, name_context,
@@ -610,6 +611,7 @@ fn plan_game(
     let fetched = Fetched {
         storage: storage.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
+        source: Source::of(&title, manifest, &config.custom_games),
         title,
         listed,
         targets: defaults.targets,

@@ -27,6 +27,7 @@ mod batch;
 mod delete;
 mod dirs;
 mod keys;
+mod manifest_paths;
 mod pick;
 mod plan;
 mod run;
@@ -90,6 +91,8 @@ pub struct RestoreTab {
     /// Whether the mapping dialog waits behind its "Choose folders…" button.
     dialog_hidden: bool,
     preview: Option<Preview>,
+    /// The plan whose **Manifest paths** dialog is open.
+    manifest_paths: Option<Arc<Fetched>>,
     /// The open details of a file the plan overwrites.
     details: Option<Details>,
     restoring: Option<Job<Restored>>,
@@ -150,6 +153,7 @@ impl RestoreTab {
         self.mapping_ui(ui.ctx(), state);
         self.batch_mapping_ui(ui.ctx(), state);
         self.delete_ui(ui.ctx());
+        self.manifest_paths_ui(ui.ctx());
         if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
@@ -232,6 +236,7 @@ impl RestoreTab {
     fn forget_plan(&mut self) {
         self.preview = None;
         self.details = None;
+        self.manifest_paths = None;
         self.mapping = None;
         self.generation += 1;
     }

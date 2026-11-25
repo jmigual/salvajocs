@@ -118,6 +118,23 @@ fn a_cleanup_dropping_the_list_closes_the_delete_dialog() {
 }
 
 #[test]
+fn the_manifest_paths_dialog_closes_when_the_plan_or_listing_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    for drop_it in [RestoreTab::forget_plan, RestoreTab::drop_listing] {
+        let fetched = fetched(&storage(&harness));
+        harness.state_mut().0.manifest_paths = Some(fetched);
+        harness.step();
+        harness.step();
+        assert!(harness.query_by_label("Save paths of Mix").is_some());
+
+        drop_it(&mut harness.state_mut().0);
+        harness.step();
+        assert!(harness.query_by_label("Save paths of Mix").is_none());
+    }
+}
+
+#[test]
 fn a_running_backup_disables_every_delete_and_leaves_the_list_browsable() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = tab_harness(dir.path(), with_mix);
@@ -300,6 +317,7 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
         reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
+        source: None,
     })
 }
 
@@ -335,6 +353,7 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
         reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
+        source: None,
     })
 }
 
