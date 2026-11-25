@@ -4216,11 +4216,10 @@ fn the_sidebar_marks_a_game_whose_base_is_not_its_newest_backup() {
         1,
         "only Alpha is marked"
     );
-    // The newest backup's host, and its date as the snapshot picker shows it.
+    // The newest backup is this PC's own, and its date is as the snapshot picker shows it.
     select(&mut harness, "Alpha");
-    let host = snapshots(&tmp, "salvajocs")[0].host.clone();
     let picked = value(&harness, "Snapshot");
-    let tooltip = format!("{NEWER_SAVES}: from {host}, {}", &picked[..10]);
+    let tooltip = format!("{NEWER_SAVES}: from this PC, {}", &picked[..10]);
     assert!(shows(&harness, &tooltip), "{tooltip}");
 
     let alpha = backups_of(&tmp, "Alpha");

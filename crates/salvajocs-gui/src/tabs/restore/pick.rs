@@ -21,7 +21,7 @@ use super::{RestoreTab, batch};
 use crate::job::Job;
 use crate::state::{State, lock_storage};
 use crate::tabs::space::Space;
-use crate::tabs::{format_date, format_time, sort};
+use crate::tabs::{format_date, format_time, host_name, sort};
 use crate::theme::{self, icons};
 
 /// How a snapshot shows in the picker: time, host and the `pre-restore` label.
@@ -302,11 +302,13 @@ impl RestoreTab {
         let config_dir = state.env.config_dir.clone();
         let scope = (state.config.as_ref()).map(AppConfig::secret_scope);
         self.listing = Some(Job::spawn(ctx, move || {
-            let games = restore::list(&*lock_storage(&storage)?)?;
+            let storage = lock_storage(&storage)?;
+            let games = restore::list(&storage)?;
+            let host = storage.hostname()?;
             let newer = scope.map_or_else(BTreeSet::new, |scope| {
                 newer_than_base(&games, &sync::load(&config_dir), &scope)
             });
-            Ok((games, newer))
+            Ok((games, newer, host))
         }));
         true
     }
@@ -459,7 +461,7 @@ impl RestoreTab {
                         {
                             let hover = format!(
                                 "The newest backup is not the one this PC last synced: from {}, {}",
-                                newest.host,
+                                host_name(&newest.host, newest.host == self.host),
                                 format_date(newest.time)
                             );
                             let accent = theme::palette(ui).accent;

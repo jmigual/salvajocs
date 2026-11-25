@@ -31,6 +31,11 @@ pub(crate) fn format_time(time: SystemTime) -> String {
     format!("{date} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
 }
 
+/// The name of the PC that made a backup in the sync texts: "this PC" when `own`, else `host`.
+pub(crate) fn host_name(host: &str, own: bool) -> &str {
+    if own { "this PC" } else { host }
+}
+
 /// The UTC date of `time` as `YYYY-MM-DD`.
 pub(crate) fn format_date(time: SystemTime) -> String {
     utc_parts(time).0

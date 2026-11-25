@@ -19,7 +19,8 @@ walks through those steps and explains how to undo a restore. Back to the
    line. **Load backups** waits while a backup runs. Once a **Back up** has saved new backups, a
    loaded list is read again by itself and keeps the game and snapshot you chose.
    A down arrow in a game's row means the newest backup is not the one this PC last synced:
-   hover it to read `The newest backup is not the one this PC last synced: from <host>, <date>`.
+   hover it to read `The newest backup is not the one this PC last synced: from <host>, <date>`,
+   with `this PC` in place of the host when this PC made the newest backup.
    See [Which backup this PC is in sync with](#which-backup-this-pc-is-in-sync-with). A game
    with no arrow is one this PC has no record for, or whose newest backup is the one it last
    synced with.

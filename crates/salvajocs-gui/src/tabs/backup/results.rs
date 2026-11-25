@@ -5,7 +5,7 @@ use salvajocs_core::backup::{GameBackup, Stored};
 
 use super::{BackupTab, Cleaned, lock};
 use crate::state::chain;
-use crate::tabs::{count, format_date};
+use crate::tabs::{count, format_date, host_name};
 use crate::theme::{self, icons};
 
 /// What a backup did for one game.
@@ -20,17 +20,24 @@ pub(super) enum Outcome {
     Unchanged,
     /// The saves equal the newest snapshot, from the host it names.
     SameAsNewest(String),
-    /// Another PC has newer saves and this PC has not changed them since it last synced, so
-    /// nothing was backed up.
+    /// Another PC, or this PC when `own`, has newer saves and this PC has not changed them since
+    /// it last synced, so nothing was backed up.
     Behind {
         /// The host of the newest backup.
         host: String,
         /// When the newest backup was made.
         date: String,
+        /// Whether this PC made the newest backup.
+        own: bool,
     },
-    /// This PC and the host it names changed the saves since this PC last synced, so nothing was
-    /// backed up.
-    ChangedOnBoth(String),
+    /// This PC and the host it names, or this PC alone when `own`, changed the saves since this
+    /// PC last synced, so nothing was backed up.
+    ChangedOnBoth {
+        host: String,
+        /// When the newest backup was made.
+        date: String,
+        own: bool,
+    },
     /// This PC has no record of syncing the game and its saves differ from the newest backup,
     /// from the host it names, so nothing was backed up.
     UnknownBase(String),
@@ -54,7 +61,7 @@ impl Outcome {
                 icons::CHECK_CIRCLE
             }
             Self::Behind { .. } => icons::ARROW_DOWN,
-            Self::ChangedOnBoth(_) | Self::UnknownBase(_) => icons::WARNING,
+            Self::ChangedOnBoth { .. } | Self::UnknownBase(_) => icons::WARNING,
             Self::Failed(_) => icons::X_CIRCLE,
         }
     }
@@ -65,7 +72,7 @@ impl Outcome {
             Self::Saved | Self::SavedAsNewest | Self::Unchanged | Self::SameAsNewest(_) => {
                 Level::Good
             }
-            Self::Behind { .. } | Self::ChangedOnBoth(_) | Self::UnknownBase(_) => Level::Warn,
+            Self::Behind { .. } | Self::ChangedOnBoth { .. } | Self::UnknownBase(_) => Level::Warn,
             Self::Failed(_) => Level::Error,
         }
     }
@@ -82,12 +89,26 @@ impl Outcome {
             Self::SameAsNewest(host) => {
                 format!("{title}: same as the newest backup, from {host}")
             }
-            Self::Behind { host, date } => format!(
+            Self::Behind {
+                date, own: true, ..
+            } => format!(
+                "{title}: not backed up: this PC has a newer backup, from {date}, and you have \
+                 not changed the saves since you restored an older one. Restore the newer one on \
+                 the Restore tab or use Back up anyway under the game."
+            ),
+            Self::Behind { host, date, .. } => format!(
                 "{title}: not backed up: {host} has newer saves, from {date}, and this PC has not \
                  changed them since it last synced. To use them, restore them on the Restore \
                  tab. To keep this PC's saves instead, use Back up anyway under the game."
             ),
-            Self::ChangedOnBoth(host) => format!(
+            Self::ChangedOnBoth {
+                date, own: true, ..
+            } => format!(
+                "{title}: not backed up: changed on this PC since it restored an older backup, \
+                 and a newer backup of this PC exists, from {date}. Nothing was overwritten. Back \
+                 up asks again next time."
+            ),
+            Self::ChangedOnBoth { host, .. } => format!(
                 "{title}: not backed up: both this PC and {host} changed the saves since this PC \
                  last synced. Nothing was overwritten. Back up asks again next time."
             ),
@@ -109,9 +130,13 @@ pub(super) struct GameResult {
     pub(super) outcome: Outcome,
 }
 
-/// The result of `backup`. A game stored while in `back_up_anyway` is one the user chose to back
-/// up over another PC's saves.
-pub(super) fn summarize(backup: &GameBackup, back_up_anyway: &BTreeSet<String>) -> GameResult {
+/// The result of `backup`, made on the PC named `this_host`. A game stored while in
+/// `back_up_anyway` is one the user chose to back up over another PC's saves.
+pub(super) fn summarize(
+    backup: &GameBackup,
+    back_up_anyway: &BTreeSet<String>,
+    this_host: &str,
+) -> GameResult {
     let outcome = match &backup.result {
         Ok(Stored::New(_)) if back_up_anyway.contains(&backup.slug) => Outcome::SavedAsNewest,
         Ok(Stored::New(_)) => Outcome::Saved,
@@ -122,9 +147,16 @@ pub(super) fn summarize(backup: &GameBackup, back_up_anyway: &BTreeSet<String>) 
         Ok(Stored::Behind { newest }) => Outcome::Behind {
             host: newest.host.clone(),
             date: format_date(newest.time),
+            own: newest.host == this_host,
         },
-        Ok(Stored::ChangedOnBoth { newest }) => Outcome::ChangedOnBoth(newest.host.clone()),
-        Ok(Stored::UnknownBase { newest }) => Outcome::UnknownBase(newest.host.clone()),
+        Ok(Stored::ChangedOnBoth { newest }) => Outcome::ChangedOnBoth {
+            host: newest.host.clone(),
+            date: format_date(newest.time),
+            own: newest.host == this_host,
+        },
+        Ok(Stored::UnknownBase { newest }) => {
+            Outcome::UnknownBase(host_name(&newest.host, newest.host == this_host).to_owned())
+        }
         Ok(other) => Outcome::Failed(format!("unexpected backup result: {other:?}")),
         Err(err) => Outcome::Failed(chain(err)),
     };

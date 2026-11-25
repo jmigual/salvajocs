@@ -45,17 +45,22 @@ const SIDEBAR_WIDTH: f32 = 240.0;
 /// The width the plan beside the games sidebar keeps, which the sidebar cannot be dragged into.
 const PLAN_WIDTH: f32 = 600.0;
 
+/// What the listing job reads: the games, their `newer` slugs and this PC's host name.
+type Listing = (Vec<GameBackups>, BTreeSet<String>, String);
+
 /// The state of the Restore tab.
 #[derive(Default)]
 pub struct RestoreTab {
     /// The repository the list came from.
     repository: Option<SharedStorage>,
     /// The listed games and their `newer` slugs.
-    listing: Option<Job<(Vec<GameBackups>, BTreeSet<String>)>>,
+    listing: Option<Job<Listing>>,
     games: Vec<GameBackups>,
     /// The slugs of `games` whose newest regular snapshot is not this PC's recorded base of them
     /// (ADR-0035).
     newer: BTreeSet<String>,
+    /// The host name this PC's backups are stored with; empty before the first listing.
+    host: String,
     /// The backup figures of each of `games`, in its order, built with `order` (ADR-0027).
     figures: Vec<BackupStats>,
     /// Works out the space of each listed game's backups.
@@ -320,8 +325,9 @@ impl RestoreTab {
         {
             self.listing = None;
             match result {
-                Ok((games, newer)) => {
+                Ok((games, newer, host)) => {
                     self.newer = newer;
+                    self.host = host;
                     // A delete may have taken a ticked game's last regular backup, or the game.
                     self.checked.retain(|slug| {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())

@@ -105,12 +105,12 @@ fn summary_says_what_the_settings_exclude() {
 #[test]
 fn a_failed_game_carries_its_error_chain() {
     let failed = backup(Err(BackupError::UnsafeTail("../x".into())));
-    let GameResult { title, outcome } = summarize(&failed, &BTreeSet::new());
+    let GameResult { title, outcome } = summarize(&failed, &BTreeSet::new(), "here");
     assert_eq!(title, "Game");
     assert!(matches!(outcome, Outcome::Failed(text) if text.contains("../x")));
     let unchanged = Stored::UpToDate { elsewhere: None };
     assert_eq!(
-        summarize(&backup(Ok(unchanged)), &BTreeSet::new()).outcome,
+        summarize(&backup(Ok(unchanged)), &BTreeSet::new(), "here").outcome,
         Outcome::Unchanged
     );
 }
@@ -125,9 +125,9 @@ fn snapshot_from(host: &str) -> SnapshotInfo {
     )
 }
 
-/// The mapped outcome of a backup that stored `stored`.
+/// The mapped outcome of a backup that stored `stored`, made on the PC "here".
 fn outcome_of(stored: Stored) -> Outcome {
-    summarize(&backup(Ok(stored)), &BTreeSet::new()).outcome
+    summarize(&backup(Ok(stored)), &BTreeSet::new(), "here").outcome
 }
 
 #[test]
@@ -138,12 +138,17 @@ fn each_sync_state_has_its_own_result() {
         outcome_of(Stored::Behind { newest: newest() }),
         Outcome::Behind {
             host: "there".into(),
-            date
+            date: date.clone(),
+            own: false
         }
     );
     assert_eq!(
         outcome_of(Stored::ChangedOnBoth { newest: newest() }),
-        Outcome::ChangedOnBoth("there".into())
+        Outcome::ChangedOnBoth {
+            host: "there".into(),
+            date,
+            own: false
+        }
     );
     assert_eq!(
         outcome_of(Stored::UnknownBase { newest: newest() }),
@@ -161,7 +166,7 @@ fn each_sync_state_has_its_own_result() {
 fn a_game_backed_up_on_request_says_its_saves_are_now_the_newest() {
     let stored = || Stored::New(snapshot_from("here"));
     let anyway: BTreeSet<String> = ["game".to_owned()].into();
-    let chosen = summarize(&backup(Ok(stored())), &anyway).outcome;
+    let chosen = summarize(&backup(Ok(stored())), &anyway, "here").outcome;
     assert_eq!(chosen, Outcome::SavedAsNewest);
     assert_eq!(
         chosen.line("Game"),
@@ -169,7 +174,7 @@ fn a_game_backed_up_on_request_says_its_saves_are_now_the_newest() {
     );
     let other: BTreeSet<String> = ["other".to_owned()].into();
     assert_eq!(
-        summarize(&backup(Ok(stored())), &other).outcome,
+        summarize(&backup(Ok(stored())), &other, "here").outcome,
         Outcome::Saved
     );
 }
@@ -179,9 +184,14 @@ fn a_game_that_was_not_backed_up_is_not_a_failure() {
     let date = "2026-11-25".to_owned();
     let behind = Outcome::Behind {
         host: "there".into(),
-        date,
+        date: date.clone(),
+        own: false,
     };
-    let both = Outcome::ChangedOnBoth("there".into());
+    let both = Outcome::ChangedOnBoth {
+        host: "there".into(),
+        date,
+        own: false,
+    };
     let unknown = Outcome::UnknownBase("there".into());
     assert_eq!(
         (behind.icon(), behind.level()),
@@ -215,6 +225,7 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
     let behind = Outcome::Behind {
         host: "there".into(),
         date: "2026-11-25".into(),
+        own: false,
     };
     assert_eq!(
         behind.line("Game"),
@@ -222,7 +233,12 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
          them since it last synced. To use them, restore them on the Restore tab. To keep this \
          PC's saves instead, use Back up anyway under the game."
     );
-    let both = Outcome::ChangedOnBoth("there".into()).line("Game");
+    let both = Outcome::ChangedOnBoth {
+        host: "there".into(),
+        date: "2026-11-25".into(),
+        own: false,
+    }
+    .line("Game");
     assert!(
         both.contains("both this PC and there changed the saves"),
         "{both}"
@@ -247,6 +263,92 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
     assert_eq!(Outcome::Unchanged.line("Game"), "Game: up to date");
 }
 
+#[test]
+fn the_newest_backup_of_this_pc_is_not_named_like_another_pc() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let own = |mut preview: Preview| {
+        if let Ok(Some(baseline)) = &mut preview {
+            baseline.own = true;
+        }
+        preview
+    };
+    let date = "1970-01-01 00:00 UTC";
+
+    let newest = snapshot_from("here");
+    let mut counts = changes::Counts::default();
+    counts.changed = 1;
+    let behind = Next::Behind {
+        newest: &newest,
+        counts,
+        own: true,
+    };
+    assert_eq!(
+        sentence(&behind),
+        format!(
+            "This PC has a newer backup, from {date}: 1 changed. You restored an older one and \
+             have not changed the saves since, so no backup will be made. To go back to the \
+             newer one, restore it on the Restore tab. To keep these saves, use Back up anyway \
+             under the game."
+        )
+    );
+
+    let both = own(compared_on(FileState::Changed, Some(forgotten_base())));
+    let next = next_backup(&game, &both, &all).unwrap();
+    assert_eq!(
+        sentence(&next),
+        format!(
+            "Changed on this PC since it restored an older backup ({date}). A newer backup of \
+             this PC exists, from {date}: 1 changed against the backup from this PC, {date}. \
+             Back up asks what to do."
+        )
+    );
+    let unknown = own(compared_on(FileState::Changed, None));
+    let next = next_backup(&game, &unknown, &all).unwrap();
+    assert!(sentence(&next).starts_with(&format!(
+        "This PC's saves differ from the newest backup, from this PC, {date}: 1 changed."
+    )));
+
+    // Another PC's backup still names it.
+    let there = compared_on(FileState::Changed, Some(forgotten_base()));
+    let next = next_backup(&game, &there, &all).unwrap();
+    assert!(sentence(&next).starts_with("Changed on this PC and on there since"));
+}
+
+#[test]
+fn the_result_of_this_pcs_own_newest_backup_says_this_pc() {
+    let newest = || snapshot_from("here");
+    let date = format_date(SystemTime::UNIX_EPOCH);
+    let behind = outcome_of(Stored::Behind { newest: newest() });
+    assert_eq!(
+        behind.line("Game"),
+        format!(
+            "Game: not backed up: this PC has a newer backup, from {date}, and you have not \
+             changed the saves since you restored an older one. Restore the newer one on the \
+             Restore tab or use Back up anyway under the game."
+        )
+    );
+    let both = outcome_of(Stored::ChangedOnBoth { newest: newest() });
+    assert_eq!(
+        both.line("Game"),
+        format!(
+            "Game: not backed up: changed on this PC since it restored an older backup, and a \
+             newer backup of this PC exists, from {date}. Nothing was overwritten. Back up asks \
+             again next time."
+        )
+    );
+    let unknown = outcome_of(Stored::UnknownBase { newest: newest() });
+    assert!(unknown.line("Game").contains("from this PC."));
+    // Another PC's backup still names it.
+    let there = Stored::Behind {
+        newest: snapshot_from("there"),
+    };
+    assert!(
+        outcome_of(there)
+            .line("Game")
+            .contains("there has newer saves")
+    );
+}
+
 /// A preview of `game(&[1], ..)` against a backup from `there` in which its one file is `state`,
 /// and this PC's base is that backup, so a change is its own.
 fn compared(state: FileState) -> Preview {
@@ -264,6 +366,7 @@ fn compared_on(state: FileState, base: Option<sync::Base>) -> Preview {
     let newest = changes::Baseline::new(snapshot_from("there"), Vec::new(), hashes, None);
     Ok(Some(Baseline {
         newest,
+        own: false,
         comparison: Comparison::new(vec![state.clone()], Vec::new()),
         states: HashMap::from([("Home/save".to_owned(), state)]),
         base,
@@ -392,7 +495,8 @@ fn the_preview_says_what_the_next_backup_would_do() {
     assert_eq!(
         sentence(&Next::Behind {
             newest: &newest,
-            counts
+            counts,
+            own: false
         }),
         format!(
             "there has newer saves, from {date}: 1 changed. This PC has not changed them since \
@@ -403,6 +507,7 @@ fn the_preview_says_what_the_next_backup_would_do() {
     let none = Next::Behind {
         newest: &newest,
         counts: changes::Counts::default(),
+        own: false,
     };
     assert!(sentence(&none).starts_with(&format!("there has newer saves, from {date}. This PC")));
     assert_eq!(text(&Ok(None)).unwrap(), "No backup yet");
@@ -565,6 +670,7 @@ fn a_game_that_asks_has_its_own_mark_and_never_the_check() {
     let behind = Next::Behind {
         newest: &newest,
         counts: changes::Counts::default(),
+        own: false,
     };
     assert_eq!(behind.glyph(), Some(icons::ARROW_DOWN));
 
@@ -1510,8 +1616,12 @@ fn saves_this_pc_has_not_changed_since_a_newer_backup_elsewhere_are_behind() {
     assert_eq!(shown.glyph, Some(icons::ARROW_DOWN));
     assert!(shown.warns);
     let text = shown.text;
-    assert!(text.contains(" has newer saves, from "), "{text}");
-    assert!(text.contains("no backup will be made. To use them, restore them on the Restore tab."));
+    // The newest backup is this PC's own, so the text does not name a host.
+    assert!(
+        text.starts_with("This PC has a newer backup, from "),
+        "{text}"
+    );
+    assert!(text.contains("no backup will be made. To go back to the newer one, restore it"));
     assert!(text.ends_with("use Back up anyway under the game."));
     assert_eq!(shown.count, Some(1));
     assert!(shown.read_base, "a base without a list needs its backup");
@@ -1538,8 +1648,16 @@ fn saves_changed_since_the_base_on_top_of_a_newer_backup_are_changed_on_both() {
 
     assert_eq!(shown.glyph, Some(icons::WARNING));
     assert!(shown.warns);
-    assert!(shown.text.starts_with("Changed on this PC and on "));
-    assert!(shown.text.ends_with("Back up asks what to do."));
+    let text = shown.text;
+    assert!(
+        text.starts_with("Changed on this PC since it restored an older backup"),
+        "{text}"
+    );
+    assert!(
+        text.contains("A newer backup of this PC exists, from "),
+        "{text}"
+    );
+    assert!(text.ends_with("Back up asks what to do."));
     assert_eq!(shown.count, Some(1));
 }
 

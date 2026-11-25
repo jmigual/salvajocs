@@ -1323,7 +1323,8 @@ fn game_g(tmp: &TempDir, content: &str) -> (PathBuf, Vec<CustomGame>) {
     (prefix, vec![game])
 }
 
-/// Two PCs on one repository: this PC's app, in `tmp`, and another PC's.
+/// Two PCs on one repository: this PC's app, in `tmp`, and another PC's. Both store snapshots
+/// with this machine's host name, so each reads the other's newest backup as its own.
 struct Pcs {
     here: Harness<'static, App>,
     env: Env,
@@ -1395,7 +1396,10 @@ fn changed_on_both() -> Pcs {
     write_save(&pcs.prefix, "G", "three");
     scan(&mut pcs.here, "1 game found");
     run_until_compared(&mut pcs.here);
-    assert!(shows(&pcs.here, "Changed on this PC and on "));
+    assert!(shows(
+        &pcs.here,
+        "Changed on this PC since it restored an older backup"
+    ));
     pcs
 }
 
@@ -1447,7 +1451,7 @@ fn cancelling_the_question_about_a_game_changed_on_both_pcs_writes_nothing() {
 
     harness.get_by_label("Back up 1 game").click();
     run_until_asked(&mut harness);
-    assert!(shows(&harness, "since this PC last synced."));
+    assert!(shows(&harness, "A newer backup of this PC exists, from "));
     assert!(shows(
         &harness,
         "1 changed against the newest backup, from "
@@ -1478,7 +1482,10 @@ fn a_game_changed_on_both_pcs_is_not_backed_up_by_default() {
     harness.get_by_label("Back up 1 game").click();
     run_until_asked(&mut harness);
     press_back_up_in_dialog(&mut harness);
-    run_until_backed_up(&mut harness, "G: not backed up: both this PC and ");
+    run_until_backed_up(
+        &mut harness,
+        "G: not backed up: changed on this PC since it restored an older backup",
+    );
 
     assert!(shows(
         &harness,
@@ -1543,7 +1550,10 @@ fn the_choice_to_back_up_is_not_remembered_for_the_next_back_up() {
 
     assert!(checked_radio(&pcs.here, "Don't back up"));
     press_back_up_in_dialog(&mut pcs.here);
-    run_until_backed_up(&mut pcs.here, "G: not backed up: both this PC and ");
+    run_until_backed_up(
+        &mut pcs.here,
+        "G: not backed up: changed on this PC since it restored an older backup",
+    );
     assert_eq!(backups_of_g(&pcs.tmp), 4);
 }
 
@@ -1560,7 +1570,7 @@ fn back_up_anyway_makes_a_behind_game_the_newest_and_leaves_the_others() {
     write_save(&pcs.prefix, "H", "h2!");
     scan(&mut pcs.here, "2 games found");
     run_until_compared(&mut pcs.here);
-    assert!(shows(&pcs.here, " has newer saves, from "));
+    assert!(shows(&pcs.here, "This PC has a newer backup, from "));
 
     pcs.here.get_by_label("Back up G anyway").click();
     run_until_backed_up(
@@ -1806,7 +1816,7 @@ fn back_up_reads_g_behind(harness: &mut Harness<'static, App>, tmp: &TempDir) {
     run_settled(harness);
     scan(harness, "1 game found");
     run_until_compared(harness);
-    assert!(shows(harness, " has newer saves, from "));
+    assert!(shows(harness, "This PC has a newer backup, from "));
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(harness, "G: not backed up: ");
     assert!(!shows(harness, DIFFERS));

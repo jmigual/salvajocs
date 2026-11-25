@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use eframe::egui;
-use salvajocs_core::backup::{self, ByState, GameBackup, Stored};
+use salvajocs_core::backup::{self, ByState, Stored};
 use salvajocs_core::changes::Mapper;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::custom_games;
@@ -17,7 +17,7 @@ use salvajocs_core::sync::{self, SyncError};
 
 use super::choices::{self, AfterBackup, Games};
 use super::preview::{Next, counted, next_backup};
-use super::results::summarize;
+use super::results::{GameResult, summarize};
 use super::unsent::{
     Answer, Asking, Checked, Reason, Shared, SyncAsk, conflict_lines, conflict_ui, has_unsent,
     rule_lines, send_unsent, sync_ui,
@@ -164,11 +164,18 @@ impl BackupTab {
         games
             .filter_map(|((game, slug), preview)| {
                 let settings = self.choices.game(&game.title).unwrap_or_default();
-                let (newest, counts, reason) = match next_backup(game, preview, &settings)? {
-                    Next::ChangedOnBoth { newest, counts, .. } => {
-                        (newest, counts, Reason::ChangedOnBoth)
-                    }
-                    Next::UnknownBase { newest, counts } => (newest, counts, Reason::UnknownBase),
+                let (newest, counts, own, reason) = match next_backup(game, preview, &settings)? {
+                    Next::ChangedOnBoth {
+                        newest,
+                        counts,
+                        own,
+                        ..
+                    } => (newest, counts, own, Reason::ChangedOnBoth),
+                    Next::UnknownBase {
+                        newest,
+                        counts,
+                        own,
+                    } => (newest, counts, own, Reason::UnknownBase),
                     _ => return None,
                 };
                 Some(SyncAsk {
@@ -176,6 +183,7 @@ impl BackupTab {
                     title: game.title.clone(),
                     reason,
                     host: newest.host.clone(),
+                    own,
                     date: format_date(newest.time),
                     differs: counted(&counts),
                     back_up: false,
@@ -304,10 +312,8 @@ impl BackupTab {
                 &mapper,
                 (&config_dir, &scope),
                 &back_up_anyway,
-                |backup| {
-                    lock(&progress)
-                        .done
-                        .push(summarize(backup, &back_up_anyway));
+                |result| {
+                    lock(&progress).done.push(result);
                     waker.request_repaint();
                 },
             );
@@ -347,7 +353,7 @@ impl BackupTab {
 
 /// Backs up `games` into `storage` by each one's state on this PC, from its newest backup read
 /// through `mapper` and its base in the `sync-base.json` of `config_dir` under the repository's
-/// `scope`, calling `progress` as each game is done, then records the new bases there. A game
+/// `scope`, calling `progress` with each game's result as it is done, then records the new bases there. A game
 /// whose slug is in `back_up_anyway` is backed up even when behind, changed on both PCs or of
 /// unknown base. Returns the ids of the new snapshots, and why the bases were not recorded when
 /// they were not.
@@ -358,9 +364,10 @@ pub(super) fn back_up(
     mapper: &Mapper,
     (config_dir, scope): (&Path, &str),
     back_up_anyway: &BTreeSet<String>,
-    progress: impl FnMut(&GameBackup),
+    mut progress: impl FnMut(GameResult),
 ) -> anyhow::Result<(Vec<String>, Option<SyncError>)> {
     let mut storage = lock_storage(storage)?;
+    let host = storage.hostname()?;
     // Read under the storage lock, which every job that records a base holds.
     let bases = sync::load(config_dir);
     let by_state = ByState {
@@ -375,7 +382,7 @@ pub(super) fn back_up(
         stage_root,
         &[],
         Some(&by_state),
-        progress,
+        |backup| progress(summarize(backup, back_up_anyway, &host)),
     )?;
     let bases =
         (backups.iter()).filter_map(|backup| Some((backup.slug.clone(), backup.base.clone()?)));

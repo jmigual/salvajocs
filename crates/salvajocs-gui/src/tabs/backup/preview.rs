@@ -19,7 +19,7 @@ use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::mapping::DialogAction;
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
-use crate::tabs::{count, format_size, format_time};
+use crate::tabs::{count, format_size, format_time, host_name};
 use crate::theme::{self, icons};
 
 /// What the scan found for a game: the count and size of the files backed up, given as
@@ -51,6 +51,8 @@ pub(super) fn summary(
 /// when it is of the other build (ADR-0021).
 pub(super) struct Baseline {
     pub(super) newest: changes::Baseline,
+    /// Whether the newest backup was made by this PC, not another.
+    pub(super) own: bool,
     pub(super) comparison: Comparison,
     /// The state of each found file, by its path key.
     pub(super) states: HashMap<String, FileState>,
@@ -94,7 +96,8 @@ pub(super) fn preview(
     let bases = sync::load(config_dir);
     let previews = games.iter().map(|game| {
         let base = bases.base(scope, &slug(&game.title), &snapshots, &host);
-        preview_game(storage, game, &snapshots, base, mapper).map_err(|err| format!("{err:#}"))
+        preview_game(storage, game, (&snapshots, &host), base, mapper)
+            .map_err(|err| format!("{err:#}"))
     });
     Ok(previews.collect())
 }
@@ -102,7 +105,7 @@ pub(super) fn preview(
 fn preview_game(
     storage: &SharedStorage,
     game: &GameScan,
-    snapshots: &[SnapshotInfo],
+    (snapshots, host): (&[SnapshotInfo], &str),
     base: Option<Cow<'_, sync::Base>>,
     mapper: &Mapper,
 ) -> anyhow::Result<Option<Baseline>> {
@@ -141,6 +144,7 @@ fn preview_game(
         _ => None,
     };
     Ok(Some(Baseline {
+        own: newest.host == host,
         newest: baseline,
         comparison,
         states,
@@ -271,6 +275,8 @@ pub(super) enum Next<'a> {
     Behind {
         newest: &'a SnapshotInfo,
         counts: Counts,
+        /// Whether this PC made the newest backup, for instance by restoring an older one.
+        own: bool,
     },
     /// This PC and another changed the saves since the base, made at `base_time` when the
     /// repository lists it; the newest backup differs by `counts` and Back up asks.
@@ -278,11 +284,13 @@ pub(super) enum Next<'a> {
         newest: &'a SnapshotInfo,
         counts: Counts,
         base_time: Option<SystemTime>,
+        own: bool,
     },
     /// This PC has no base for the game and the newest backup differs by `counts`: Back up asks.
     UnknownBase {
         newest: &'a SnapshotInfo,
         counts: Counts,
+        own: bool,
     },
     /// Made, with `counts` of differences from the newest backup.
     Changes {
@@ -327,6 +335,7 @@ pub(super) fn next_backup<'a>(
     };
     let counts = changes::counts(game, &baseline.comparison, settings)?;
     let newest = &baseline.newest.snapshot;
+    let own = baseline.own;
     let blocker = if counts == Counts::default() {
         // The scan the backup stores, whose registry keys may all be unticked.
         let applied = selection::apply(game, settings)?;
@@ -349,13 +358,22 @@ pub(super) fn next_backup<'a>(
     let (base, base_backup) = (baseline.base.as_ref(), baseline.base_backup.as_ref());
     Some(
         match sync::state(&saves, Some(&baseline.newest), base, base_backup) {
-            sync::State::Behind => Next::Behind { newest, counts },
+            sync::State::Behind => Next::Behind {
+                newest,
+                counts,
+                own,
+            },
             sync::State::ChangedOnBoth => Next::ChangedOnBoth {
                 newest,
                 counts,
                 base_time: baseline.base_time,
+                own,
             },
-            sync::State::UnknownBase => Next::UnknownBase { newest, counts },
+            sync::State::UnknownBase => Next::UnknownBase {
+                newest,
+                counts,
+                own,
+            },
             // Ahead, which is neither up to date nor missing here.
             _ if blocker.is_some() => Next::Same { newest, blocker },
             _ => Next::Changes {
@@ -481,7 +499,11 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
                 Some(_) => format!("{same}, but a backup will be made"),
             }
         }
-        Next::Behind { newest, counts } => {
+        Next::Behind {
+            newest,
+            counts,
+            own,
+        } => {
             let (host, date) = since(newest);
             let differs = counted(&counts);
             let differs = if differs.is_empty() {
@@ -489,6 +511,14 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             } else {
                 format!(": {differs}")
             };
+            if own {
+                return format!(
+                    "This PC has a newer backup, from {date}{differs}. You restored an older one \
+                     and have not changed the saves since, so no backup will be made. To go back \
+                     to the newer one, restore it on the Restore tab. To keep these saves, use \
+                     Back up anyway under the game."
+                );
+            }
             format!(
                 "{host} has newer saves, from {date}{differs}. This PC has not changed them \
                  since it last synced, so no backup will be made. To use them, restore them on \
@@ -500,8 +530,10 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             newest,
             counts,
             base_time,
+            own,
         } => {
             let (host, date) = since(newest);
+            let host = host_name(&host, own);
             // After an undo the base is a safety backup made after the newest one.
             let synced = (base_time.filter(|time| *time <= newest.time))
                 .map_or(String::new(), |time| format!(" ({})", format_time(time)));
@@ -511,13 +543,24 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             } else {
                 format!("{differs} against the backup from {host}, {date}")
             };
+            if own {
+                return format!(
+                    "Changed on this PC since it restored an older backup{synced}. A newer \
+                     backup of this PC exists, from {date}: {against}. Back up asks what to do."
+                );
+            }
             format!(
                 "Changed on this PC and on {host} since this PC last synced{synced}: {against}. \
                  Back up asks what to do."
             )
         }
-        Next::UnknownBase { newest, counts } => {
+        Next::UnknownBase {
+            newest,
+            counts,
+            own,
+        } => {
             let (host, date) = since(newest);
+            let host = host_name(&host, own);
             let differs = counted(&counts);
             let saves = if differs.is_empty() {
                 format!("This PC's files match the newest backup, from {host}, {date}")

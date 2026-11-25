@@ -574,7 +574,11 @@ fn a_new_snapshot_in_the_list_keeps_the_chosen_older_one_and_the_plan() {
     assert!(state.0.preview.is_some(), "a backup removes no snapshot");
     // The new list has a snapshot in front, which shifts the older one's index.
     state.0.listing = Some(Job::spawn(&ctx, || {
-        Ok((vec![mix_snapshots(&["c", "b", "a"])], Default::default()))
+        Ok((
+            vec![mix_snapshots(&["c", "b", "a"])],
+            Default::default(),
+            String::new(),
+        ))
     }));
     step_until(&mut harness, "the list", |h| h.state().0.listing.is_none());
 

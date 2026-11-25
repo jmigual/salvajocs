@@ -14,6 +14,7 @@ use salvajocs_core::storage::Storage;
 
 use super::chain;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::host_name;
 use crate::theme;
 
 /// What a backup saved of this PC's unsent custom games and rules (ADR-0029).
@@ -65,6 +66,8 @@ pub(super) struct SyncAsk {
     pub(super) reason: Reason,
     /// The PC that made the newest backup, and its date.
     pub(super) host: String,
+    /// Whether this PC made the newest backup.
+    pub(super) own: bool,
     pub(super) date: String,
     /// What differs from the newest backup, as the preview counts it; empty when no file does.
     pub(super) differs: String,
@@ -246,10 +249,17 @@ pub(super) fn conflict_ui(
 /// One game of the dialog about saves that differ from the newest backup: why it asks, what
 /// differs, and the choice in `ask.back_up`.
 pub(super) fn sync_ui(ui: &mut Ui, ask: &mut SyncAsk) {
-    let host = &ask.host;
+    let host = host_name(&ask.host, ask.own);
     ui.add_space(8.0);
     ui.label(theme::semibold(&ask.title));
     match ask.reason {
+        Reason::ChangedOnBoth if ask.own => {
+            ui.label(format!(
+                "Changed on this PC since it restored an older backup. A newer backup of this PC \
+                 exists, from {}.",
+                ask.date
+            ));
+        }
         Reason::ChangedOnBoth => {
             ui.label(format!(
                 "Changed on this PC and on {host} since this PC last synced."
@@ -269,9 +279,11 @@ pub(super) fn sync_ui(ui: &mut Ui, ask: &mut SyncAsk) {
     });
     ui.horizontal_wrapped(|ui| {
         ui.radio_value(&mut ask.back_up, true, "Back up this PC's");
-        ui.weak(format!(
-            "becomes the newest backup; {host}'s stays in the history."
-        ));
+        ui.weak(if ask.own {
+            "becomes the newest backup; the current newest stays in the history.".to_owned()
+        } else {
+            format!("becomes the newest backup; {host}'s stays in the history.")
+        });
     });
     ui.horizontal_wrapped(|ui| {
         ui.radio_value(&mut ask.back_up, false, "Don't back up");
