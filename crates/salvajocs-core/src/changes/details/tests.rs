@@ -296,7 +296,7 @@ fn without_a_cap_a_large_file_is_read_and_diffed() {
     fs::write(&content, saved).unwrap();
     fs::write(stage.join("salvajocs.json"), "{}").unwrap();
     let tags = ["salvajocs", "game:game"];
-    let id = storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game");
+    let id = storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game", true);
     let snapshot = id.unwrap().unwrap();
     let mut copy = backed_up(saved.as_bytes(), true);
     copy.snapshot = snapshot;
@@ -341,7 +341,7 @@ fn a_backup_that_lists_a_small_size_is_still_read_within_the_cap() {
     fs::write(&content, vec![b'x'; CAP as usize + 1]).unwrap();
     fs::write(stage.join("salvajocs.json"), "{}").unwrap();
     let tags = ["salvajocs", "game:game"];
-    let snapshot = (storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game"))
+    let snapshot = (storage.backup_dir(&stage, "/salvajocs/game", &tags, "Game", true))
         .unwrap()
         .unwrap();
     // The listing claims 3 bytes; the file holds more than the cap.
@@ -442,7 +442,7 @@ fn a_backed_up_file_changed_since_gives_the_list_hash_the_node_mtime_and_the_dif
     let slug = slug("Game");
     let tags = ["salvajocs", &format!("game:{slug}")];
     let as_path = format!("/salvajocs/{slug}");
-    let newest = (storage.backup_dir(&stage_dir, &as_path, &tags, "Game"))
+    let newest = (storage.backup_dir(&stage_dir, &as_path, &tags, "Game", true))
         .unwrap()
         .unwrap();
     write(&saves, "save.dat", b"one\n2\n", at(200));

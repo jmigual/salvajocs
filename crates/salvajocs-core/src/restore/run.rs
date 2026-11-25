@@ -707,7 +707,12 @@ pub fn run(
         let outcome = outcomes.pop().expect("one outcome per game");
         match outcome.result? {
             Stored::New(snapshot) => SafetyBackup::Created(snapshot),
-            Stored::Unchanged { .. } | Stored::SameAsNewest(_) => SafetyBackup::Unchanged,
+            Stored::Unchanged => SafetyBackup::Unchanged,
+            // Only a backup by state reports these; the safety backup is not one.
+            Stored::UpToDate { .. }
+            | Stored::Behind { .. }
+            | Stored::ChangedOnBoth { .. }
+            | Stored::UnknownBase { .. } => SafetyBackup::Unchanged,
         }
     };
 

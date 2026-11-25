@@ -310,7 +310,7 @@ impl Repo {
         self.storage.reindex().unwrap();
         let src = self.save(contents);
         self.storage
-            .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+            .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A", true)
             .unwrap()
             .unwrap()
     }
@@ -382,7 +382,7 @@ fn a_backup_reusing_a_marked_pack_is_recovered_by_the_next_cleanup() {
     // Its backup reuses the "old" data, which is now only in a marked pack.
     let src = repo.save("old");
     let theirs = other
-        .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+        .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A", true)
         .unwrap()
         .unwrap();
     assert!(!repo.restores(&theirs, "old"));
@@ -554,7 +554,7 @@ fn delete_refuses_a_snapshot_retention_never_picks() {
         ("settings", &[APP_TAG, SETTINGS_TAG, "game:a"][..]),
     ] {
         let as_path = format!("/salvajocs/{label}");
-        let other = (repo.storage.backup_dir(&src, &as_path, tags, label))
+        let other = (repo.storage.backup_dir(&src, &as_path, tags, label, true))
             .unwrap()
             .unwrap();
         let before = repo.ids(APP_TAG);

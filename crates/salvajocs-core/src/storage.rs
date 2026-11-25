@@ -558,14 +558,16 @@ impl Storage {
     }
 
     /// Backs up the directory `src` as one snapshot stored under `as_path`, with `tags` (which
-    /// must not contain commas) and `label`. Returns `None` when `src` is unchanged since the
-    /// parent snapshot and nothing was written.
+    /// must not contain commas) and `label`. With `skip_if_unchanged`, returns `None` when `src`
+    /// is unchanged since the parent snapshot and nothing was written; without it, always writes
+    /// one.
     pub fn backup_dir(
         &mut self,
         src: &Path,
         as_path: &str,
         tags: &[&str],
         label: &str,
+        skip_if_unchanged: bool,
     ) -> Result<Option<SnapshotInfo>, StorageError> {
         let src = src
             .to_str()
@@ -586,7 +588,7 @@ impl Storage {
             .and_then(|opts| opts.to_snapshot())
             .map_err(backend)?;
         let mut options = BackupOptions::default().as_path(PathBuf::from(as_path));
-        options.parent_opts = options.parent_opts.skip_if_unchanged(true);
+        options.parent_opts = options.parent_opts.skip_if_unchanged(skip_if_unchanged);
         let snap = self
             .repo
             .backup(&options, &source, snapshot)

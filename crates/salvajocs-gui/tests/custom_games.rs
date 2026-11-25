@@ -1220,7 +1220,7 @@ fn custom_games_written_by_a_newer_version_cannot_be_changed() {
     let tag = format!("custom-game:{slug}");
     let as_path = format!("/salvajocs-settings/custom-games/{slug}");
     let tags = ["salvajocs-settings", tag.as_str()];
-    let snapshot = other_pc(&tmp).backup_dir(&dir, &as_path, &tags, "Newer");
+    let snapshot = other_pc(&tmp).backup_dir(&dir, &as_path, &tags, "Newer", true);
     snapshot.unwrap().unwrap();
 
     let local = dialog_game("Newer");

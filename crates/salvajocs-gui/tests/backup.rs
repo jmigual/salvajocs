@@ -484,6 +484,7 @@ fn write_newer_settings(tmp: &TempDir, title: &str) {
             &format!("/salvajocs-settings/{slug}"),
             &["salvajocs-settings", &tag],
             title,
+            true,
         )
         .unwrap()
         .unwrap();
@@ -1053,6 +1054,34 @@ fn a_failed_game_does_not_stop_the_cleanup() {
 }
 
 #[test]
+fn a_sync_record_that_cannot_be_written_warns_and_still_cleans_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    keep_last_one(&tmp);
+    // Two backups of G, so the cleanup has an old one to remove.
+    back_up_linux_build(&tmp, "old");
+    back_up_linux_build(&tmp, "new");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "Alpha", "abc");
+    let games = vec![custom_game("Alpha", false, &prefix)];
+    let (mut harness, env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), games, true);
+    // A directory where the record belongs makes writing it fail.
+    fs::create_dir_all(env.config_dir.join("sync-base.json")).unwrap();
+    scan(&mut harness, "1 game found");
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "Alpha: backed up");
+
+    let tag = format!("game:{}", slug("Alpha"));
+    assert_eq!(open_repo(&tmp).snapshots(&tag).unwrap().len(), 1);
+    assert!(shows(
+        &harness,
+        "This PC's sync record (sync-base.json) was not updated"
+    ));
+    assert!(shows(&harness, "Removed 1 old backup"));
+}
+
+#[test]
 fn without_a_policy_every_backup_stays() {
     let tmp = tempfile::tempdir().unwrap();
     init_repo(&repo_dir(&tmp));
@@ -1078,6 +1107,7 @@ fn an_unreadable_policy_removes_nothing_and_warns() {
             "/salvajocs-settings/retention",
             &tags,
             "Retention policy",
+            true,
         )
         .unwrap()
         .unwrap();
@@ -1212,12 +1242,16 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
                here (its folder is unknown, or another file takes its path)";
     assert_eq!(harness.query_all_by_label(why).count(), 1);
 
+    // This PC has no record of syncing G and its saves differ, so it is not backed up (ADR-0035).
     harness.get_by_label("Back up 1 game").click();
-    run_until_backed_up(&mut harness, "G: backed up");
+    run_until_backed_up(
+        &mut harness,
+        "G: failed: not backed up: differs from the newest backup",
+    );
 }
 
 #[test]
-fn a_registry_key_of_one_build_promises_a_backup() {
+fn a_registry_key_of_one_build_is_not_backed_up_without_a_base() {
     let tmp = tempfile::tempdir().unwrap();
     let repository = repo_dir(&tmp);
     init_repo(&repository);
@@ -1240,8 +1274,12 @@ fn a_registry_key_of_one_build_promises_a_backup() {
         "{}",
         label_of(&harness, sentence)
     );
+    // This PC has no record of syncing G and its saves differ, so it is not backed up (ADR-0035).
     harness.get_by_label("Back up 1 game").click();
-    run_until_backed_up(&mut harness, "G: backed up");
+    run_until_backed_up(
+        &mut harness,
+        "G: failed: not backed up: differs from the newest backup",
+    );
 }
 
 #[test]

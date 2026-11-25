@@ -140,7 +140,7 @@ fn write(
     // The fresh mtime keeps rustic's skip-if-unchanged from matching an older snapshot; if it
     // still does, the changes may be in no newest snapshot, so the caller must keep them.
     let written = storage
-        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], title)?
+        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], title, true)?
         .ok_or(SelectionError::NotWritten)?;
     match settle(storage, &tag, &read.ids, &written.id)? {
         Settled::Raced => Err(SelectionError::NotWritten),

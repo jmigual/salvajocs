@@ -105,9 +105,7 @@ fn a_failed_game_carries_its_error_chain() {
     let GameResult { title, outcome } = summarize(&failed);
     assert_eq!(title, "Game");
     assert!(matches!(outcome, Outcome::Failed(text) if text.contains("../x")));
-    let unchanged = Stored::Unchanged {
-        newer_elsewhere: None,
-    };
+    let unchanged = Stored::UpToDate { elsewhere: None };
     assert_eq!(
         summarize(&backup(Ok(unchanged))).outcome,
         Outcome::Unchanged
@@ -126,14 +124,16 @@ fn snapshot_from(host: &str) -> SnapshotInfo {
 
 #[test]
 fn the_results_name_the_host_of_the_newest_backup() {
-    let unchanged = Stored::Unchanged {
-        newer_elsewhere: Some(snapshot_from("there")),
+    let behind = Stored::Behind {
+        newest: snapshot_from("there"),
     };
     assert_eq!(
-        summarize(&backup(Ok(unchanged))).outcome,
+        summarize(&backup(Ok(behind))).outcome,
         Outcome::UnchangedNewerElsewhere("there".into())
     );
-    let same = Stored::SameAsNewest(snapshot_from("there"));
+    let same = Stored::UpToDate {
+        elsewhere: Some(snapshot_from("there")),
+    };
     assert_eq!(
         summarize(&backup(Ok(same))).outcome,
         Outcome::SameAsNewest("there".into())
@@ -1127,13 +1127,31 @@ fn back_up_returns_only_the_new_snapshots() {
     let mapper = Mapper::new(&manifest, &config, &env);
     let same = saved_game(dir.path(), "Same", "a");
     let games = [same.clone(), saved_game(dir.path(), "Changed", "b")];
-    back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
+    back_up(
+        &storage,
+        &games,
+        &stage,
+        &mapper,
+        dir.path(),
+        "repo",
+        |_| {},
+    )
+    .unwrap();
     let failing = saved_game(dir.path(), "Failing", "c");
     // A file where its staging dir belongs makes staging it fail.
     std::fs::write(stage.join(salvajocs_core::slug::slug("Failing")), "").unwrap();
 
     let games = [same, saved_game(dir.path(), "Changed", "b2"), failing];
-    let made = back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
+    let (made, _) = back_up(
+        &storage,
+        &games,
+        &stage,
+        &mapper,
+        dir.path(),
+        "repo",
+        |_| {},
+    )
+    .unwrap();
 
     assert_eq!(made, snapshot_ids(&storage, "Changed")[..1]);
 }
@@ -1147,7 +1165,16 @@ fn clean_up_never_forgets_the_snapshots_it_is_given() {
     let mapper = Mapper::new(&manifest, &config, &env);
     for content in ["old", "new"] {
         let games = [saved_game(dir.path(), "Game", content)];
-        back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
+        back_up(
+            &storage,
+            &games,
+            &stage,
+            &mapper,
+            dir.path(),
+            "repo",
+            |_| {},
+        )
+        .unwrap();
     }
     let ids = snapshot_ids(&storage, "Game");
     let mut policy = Retention::default();
@@ -1171,7 +1198,7 @@ fn a_new_scan_closes_the_open_details() {
     let game = saved_game(dir.path(), "Game", "old");
     let stage = dir.path().join("stage");
     let games = std::slice::from_ref(&game);
-    back_up(&storage, games, &stage, &mapper, |_| {}).unwrap();
+    back_up(&storage, games, &stage, &mapper, dir.path(), "repo", |_| {}).unwrap();
     let previews = preview(&storage, games, &mapper, |_| {}).unwrap();
     let Ok(Some(baseline)) = &previews[0] else {
         panic!("the game has a backup");
@@ -1521,7 +1548,7 @@ fn newer_rules(dir: &Path) {
     std::fs::write(staged.join("retention.json"), r#"{ "format": 2 }"#).unwrap();
     let tags = ["salvajocs-settings", "settings:retention"];
     let as_path = "/salvajocs-settings/retention";
-    let written = other_pc(dir).backup_dir(&staged, as_path, &tags, "Retention policy");
+    let written = other_pc(dir).backup_dir(&staged, as_path, &tags, "Retention policy", true);
     written.unwrap().unwrap();
 }
 
@@ -1635,7 +1662,16 @@ fn a_game_saved_while_the_rules_fail_is_sent_and_the_rules_stay() {
     let mapper = Mapper::new(&manifest, &config, &env);
     for content in ["old", "new"] {
         let games = [saved_game(dir.path(), "Game", content)];
-        back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
+        back_up(
+            &storage,
+            &games,
+            &stage,
+            &mapper,
+            dir.path(),
+            "repo",
+            |_| {},
+        )
+        .unwrap();
     }
     let ids = snapshot_ids(&storage, "Game");
     retention::save(&mut lock_storage(&storage).unwrap(), &keep_last(1), &stage).unwrap();
@@ -1702,7 +1738,16 @@ fn a_cleanup_after_rules_that_were_not_saved_forgets_nothing() {
     let mapper = Mapper::new(&manifest, &config, &env);
     for content in ["old", "new"] {
         let games = [saved_game(dir.path(), "Game", content)];
-        back_up(&storage, &games, &stage, &mapper, |_| {}).unwrap();
+        back_up(
+            &storage,
+            &games,
+            &stage,
+            &mapper,
+            dir.path(),
+            "repo",
+            |_| {},
+        )
+        .unwrap();
     }
     let ids = snapshot_ids(&storage, "Game");
     retention::save(&mut lock_storage(&storage).unwrap(), &keep_last(1), &stage).unwrap();

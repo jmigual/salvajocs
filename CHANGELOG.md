@@ -33,6 +33,12 @@ All notable changes to salvajocs. The format follows
 - Typing a password in Settings for a repository that was set up without one now adds that
   salvajocs cannot add one to "Wrong encryption password."; the guide shows how to add one with
   restic.
+- Back up decides each game by this PC's saves against the game's newest backup, from any PC, and
+  the backup this PC last synced with, kept in `sync-base.json` in the config folder. A game this
+  PC has not changed while another PC made a newer backup is no longer backed up, so older saves
+  never become the newest; nor is one changed both here and on another PC, or one this PC has no
+  record of syncing that differs from the newest. A game this PC changed is backed up even when
+  its files equal this PC's own last backup.
 
 ## [0.10.0] - 2026-11-22
 

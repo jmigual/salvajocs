@@ -44,10 +44,12 @@ parallel branch.
   `skip_blocker`; a newest without a verified list is never equal. N = B is the same snapshot
   id, else the base's hash list against N (`Baseline::same_content`). L = B is the base's hash
   list against L, else, when the base has no list, B's snapshot read through the `Mapper` and
-  compared as N; a base without a list whose snapshot is gone is not equal. The preview, which
-  reads neither the registry nor `salvajocs.json`, finds L = B only when neither side has
-  registry keys and the scan would stage the same `salvajocs.json`, so it never predicts behind
-  for a game Back up asks about.
+  compared as N; a base without a list whose snapshot is gone is not equal. A newest that Back
+  up cannot read counts as one without a list, and a base snapshot it cannot read as gone: Back
+  up cannot confirm an equality then, so it asks (or stores, when ahead); nothing is lost. The
+  preview, which reads neither the registry nor `salvajocs.json`, finds L = B only when neither
+  side has registry keys and the scan would stage the same `salvajocs.json`, so it never
+  predicts behind for a game Back up asks about.
 - **One pure function decides**: `sync::state(saves, newest, base, base_backup)` in
   `core::sync`, called by the preview (`Saves::Scanned`) and by `backup_games`
   (`Saves::Staged`), with the same rules. A scan does not read the registry or

@@ -256,7 +256,13 @@ fn unsent_rules_over_a_newer_versions_can_be_discarded() {
     std::fs::write(staged.join("retention.json"), r#"{ "format": 2 }"#).unwrap();
     let tags = ["salvajocs-settings", "settings:retention"];
     let mut other = Storage::open(&location(dir.path()), "").unwrap();
-    let written = other.backup_dir(&staged, "/salvajocs-settings/retention", &tags, "Rules");
+    let written = other.backup_dir(
+        &staged,
+        "/salvajocs-settings/retention",
+        &tags,
+        "Rules",
+        true,
+    );
     written.unwrap().unwrap();
     let changed = retention::Unsent::new(keep_last(3), Retention::default());
     state.config.as_mut().unwrap().retention_unsent = Some(changed);

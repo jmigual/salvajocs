@@ -47,7 +47,7 @@ impl Fixture {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(POLICY_FILE), json).unwrap();
         storage
-            .backup_dir(&dir, AS_PATH, &[SETTINGS_TAG, POLICY_TAG], LABEL)
+            .backup_dir(&dir, AS_PATH, &[SETTINGS_TAG, POLICY_TAG], LABEL, true)
             .unwrap()
             .unwrap();
     }

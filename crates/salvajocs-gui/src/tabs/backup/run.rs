@@ -1,15 +1,17 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use eframe::egui;
-use salvajocs_core::backup::{self, GameBackup, Stored};
+use salvajocs_core::backup::{self, ByState, GameBackup, Stored};
 use salvajocs_core::changes::Mapper;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::custom_games;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ScanReport};
 use salvajocs_core::selection::{self, Pending};
+use salvajocs_core::sync::{self, SyncError};
 
 use super::choices::{self, AfterBackup, Games};
 use super::results::summarize;
@@ -203,13 +205,29 @@ impl BackupTab {
             let games = chosen_files(&report, filter);
             lock(&progress).total = games.len();
             let mapper = Mapper::new(&manifest, &config, &environment);
-            let backed_up = back_up(&storage, &games, &stage_root, &mapper, |backup| {
-                lock(&progress).done.push(summarize(backup));
-                waker.request_repaint();
-            });
-            // A failed game still cleans up; a run that stopped early does not.
+            let scope = config.secret_scope();
+            let backed_up = back_up(
+                &storage,
+                &games,
+                &stage_root,
+                &mapper,
+                &config_dir,
+                &scope,
+                |backup| {
+                    lock(&progress).done.push(summarize(backup));
+                    waker.request_repaint();
+                },
+            );
+            // A failed game or base record still cleans up; a run that stopped early does not.
             let (error, cleanup) = match backed_up {
-                Ok(made) => {
+                Ok((made, unrecorded)) => {
+                    if let Some(err) = unrecorded {
+                        saving.warnings.push(format!(
+                            "This PC's sync record (sync-base.json) was not updated, so the next \
+                             Back up may ask about the games backed up now: {}",
+                            chain(&err)
+                        ));
+                    }
                     lock(&progress).cleaning = true;
                     waker.request_repaint();
                     (None, Some(clean_up(&storage, &made, shared.rules_failed)))
@@ -234,32 +252,46 @@ impl BackupTab {
     }
 }
 
-/// Backs up `games` into `storage`, comparing each with its newest backup through `mapper`, and
-/// calling `progress` as each game is done. Returns the ids of the new snapshots.
+/// Backs up `games` into `storage` by each one's state on this PC, from its newest backup read
+/// through `mapper` and its base in the `sync-base.json` of `config_dir` under the repository's
+/// `scope`, calling `progress` as each game is done, then records the new bases there. Returns
+/// the ids of the new snapshots, and why the bases were not recorded when they were not.
 pub(super) fn back_up(
     storage: &SharedStorage,
     games: &[GameScan],
     stage_root: &Path,
     mapper: &Mapper,
+    config_dir: &Path,
+    scope: &str,
     progress: impl FnMut(&GameBackup),
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<(Vec<String>, Option<SyncError>)> {
     let mut storage = lock_storage(storage)?;
-    let same_as_newest = Some(mapper);
+    // Read under the storage lock, which every job that records a base holds.
+    let bases = sync::load(config_dir);
+    let by_state = ByState {
+        mapper,
+        bases: &bases,
+        scope,
+        back_up_anyway: &BTreeSet::new(),
+    };
     let backups = backup::backup_games(
         &mut storage,
         games,
         stage_root,
         &[],
-        same_as_newest,
+        Some(&by_state),
         progress,
     )?;
+    let bases =
+        (backups.iter()).filter_map(|backup| Some((backup.slug.clone(), backup.base.clone()?)));
+    let unrecorded = sync::record(config_dir, scope, bases).err();
     let made = backups
         .into_iter()
         .filter_map(|backup| match backup.result {
             Ok(Stored::New(snapshot)) => Some(snapshot.id),
             _ => None,
         });
-    Ok(made.collect())
+    Ok((made.collect(), unrecorded))
 }
 
 /// Forgets and prunes by the repository's retention policy, never the snapshots `made`

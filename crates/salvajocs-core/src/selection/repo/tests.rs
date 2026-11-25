@@ -281,7 +281,7 @@ fn newer_format_is_neither_loaded_nor_saved() {
     fs::write(dir.join(SETTINGS_FILE), r#"{ "format": 2 }"#).unwrap();
     let tag = game_tag(&slug);
     storage
-        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], GAME)
+        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], GAME, true)
         .unwrap()
         .unwrap();
     f.save(&mut storage, "Other", &[Change::Skip(true)])

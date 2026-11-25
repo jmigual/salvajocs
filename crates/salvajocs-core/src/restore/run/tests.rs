@@ -125,7 +125,7 @@ fn crafted_snapshot(storage: &mut Storage, stage: &Path) -> SnapshotInfo {
     let as_path = format!("/salvajocs/{slug}");
     let tags = ["salvajocs", game_tag.as_str()];
     storage
-        .backup_dir(stage, &as_path, &tags, "Foo")
+        .backup_dir(stage, &as_path, &tags, "Foo", true)
         .unwrap()
         .unwrap()
 }

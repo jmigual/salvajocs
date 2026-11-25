@@ -32,13 +32,17 @@ pub(super) struct GameResult {
 pub(super) fn summarize(backup: &GameBackup) -> GameResult {
     let outcome = match &backup.result {
         Ok(Stored::New(_)) => Outcome::Saved,
-        Ok(Stored::Unchanged {
-            newer_elsewhere: None,
-        }) => Outcome::Unchanged,
-        Ok(Stored::Unchanged {
-            newer_elsewhere: Some(newest),
-        }) => Outcome::UnchangedNewerElsewhere(newest.host.clone()),
-        Ok(Stored::SameAsNewest(newest)) => Outcome::SameAsNewest(newest.host.clone()),
+        Ok(Stored::UpToDate { elsewhere: None }) => Outcome::Unchanged,
+        Ok(Stored::UpToDate {
+            elsewhere: Some(newest),
+        }) => Outcome::SameAsNewest(newest.host.clone()),
+        Ok(Stored::Behind { newest, .. }) => Outcome::UnchangedNewerElsewhere(newest.host.clone()),
+        Ok(Stored::ChangedOnBoth { newest } | Stored::UnknownBase { newest }) => {
+            Outcome::Failed(format!(
+                "not backed up: differs from the newest backup, from {}",
+                newest.host
+            ))
+        }
         Ok(other) => Outcome::Failed(format!("unexpected backup result: {other:?}")),
         Err(err) => Outcome::Failed(chain(err)),
     };

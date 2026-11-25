@@ -2537,7 +2537,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
     let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
     let tags = ["salvajocs", game_tag.as_str()];
     open_repo(&tmp)
-        .backup_dir(&stage, &as_path, &tags, "Alpha")
+        .backup_dir(&stage, &as_path, &tags, "Alpha", true)
         .unwrap()
         .unwrap();
     // The same bytes with another mtime.
@@ -2790,7 +2790,7 @@ fn details_of_a_big_backup_with_no_hash_list_record_no_hash_and_mark_none() {
     let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
     let tags = ["salvajocs", game_tag.as_str()];
     open_repo(&tmp)
-        .backup_dir(&stage, &as_path, &tags, "Alpha")
+        .backup_dir(&stage, &as_path, &tags, "Alpha", true)
         .unwrap()
         .unwrap();
     let local = under(&xdg_data(&tmp), "Alpha/save.dat");

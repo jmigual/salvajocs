@@ -882,7 +882,7 @@ fn the_baseline_maps_only_a_snapshot_of_the_other_build() {
     let slug = slug("Game");
     let tags = ["salvajocs", &format!("game:{slug}")];
     let as_path = format!("/salvajocs/{slug}");
-    let newest = (storage.backup_dir(&stage_dir, &as_path, &tags, "Game"))
+    let newest = (storage.backup_dir(&stage_dir, &as_path, &tags, "Game", true))
         .unwrap()
         .unwrap();
     let home = tmp.path().join("home");

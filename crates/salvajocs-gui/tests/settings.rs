@@ -1556,6 +1556,7 @@ fn an_unreadable_policy_is_reported_and_not_editable() {
             "/salvajocs-settings/retention",
             &["salvajocs-settings", "settings:retention"],
             "Retention policy",
+            true,
         )
         .unwrap()
         .unwrap();

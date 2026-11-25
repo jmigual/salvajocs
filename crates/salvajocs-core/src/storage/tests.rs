@@ -428,7 +428,7 @@ fn backup_with_as_path_then_restore_round_trip() {
     let mut storage = init_local(tmp.path(), "", Compression::Default);
 
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .expect("first backup is written");
     assert_eq!(
@@ -454,7 +454,7 @@ fn second_unchanged_backup_is_skipped() {
         src = save_dir(&tmp.path().join(round.to_string()));
         assert!(
             storage
-                .backup_dir(&src, AS_PATH, TAGS, "Test")
+                .backup_dir(&src, AS_PATH, TAGS, "Test", true)
                 .unwrap()
                 .is_some()
         );
@@ -462,7 +462,7 @@ fn second_unchanged_backup_is_skipped() {
         storage.reindex().unwrap();
         assert!(
             storage
-                .backup_dir(&src, AS_PATH, TAGS, "Test")
+                .backup_dir(&src, AS_PATH, TAGS, "Test", true)
                 .unwrap()
                 .is_none(),
             "round {round} wrote an extra snapshot"
@@ -474,11 +474,27 @@ fn second_unchanged_backup_is_skipped() {
     storage.reindex().unwrap();
     assert!(
         storage
-            .backup_dir(&src, AS_PATH, TAGS, "Test")
+            .backup_dir(&src, AS_PATH, TAGS, "Test", true)
             .unwrap()
             .is_some()
     );
     assert_eq!(storage.snapshots("salvajocs").unwrap().len(), rounds + 1);
+}
+
+#[test]
+fn an_unchanged_backup_without_the_skip_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = save_dir(tmp.path());
+    let mut storage = init_local(tmp.path(), "", Compression::Default);
+    let first = (storage.backup_dir(&src, AS_PATH, TAGS, "Test", false))
+        .unwrap()
+        .unwrap();
+    storage.reindex().unwrap();
+    let second = (storage.backup_dir(&src, AS_PATH, TAGS, "Test", false))
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.id, second.id);
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 2);
 }
 
 #[test]
@@ -487,11 +503,11 @@ fn forgotten_snapshot_is_no_longer_listed() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let kept = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Kept")
+        .backup_dir(&src, AS_PATH, TAGS, "Kept", true)
         .unwrap()
         .unwrap();
     let forgotten = storage
-        .backup_dir(&src, "/salvajocs/other", TAGS, "Forgotten")
+        .backup_dir(&src, "/salvajocs/other", TAGS, "Forgotten", true)
         .unwrap()
         .unwrap();
     assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 2);
@@ -515,12 +531,14 @@ fn data_only_in_marked_packs_is_written_again_after_a_prune() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let old = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     fs::write(src.join("a.sav"), "newer").unwrap();
     storage.reindex().unwrap();
-    storage.backup_dir(&src, AS_PATH, TAGS, "Test").unwrap();
+    storage
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
+        .unwrap();
     storage.forget(&[&old.id]).unwrap();
     storage.prune().unwrap();
     assert!(!storage.stale);
@@ -528,7 +546,7 @@ fn data_only_in_marked_packs_is_written_again_after_a_prune() {
     // "alpha" is now only in a marked pack, which the reloaded index no longer offers to reuse.
     fs::write(src.join("a.sav"), "alpha").unwrap();
     let again = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut fresh = Storage::open(&local(&tmp.path().join("repo")), "").unwrap();
@@ -543,13 +561,13 @@ fn newest_snapshot_restores_after_forget_and_prune() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let old = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     fs::write(src.join("a.sav"), "newer").unwrap();
     storage.reindex().unwrap();
     let newest = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     assert!(!storage.has_marked_packs().unwrap());
@@ -570,7 +588,7 @@ fn read_file_returns_a_file_of_a_snapshot_written_this_session() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let bytes = storage
@@ -585,7 +603,9 @@ fn label_keeps_commas_and_unicode() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let label = "Title, with comma: ünï";
-    storage.backup_dir(&src, AS_PATH, TAGS, label).unwrap();
+    storage
+        .backup_dir(&src, AS_PATH, TAGS, label, true)
+        .unwrap();
 
     let snapshots = storage.snapshots("game:test-slug").unwrap();
     assert_eq!(snapshots.len(), 1);
@@ -604,7 +624,7 @@ fn opendal_memory_backend_round_trip() {
     };
     let mut storage = Storage::init(&location, "", Compression::Default).unwrap();
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let out = tmp.path().join("out");
@@ -618,7 +638,7 @@ fn snapshot_path_is_the_same_on_every_os() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
 
@@ -639,7 +659,7 @@ fn listed_files_carry_their_nested_path_size_and_mtime() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut listed = storage.snapshot_files(&info.id, AS_PATH).unwrap();
@@ -678,7 +698,7 @@ fn snapshot_entries_lists_dirs_files_and_symlinks_with_kinds() {
     let src = save_dir_with_link(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut listed: Vec<_> = (storage.snapshot_entries(&info.id, AS_PATH).unwrap())
@@ -707,7 +727,7 @@ fn snapshot_files_still_lists_regular_files_only() {
     let src = save_dir_with_link(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut listed: Vec<_> = (storage.snapshot_files(&info.id, AS_PATH).unwrap())
@@ -733,7 +753,7 @@ fn a_game_without_files_lists_none_below_files() {
     fs::write(src.join("registry.json"), "{}").unwrap();
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut paths: Vec<_> = (storage.snapshot_files(&info.id, AS_PATH).unwrap())
@@ -750,7 +770,7 @@ fn reading_a_file_the_snapshot_lacks_gives_none() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let mut read = |path: &str| {
@@ -769,7 +789,7 @@ fn reading_a_file_stops_at_the_limit_whatever_size_the_snapshot_declares() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let path = format!("{AS_PATH}/sub/b.sav");
@@ -792,7 +812,7 @@ fn read_file_stops_at_the_limit_and_still_reports_a_missing_file() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     let path = format!("{AS_PATH}/sub/b.sav");
@@ -816,7 +836,7 @@ fn hostname_is_the_host_snapshots_are_stored_with() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     assert_eq!(storage.hostname().unwrap(), info.host);
@@ -830,7 +850,7 @@ fn a_snapshot_another_session_added_is_read_after_a_reindex() {
     // Another session, such as another machine, backs up after this one loaded the index.
     let mut other = Storage::open(&local(&tmp.path().join("repo")), "").unwrap();
     let info = other
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
 
@@ -851,7 +871,7 @@ fn a_backup_and_the_listing_carry_the_size_of_its_files() {
     let src = save_dir(tmp.path());
     let mut storage = init_local(tmp.path(), "", Compression::Default);
     let info = storage
-        .backup_dir(&src, AS_PATH, TAGS, "Test")
+        .backup_dir(&src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .unwrap();
     // "alpha" and "beta".
@@ -896,7 +916,7 @@ fn noisy_save(root: &Path) -> (PathBuf, PathBuf) {
 /// Backs `src` up and returns the new snapshot's id; panics when nothing was written.
 fn backed_up(storage: &mut Storage, src: &Path) -> String {
     storage
-        .backup_dir(src, AS_PATH, TAGS, "Test")
+        .backup_dir(src, AS_PATH, TAGS, "Test", true)
         .unwrap()
         .expect("a new snapshot")
         .id
@@ -1020,7 +1040,9 @@ fn space_used_timing() {
             let file = src.join("a/0.sav");
             fs::write(&file, noise(16 * 1024, 10_000 + game * 100 + backup)).unwrap();
             let as_path = format!("/salvajocs/{slug}");
-            let info = storage.backup_dir(&src, &as_path, &tags, &slug).unwrap();
+            let info = storage
+                .backup_dir(&src, &as_path, &tags, &slug, true)
+                .unwrap();
             ids.push(info.expect("a new snapshot").id);
         }
         games.push(ids);
