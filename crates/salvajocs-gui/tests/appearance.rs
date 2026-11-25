@@ -33,12 +33,13 @@ use rustic_core::{
     BackupOptions, Credentials, PathList, Repository, RepositoryOptions, SnapshotOptions,
 };
 use salvajocs_core::backup::stage;
-use salvajocs_core::layout::{Base, Context, LinuxFolders, Root, RootKind};
+use salvajocs_core::layout::{Base, Context, Hashes, LinuxFolders, Root, RootKind};
 use salvajocs_core::manifest::{
     CustomFile, CustomGame, GameEntry, Integration, Manifest, Pair, parse_yaml, to_json,
 };
 use salvajocs_core::registry::RegistryExport;
 use salvajocs_core::scan::{Environment, FoundFile, GameScan};
+use salvajocs_core::sync;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -252,10 +253,11 @@ fn demo_repository() -> (MutexGuard<'static, ()>, String) {
 }
 
 /// The Backup tab after a scan and a comparison with a backup of every game from another
-/// machine: one save changed since, so its game shows a `changed` file. `text`, the contents of
-/// Hollow Knight's `settings.dat` before and after the backup, adds a changed text file at fixed
-/// times. The comparison has to count `changed` files. The temp folder and the demo repository's
-/// turn stay alive with the harness.
+/// machine, which this PC has synced: one save changed since, so its game is ahead with a
+/// `changed` file, and Hades is behind, as the other machine has newer saves. `text`, the
+/// contents of Hollow Knight's `settings.dat` before and after the backup, adds a changed text
+/// file at fixed times. The comparison has to count `changed` files. The temp folder and the demo
+/// repository's turn stay alive with the harness.
 fn compared_backup_tab(
     theme: Theme,
     height: f32,
@@ -278,15 +280,59 @@ fn compared_backup_tab(
     // Forged, so the comparison names a made-up host and time rather than this machine's.
     let manifest = parse_yaml(MANIFEST).unwrap();
     let report = salvajocs_core::scan::scan(&manifest, &config, &deck(), |_, _| {});
-    let snapshots: Vec<Forged> = (report.games.iter())
+    // Hades is the game another machine has backed up since this one synced: the base is an
+    // older backup of the saves as they are here, the newest has a changed save.
+    let newer_hades = scan(
+        &tmp,
+        "Hades",
+        &[
+            (
+                Base::WinDocuments,
+                "Saved Games/Hades/Profile1.sav",
+                2_480_000,
+            ),
+            (
+                Base::WinDocuments,
+                "Saved Games/Hades/Profile2.sav",
+                2_330_000,
+            ),
+        ],
+        &[(Base::WinDocuments, "Saved Games/Hades")],
+    );
+    let mut snapshots: Vec<Forged> = (report.games.iter())
         .map(|game| Forged {
-            game,
+            game: if game.title == "Hades" {
+                &newer_hades
+            } else {
+                game
+            },
             host: "steamdeck",
             time: "2026-11-14T21:30:00Z",
             pre_restore: false,
         })
         .collect();
-    forge(&tmp, &repository, &snapshots);
+    let hades = (report.games.iter())
+        .find(|game| game.title == "Hades")
+        .unwrap();
+    snapshots.push(Forged {
+        game: hades,
+        host: "desktop-win",
+        time: "2026-11-12T09:00:00Z",
+        pre_restore: false,
+    });
+    let stored = forge(&tmp, &repository, &snapshots);
+    // This PC synced each game with its newest backup, but Hades with the older one.
+    let (older, games) = stored.split_last().unwrap();
+    let updates = report.games.iter().zip(games).map(|(game, (id, _))| {
+        let slug = salvajocs_core::slug::slug(&game.title);
+        let base = if game.title == "Hades" {
+            sync::Base::new(older.0.clone(), Some(older.1.clone()))
+        } else {
+            sync::Base::new(id.clone(), None)
+        };
+        (slug, base)
+    });
+    sync::record(&env.config_dir, &config.secret_scope(), updates).unwrap();
     write_file(&knight.join("user3.dat"), 18_600);
     if let Some((_, after)) = text {
         fs::write(&settings, after).unwrap();
@@ -302,7 +348,7 @@ fn compared_backup_tab(
         shows(
             h,
             &format!("{changed} changed since the backup from steamdeck"),
-        )
+        ) && shows(h, "steamdeck has newer saves")
     });
     (harness, tmp, turn)
 }
@@ -400,9 +446,10 @@ fn scan(
     scan
 }
 
-/// Writes `snapshots` into the repository at `repository` with the host and time they name.
-/// `Storage` stamps this machine's host and the current time, so rustic is used directly.
-fn forge(tmp: &TempDir, repository: &str, snapshots: &[Forged]) {
+/// Writes `snapshots` into the repository at `repository` with the host and time they name, and
+/// returns each one's id and staged hash list. `Storage` stamps this machine's host and the
+/// current time, so rustic is used directly.
+fn forge(tmp: &TempDir, repository: &str, snapshots: &[Forged]) -> Vec<(String, Hashes)> {
     let backends = BackendOptions::default()
         .repository(repository)
         .to_backends()
@@ -413,10 +460,11 @@ fn forge(tmp: &TempDir, repository: &str, snapshots: &[Forged]) {
         .unwrap()
         .to_indexed_ids()
         .unwrap();
+    let mut forged_ids = Vec::new();
     for (index, forged) in snapshots.iter().enumerate() {
         let slug = salvajocs_core::slug::slug(&forged.game.title);
         let staged = tmp.path().join("forge").join(index.to_string());
-        stage(forged.game, &RegistryExport::default(), &staged).unwrap();
+        let hashes = stage(forged.game, &RegistryExport::default(), &staged).unwrap();
         let mut tags = format!("salvajocs,game:{slug}");
         if forged.pre_restore {
             tags += ",pre-restore";
@@ -440,8 +488,10 @@ fn forge(tmp: &TempDir, repository: &str, snapshots: &[Forged]) {
             .unwrap()
             .sanitize()
             .unwrap();
-        repo.backup(&options, &source, snapshot).unwrap();
+        let stored = repo.backup(&options, &source, snapshot).unwrap();
+        forged_ids.push((stored.id.to_hex().to_string(), hashes));
     }
+    forged_ids
 }
 
 /// Hollow Knight as the Windows build saves it and as the Linux build does.
@@ -590,7 +640,7 @@ fn restore_tab() {
             pre_restore: false,
         },
     ];
-    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Hades", 820.0);
+    let mut harness = restore_app(demo_env(&tmp), &tmp, &snapshots, "Hades", 880.0);
 
     harness.get_by_label("Hollow Knight").click();
     run_until(&mut harness, "the default targets", |h| {
@@ -652,7 +702,7 @@ fn restore_batch() {
         home.join(".config"),
     )));
     env.environment = Some(environment);
-    let mut harness = restore_app(env, &tmp, &snapshots, "Stardew Valley", 760.0);
+    let mut harness = restore_app(env, &tmp, &snapshots, "Stardew Valley", 830.0);
 
     // The confirm of a batch: each ticked game's files as a tree, labelled by what the restore
     // does to them.
@@ -781,7 +831,7 @@ fn custom_games_tab() {
         ),
     ];
     save_config(&env, &config);
-    let mut harness = shot_harness(env, Theme::Dark, 900.0);
+    let mut harness = shot_harness(env, Theme::Dark, 1450.0);
     run_until_ready(&mut harness);
     harness.state_mut().set_tab(Tab::CustomGames);
     run_settled(&mut harness);
