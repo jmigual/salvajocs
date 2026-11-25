@@ -104,6 +104,23 @@ pub(crate) enum Slot<'a> {
     Below,
 }
 
+/// Where [`FileTree::ui_with_folder_rows`] calls its folder slot.
+#[derive(Debug)]
+pub(crate) enum FolderSlot<'a> {
+    /// At the end of the folder's header, after its open button. Set `open` to open the folder,
+    /// so the next frame draws [`FolderSlot::Top`].
+    End { open: &'a mut bool },
+    /// At the top of the folder's body, drawn only while the folder is open.
+    Top,
+}
+
+/// A folder slot: called with the folder's key, a function that lists the row positions of its
+/// present files, which costs a pass over them, and where to draw.
+type FolderRow<'a> = dyn FnMut(&mut Ui, &str, &dyn Fn() -> Vec<usize>, FolderSlot<'_>) + 'a;
+
+/// The folder slot of a drawing, if the caller has one.
+type FolderRows<'a, 'b> = Option<&'b mut FolderRow<'a>>;
+
 /// What the user clicked in a [`FileTree`].
 pub(crate) enum Clicked {
     /// A folder's or file's checkbox: its key and new value. A folder's key covers every file
@@ -281,6 +298,34 @@ impl FileTree {
         hint: &dyn Fn(usize, &str, Badge) -> String,
         row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
     ) -> Option<Clicked> {
+        self.draw(ui, mode, badge, hint, row, None)
+    }
+
+    /// Like [`FileTree::ui_with_rows`], and calls `folder` on each folder drawn, with the
+    /// folder's key, a function listing the row positions of its present files (call it only when
+    /// needed) and where on it to draw. A chain of folders drawn as one row is called as the
+    /// deepest one, which the row's label names.
+    pub(crate) fn ui_with_folder_rows(
+        &mut self,
+        ui: &mut Ui,
+        mode: Mode<'_>,
+        badge: &dyn Fn(usize, &str) -> Option<Badge>,
+        hint: &dyn Fn(usize, &str, Badge) -> String,
+        row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+        folder: &mut FolderRow<'_>,
+    ) -> Option<Clicked> {
+        self.draw(ui, mode, badge, hint, row, Some(folder))
+    }
+
+    fn draw(
+        &mut self,
+        ui: &mut Ui,
+        mode: Mode<'_>,
+        badge: &dyn Fn(usize, &str) -> Option<Badge>,
+        hint: &dyn Fn(usize, &str, Badge) -> String,
+        row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+        mut folder: FolderRows<'_, '_>,
+    ) -> Option<Clicked> {
         let FileTree {
             files,
             root,
@@ -295,7 +340,7 @@ impl FileTree {
             hint,
         };
         let mut clicked = None;
-        drawing.children(ui, root, &mut clicked, row);
+        drawing.children(ui, root, &mut clicked, row, &mut folder);
         clicked
     }
 }
@@ -396,9 +441,10 @@ impl Drawing<'_> {
         parent: &Folder,
         clicked: &mut Option<Clicked>,
         row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+        folder_row: &mut FolderRows<'_, '_>,
     ) {
         for folder in &parent.folders {
-            self.folder(ui, folder, clicked, row);
+            self.folder(ui, folder, clicked, row, folder_row);
         }
         for &at in &parent.files {
             let file = &self.files[at];
@@ -447,13 +493,15 @@ impl Drawing<'_> {
     /// A folder as a collapsing header whose children are only built while it is open. A chain of
     /// folders that each hold only the next one is one row, labelled with their joined names. Its
     /// checkbox toggles the top folder, to clear saved choices on every level; counts and the open
-    /// button are the deepest folder's. A folder with only removed files has no checkbox.
+    /// button are the deepest folder's, which `folder_row` is called with. A folder with only
+    /// removed files has no checkbox.
     fn folder(
         &self,
         ui: &mut Ui,
         first: &Folder,
         clicked: &mut Option<Clicked>,
         row: &mut dyn FnMut(&mut Ui, usize, &str, Slot<'_>),
+        folder_row: &mut FolderRows<'_, '_>,
     ) {
         let mut folder = first;
         let mut label = folder.name.clone();
@@ -473,6 +521,13 @@ impl Drawing<'_> {
             unknown: to.unknown - from.unknown,
             will_fail: to.will_fail - from.will_fail,
         };
+        let positions = || -> Vec<usize> {
+            (self.files[start..end].iter())
+                .filter(|file| !file.removed)
+                .map(|file| file.index)
+                .collect()
+        };
+        let mut open_now = false;
         let id = ui.make_persistent_id(&folder.key);
         let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
         let verb = if state.is_open() { "Close" } else { "Open" };
@@ -511,8 +566,25 @@ impl Drawing<'_> {
                         *clicked = Some(Clicked::Open(real.clone()));
                     }
                 }
+                let slot = FolderSlot::End {
+                    open: &mut open_now,
+                };
+                if let Some(folder_row) = folder_row.as_deref_mut() {
+                    folder_row(ui, &folder.key, &positions, slot);
+                }
             })
-            .body(|ui| self.children(ui, folder, clicked, row));
+            .body(|ui| {
+                if let Some(folder_row) = folder_row.as_deref_mut() {
+                    folder_row(ui, &folder.key, &positions, FolderSlot::Top);
+                }
+                self.children(ui, folder, clicked, row, folder_row);
+            });
+        if open_now {
+            let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+            state.set_open(true);
+            state.store(ui.ctx());
+            ui.ctx().request_repaint();
+        }
         // The arrow is a bare interaction, so name it for screen readers; not the bare folder
         // name, which the checkbox carries.
         arrow.widget_info(|| {

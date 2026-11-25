@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-20
+**Amended:** 2026-11-25: ticks also hold below an overridden folder (ADR-0033).
 
 ## Context
 

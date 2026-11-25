@@ -145,6 +145,17 @@ An unticked file is not written, overridden or not; **Override**, **Apply** and 
 its tick. A new plan, after you change the snapshot or where to restore, starts without
 overrides and with everything ticked again.
 
+A folder has an **Override** button too. It opens the folder and a field at its top: type an
+absolute path and click **Apply** to send every file in the folder to that path, each keeping its
+place below the folder (`sub/save.dat` goes to `<path>/sub/save.dat`). A folder override replaces
+the overrides of the files below it. The folder's header then shows the path with a **Clear**
+button, which puts every file in the folder back to its planned target. If you then override one
+of its files, or a folder inside it, the folder's header no longer shows the path and its
+**Clear**, as not every file is there any more; the files show their own targets and **Clear**
+buttons. Files you left unticked are not written, and the safety backup holds what is at the
+overridden targets of the ticked ones. While salvajocs compares the new targets, **Restore files**
+waits.
+
 ## What happens when you click Restore files
 
 1. **Download.** salvajocs downloads the game's backup into its cache folder. If the download

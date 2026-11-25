@@ -11,6 +11,9 @@ All notable changes to salvajocs. The format follows
 - The Backup tab can sort its games by **Changes**: the number of files the next backup would
   add, change or remove, most first by default, so the games with changes are on top or at the
   bottom.
+- The Restore plan overrides a whole folder: a folder's **Override** sends every file below it to
+  a new absolute path, keeping their places below the folder, and **Clear** puts them back.
+  Before, only single files could be overridden.
 
 ### Changed
 

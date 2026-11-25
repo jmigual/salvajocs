@@ -808,7 +808,9 @@ fn a_big_plan_draws_only_its_folders_until_one_is_opened() {
         let rows = (harness.query_all_by_label_contains("file0"))
             .filter(|node| node.accesskit_node().role() == Role::CheckBox)
             .count();
-        let buttons = harness.query_all_by_label_contains("Override ").count();
+        let buttons = harness
+            .query_all_by_label_contains("Override XdgData/")
+            .count();
         (rows, buttons)
     };
 
@@ -3516,4 +3518,285 @@ fn restore_list_sorts_by_space_used_once_computed() {
     assert_eq!(listed_order(&harness, &TITLES), ["Gamma", "Alpha", "Beta"]);
     click(&mut harness, "Largest first");
     assert_eq!(listed_order(&harness, &TITLES), ["Beta", "Alpha", "Gamma"]);
+}
+
+/// The folder of the plan of Deep, whose files are `a.sav`, `sub/b.sav` and `sub/deeper/c.sav`.
+const DEEP: &str = "XdgData/Deep";
+
+/// Deep, a native game with files in nested folders, planned with its folder open; each of
+/// `existing`, a path below the game's folder, already holds `old` at its planned target.
+fn deep_planned(tmp: &TempDir, existing: &[&str]) -> Harness<'static, App> {
+    let tails = ["Deep/a.sav", "Deep/sub/b.sav", "Deep/sub/deeper/c.sav"];
+    let (game, snapshot) = native(tmp, "Deep", &tails);
+    let (mut harness, _env) = open_tab(tmp, vec![game], &[snapshot]);
+    for tail in existing {
+        put(&under(&xdg_data(tmp).join("Deep"), tail), "old");
+    }
+    select(&mut harness, "Deep");
+    preview(&mut harness);
+    click(&mut harness, &format!("Open {DEEP}"));
+    harness
+}
+
+/// Opens the override field of the plan's folder `key`, types `target` and applies it, then
+/// waits for the new targets to be compared.
+fn apply_folder_override(harness: &mut Harness<'static, App>, key: &str, target: &Path) {
+    click(harness, &format!("Override folder {key}"));
+    let field = format!("New target of folder {key}");
+    replace_text(harness, &field, target.to_str().unwrap());
+    click(harness, &format!("Apply the new target of folder {key}"));
+    run_until(harness, "the new targets compared", |h| {
+        !shows(h, "Checking the new targets")
+    });
+}
+
+/// Restores the plan and waits for the result.
+fn restore_deep(harness: &mut Harness<'static, App>) {
+    harness.get_by_label("Restore files").click();
+    run_until(harness, "the restore", |h| shows(h, "Restored Deep"));
+}
+
+#[test]
+fn a_folder_override_sends_every_file_below_it_into_the_new_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &["sub/b.sav"]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+    put(&elsewhere.join("sub/b.sav"), "old");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", elsewhere.display())
+    ));
+    assert!(shows(&harness, "3 files overridden"));
+    let a = under(&elsewhere, "a.sav");
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", a.display())
+    ));
+    click(&mut harness, "Open sub");
+    let b = under(&elsewhere, "sub/b.sav");
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", b.display())
+    ));
+    // The target there holds other bytes, which the label compares afresh.
+    assert!(harness.query_by_label("b.sav, changed").is_some());
+
+    restore_deep(&mut harness);
+
+    assert_eq!(fs::read_to_string(&a).unwrap(), "Deep/a.sav");
+    assert_eq!(fs::read_to_string(&b).unwrap(), "Deep/sub/b.sav");
+    let c = under(&elsewhere, "sub/deeper/c.sav");
+    assert_eq!(fs::read_to_string(c).unwrap(), "Deep/sub/deeper/c.sav");
+    // Nothing went to the planned targets, where `b.sav` is still the old one.
+    let planned = xdg_data(&tmp).join("Deep");
+    assert!(!planned.join("a.sav").exists());
+    assert_eq!(
+        fs::read_to_string(planned.join("sub/b.sav")).unwrap(),
+        "old"
+    );
+    // The safety backup holds what the restore overwrote at the new targets, and only that.
+    let entries = safety_entries(&tmp, "Deep").expect("a safety backup");
+    assert!(
+        entries
+            .iter()
+            .any(|path| path.ends_with("elsewhere/sub/b.sav")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("Deep/sub/b.sav")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("a.sav")),
+        "{entries:?}"
+    );
+}
+
+#[test]
+fn clearing_a_folder_override_restores_to_the_planned_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+    assert!(shows(&harness, "3 files overridden"));
+    click(
+        &mut harness,
+        &format!("Clear the override of folder {DEEP}"),
+    );
+    run_until(&mut harness, "the targets compared", |h| {
+        !shows(h, "Checking the new targets")
+    });
+    assert!(!shows(&harness, "overridden"));
+    assert!(!disabled(&harness, "Restore files"));
+
+    restore_deep(&mut harness);
+
+    let planned = xdg_data(&tmp).join("Deep");
+    assert_eq!(
+        fs::read_to_string(planned.join("a.sav")).unwrap(),
+        "Deep/a.sav"
+    );
+    assert!(planned.join("sub/deeper/c.sav").exists());
+    assert!(!elsewhere.exists());
+}
+
+#[test]
+fn a_folder_override_with_a_relative_path_is_refused_and_changes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+
+    apply_folder_override(&mut harness, DEEP, Path::new("relative/dir"));
+
+    assert!(shows(&harness, "not an absolute path"));
+    assert!(!shows(&harness, "overridden"));
+    assert!(harness.query_by_label("a.sav, new").is_some());
+    assert!(disabled(&harness, "Restore files"));
+    assert!(shows(
+        &harness,
+        "The new target of folder XdgData/Deep is not applied"
+    ));
+
+    // Closing the field drops the text and the error, and the plan restores as planned.
+    click(&mut harness, &format!("Override folder {DEEP}"));
+    assert!(!shows(&harness, "not an absolute path"));
+    assert!(!disabled(&harness, "Restore files"));
+    restore_deep(&mut harness);
+    let planned = xdg_data(&tmp).join("Deep");
+    assert!(planned.join("a.sav").exists());
+    assert!(!tmp.path().join("relative").exists());
+}
+
+#[test]
+fn an_unticked_file_below_an_overridden_folder_is_not_written_or_backed_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+    put(&elsewhere.join("a.sav"), "old");
+    click(&mut harness, "a.sav, new");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+    assert!(!ticked(&harness, "a.sav, changed"));
+    restore_deep(&mut harness);
+
+    assert_eq!(fs::read_to_string(elsewhere.join("a.sav")).unwrap(), "old");
+    assert!(elsewhere.join("sub/b.sav").exists());
+    assert!(!xdg_data(&tmp).join("Deep").exists());
+    assert!(safety_entries(&tmp, "Deep").is_none_or(|entries| entries.is_empty()));
+}
+
+#[test]
+fn a_folder_override_replaces_the_overrides_it_covers_and_is_replaced_by_a_file_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let (one, two, three) = (
+        under(tmp.path(), "one"),
+        under(tmp.path(), "two"),
+        under(tmp.path(), "three"),
+    );
+
+    // The file's own override gives way to the folder's.
+    apply_override(&mut harness, "XdgData/Deep/a.sav", &one.join("x.sav"));
+    apply_folder_override(&mut harness, DEEP, &two);
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", two.join("a.sav").display())
+    ));
+    assert!(!shows_path(
+        &harness,
+        &one.join("x.sav").display().to_string()
+    ));
+
+    // The inner folder's override leaves the outer folder's header with nothing to clear.
+    click(&mut harness, "Open sub");
+    apply_folder_override(&mut harness, "XdgData/Deep/sub", &three);
+    assert!(
+        harness
+            .query_by_label(&format!("Clear the override of folder {DEEP}"))
+            .is_none()
+    );
+    let clear = "Clear the override of folder XdgData/Deep/sub";
+    assert!(harness.query_by_label(clear).is_some());
+    assert!(shows(&harness, "3 files overridden"));
+
+    // Overriding a file below ends its folder's override too.
+    apply_override(&mut harness, "XdgData/Deep/sub/b.sav", &one.join("y.sav"));
+    assert!(harness.query_by_label(clear).is_none());
+    assert!(shows(&harness, "3 files overridden"));
+    restore_deep(&mut harness);
+    assert!(two.join("a.sav").exists());
+    assert!(one.join("y.sav").exists());
+    assert!(three.join("deeper/c.sav").exists());
+    assert!(!three.join("b.sav").exists());
+}
+
+#[test]
+fn restore_files_waits_while_the_new_targets_of_a_folder_are_compared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    click(&mut harness, &format!("Override folder {DEEP}"));
+    let field = format!("New target of folder {DEEP}");
+    replace_text(&mut harness, &field, elsewhere.to_str().unwrap());
+    // Frame by frame: the job's result is only taken by a frame after the click's.
+    let apply = format!("Apply the new target of folder {DEEP}");
+    harness.get_by_label(&apply).click();
+    run_until(&mut harness, "the comparison to start", |h| {
+        shows(h, "Checking the new targets")
+    });
+    assert!(disabled(&harness, "Restore files"));
+
+    run_until(&mut harness, "the comparison to end", |h| {
+        !shows(h, "Checking the new targets")
+    });
+    assert!(!disabled(&harness, "Restore files"));
+    assert!(!disabled(&harness, &format!("Override folder {DEEP}")));
+}
+
+// NTFS ignores case, so the plan's target there keeps the backup's `my games`: the folder has
+// no other case on disk to keep.
+#[cfg(unix)]
+#[test]
+fn a_folder_override_keeps_the_case_the_target_has_on_disk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let documents = under(&prefix, "drive_c/users/steamuser/Documents");
+    fs::create_dir_all(documents.join("My Games")).unwrap();
+    let files = ["<winDocuments>/my games/Cased", "<winDocuments>/Notes"];
+    let game = custom("Cased", &files, Some(&prefix), Vec::new());
+    // The backup says `my games`, the prefix has `My Games`; `Notes` keeps WinDocuments from
+    // being drawn as a chain with `my games`, so the Base is the folder to override.
+    let snapshot = scan(
+        &tmp,
+        "Cased",
+        &[
+            (Base::WinDocuments, "my games/Cased/save.dat"),
+            (Base::WinDocuments, "Notes/n.dat"),
+        ],
+        &[
+            (Base::WinDocuments, "my games/Cased"),
+            (Base::WinDocuments, "Notes"),
+        ],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Cased");
+    preview(&mut harness);
+    click(&mut harness, "Open WinDocuments");
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    apply_folder_override(&mut harness, "WinDocuments", &elsewhere);
+
+    click(&mut harness, "Open my games/Cased");
+    let moved = under(&elsewhere, "My Games/Cased/save.dat");
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", moved.display())
+    ));
 }
