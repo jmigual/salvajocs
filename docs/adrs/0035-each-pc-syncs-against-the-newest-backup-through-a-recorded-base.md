@@ -81,9 +81,11 @@ parallel branch.
   planned write (ticks allowed) → `{ S, none }`; a restore with a failed write or a failed
   safety backup → unchanged; the preview never writes. A ticked restore sets the base to S on
   purpose: the unticked files are this PC's choice, so the next Back up stores the mix.
-  A restore of a `pre-restore` safety backup clears the game's record (`sync::forget`) instead:
-  with no list it would read behind, and the saves the user went back to could never be backed up;
-  the game falls back to its seed, so the next Back up asks.
+  A restore of a `pre-restore` safety backup (an undo) is a restore like any other: it records
+  the safety backup as the base, so the game reads behind (the newest regular backup is not the
+  base) and Back up asks only after the user changes the saves (2026-11-25, approved by the
+  user). An earlier rule cleared the record on an undo so the next Back up asked; it is
+  replaced.
 - **Seed** (upgrade, or a lost file): with no record, the base is this PC's own newest regular
   snapshot of the game, by hostname, without a list. It is used, never written, so the reported
   case reads "behind" on the first preview after the upgrade. A seed never makes a game ahead:
@@ -103,8 +105,9 @@ parallel branch.
   - `pre-restore` safety backups keep their own retention list, same rules, newest kept
     (ADR-0034). A restore always stores this PC's files that way first (ADR-0005).
   - The base is stored with its hash list in `sync-base.json`.
-  - Restoring a `pre-restore` safety backup clears the game's base, so the next Back up asks
-    (2026-11-25, approved by the user, who asked that the guide and the UI explain it very well).
+  - ~~Restoring a `pre-restore` safety backup clears the game's base, so the next Back up asks.~~
+    Replaced the same day, with the user's approval: it records the safety backup as the base
+    like any restore, which reads behind, and Back up asks only after the saves change.
 - **Restore tab:** the default snapshot stays the newest regular one; a game whose recorded base
   (no seed) is not its newest gets a marker.
 

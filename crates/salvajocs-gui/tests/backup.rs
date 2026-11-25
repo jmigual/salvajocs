@@ -30,6 +30,7 @@ use salvajocs_core::scan::{FoundFile, GameScan};
 use salvajocs_core::selection::{Change, GameSettings, Pending};
 use salvajocs_core::slug::slug;
 use salvajocs_core::storage::{Compression, RepoLocation, Storage};
+use salvajocs_core::sync;
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -1406,7 +1407,7 @@ fn a_game_with_an_unknown_base_asks_and_says_why() {
     ));
     assert!(shows(
         &harness,
-        "after you restore a pre-restore safety backup"
+        "This can happen after you upgrade salvajocs."
     ));
     assert!(checked_radio(&harness, "Don't back up"));
     assert!(!checked_radio(&harness, "Back up this PC's"));
@@ -1531,6 +1532,76 @@ fn the_choice_to_back_up_is_not_remembered_for_the_next_back_up() {
     press_back_up_in_dialog(&mut pcs.here);
     run_until_backed_up(&mut pcs.here, "G: not backed up: both this PC and ");
     assert_eq!(backups_of_g(&pcs.tmp), 4);
+}
+
+/// Selects G in the Restore tab and restores its default snapshot, the newest regular one, and
+/// waits for the saves of G in `prefix` to hold `content`.
+fn restore_newest_g(harness: &mut Harness<'static, App>, prefix: &Path, content: &str) {
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(harness);
+    harness.get_by_label("Load backups").click();
+    run_until(harness, "the list", |h| shows(h, "G"));
+    harness.get_by_label("G").click();
+    run_until(harness, "the default targets", |h| {
+        shows(h, "Restore into:")
+    });
+    restore_planned_g(harness, prefix, content);
+}
+
+/// With G selected in the Restore tab, picks its pre-restore safety backup, as an undo, and
+/// restores it.
+fn undo_g(harness: &mut Harness<'static, App>, prefix: &Path, content: &str) {
+    click(harness, "Snapshot");
+    harness.get_by_label_contains(", pre-restore").click();
+    restore_planned_g(harness, prefix, content);
+}
+
+/// Restores the plan of G and waits for the saves of G in `prefix` to hold `content` and the
+/// list to reload.
+fn restore_planned_g(harness: &mut Harness<'static, App>, prefix: &Path, content: &str) {
+    run_until(harness, "the plan", |h| shows(h, "Files to write"));
+    harness.get_by_label("Restore files").click();
+    let save = save_dir(prefix, "G").join("save.dat");
+    run_until(harness, "the restore", |h| {
+        shows(h, "Restored G") && fs::read_to_string(&save).is_ok_and(|text| text == content)
+    });
+    run_until(harness, "the list to reload", |h| {
+        !h.get_by_label("Load backups")
+            .accesskit_node()
+            .is_disabled()
+    });
+}
+
+#[test]
+fn undoing_a_restore_of_another_pcs_backup_reads_behind_and_back_up_stores_nothing() {
+    let Pcs {
+        here: mut harness,
+        env,
+        tmp,
+        prefix,
+        ..
+    } = behind_another_pc();
+    restore_newest_g(&mut harness, &prefix, "two!");
+    let safety = open_repo(&tmp).snapshots("pre-restore").unwrap();
+    assert_eq!(safety.len(), 1);
+    undo_g(&mut harness, &prefix, "one");
+    let stored = backups_of_g(&tmp);
+
+    // The safety backup is this PC's base, as for any restore.
+    let scope = local_config(&repo_dir(&tmp)).secret_scope();
+    let bases = sync::load(&env.config_dir);
+    let base = bases.get(&scope, &slug("G")).unwrap();
+    assert_eq!(base.snapshot, safety[0].id);
+
+    // Like an older restore, the game reads behind: no question, and Back up stores nothing.
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut harness, "G: not backed up: ");
+    assert!(!shows(&harness, DIFFERS));
+    assert_eq!(backups_of_g(&tmp), stored);
 }
 
 #[test]

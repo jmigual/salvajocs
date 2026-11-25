@@ -258,8 +258,7 @@ pub(super) fn sync_ui(ui: &mut Ui, ask: &mut SyncAsk) {
         Reason::UnknownBase => {
             ui.label(
                 "salvajocs does not know which backup this PC is in sync with, so it cannot tell \
-                 which PC changed the saves. This happens after you restore a pre-restore safety \
-                 backup (an undo) or after you upgrade salvajocs.",
+                 which PC changed the saves. This can happen after you upgrade salvajocs.",
             );
         }
     }

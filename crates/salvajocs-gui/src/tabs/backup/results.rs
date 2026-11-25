@@ -92,7 +92,7 @@ impl Outcome {
             ),
             Self::UnknownBase(host) => format!(
                 "{title}: not backed up: salvajocs does not know which backup this PC is in sync \
-                 with (for example after undoing a restore or upgrading), and the saves differ \
+                 with (for example after upgrading), and the saves differ \
                  from the newest backup, from {host}. Nothing was overwritten. Back up asks \
                  again next time."
             ),

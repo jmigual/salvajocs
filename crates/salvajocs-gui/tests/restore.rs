@@ -4065,7 +4065,7 @@ fn the_sidebar_marks_a_game_whose_base_is_not_its_newest_backup() {
 }
 
 #[test]
-fn restoring_a_safety_backup_clears_the_base_instead_of_recording_it() {
+fn restoring_a_safety_backup_records_it_as_the_base_like_any_restore() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, env, saves) = alpha(&tmp);
     fs::create_dir_all(&saves).unwrap();
@@ -4079,6 +4079,8 @@ fn restoring_a_safety_backup_clears_the_base_instead_of_recording_it() {
     // Another game's base stays.
     let other = "1".repeat(64);
     record_base(&tmp, &env, "Other", &other);
+    let safety = snapshots(&tmp, "pre-restore");
+    assert_eq!(safety.len(), 1);
 
     // The safety backup holds the files the restore replaced: going back to them is deliberate.
     run_until(&mut harness, "the list to reload", |h| {
@@ -4097,7 +4099,11 @@ fn restoring_a_safety_backup_clears_the_base_instead_of_recording_it() {
     });
 
     assert_eq!(fs::read_to_string(saves.join("save.dat")).unwrap(), "old");
-    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    assert_eq!(
+        recorded_base(&tmp, &env, "Alpha"),
+        Some(safety[0].id.clone())
+    );
     assert_eq!(recorded_base(&tmp, &env, "Other"), Some(other));
-    assert!(!shows(&harness, NEWER_SAVES));
+    // The newest regular backup is not that base, so the sidebar marks the game.
+    assert!(shows(&harness, NEWER_SAVES));
 }

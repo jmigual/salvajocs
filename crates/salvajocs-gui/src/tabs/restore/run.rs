@@ -2,9 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, anyhow};
 use eframe::egui::{self, Ui};
-use salvajocs_core::restore::{
-    self, PRE_RESTORE_TAG, RestorePlan, RestoreReport, RunError, SafetyBackup,
-};
+use salvajocs_core::restore::{self, RestorePlan, RestoreReport, RunError, SafetyBackup};
 use salvajocs_core::storage::SnapshotInfo;
 use salvajocs_core::sync::{self, Base};
 
@@ -62,22 +60,16 @@ impl Restored {
     }
 
     /// Updates this PC's base of the game of `snapshot`, which this restore wrote, in the
-    /// repository `scope` (ADR-0035) when no write failed: `snapshot` becomes the base, except a
-    /// pre-restore safety backup, which clears it, so the game falls back to its seed and the
-    /// next Back up asks. A failed update adds a line and leaves the restore as it is. Call it
-    /// while holding the repository's storage lock.
+    /// repository `scope` (ADR-0035) when no write failed: `snapshot` becomes the base, a
+    /// pre-restore safety backup too. A failed update adds a line and leaves the restore as it
+    /// is. Call it while holding the repository's storage lock.
     pub(super) fn update_base(&mut self, config_dir: &Path, scope: &str, snapshot: &SnapshotInfo) {
         let slug = (snapshot.tags.iter()).find_map(|tag| tag.strip_prefix("game:"));
         let Some(slug) = slug.filter(|_| self.lines.iter().all(|(_, failed)| !failed)) else {
             return;
         };
-        let result = if snapshot.tags.iter().any(|tag| tag == PRE_RESTORE_TAG) {
-            sync::forget(config_dir, scope, slug)
-        } else {
-            let base = Base::new(snapshot.id.clone(), None);
-            sync::record(config_dir, scope, [(slug.to_owned(), base)])
-        };
-        if let Err(err) = result {
+        let base = Base::new(snapshot.id.clone(), None);
+        if let Err(err) = sync::record(config_dir, scope, [(slug.to_owned(), base)]) {
             let line = format!("This PC's sync state was not updated: {:#}", anyhow!(err));
             self.lines.push((line, true));
         }
