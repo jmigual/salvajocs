@@ -2,6 +2,8 @@
 
 **Status:** Accepted (the user's OK, 2026-11-25)
 **Date:** 2026-11-25
+**Amended:** 2026-11-25: after a restore that deletes the files its backup lacks, with nothing kept,
+the base reads Up to date, not Ahead (ADR-0036).
 
 ## Context
 

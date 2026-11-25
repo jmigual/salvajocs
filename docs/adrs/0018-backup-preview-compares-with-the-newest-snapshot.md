@@ -5,6 +5,8 @@
 **Amended:** 2026-11-25: the skip rule and the preview become the states of ADR-0035 (up to date,
 ahead, behind, changed on both, unknown base) against the newest backup and this PC's recorded
 base; (A) is off for regular backups.
+**Amended:** 2026-11-25: `hashes.json` gains `selection`, the backup's path rules; the format stays
+1 and `same_content` ignores it (ADR-0036).
 
 ## Context
 

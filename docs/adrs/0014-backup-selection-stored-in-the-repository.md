@@ -6,6 +6,9 @@
 retention policy; other settings snapshots, such as custom games, use another prefix (ADR-0028).
 **Amended:** 2026-11-22: a save that finds another machine's snapshot written meanwhile forgets
 its own and fails with `NotWritten`, so the changes stay pending (see Consequences).
+**Amended:** 2026-11-25: each backup records the path rules it used in `hashes.json`
+(`Hashes.selection`); a restore that deletes keeps what they or today's selection exclude
+(ADR-0036).
 
 ## Context
 
