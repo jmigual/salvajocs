@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use eframe::egui::Ui;
 use salvajocs_core::backup::{GameBackup, Stored};
 
@@ -11,6 +13,9 @@ use crate::theme::{self, icons};
 pub(super) enum Outcome {
     /// A new snapshot was stored.
     Saved,
+    /// A new snapshot was stored because the user chose to back up this PC's saves over those of
+    /// another PC, so they are now the newest.
+    SavedAsNewest,
     /// The saves equal the newest snapshot, which is this PC's own.
     Unchanged,
     /// The saves equal the newest snapshot, from the host it names.
@@ -45,7 +50,9 @@ impl Outcome {
     /// The icon in front of the game's line.
     pub(super) fn icon(&self) -> &'static str {
         match self {
-            Self::Saved | Self::Unchanged | Self::SameAsNewest(_) => icons::CHECK_CIRCLE,
+            Self::Saved | Self::SavedAsNewest | Self::Unchanged | Self::SameAsNewest(_) => {
+                icons::CHECK_CIRCLE
+            }
             Self::Behind { .. } => icons::ARROW_DOWN,
             Self::ChangedOnBoth(_) | Self::UnknownBase(_) => icons::WARNING,
             Self::Failed(_) => icons::X_CIRCLE,
@@ -55,7 +62,9 @@ impl Outcome {
     /// The severity of the icon and the line.
     pub(super) fn level(&self) -> Level {
         match self {
-            Self::Saved | Self::Unchanged | Self::SameAsNewest(_) => Level::Good,
+            Self::Saved | Self::SavedAsNewest | Self::Unchanged | Self::SameAsNewest(_) => {
+                Level::Good
+            }
             Self::Behind { .. } | Self::ChangedOnBoth(_) | Self::UnknownBase(_) => Level::Warn,
             Self::Failed(_) => Level::Error,
         }
@@ -66,6 +75,9 @@ impl Outcome {
     pub(super) fn line(&self, title: &str) -> String {
         match self {
             Self::Saved => format!("{title}: backed up"),
+            Self::SavedAsNewest => {
+                format!("{title}: backed up; this PC's saves are now the newest")
+            }
             Self::Unchanged => format!("{title}: up to date"),
             Self::SameAsNewest(host) => {
                 format!("{title}: same as the newest backup, from {host}")
@@ -76,13 +88,13 @@ impl Outcome {
             ),
             Self::ChangedOnBoth(host) => format!(
                 "{title}: not backed up: both this PC and {host} changed the saves since this PC \
-                 last synced. Nothing was overwritten; open the game to compare them."
+                 last synced. Nothing was overwritten. Back up asks again next time."
             ),
             Self::UnknownBase(host) => format!(
                 "{title}: not backed up: salvajocs does not know which backup this PC is in sync \
                  with (for example after undoing a restore or upgrading), and the saves differ \
-                 from the newest backup, from {host}. Nothing was overwritten; open the game to \
-                 compare them."
+                 from the newest backup, from {host}. Nothing was overwritten. Back up asks \
+                 again next time."
             ),
             Self::Failed(error) => format!("{title}: failed: {error}"),
         }
@@ -96,8 +108,11 @@ pub(super) struct GameResult {
     pub(super) outcome: Outcome,
 }
 
-pub(super) fn summarize(backup: &GameBackup) -> GameResult {
+/// The result of `backup`. A game stored while in `back_up_anyway` is one the user chose to back
+/// up over another PC's saves.
+pub(super) fn summarize(backup: &GameBackup, back_up_anyway: &BTreeSet<String>) -> GameResult {
     let outcome = match &backup.result {
+        Ok(Stored::New(_)) if back_up_anyway.contains(&backup.slug) => Outcome::SavedAsNewest,
         Ok(Stored::New(_)) => Outcome::Saved,
         Ok(Stored::UpToDate { elsewhere: None }) => Outcome::Unchanged,
         Ok(Stored::UpToDate {

@@ -32,6 +32,8 @@ All notable changes to salvajocs. The format follows
   last backup. A game whose newest backup comes from another PC and that this PC has not changed
   since it last synced shows a down arrow, "has newer saves", instead of a check; a game changed on
   both PCs, or that this PC has no record of syncing, has its own mark and says Back up asks.
+  Back up now asks first, in the same dialog as the custom games conflicts, for each such game,
+  with "Don't back up" preselected; "Back up this PC's" makes this PC's saves the newest backup.
 - The Old backups rules no longer keep the newest backup of each computer. They keep the last N
   backups of a game, or those newer than the span, whichever computer made them, plus the newest
   backup of the game; the safety backups (`pre-restore`) follow the same rules on their own, with

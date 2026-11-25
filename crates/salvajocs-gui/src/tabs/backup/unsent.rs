@@ -48,13 +48,40 @@ pub(super) enum Keep {
     Repository,
 }
 
-/// The question of which version to keep of each change made on another PC, before a backup.
+/// Why Back up asks about a game whose saves differ from the newest backup (ADR-0035).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reason {
+    /// This PC and the newest backup's PC changed the saves since this PC last synced.
+    ChangedOnBoth,
+    /// This PC has no record of which backup it is in sync with.
+    UnknownBase,
+}
+
+/// A game Back up asks about because its saves differ from the newest backup and this PC cannot
+/// tell whether its own are the newer (ADR-0035), built from the game's preview.
+pub(super) struct SyncAsk {
+    pub(super) slug: String,
+    pub(super) title: String,
+    pub(super) reason: Reason,
+    /// The PC that made the newest backup, and its date.
+    pub(super) host: String,
+    pub(super) date: String,
+    /// What differs from the newest backup, as the preview counts it; empty when no file does.
+    pub(super) differs: String,
+    /// Whether this PC's saves are backed up anyway; the answer starts as "Don't back up".
+    pub(super) back_up: bool,
+}
+
+/// The question of which version to keep of each change made on another PC, and which saves to
+/// back up that differ from another PC's, before a backup.
 pub(super) struct Asking {
     /// The repository that was checked.
     pub(super) source: Weak<Mutex<Storage>>,
     pub(super) games: Vec<(Conflict, Option<Keep>)>,
     /// The repository's rules and the choice.
     pub(super) rules: Option<(Retention, Option<Keep>)>,
+    /// The games whose saves differ from the newest backup, each answered from the start.
+    pub(super) syncs: Vec<SyncAsk>,
 }
 
 impl Asking {
@@ -213,6 +240,45 @@ pub(super) fn conflict_ui(
     ui.horizontal(|ui| {
         ui.radio_value(keep, Some(Keep::Here), "Keep this PC's");
         ui.radio_value(keep, Some(Keep::Repository), "Keep the repository's");
+    });
+}
+
+/// One game of the dialog about saves that differ from the newest backup: why it asks, what
+/// differs, and the choice in `ask.back_up`.
+pub(super) fn sync_ui(ui: &mut Ui, ask: &mut SyncAsk) {
+    let host = &ask.host;
+    ui.add_space(8.0);
+    ui.label(theme::semibold(&ask.title));
+    match ask.reason {
+        Reason::ChangedOnBoth => {
+            ui.label(format!(
+                "Changed on this PC and on {host} since this PC last synced."
+            ));
+        }
+        Reason::UnknownBase => {
+            ui.label(
+                "salvajocs does not know which backup this PC is in sync with, so it cannot tell \
+                 which PC changed the saves. This happens after you restore a pre-restore safety \
+                 backup (an undo) or after you upgrade salvajocs.",
+            );
+        }
+    }
+    let against = format!("the newest backup, from {host}, {}", ask.date);
+    ui.label(match ask.differs.as_str() {
+        "" => format!("This PC: no file differs from {against}."),
+        differs => format!("This PC: {differs} against {against}."),
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut ask.back_up, true, "Back up this PC's");
+        ui.weak(format!(
+            "becomes the newest backup; {host}'s stays in the history."
+        ));
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut ask.back_up, false, "Don't back up");
+        ui.weak(
+            "restore the newest later; a restore first saves this PC's files as a safety backup.",
+        );
     });
 }
 

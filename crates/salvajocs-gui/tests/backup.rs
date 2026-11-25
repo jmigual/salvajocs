@@ -18,6 +18,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
 use salvajocs_core::config::{AppConfig, ListSort, SortKey};
+use salvajocs_core::custom_games;
 use salvajocs_core::launcher::{Launcher, LauncherGame, LauncherPrefix};
 use salvajocs_core::layout::{Base, Root, RootKind};
 use salvajocs_core::manifest::fetch::{FetchError, Freshness, JSON_FILE};
@@ -1242,8 +1243,11 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
                here (its folder is unknown, or another file takes its path)";
     assert_eq!(harness.query_all_by_label(why).count(), 1);
 
-    // This PC has no record of syncing G and its saves differ, so it is not backed up (ADR-0035).
+    // This PC has no record of syncing G and its saves differ, so Back up asks, and "Don't back
+    // up" is the default (ADR-0035).
     harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+    press_back_up_in_dialog(&mut harness);
     run_until_backed_up(
         &mut harness,
         "G: not backed up: salvajocs does not know which backup this PC is in sync with",
@@ -1275,11 +1279,308 @@ fn a_registry_key_of_one_build_is_not_backed_up_without_a_base() {
         "{}",
         label_of(&harness, sentence)
     );
-    // This PC has no record of syncing G and its saves differ, so it is not backed up (ADR-0035).
+    // This PC has no record of syncing G and its saves differ, so Back up asks, and "Don't back
+    // up" is the default (ADR-0035).
     harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+    press_back_up_in_dialog(&mut harness);
     run_until_backed_up(
         &mut harness,
         "G: not backed up: salvajocs does not know which backup this PC is in sync with",
+    );
+}
+
+/// The heading of the question Back up asks about games whose saves differ from the newest backup.
+const DIFFERS: &str = "Saves that differ from the newest backup";
+
+/// Runs frames until Back up asks about games whose saves differ from the newest backup.
+fn run_until_asked(harness: &mut Harness<'static, App>) {
+    run_until(harness, "the question about saves that differ", |h| {
+        shows(h, DIFFERS)
+    });
+}
+
+/// Presses the question's own Back up, the enabled one.
+fn press_back_up_in_dialog(harness: &mut Harness<'static, App>) {
+    let button = harness
+        .query_all_by_label("Back up")
+        .find(|node| !node.accesskit_node().is_disabled())
+        .expect("the question has an enabled Back up");
+    button.click();
+}
+
+/// How many backups of G the repository of `tmp` holds.
+fn backups_of_g(tmp: &TempDir) -> usize {
+    let tag = format!("game:{}", slug("G"));
+    open_repo(tmp).snapshots(&tag).unwrap().len()
+}
+
+/// A game `G` whose one save holds `content`, in a prefix under `tmp`.
+fn game_g(tmp: &TempDir, content: &str) -> (PathBuf, Vec<CustomGame>) {
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", content);
+    let game = custom_game("G", false, &prefix);
+    (prefix, vec![game])
+}
+
+/// Two PCs on one repository: this PC's app, in `tmp`, and another PC's.
+struct Pcs {
+    here: Harness<'static, App>,
+    env: Env,
+    tmp: TempDir,
+    /// The prefix holding G here.
+    prefix: PathBuf,
+    there: Harness<'static, App>,
+    /// The prefix holding G there.
+    there_prefix: PathBuf,
+    _other: TempDir,
+}
+
+/// Backs up G on the other PC, whose saves differ from the newest backup, as "Back up this PC's".
+fn back_up_there_anyway(there: &mut Harness<'static, App>) {
+    scan(there, "1 game found");
+    run_until_compared(there);
+    there.get_by_label("Back up 1 game").click();
+    run_until_asked(there);
+    there.get_by_label("Back up this PC's").click();
+    run_settled(there);
+    press_back_up_in_dialog(there);
+    run_until_backed_up(there, "G: backed up; this PC's saves are now the newest");
+}
+
+/// This PC's app backed up G holding "one" and so has a base; then another PC's app backed up G
+/// holding "two!", the newest backup now. Here G still holds "one".
+fn behind_another_pc() -> Pcs {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    let (prefix, games) = game_g(&tmp, "one");
+    let (mut here, env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), games, true);
+    scan(&mut here, "1 game found");
+    here.get_by_label("Back up 1 game").click();
+    run_until_backed_up(&mut here, "G: backed up");
+
+    let other = tempfile::tempdir().unwrap();
+    let (there_prefix, games) = game_g(&other, "two!");
+    let (mut there, _) = open_app(&other, &repo_dir(&tmp), Vec::new(), games, true);
+    back_up_there_anyway(&mut there);
+    assert_eq!(backups_of_g(&tmp), 2);
+    Pcs {
+        here,
+        env,
+        tmp,
+        prefix,
+        there,
+        there_prefix,
+        _other: other,
+    }
+}
+
+/// [`behind_another_pc`], then this PC changed G too and compared again: changed on both.
+fn changed_on_both() -> Pcs {
+    let mut pcs = behind_another_pc();
+    write_save(&pcs.prefix, "G", "three");
+    scan(&mut pcs.here, "1 game found");
+    run_until_compared(&mut pcs.here);
+    assert!(shows(&pcs.here, "Changed on this PC and on "));
+    pcs
+}
+
+#[test]
+fn a_game_with_an_unknown_base_asks_and_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(&repo_dir(&tmp));
+    back_up_linux_build(&tmp, "abc");
+    let prefix = make_prefix(tmp.path());
+    write_save(&prefix, "G", "abc");
+    let game = like_factorio(&prefix);
+    let (mut harness, env) = open_app(&tmp, &repo_dir(&tmp), Vec::new(), vec![game], true);
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+
+    assert!(shows(
+        &harness,
+        "salvajocs does not know which backup this PC is in sync with, so"
+    ));
+    assert!(shows(
+        &harness,
+        "after you restore a pre-restore safety backup"
+    ));
+    assert!(checked_radio(&harness, "Don't back up"));
+    assert!(!checked_radio(&harness, "Back up this PC's"));
+    harness.get_by_label("Cancel").click();
+    run_settled(&mut harness);
+    assert!(!env.config_dir.join("sync-base.json").exists());
+    assert_eq!(backups_of_g(&tmp), 1);
+}
+
+/// Whether the radio button `label` is on.
+fn checked_radio(harness: &Harness<'static, App>, label: &str) -> bool {
+    harness.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
+}
+
+#[test]
+fn cancelling_the_question_about_a_game_changed_on_both_pcs_writes_nothing() {
+    let Pcs {
+        here: mut harness,
+        env,
+        tmp,
+        ..
+    } = changed_on_both();
+    let base = fs::read(env.config_dir.join("sync-base.json")).unwrap();
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+    assert!(shows(&harness, "since this PC last synced."));
+    assert!(shows(
+        &harness,
+        "1 changed against the newest backup, from "
+    ));
+    assert!(checked_radio(&harness, "Don't back up"));
+    harness.get_by_label("Cancel").click();
+    run_settled(&mut harness);
+
+    assert!(!shows(&harness, DIFFERS));
+    assert!(!shows(&harness, "G: not backed up"), "no job started");
+    assert_eq!(backups_of_g(&tmp), 2);
+    assert_eq!(
+        fs::read(env.config_dir.join("sync-base.json")).unwrap(),
+        base
+    );
+}
+
+#[test]
+fn a_game_changed_on_both_pcs_is_not_backed_up_by_default() {
+    let Pcs {
+        here: mut harness,
+        env,
+        tmp,
+        ..
+    } = changed_on_both();
+    let base = fs::read(env.config_dir.join("sync-base.json")).unwrap();
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+    press_back_up_in_dialog(&mut harness);
+    run_until_backed_up(&mut harness, "G: not backed up: both this PC and ");
+
+    assert!(shows(
+        &harness,
+        "Nothing was overwritten. Back up asks again next time."
+    ));
+    assert_eq!(backups_of_g(&tmp), 2);
+    assert_eq!(
+        fs::read(env.config_dir.join("sync-base.json")).unwrap(),
+        base
+    );
+}
+
+#[test]
+fn a_game_changed_on_both_pcs_is_backed_up_when_chosen() {
+    let Pcs {
+        here: mut harness,
+        env,
+        tmp,
+        ..
+    } = changed_on_both();
+    let base = fs::read(env.config_dir.join("sync-base.json")).unwrap();
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+    harness.get_by_label("Back up this PC's").click();
+    run_settled(&mut harness);
+    press_back_up_in_dialog(&mut harness);
+    run_until_backed_up(
+        &mut harness,
+        "G: backed up; this PC's saves are now the newest",
+    );
+
+    assert_eq!(backups_of_g(&tmp), 3);
+    assert_ne!(
+        fs::read(env.config_dir.join("sync-base.json")).unwrap(),
+        base
+    );
+}
+
+#[test]
+fn the_choice_to_back_up_is_not_remembered_for_the_next_back_up() {
+    let mut pcs = changed_on_both();
+    pcs.here.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut pcs.here);
+    pcs.here.get_by_label("Back up this PC's").click();
+    run_settled(&mut pcs.here);
+    press_back_up_in_dialog(&mut pcs.here);
+    run_until_backed_up(
+        &mut pcs.here,
+        "G: backed up; this PC's saves are now the newest",
+    );
+    assert_eq!(backups_of_g(&pcs.tmp), 3);
+
+    // The other PC backs up again and this PC changes G again: changed on both once more.
+    write_save(&pcs.there_prefix, "G", "four!!");
+    back_up_there_anyway(&mut pcs.there);
+    write_save(&pcs.prefix, "G", "five55");
+    scan(&mut pcs.here, "1 game found");
+    run_until_compared(&mut pcs.here);
+    pcs.here.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut pcs.here);
+
+    assert!(checked_radio(&pcs.here, "Don't back up"));
+    press_back_up_in_dialog(&mut pcs.here);
+    run_until_backed_up(&mut pcs.here, "G: not backed up: both this PC and ");
+    assert_eq!(backups_of_g(&pcs.tmp), 4);
+}
+
+#[test]
+fn the_question_about_unsent_custom_games_and_the_question_about_saves_are_one_dialog() {
+    let Pcs {
+        here: mut harness,
+        env,
+        tmp,
+        ..
+    } = changed_on_both();
+    // A game added here and, meanwhile, by another PC: a conflict the check finds.
+    harness.state_mut().set_tab(Tab::CustomGames);
+    run_settled(&mut harness);
+    harness.get_by_label("Add game").click();
+    run_settled(&mut harness);
+    replace_text(&mut harness, "Name", "H");
+    harness.get_by_label("Save game").click();
+    run_settled(&mut harness);
+    run_until(&mut harness, "the unsent game to be saved", |_| {
+        AppConfig::load(&env.config_dir)
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.custom_games_unsent.len() == 1)
+    });
+    let mut theirs = CustomGame::new("H".into(), Default::default(), Integration::Extend);
+    theirs.skips = vec!["<xdgData>/Theirs".into()];
+    let stage = tmp.path().join("elsewhere");
+    custom_games::save(&mut open_repo(&tmp), "H", None, Some(&theirs), &stage).unwrap();
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    let config = fs::read(env.config_dir.join("config.yaml")).unwrap();
+    let base = fs::read(env.config_dir.join("sync-base.json")).unwrap();
+
+    harness.get_by_label("Back up 1 game").click();
+    run_until_asked(&mut harness);
+
+    assert!(shows(&harness, "Changed on another PC"));
+    assert!(checked_radio(&harness, "Don't back up"));
+    harness.get_by_label("Cancel").click();
+    run_settled(&mut harness);
+    assert!(!shows(&harness, DIFFERS));
+    assert!(!shows(&harness, "G: not backed up"), "no job started");
+    assert_eq!(backups_of_g(&tmp), 2);
+    assert_eq!(
+        fs::read(env.config_dir.join("config.yaml")).unwrap(),
+        config
+    );
+    assert_eq!(
+        fs::read(env.config_dir.join("sync-base.json")).unwrap(),
+        base
     );
 }
 

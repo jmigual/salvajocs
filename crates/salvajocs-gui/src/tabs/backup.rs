@@ -3,7 +3,7 @@
 //! ADR-0015, ADR-0018).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
@@ -166,6 +166,9 @@ pub struct BackupTab {
     /// The repository a passed check, or the answered question, was for: the backup starts once
     /// no pending file write runs.
     cleared: Option<Weak<Mutex<Storage>>>,
+    /// The slugs of the games the user chose to back up although their saves differ from the
+    /// newest backup's; for the next backup only, never saved (ADR-0035).
+    back_up_anyway: BTreeSet<String>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
     /// A backup saved this PC's rules, or the question about them was answered, since
@@ -247,8 +250,9 @@ impl BackupTab {
                     self.run_error = error;
                     self.saving = saving;
                     // A game saved before the run stopped early counts too.
-                    self.saved |= (lock(&self.progress).done.iter())
-                        .any(|game| matches!(game.outcome, Outcome::Saved));
+                    self.saved |= (lock(&self.progress).done.iter()).any(|game| {
+                        matches!(game.outcome, Outcome::Saved | Outcome::SavedAsNewest)
+                    });
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
                     if let Some(after) = after
@@ -337,8 +341,11 @@ impl BackupTab {
             self.checking = None;
             // A check of a repository Settings replaced is dropped, and so is its backup.
             if is_session(&source, state) {
+                let syncs = self.sync_asks();
                 match result {
-                    Ok(Checked { games, rules }) if games.is_empty() && rules.is_none() => {
+                    Ok(Checked { games, rules })
+                        if games.is_empty() && rules.is_none() && syncs.is_empty() =>
+                    {
                         self.cleared = Some(source);
                     }
                     Ok(Checked { games, rules }) => {
@@ -346,6 +353,7 @@ impl BackupTab {
                             source,
                             games: games.into_iter().map(|conflict| (conflict, None)).collect(),
                             rules: rules.map(|stored| (stored, None)),
+                            syncs,
                         });
                     }
                     Err(err) => {

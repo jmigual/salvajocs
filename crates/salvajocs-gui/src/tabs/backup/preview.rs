@@ -237,7 +237,7 @@ fn file_tree(game: &GameScan, preview: Option<&Preview>) -> FileTree {
 
 /// `2 new, 1 changed, 1 removed, 1 could not be compared`, leaving out the kinds there are none
 /// of; empty when there is none of any.
-fn counted(counts: &Counts) -> String {
+pub(super) fn counted(counts: &Counts) -> String {
     let parts = [
         (counts.new, "new"),
         (counts.changed, "changed"),

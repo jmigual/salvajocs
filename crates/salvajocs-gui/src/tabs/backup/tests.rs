@@ -105,12 +105,12 @@ fn summary_says_what_the_settings_exclude() {
 #[test]
 fn a_failed_game_carries_its_error_chain() {
     let failed = backup(Err(BackupError::UnsafeTail("../x".into())));
-    let GameResult { title, outcome } = summarize(&failed);
+    let GameResult { title, outcome } = summarize(&failed, &BTreeSet::new());
     assert_eq!(title, "Game");
     assert!(matches!(outcome, Outcome::Failed(text) if text.contains("../x")));
     let unchanged = Stored::UpToDate { elsewhere: None };
     assert_eq!(
-        summarize(&backup(Ok(unchanged))).outcome,
+        summarize(&backup(Ok(unchanged)), &BTreeSet::new()).outcome,
         Outcome::Unchanged
     );
 }
@@ -127,7 +127,7 @@ fn snapshot_from(host: &str) -> SnapshotInfo {
 
 /// The mapped outcome of a backup that stored `stored`.
 fn outcome_of(stored: Stored) -> Outcome {
-    summarize(&backup(Ok(stored))).outcome
+    summarize(&backup(Ok(stored)), &BTreeSet::new()).outcome
 }
 
 #[test]
@@ -158,6 +158,23 @@ fn each_sync_state_has_its_own_result() {
 }
 
 #[test]
+fn a_game_backed_up_on_request_says_its_saves_are_now_the_newest() {
+    let stored = || Stored::New(snapshot_from("here"));
+    let anyway: BTreeSet<String> = ["game".to_owned()].into();
+    let chosen = summarize(&backup(Ok(stored())), &anyway).outcome;
+    assert_eq!(chosen, Outcome::SavedAsNewest);
+    assert_eq!(
+        chosen.line("Game"),
+        "Game: backed up; this PC's saves are now the newest"
+    );
+    let other: BTreeSet<String> = ["other".to_owned()].into();
+    assert_eq!(
+        summarize(&backup(Ok(stored())), &other).outcome,
+        Outcome::Saved
+    );
+}
+
+#[test]
 fn a_game_that_was_not_backed_up_is_not_a_failure() {
     let date = "2026-11-25".to_owned();
     let behind = Outcome::Behind {
@@ -182,6 +199,7 @@ fn a_game_that_was_not_backed_up_is_not_a_failure() {
     );
     for outcome in [
         Outcome::Saved,
+        Outcome::SavedAsNewest,
         Outcome::Unchanged,
         Outcome::SameAsNewest("there".into()),
     ] {
@@ -216,6 +234,10 @@ fn the_result_lines_say_why_nothing_was_backed_up() {
     for line in [both, unknown] {
         assert!(line.starts_with("Game: not backed up: "), "{line}");
         assert!(!line.contains("failed"), "{line}");
+        assert!(
+            line.ends_with("Nothing was overwritten. Back up asks again next time."),
+            "{line}"
+        );
     }
     assert_eq!(
         Outcome::SameAsNewest("there".into()).line("Game"),
@@ -1146,6 +1168,33 @@ fn the_bottom_bar_says_whether_the_repository_is_encrypted() {
 }
 
 #[test]
+fn back_up_waits_for_the_comparison_its_question_is_built_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let ctx = egui::Context::default();
+    let mut tab = listing(&["Game"]);
+    let (release, hold) = mpsc::channel::<()>();
+    tab.previewing = Some(Job::spawn(&ctx, move || {
+        let _ = hold.recv();
+        Ok(Vec::new())
+    }));
+    tab.backup_requested = true;
+
+    tab.start_requested(&ctx, &state);
+
+    assert!(tab.backup_requested, "the request waits for the previews");
+    drop(release);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while tab.previewing.as_mut().is_some_and(|job| job.is_running()) {
+        assert!(Instant::now() < deadline, "the previews never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    tab.previewing = None;
+    tab.start_requested(&ctx, &state);
+    assert!(!tab.backup_requested);
+}
+
+#[test]
 fn back_up_waits_while_what_to_back_up_loads() {
     let dir = tempfile::tempdir().unwrap();
     let mut harness = theme::harness(
@@ -1316,8 +1365,8 @@ fn back_up_returns_only_the_new_snapshots() {
         &games,
         &stage,
         &mapper,
-        dir.path(),
-        "repo",
+        (dir.path(), "repo"),
+        &BTreeSet::new(),
         |_| {},
     )
     .unwrap();
@@ -1331,8 +1380,8 @@ fn back_up_returns_only_the_new_snapshots() {
         &games,
         &stage,
         &mapper,
-        dir.path(),
-        "repo",
+        (dir.path(), "repo"),
+        &BTreeSet::new(),
         |_| {},
     )
     .unwrap();
@@ -1351,7 +1400,16 @@ fn two_backups(dir: &Path) -> (SharedStorage, Vec<String>) {
     for content in ["a", "bb"] {
         let games = [saved_game(dir, "Game", content)];
         let recorded = dir.join("setup-bases");
-        back_up(&storage, &games, &stage, &mapper, &recorded, "repo", |_| {}).unwrap();
+        back_up(
+            &storage,
+            &games,
+            &stage,
+            &mapper,
+            (&recorded, "repo"),
+            &BTreeSet::new(),
+            |_| {},
+        )
+        .unwrap();
     }
     let mut ids = snapshot_ids(&storage, "Game");
     ids.reverse();
@@ -1526,8 +1584,8 @@ fn clean_up_never_forgets_the_snapshots_it_is_given() {
             &games,
             &stage,
             &mapper,
-            dir.path(),
-            "repo",
+            (dir.path(), "repo"),
+            &BTreeSet::new(),
             |_| {},
         )
         .unwrap();
@@ -1554,7 +1612,16 @@ fn a_new_scan_closes_the_open_details() {
     let game = saved_game(dir.path(), "Game", "old");
     let stage = dir.path().join("stage");
     let games = std::slice::from_ref(&game);
-    back_up(&storage, games, &stage, &mapper, dir.path(), "repo", |_| {}).unwrap();
+    back_up(
+        &storage,
+        games,
+        &stage,
+        &mapper,
+        (dir.path(), "repo"),
+        &BTreeSet::new(),
+        |_| {},
+    )
+    .unwrap();
     let previews = preview(&storage, games, &mapper, (dir.path(), "repo"), |_| {}).unwrap();
     let Ok(Some(baseline)) = &previews[0] else {
         panic!("the game has a backup");
@@ -2023,8 +2090,8 @@ fn a_game_saved_while_the_rules_fail_is_sent_and_the_rules_stay() {
             &games,
             &stage,
             &mapper,
-            dir.path(),
-            "repo",
+            (dir.path(), "repo"),
+            &BTreeSet::new(),
             |_| {},
         )
         .unwrap();
@@ -2099,8 +2166,8 @@ fn a_cleanup_after_rules_that_were_not_saved_forgets_nothing() {
             &games,
             &stage,
             &mapper,
-            dir.path(),
-            "repo",
+            (dir.path(), "repo"),
+            &BTreeSet::new(),
             |_| {},
         )
         .unwrap();

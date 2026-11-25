@@ -6,7 +6,8 @@
 the repository's games this PC lacks are offered, not appended; **Keep the repository's** is an
 acceptance (ADR-0030).
 **Amended:** 2026-11-25: the Back up dialog also asks about each game changed here and on
-another PC since this PC last synced, with **Don't back up** preselected (ADR-0035).
+another PC since this PC last synced, or whose base is unknown, with **Don't back up**
+preselected (ADR-0035).
 
 ## Context
 
