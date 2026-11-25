@@ -369,6 +369,18 @@ fn restage_keeps_recorded_roots_when_source_unreadable() {
     ));
 }
 
+#[test]
+fn meta_sha256_is_the_hash_stage_lists_unless_a_path_was_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut scan = game("Foo", vec![]);
+    scan.roots = vec![(Base::WinAppData, "A".to_string())];
+    scan.prefix_origin = Some(PrefixOrigin::Proton(70));
+    let staged = stage(&scan, &RegistryExport::default(), tmp.path()).unwrap();
+    assert_eq!(meta_sha256(&scan), Some(staged.meta));
+    scan.unreadable = vec![tmp.path().join("B")];
+    assert_eq!(meta_sha256(&scan), None);
+}
+
 fn init_repo(root: &Path) -> Storage {
     let location = RepoLocation {
         repository: root.join("repo").to_str().unwrap().into(),

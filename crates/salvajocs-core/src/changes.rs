@@ -74,9 +74,16 @@ pub struct Counts {
 /// them) of the game `slug`, from any host, that is not a pre-restore safety backup.
 pub fn newest<'a>(snapshots: &'a [SnapshotInfo], slug: &str) -> Option<&'a SnapshotInfo> {
     let game_tag = format!("game:{slug}");
-    snapshots.iter().find(|snapshot| {
-        snapshot.tags.contains(&game_tag) && !snapshot.tags.iter().any(|t| t == PRE_RESTORE_TAG)
-    })
+    snapshots
+        .iter()
+        .find(|snapshot| regular(snapshot, &game_tag))
+}
+
+/// Whether `snapshot` is tagged `game_tag` (`game:<slug>`) and is not a pre-restore safety
+/// backup.
+pub(crate) fn regular(snapshot: &SnapshotInfo, game_tag: &str) -> bool {
+    snapshot.tags.iter().any(|tag| tag == game_tag)
+        && !snapshot.tags.iter().any(|tag| tag == PRE_RESTORE_TAG)
 }
 
 /// The hash list of the game's staged directory `dir` in snapshot `snapshot_id`, whose entries

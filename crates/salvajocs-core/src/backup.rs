@@ -170,6 +170,20 @@ pub fn stage(
     Ok(hashes)
 }
 
+/// The SHA-256 of the `salvajocs.json` [`stage`] writes for `game`; `None` when
+/// `game.unreadable` is not empty, since `stage` then keeps the staged meta's roots and prefix.
+pub(crate) fn meta_sha256(game: &GameScan) -> Option<String> {
+    let meta = SnapshotMeta {
+        format: SNAPSHOT_FORMAT,
+        title: game.title.clone(),
+        roots: game.roots.clone(),
+        prefix: game.prefix_origin.clone(),
+    };
+    game.unreadable
+        .is_empty()
+        .then(|| sha256_bytes(&json(&meta)))
+}
+
 /// The staged `hashes.json`; `None` when there is none or it cannot be parsed, so every file
 /// not copied this run is read again.
 fn staged_hashes(hashes_file: &Path) -> Result<Option<Hashes>, BackupError> {
