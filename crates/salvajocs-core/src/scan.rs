@@ -125,6 +125,12 @@ pub struct GameScan {
     pub prefix_origin: Option<PrefixOrigin>,
     /// Paths that could not be read; `files` may be incomplete.
     pub unreadable: Vec<PathBuf>,
+    /// The path rules ([`GameSettings::paths`]) [`selection::apply`] filtered `files` with,
+    /// which a backup records in `hashes.json` (ADR-0036); empty from a scan.
+    ///
+    /// [`GameSettings::paths`]: crate::selection::GameSettings::paths
+    /// [`selection::apply`]: crate::selection::apply
+    pub selection: BTreeMap<String, bool>,
 }
 
 /// Where a game's registry keys were found.
@@ -654,6 +660,7 @@ fn scan_game(
         prefixes,
         prefix_origin,
         unreadable,
+        selection: BTreeMap::new(),
     })
 }
 

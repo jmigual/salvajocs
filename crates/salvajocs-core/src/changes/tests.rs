@@ -93,6 +93,7 @@ fn game(files: Vec<FoundFile>) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: Vec::new(),
+        selection: BTreeMap::new(),
     }
 }
 

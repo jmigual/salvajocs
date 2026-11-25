@@ -188,13 +188,15 @@ pub fn path_key(file: &FoundFile) -> String {
     format!("{}/{}", file.base.dir_name(), file.tail)
 }
 
-/// `scan` without the files and registry keys `settings` exclude; `None` when the game is
-/// skipped or nothing is left, so no empty snapshot is made.
+/// `scan` without the files and registry keys `settings` exclude, with the path rules in
+/// `GameScan::selection` for the backup to record; `None` when the game is skipped or nothing
+/// is left, so no empty snapshot is made.
 pub fn apply(scan: &GameScan, settings: &GameSettings) -> Option<GameScan> {
     if settings.skip {
         return None;
     }
     let mut kept = scan.clone();
+    kept.selection = settings.paths.clone();
     kept.files
         .retain(|file| settings.path_included(&path_key(file)));
     kept.registry_keys

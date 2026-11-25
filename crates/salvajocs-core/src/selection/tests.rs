@@ -37,6 +37,7 @@ fn scan(files: Vec<FoundFile>) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     }
 }
 
@@ -327,4 +328,12 @@ fn a_new_key_below_an_older_ancestor_key_wins_by_depth() {
     ]);
     assert!(s.path_included("WinLocalAppDataLow/Co/a.sav"));
     assert!(!s.path_included("WinAppData/Foo/x"));
+}
+
+#[test]
+fn apply_carries_the_path_rules() {
+    let rules = settings(&[("WinAppData/Foo", false), ("WinAppData/Foo/keep", true)]);
+    let files = vec![file(Base::WinAppData, "Foo/keep/a.sav")];
+    let kept = apply(&scan(files), &rules).unwrap();
+    assert_eq!(kept.selection, rules.paths);
 }

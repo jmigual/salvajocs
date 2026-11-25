@@ -40,6 +40,7 @@ fn game(title: &str, files: Vec<FoundFile>) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     }
 }
 
@@ -1442,4 +1443,60 @@ fn time_twenty_game_backup() {
         "same as newest elsewhere: {count} snapshots in {:?}",
         started.elapsed()
     );
+}
+
+/// Path rules unticking a folder and ticking a file again below it.
+fn rules() -> BTreeMap<String, bool> {
+    BTreeMap::from([
+        ("WinAppData/Game/old".to_owned(), false),
+        ("WinAppData/Game/old/keep.sav".to_owned(), true),
+    ])
+}
+
+#[test]
+fn stage_records_the_selection_in_hashes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = game_with_save(tmp.path(), "Foo", "foo");
+    let unticked = GameScan {
+        selection: rules(),
+        ..plain.clone()
+    };
+    let (with, without) = (tmp.path().join("with"), tmp.path().join("without"));
+
+    let listed = stage(&unticked, &RegistryExport::default(), &with).unwrap();
+    assert_eq!(listed.selection, rules());
+    assert_eq!(hash_list(&with), listed);
+    // Neither the meta hash nor the content comparison sees the rules.
+    let other = stage(&plain, &RegistryExport::default(), &without).unwrap();
+    assert!(other.selection.is_empty());
+    assert_eq!(listed.meta, other.meta);
+    assert!(listed.same_content(&other));
+    assert_eq!(meta_sha256(&unticked), meta_sha256(&plain));
+}
+
+#[test]
+fn a_selection_only_change_backs_up_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let plain = game_with_save(tmp.path(), "Foo", "foo");
+    let stage_root = tmp.path().join("stage");
+    let outcomes = backup_by_state(
+        &mut storage,
+        std::slice::from_ref(&plain),
+        &stage_root,
+        &mapper(),
+        &[],
+    );
+    assert!(written(&outcomes)[0].is_some());
+
+    let unticked = GameScan {
+        selection: rules(),
+        ..plain
+    };
+    let outcomes = backup_by_state(&mut storage, &[unticked], &stage_root, &mapper(), &[]);
+    let outcome = outcomes[0].result.as_ref().unwrap();
+    assert!(matches!(outcome, Stored::UpToDate { .. }), "{outcome:?}");
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
+    // The staged list holds the new rules for the next snapshot.
+    assert_eq!(hash_list(&stage_root.join(slug("Foo"))).selection, rules());
 }

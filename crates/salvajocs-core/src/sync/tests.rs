@@ -283,6 +283,7 @@ fn bare_scan() -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: Vec::new(),
+        selection: BTreeMap::new(),
     }
 }
 

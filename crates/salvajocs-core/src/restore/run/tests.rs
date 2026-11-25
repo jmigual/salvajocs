@@ -46,6 +46,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     }
 }
 
@@ -2231,6 +2232,7 @@ fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (Listed, RestorePl
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     };
     back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
     let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
@@ -2945,4 +2947,25 @@ fn run_refuses_a_file_to_delete_that_became_a_symlink() {
     );
     assert!(fs::symlink_metadata(&old).unwrap().is_symlink());
     assert_eq!(read(&elsewhere), "elsewhere");
+}
+
+#[test]
+fn a_safety_backup_records_no_selection() {
+    let mut f = fixture();
+    write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let rules = BTreeMap::from([("WinAppData/Game/other".to_owned(), false)]);
+    let game = GameScan {
+        selection: rules.clone(),
+        ..game_with_save(f.tmp.path(), "Foo", "new")
+    };
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+    assert_eq!(listed.hashes.as_ref().unwrap().selection, rules);
+    download(&mut f.storage, &listed).unwrap();
+
+    let report = f.run(&plan, false).unwrap();
+    let work = f.tmp.path().join("safety");
+    let safety = super::read(&mut f.storage, created(&report), &work).unwrap();
+    assert!(safety.hashes.unwrap().selection.is_empty());
 }

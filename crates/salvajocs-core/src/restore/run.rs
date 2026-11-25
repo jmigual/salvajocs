@@ -705,6 +705,8 @@ pub fn run(
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: Vec::new(),
+        // A safety backup is not filtered by the selection, so it records no rules.
+        selection: BTreeMap::new(),
     };
     for (write, check) in plan.writes.iter().zip(&checks) {
         let Ok(Some(size)) = *check else {

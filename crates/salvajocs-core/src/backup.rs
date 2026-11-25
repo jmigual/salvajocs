@@ -166,7 +166,7 @@ pub fn stage(
         meta: sha256_file(&meta_file).map_err(io_error(&meta_file))?,
         registry,
         files,
-        selection: BTreeMap::new(),
+        selection: game.selection.clone(),
     };
     write_if_changed(&hashes_file, &json(&hashes))?;
     Ok(hashes)
