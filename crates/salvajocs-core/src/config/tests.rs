@@ -611,6 +611,24 @@ fn sort_round_trips() {
 }
 
 #[test]
+fn the_changes_sort_is_written_and_read_as_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    fs::write(
+        &file,
+        "repository: /backups\npassword: none\n\
+         backup_sort: { by: changes, descending: true }\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.backup_sort, ListSort::new(SortKey::Changes, true));
+
+    config.save(tmp.path()).unwrap();
+    assert!(fs::read_to_string(&file).unwrap().contains("changes"));
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
 fn unknown_sort_value_reads_as_default() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(

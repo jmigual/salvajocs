@@ -6,6 +6,12 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The Backup tab can sort its games by **Changes**: the number of files the next backup would
+  add, change or remove, most first by default, so the games with changes are on top or at the
+  bottom.
+
 ### Changed
 
 - The custom games list says "extends the manifest entry" and "overrides the manifest entry"

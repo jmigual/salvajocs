@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use eframe::egui::{self, Checkbox, Ui};
-use salvajocs_core::config::ListSort;
+use salvajocs_core::config::{ListSort, SortKey};
 use salvajocs_core::crossbuild::MappingEntry;
 use salvajocs_core::retention::Cleanup;
 use salvajocs_core::scan::{self, Environment, ProblemKind, ScanProblem, ScanReport};
@@ -27,7 +27,8 @@ use crate::tabs::space::{Polled, Space};
 use crate::theme::{self, icons};
 use choices::{AfterBackup, Choices};
 use preview::{
-    FileAction, Listed, Preview, badges, files_ui, header_of, preview_ui, to_choose, unknown,
+    FileAction, Listed, Preview, badges, change_count, files_ui, header_of, preview_ui, to_choose,
+    unknown,
 };
 use results::{GameResult, Outcome};
 use unsent::{Asking, Checked, Shared, is_session};
@@ -133,7 +134,8 @@ pub struct BackupTab {
     listed_stats: Arc<Mutex<Option<HashMap<String, BackupStats>>>>,
     /// Works out the space of each game's backups.
     space: Option<Space>,
-    /// Counts the changes of `report` and of the figures, which the order is built from.
+    /// Counts the changes of `report`, of the figures, and under Changes of the previews and the
+    /// loaded settings, which the order is built from.
     generation: u64,
     /// The indices of `report.games` in the order shown.
     order: Vec<usize>,
@@ -296,6 +298,8 @@ impl BackupTab {
                 Polled::Nothing => {}
             }
         }
+        let by_changes =
+            (state.config.as_ref()).is_some_and(|c| c.backup_sort.by == SortKey::Changes);
         if let Some(job) = &mut self.previewing
             && let Some(result) = job.take_result()
         {
@@ -305,6 +309,10 @@ impl BackupTab {
                 Ok(previews) => previews,
                 Err(err) => (0..games).map(|_| Err(format!("{err:#}"))).collect(),
             };
+            // Other keys must not reorder on previews: the space figures arrive on their own.
+            if by_changes {
+                self.generation += 1;
+            }
             if let Some(report) = &self.report {
                 let games = report.games.iter().zip(&self.previews);
                 self.listed = games
@@ -317,6 +325,10 @@ impl BackupTab {
         }
         if self.choices.poll(ctx, state) {
             self.listed.iter_mut().for_each(Listed::invalidate);
+            // The loaded settings change the counts the order by changes was built from.
+            if by_changes {
+                self.generation += 1;
+            }
         }
         if let Some((source, job)) = &mut self.checking
             && let Some(result) = job.take_result()
@@ -394,7 +406,7 @@ impl BackupTab {
     }
 
     /// Builds the order of the games by `sort`, and drops the lines of figures, when the sort,
-    /// the report or the figures changed since it was last built.
+    /// the report, the figures or (under Changes) the previews changed since it was last built.
     fn sort_rows(&mut self, sort: ListSort) {
         if self.sorted == Some((sort, self.generation)) {
             return;
@@ -408,8 +420,19 @@ impl BackupTab {
             }
         }
         let figures = self.stats.as_ref();
-        let rows: Vec<_> = (report.games.iter().zip(&self.slugs))
-            .map(|(game, slug)| (game.title.as_str(), figures.and_then(|f| f.get(slug))))
+        let rows: Vec<_> = (report.games.iter().zip(&self.slugs).enumerate())
+            .map(|(index, (game, slug))| {
+                // Read once per build: a tick must not move the game under the cursor.
+                let changes = (self.previews.get(index)).and_then(|preview| {
+                    let settings = self.choices.game(&game.title).unwrap_or_default();
+                    change_count(game, preview, &settings)
+                });
+                (
+                    game.title.as_str(),
+                    figures.and_then(|f| f.get(slug)),
+                    changes,
+                )
+            })
             .collect();
         self.order = stats::order(&rows, sort);
         self.lines = vec![None; report.games.len()];
@@ -639,7 +662,7 @@ impl BackupTab {
             );
             return;
         }
-        let picked = sort::sort_ui(ui, "backup_sort", sort);
+        let picked = sort::sort_ui(ui, "backup_sort", SortKey::ALL, sort);
         let (choices, listed, prefixes) = (&self.choices, &mut self.listed, &self.prefixes);
         let (previews, order, lines) = (&self.previews, &self.order, &mut self.lines);
         let (figures, space, slugs) = (&self.stats, &self.space, &self.slugs);

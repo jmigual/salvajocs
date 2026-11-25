@@ -68,20 +68,27 @@ fn stats(last: Option<u64>, size: Option<u64>, space: Option<u64>) -> BackupStat
     }
 }
 
-fn sorted(rows: &[(&str, Option<&BackupStats>)], by: SortKey, descending: bool) -> Vec<usize> {
+type Row<'a> = (&'a str, Option<&'a BackupStats>, Option<usize>);
+
+fn sorted(rows: &[Row], by: SortKey, descending: bool) -> Vec<usize> {
     order(rows, ListSort::new(by, descending))
 }
 
 #[test]
 fn name_sorts_by_bytes_both_ways_and_keeps_equal_titles_in_order() {
-    let rows = [("B", None), ("a", None), ("b", None), ("a", None)];
+    let rows = [
+        ("B", None, None),
+        ("a", None, None),
+        ("b", None, None),
+        ("a", None, None),
+    ];
     assert_eq!(sorted(&rows, SortKey::Name, false), [0, 1, 3, 2]);
     assert_eq!(sorted(&rows, SortKey::Name, true), [2, 1, 3, 0]);
 }
 
 #[test]
 fn name_ascending_keeps_a_list_in_byte_order_as_it_is() {
-    let rows = [("B", None), ("a", None), ("b", None)];
+    let rows = [("B", None, None), ("a", None, None), ("b", None, None)];
     assert_eq!(sorted(&rows, SortKey::Name, false), [0, 1, 2]);
 }
 
@@ -93,10 +100,10 @@ fn each_key_sorts_both_ways_with_missing_values_last() {
     );
     let unknown = stats(Some(3), None, None);
     let rows = [
-        ("Missing", None),
-        ("Small old", Some(&small_old)),
-        ("Unknown", Some(&unknown)),
-        ("Big new", Some(&big_new)),
+        ("Missing", None, None),
+        ("Small old", Some(&small_old), None),
+        ("Unknown", Some(&unknown), None),
+        ("Big new", Some(&big_new), None),
     ];
     assert_eq!(sorted(&rows, SortKey::LastBackup, true), [2, 3, 1, 0]);
     assert_eq!(sorted(&rows, SortKey::LastBackup, false), [1, 3, 2, 0]);
@@ -109,10 +116,27 @@ fn each_key_sorts_both_ways_with_missing_values_last() {
 #[test]
 fn ties_fall_back_to_the_title_then_the_index() {
     let same = stats(Some(1), Some(5), Some(5));
-    let rows = [("b", Some(&same)), ("a", Some(&same)), ("b", Some(&same))];
+    let rows = [
+        ("b", Some(&same), None),
+        ("a", Some(&same), None),
+        ("b", Some(&same), None),
+    ];
     for descending in [false, true] {
         assert_eq!(sorted(&rows, SortKey::SpaceUsed, descending), [1, 0, 2]);
     }
+}
+
+#[test]
+fn changes_sorts_by_count_with_missing_values_last_and_ties_by_title() {
+    let rows = [
+        ("none", None, None),
+        ("ten", None, Some(10)),
+        ("zero", None, Some(0)),
+        ("tie b", None, Some(3)),
+        ("tie a", None, Some(3)),
+    ];
+    assert_eq!(sorted(&rows, SortKey::Changes, true), [1, 4, 3, 2, 0]);
+    assert_eq!(sorted(&rows, SortKey::Changes, false), [2, 4, 3, 1, 0]);
 }
 
 #[test]
@@ -122,6 +146,7 @@ fn natural_directions() {
         SortKey::LastBackup,
         SortKey::LastBackupSize,
         SortKey::SpaceUsed,
+        SortKey::Changes,
     ] {
         assert!(key.descending_by_default());
     }

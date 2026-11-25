@@ -15,9 +15,9 @@ walks through those steps and explains how to undo a restore. Back to the
    used`; hover it for the full sentence. `… used` means the space is still being worked out,
    and `Only safety backups` a game with only the backups a restore makes. The **Sort by** row
    above the list works as on the [Backup tab](backup.md#sort-and-backup-sizes), with a choice
-   of its own, and the figure the list is sorted by comes first on each line. **Load backups**
-   waits while a backup runs. Once a **Back up** has saved new backups, a loaded list is read
-   again by itself and keeps the game and snapshot you chose.
+   of its own and without **Changes**, and the figure the list is sorted by comes first on each
+   line. **Load backups** waits while a backup runs. Once a **Back up** has saved new backups, a
+   loaded list is read again by itself and keeps the game and snapshot you chose.
 2. Click a game. The **Snapshot** list shows its backups, newest first, as `time, host`. A backup
    made by a restore adds `, pre-restore`. The newest backup that is not a `pre-restore` one is
    preselected.

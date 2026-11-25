@@ -12,6 +12,15 @@ use crate::theme::{self, icons};
 /// The widest the dropdown grows, enough for its longest item.
 const COMBO_WIDTH: f32 = 160.0;
 
+/// The keys the Restore sidebar lists: every key but [`SortKey::Changes`], which compares with
+/// what the Backup tab previews (ADR-0032).
+pub(crate) const RESTORE_KEYS: &[SortKey] = &[
+    SortKey::Name,
+    SortKey::LastBackup,
+    SortKey::LastBackupSize,
+    SortKey::SpaceUsed,
+];
+
 /// The dropdown's name of `key`.
 fn label(key: SortKey) -> &'static str {
     match key {
@@ -19,6 +28,7 @@ fn label(key: SortKey) -> &'static str {
         SortKey::LastBackup => "Last backup",
         SortKey::LastBackupSize => "Last backup size",
         SortKey::SpaceUsed => "Space used",
+        SortKey::Changes => "Changes",
         _ => "Other",
     }
 }
@@ -38,6 +48,10 @@ fn definition(key: SortKey) -> &'static str {
             "Space used by all backups: the space all of the game's backups use in the \
              repository, compressed, safety backups included"
         }
+        SortKey::Changes => {
+            "Changes: how many files the next backup would add, change or remove compared with \
+             the last backup"
+        }
         _ => "",
     }
 }
@@ -49,15 +63,22 @@ fn order_words(sort: ListSort) -> &'static str {
         (SortKey::Name, true) => "Z to A",
         (SortKey::LastBackup, false) => "Oldest first",
         (SortKey::LastBackup, true) => "Newest first",
+        (SortKey::Changes, false) => "Fewest changes first",
+        (SortKey::Changes, true) => "Most changes first",
         (_, false) => "Smallest first",
         (_, true) => "Largest first",
     }
 }
 
-/// The Sort by row: a dropdown of the keys and a button that reverses the order, the dropdown
+/// The Sort by row: a dropdown of `keys` and a button that reverses the order, the dropdown
 /// as wide as the row leaves up to its own width. Returns the sort the user picked, if any;
 /// picking a key resets the direction to the key's natural one.
-pub(crate) fn sort_ui(ui: &mut Ui, id_salt: &str, sort: ListSort) -> Option<ListSort> {
+pub(crate) fn sort_ui(
+    ui: &mut Ui,
+    id_salt: &str,
+    keys: &[SortKey],
+    sort: ListSort,
+) -> Option<ListSort> {
     let mut picked = None;
     ui.horizontal(|ui| {
         let name = ui.label("Sort by");
@@ -72,7 +93,7 @@ pub(crate) fn sort_ui(ui: &mut Ui, id_salt: &str, sort: ListSort) -> Option<List
                 .selected_text(label(sort.by))
                 .show_ui(ui, |ui| {
                     theme::pill_list(ui);
-                    for &key in SortKey::ALL {
+                    for &key in keys {
                         let item = ui.selectable_label(key == sort.by, label(key));
                         if item.on_hover_text(definition(key)).clicked() && key != sort.by {
                             picked = Some(ListSort::new(key, key.descending_by_default()));

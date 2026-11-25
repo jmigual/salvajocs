@@ -24,7 +24,9 @@ use crate::status_bar;
 use crate::tabs::tree::Badge;
 use crate::theme;
 
-use super::preview::{Baseline, Next, hint, next_backup, preview, preview_text, sentence, summary};
+use super::preview::{
+    Baseline, Next, change_count, hint, next_backup, preview, preview_text, sentence, summary,
+};
 use super::results::summarize;
 use super::run::{back_up, clean_up};
 use super::unsent::conflict_lines;
@@ -537,7 +539,8 @@ fn listing(titles: &[&str]) -> BackupTab {
 }
 
 #[test]
-fn the_order_is_built_again_only_when_the_report_the_figures_or_the_sort_change() {
+fn the_order_is_built_again_only_when_the_report_the_figures_the_sort_or_the_previews_under_changes_change()
+ {
     let mut tab = listing(&["B", "A"]);
     let name = ListSort::default();
     tab.sort_rows(name);
@@ -571,6 +574,138 @@ fn the_order_is_built_again_only_when_the_report_the_figures_or_the_sort_change(
         [1, 0, 2],
         "newest first, the game without a backup last"
     );
+}
+
+/// Hands `tab` the result of a comparison job that ends with `previews`, and polls it once.
+fn deliver_previews(
+    tab: &mut BackupTab,
+    ctx: &egui::Context,
+    state: &mut State,
+    previews: Vec<Preview>,
+) {
+    tab.previewing = Some(Job::spawn(ctx, move || Ok(previews)));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while tab.previewing.as_mut().is_some_and(|job| job.is_running()) {
+        assert!(Instant::now() < deadline, "the previews never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    tab.poll(ctx, state);
+    assert!(tab.previewing.is_none());
+}
+
+#[test]
+fn the_order_by_changes_follows_the_previews_and_the_settings_but_not_a_tick() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let most = ListSort::new(SortKey::Changes, true);
+    state.config.as_mut().unwrap().backup_sort = most;
+    let mut tab = listing(&["B", "A", "C"]);
+    let ctx = egui::Context::default();
+    tab.sort_rows(most);
+    assert_eq!(tab.order, [1, 0, 2], "no preview yet: by title");
+
+    // B has a changed file, A is unchanged, C has no backup yet. The settings load starts with
+    // this poll and ends in a later one.
+    let previews = vec![
+        compared(FileState::Changed, false),
+        compared(FileState::Same, false),
+        Ok(None),
+    ];
+    deliver_previews(&mut tab, &ctx, &mut state, previews);
+    assert!(!tab.choices.loaded());
+    tab.sort_rows(most);
+    assert_eq!(tab.order, [0, 2, 1], "C's one new file ties B, A has none");
+    tab.sort_rows(ListSort::new(SortKey::Changes, false));
+    assert_eq!(tab.order, [1, 0, 2]);
+    tab.sort_rows(most);
+
+    // The settings loading rebuilds the order, which was built with every file included.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !tab.choices.loaded() {
+        assert!(Instant::now() < deadline, "the settings never loaded");
+        std::thread::sleep(Duration::from_millis(5));
+        tab.poll(&ctx, &mut state);
+    }
+    tab.order = vec![9];
+    tab.sort_rows(most);
+    assert_eq!(tab.order, [0, 2, 1]);
+
+    // A tick does not move a game under the cursor; the next rebuild counts it.
+    tab.choices.change(&ctx, &state, "B", Change::Skip(true));
+    tab.sort_rows(most);
+    assert_eq!(tab.order, [0, 2, 1]);
+    tab.generation += 1;
+    tab.sort_rows(most);
+    assert_eq!(tab.order, [2, 1, 0], "B is skipped now");
+    while tab.choices.busy() {
+        std::thread::sleep(Duration::from_millis(5));
+        tab.poll(&ctx, &mut state);
+    }
+}
+
+#[test]
+fn the_previews_arriving_do_not_reorder_another_sort() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = state(dir.path());
+    let by_space = ListSort::new(SortKey::SpaceUsed, true);
+    state.config.as_mut().unwrap().backup_sort = by_space;
+    let mut tab = listing(&["B", "A"]);
+    tab.sort_rows(by_space);
+    tab.order = vec![9];
+
+    let previews = vec![compared(FileState::Changed, false), Ok(None)];
+    deliver_previews(&mut tab, &egui::Context::default(), &mut state, previews);
+    tab.sort_rows(by_space);
+    assert_eq!(
+        tab.order,
+        [9],
+        "the order is kept until every space figure is in"
+    );
+}
+
+#[test]
+fn change_count_counts_what_the_header_counts() {
+    let all = GameSettings::default();
+    let count = |game: &GameScan, preview: &Preview, settings: &GameSettings| {
+        change_count(game, preview, settings)
+    };
+    let one = game(&[1], false, 0);
+    assert_eq!(count(&one, &Err("broken".into()), &all), None);
+    let mut skipped = GameSettings::default();
+    skipped.skip = true;
+    assert_eq!(
+        count(&one, &compared(FileState::Changed, false), &skipped),
+        None
+    );
+    assert_eq!(
+        count(&one, &compared(FileState::Same, false), &all),
+        Some(0)
+    );
+    assert_eq!(
+        count(&one, &compared(FileState::Changed, true), &all),
+        Some(0)
+    );
+    assert_eq!(
+        count(&one, &compared(FileState::Changed, false), &all),
+        Some(1)
+    );
+
+    // No backup yet: the included files, and the registry as one.
+    let mut two = game(&[1, 2], false, 0);
+    two.files[1] = FoundFile::new(Base::Home, "other".into(), PathBuf::from("/other"), 2, None);
+    assert_eq!(count(&two, &Ok(None), &all), Some(2));
+    let mut excluded = GameSettings::default();
+    excluded.set_path("Home/other", false);
+    assert_eq!(count(&two, &Ok(None), &excluded), Some(1));
+    assert_eq!(count(&game(&[], true, 0), &Ok(None), &all), Some(1));
+    assert_eq!(count(&game(&[1], true, 0), &Ok(None), &all), Some(2));
+    let mut no_registry = GameSettings::default();
+    no_registry.set_registry(KEY, false);
+    assert_eq!(
+        count(&game(&[1], true, 0), &Ok(None), &no_registry),
+        Some(1)
+    );
+    assert_eq!(count(&game(&[], true, 0), &Ok(None), &no_registry), None);
 }
 
 /// Steps until the tab's jobs, such as loading what to back up, are done.

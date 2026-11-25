@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, TextEdit, Ui, Vec2};
-use salvajocs_core::config::ListSort;
+use salvajocs_core::config::{ListSort, SortKey};
 use salvajocs_core::layout::{Context, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
@@ -251,7 +251,7 @@ impl RestoreTab {
             })
             .collect();
         let rows: Vec<_> = (self.games.iter().zip(&self.figures))
-            .map(|(game, figures)| (game.title.as_str(), Some(figures)))
+            .map(|(game, figures)| (game.title.as_str(), Some(figures), None))
             .collect();
         self.order = stats::order(&rows, sort);
         self.lines = vec![None; self.games.len()];
@@ -376,7 +376,13 @@ impl RestoreTab {
         }
         self.select_all_ui(ui);
         let sort = (state.config.as_ref()).map_or(ListSort::default(), |c| c.restore_sort);
-        if let Some(picked) = sort::sort_ui(ui, "restore_sort", sort)
+        // Changes is a Backup tab key; a hand-edited config that names it sorts by name here.
+        let sort = if sort.by == SortKey::Changes {
+            ListSort::default()
+        } else {
+            sort
+        };
+        if let Some(picked) = sort::sort_ui(ui, "restore_sort", sort::RESTORE_KEYS, sort)
             && let Some(config) = &mut state.config
         {
             config.restore_sort = picked;

@@ -1,5 +1,7 @@
 use std::time::{Duration, UNIX_EPOCH};
 
+use eframe::egui::Role;
+use egui_kittest::kittest::Queryable;
 use salvajocs_core::storage::SnapshotInfo;
 
 use super::*;
@@ -111,4 +113,25 @@ fn the_direction_is_named_in_words() {
     assert_eq!(words(SortKey::LastBackup, true), "Newest first");
     assert_eq!(words(SortKey::SpaceUsed, true), "Largest first");
     assert_eq!(words(SortKey::LastBackupSize, false), "Smallest first");
+    assert_eq!(words(SortKey::Changes, true), "Most changes first");
+    assert_eq!(words(SortKey::Changes, false), "Fewest changes first");
+}
+
+/// Whether the dropdown of `keys`, once opened, lists "Changes".
+fn lists_changes(keys: &[SortKey]) -> bool {
+    let mut harness = crate::theme::harness(
+        |ui, _: &mut ()| {
+            sort_ui(ui, "sort", keys, ListSort::default());
+        },
+        (),
+    );
+    harness.get_by_role(Role::ComboBox).click();
+    harness.run();
+    harness.query_by_label("Changes").is_some()
+}
+
+#[test]
+fn changes_is_listed_on_the_backup_tab_and_not_on_the_restore_sidebar() {
+    assert!(lists_changes(SortKey::ALL));
+    assert!(!lists_changes(RESTORE_KEYS));
 }

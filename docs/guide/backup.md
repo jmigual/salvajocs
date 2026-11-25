@@ -74,11 +74,19 @@ Once the comparison below has listed the backups, each game shows a line such as
   safety backups use.
 
 The **Sort by** row above the list orders the games by **Name**, **Last backup**, **Last backup
-size** or **Space used**; hover an item to read what it means. The arrow button next to it
-reverses the order and says the current one, such as **Largest first**. Picking a key starts in
-its natural order: names A to Z, times newest first, sizes largest first. Games without the
-value, such as one without a backup, stay at the end either way. The figure the list is sorted
-by is drawn brighter on each line. The choice is saved, and the Restore tab keeps its own.
+size**, **Space used** or **Changes**; hover an item to read what it means. The arrow button
+next to it reverses the order and says the current one, such as **Largest first**. Picking a key
+starts in its natural order: names A to Z, times newest first, sizes largest first, most changes
+first. Games without the value, such as one without a backup, stay at the end either way. The
+figure the list is sorted by is drawn brighter on each line (for **Changes**, the count in the
+game's header). The choice is saved, and the Restore tab keeps its own.
+
+**Changes** counts the files the next backup would add, change or remove compared with the
+newest backup, the number each game's header shows. A game without a backup yet counts all its
+files, and a game with no changes counts 0. A game whose comparison has not arrived, has failed
+or is not backed up stays at the end. The order is built when the comparisons arrive, so
+ticking or unticking a file does not move a game; reverse the order, pick another key, scan or
+back up to take the ticks into account. The Restore tab has no **Changes**.
 
 Open the line to see the game's files as a tree of folders, each with a checkbox, and its registry
 keys under **Registry**:

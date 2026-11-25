@@ -334,6 +334,26 @@ pub(super) fn next_backup<'a>(
     })
 }
 
+/// How many files the next backup would add, change or remove, for sorting by changes
+/// (ADR-0032): all included files, and the registry as one, when there is no backup yet; none
+/// when the game is unchanged. `None` when the preview failed or the game would not be backed up
+/// at all.
+pub(super) fn change_count(
+    game: &GameScan,
+    preview: &Preview,
+    settings: &GameSettings,
+) -> Option<usize> {
+    match next_backup(game, preview, settings)? {
+        Next::NoBackupYet => (selection::apply(game, settings))
+            .map(|kept| kept.files.len() + usize::from(kept.registry_source.is_some())),
+        Next::Failed(_) => None,
+        Next::Same { .. } | Next::UnchangedHere { .. } => Some(0),
+        Next::Changes { counts, .. } => {
+            Some(counts.new + counts.changed + counts.removed + counts.unknown)
+        }
+    }
+}
+
 /// [`next_backup`] as a sentence, with what [`noted`] adds; `None` when the game would not be
 /// backed up at all.
 pub(super) fn preview_text(

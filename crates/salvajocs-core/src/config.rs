@@ -129,6 +129,9 @@ pub enum SortKey {
     LastBackupSize,
     /// The space all of the game's backups use in the repository.
     SpaceUsed,
+    /// How many files the next backup would add, change or remove (ADR-0032). The Backup tab
+    /// only.
+    Changes,
 }
 
 impl SortKey {
@@ -138,9 +141,11 @@ impl SortKey {
         SortKey::LastBackup,
         SortKey::LastBackupSize,
         SortKey::SpaceUsed,
+        SortKey::Changes,
     ];
 
-    /// The key's natural direction: names A to Z, sizes largest first, times newest first.
+    /// The key's natural direction: names A to Z, sizes largest first, times newest first,
+    /// changes most first.
     pub fn descending_by_default(self) -> bool {
         self != SortKey::Name
     }
