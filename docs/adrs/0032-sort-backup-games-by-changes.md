@@ -21,8 +21,12 @@ ticks: unticking a file changes the count.
   | --- | --- |
   | Differs from the newest backup by `counts` | `new + changed + removed + unknown` |
   | No backup yet | the number of included files, and 1 for the registry keys, all of them new |
-  | The same as the newest backup, or unchanged since this PC's last | 0 |
+  | The same as the newest backup | 0 |
   | No preview yet, the preview failed, or the game is skipped or has nothing left | none |
+
+  - Amended by ADR-0035: the row "unchanged since this PC's last" is gone. A game that is
+    behind, changed on both PCs or has an unknown base differs from the newest backup, so it
+    counts as the first row says: a behind game needs attention though no backup will be made.
 
   A game with no value sorts after every game with one, in both directions, as in ADR-0027.
   Ties fall back to the title.

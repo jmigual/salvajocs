@@ -17,6 +17,7 @@ use salvajocs_core::retention::{self, Retention};
 use salvajocs_core::scan::{FoundFile, GameScan, RegistrySource};
 use salvajocs_core::selection::{Change, Pending};
 use salvajocs_core::storage::{Compression, RepoLocation, SnapshotInfo, Storage};
+use salvajocs_core::sync;
 
 use crate::env::{Env, MemorySecrets};
 use crate::state::lock_storage;
@@ -25,7 +26,8 @@ use crate::tabs::tree::Badge;
 use crate::theme;
 
 use super::preview::{
-    Baseline, Next, change_count, hint, next_backup, preview, preview_text, sentence, summary,
+    Baseline, Header, Next, Tone, change_count, header_of, hint, next_backup, preview,
+    preview_text, sentence, summary,
 };
 use super::results::summarize;
 use super::run::{back_up, clean_up};
@@ -141,19 +143,27 @@ fn the_results_name_the_host_of_the_newest_backup() {
 }
 
 /// A preview of `game(&[1], ..)` against a backup from `there` in which its one file is `state`,
-/// with this machine's last backup holding that file unchanged when `unchanged_here`.
-fn compared(state: FileState, unchanged_here: bool) -> Preview {
-    let parent = unchanged_here.then(|| {
-        let files = HashMap::from([("Home/save".to_owned(), (1, None))]);
-        (snapshot_from("here"), files)
-    });
+/// and this PC's base is that backup, so a change is its own.
+fn compared(state: FileState) -> Preview {
+    compared_on(state, Some(sync::Base::new("there-id".into(), None)))
+}
+
+/// A base that is not the newest backup and has neither a hash list nor a readable snapshot.
+fn forgotten_base() -> sync::Base {
+    sync::Base::new("forgotten".into(), None)
+}
+
+/// As [`compared`], with this PC's `base`, whose snapshot the repository lists at the epoch.
+fn compared_on(state: FileState, base: Option<sync::Base>) -> Preview {
     let hashes = Hashes::from_json(br#"{"format": 1, "meta": "", "files": {}}"#);
     let newest = changes::Baseline::new(snapshot_from("there"), Vec::new(), hashes, None);
     Ok(Some(Baseline {
         newest,
         comparison: Comparison::new(vec![state.clone()], Vec::new()),
         states: HashMap::from([("Home/save".to_owned(), state)]),
-        parent,
+        base,
+        base_time: Some(SystemTime::UNIX_EPOCH),
+        base_backup: None,
     }))
 }
 
@@ -186,17 +196,17 @@ fn a_backup_of_the_other_build_says_how_its_folders_were_matched() {
     let (game, all) = (game(&[1], false, 0), GameSettings::default());
     let date = "1970-01-01 00:00 UTC";
 
-    let matched = of_the_other_build(compared(FileState::Same, false), Vec::new(), &[]);
+    let matched = of_the_other_build(compared(FileState::Same), Vec::new(), &[]);
     assert_eq!(
         preview_text(&game, &matched, &all).unwrap(),
         format!(
-            "No changes since the backup from there, {date}; no backup will be made. The backup \
+            "Up to date with the backup from there, {date}; no backup will be made. The backup \
              is from the other build; its folders were matched to this machine's."
         )
     );
     let saves = (Base::WinAppData, "Factorio/saves".to_owned());
     let unplaced = ["WinAppData/Factorio/saves/a.zip"];
-    let preview = of_the_other_build(compared(FileState::Changed, false), vec![saves], &unplaced);
+    let preview = of_the_other_build(compared(FileState::Changed), vec![saves], &unplaced);
     assert_eq!(
         preview_text(&game, &preview, &all).unwrap(),
         format!(
@@ -215,7 +225,7 @@ fn a_backup_of_the_other_build_says_how_its_folders_were_matched() {
     );
     // A file another one pushed aside, in a folder that has a place.
     let unplaced = ["WinDocuments/G/save"];
-    let preview = of_the_other_build(compared(FileState::Same, false), Vec::new(), &unplaced);
+    let preview = of_the_other_build(compared(FileState::Same), Vec::new(), &unplaced);
     assert!(preview_text(&game, &preview, &all).unwrap().ends_with(
         ". The newest backup is from the other build; some of its files have no place here."
     ));
@@ -225,7 +235,7 @@ fn a_backup_of_the_other_build_says_how_its_folders_were_matched() {
 fn registry_keys_across_builds_promise_a_backup() {
     let mut game = game(&[1], true, 0);
     let all = GameSettings::default();
-    let preview = of_the_other_build(compared(FileState::Same, false), Vec::new(), &[]);
+    let preview = of_the_other_build(compared(FileState::Same), Vec::new(), &[]);
     let next = next_backup(&game, &preview, &all).unwrap();
     assert_eq!(next.glyph(), Some(icons::EQUALS));
     assert!(sentence(&next).starts_with(
@@ -250,20 +260,45 @@ fn the_preview_says_what_the_next_backup_would_do() {
     let date = "1970-01-01 00:00 UTC";
 
     assert_eq!(
-        text(&compared(FileState::Changed, false)).unwrap(),
+        text(&compared(FileState::Changed)).unwrap(),
         format!("1 changed since the backup from there, {date}")
     );
     assert_eq!(
-        text(&compared(FileState::Same, false)).unwrap(),
-        format!("No changes since the backup from there, {date}; no backup will be made")
+        text(&compared(FileState::Same)).unwrap(),
+        format!("Up to date with the backup from there, {date}; no backup will be made")
     );
     assert_eq!(
-        text(&compared(FileState::Changed, true)).unwrap(),
+        text(&compared_on(FileState::Changed, Some(forgotten_base()))).unwrap(),
         format!(
-            "Unchanged since this PC's last backup ({date}), so no backup will be made. The \
-             newest backup, from there on {date}, differs: 1 changed"
+            "Changed on this PC and on there since this PC last synced ({date}): 1 changed \
+             against the backup from there, {date}. Back up asks what to do."
         )
     );
+    assert_eq!(
+        text(&compared_on(FileState::Changed, None)).unwrap(),
+        format!(
+            "This PC's saves differ from the newest backup, from there, {date}: 1 changed. \
+             salvajocs has no record of this PC syncing this game. Back up asks what to do."
+        )
+    );
+    let newest = snapshot_from("there");
+    let mut counts = changes::Counts::default();
+    counts.changed = 1;
+    assert_eq!(
+        sentence(&Next::Behind {
+            newest: &newest,
+            counts
+        }),
+        format!(
+            "there has newer saves, from {date}: 1 changed. This PC has not changed them since \
+             it last synced, so no backup will be made. Restore them on the Restore tab."
+        )
+    );
+    let none = Next::Behind {
+        newest: &newest,
+        counts: changes::Counts::default(),
+    };
+    assert!(sentence(&none).starts_with(&format!("there has newer saves, from {date}. This PC")));
     assert_eq!(text(&Ok(None)).unwrap(), "No backup yet");
     assert_eq!(
         text(&Err("offline".into())).unwrap(),
@@ -273,14 +308,14 @@ fn the_preview_says_what_the_next_backup_would_do() {
     let mut skipped = GameSettings::default();
     skipped.skip = true;
     assert_eq!(preview_text(&game, &Ok(None), &skipped), None);
-    let preview = compared(FileState::Changed, false);
+    let preview = compared(FileState::Changed);
     assert_eq!(preview_text(&game, &preview, &skipped), None);
 }
 
 #[test]
 fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     let game = game(&[1], false, 0);
-    let mut preview = compared(FileState::Same, false);
+    let mut preview = compared(FileState::Same);
     if let Ok(Some(baseline)) = &mut preview {
         baseline.newest.hashes = None;
     }
@@ -291,11 +326,56 @@ fn without_a_hash_list_the_preview_does_not_promise_a_skip() {
     );
 }
 
+/// Files equal to a backup that is made again anyway are still judged against the base: this PC
+/// may be behind, changed on both, or have no base.
+#[test]
+fn a_backup_made_anyway_is_judged_against_the_base_too() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    let unhashed = |base| {
+        let mut preview = compared_on(FileState::Same, base);
+        if let Ok(Some(baseline)) = &mut preview {
+            baseline.newest.hashes = None;
+        }
+        preview
+    };
+    let date = "1970-01-01 00:00 UTC";
+
+    let ahead = unhashed(Some(sync::Base::new("there-id".into(), None)));
+    assert!(matches!(
+        next_backup(&game, &ahead, &all),
+        Some(Next::Same {
+            blocker: Some(_),
+            ..
+        })
+    ));
+    let both = unhashed(Some(forgotten_base()));
+    let next = next_backup(&game, &both, &all).unwrap();
+    assert!(matches!(next, Next::ChangedOnBoth { .. }));
+    assert_eq!(
+        sentence(&next),
+        format!(
+            "Changed on this PC and on there since this PC last synced ({date}): no file differs \
+             from the backup from there, {date}. Back up asks what to do."
+        )
+    );
+    let unknown = unhashed(None);
+    let next = next_backup(&game, &unknown, &all).unwrap();
+    assert!(matches!(next, Next::UnknownBase { .. }));
+    assert_eq!(
+        sentence(&next),
+        format!(
+            "This PC's files match the newest backup, from there, {date}. salvajocs has no record \
+             of this PC syncing this game. Back up asks what to do."
+        )
+    );
+    assert_eq!(change_count(&game, &unknown, &all), Some(0));
+}
+
 #[test]
 fn a_change_judged_by_mtime_says_so() {
     let game = game(&[1], false, 0);
     let all = GameSettings::default();
-    let mut preview = compared(FileState::Changed, false);
+    let mut preview = compared(FileState::Changed);
     assert_eq!(
         hint(Some(&preview), "Home/save", Badge::Changed),
         "Changed since the backup"
@@ -326,17 +406,14 @@ fn each_header_state_has_its_icon() {
     let glyph = |preview: &Preview| next_backup(&game, preview, &all).unwrap().glyph();
 
     assert_eq!(glyph(&Ok(None)), Some(icons::PLUS_CIRCLE));
-    let same = compared(FileState::Same, false);
+    let same = compared(FileState::Same);
     assert_eq!(glyph(&same), Some(icons::CHECK_CIRCLE));
-    let mut unhashed = compared(FileState::Same, false);
+    let mut unhashed = compared(FileState::Same);
     if let Ok(Some(baseline)) = &mut unhashed {
         baseline.newest.hashes = None;
     }
     assert_eq!(glyph(&unhashed), Some(icons::EQUALS));
-    // Skipped like `same`, though the newest backup differs.
-    let unchanged_here = compared(FileState::Changed, true);
-    assert_eq!(glyph(&unchanged_here), Some(icons::CHECK_CIRCLE));
-    let changed = compared(FileState::Changed, false);
+    let changed = compared(FileState::Changed);
     assert!(matches!(
         next_backup(&game, &changed, &all),
         Some(Next::Changes { .. })
@@ -345,12 +422,43 @@ fn each_header_state_has_its_icon() {
     assert_eq!(glyph(&Err("offline".into())), None);
 }
 
+/// Changed on both and an unknown base each have their own mark, neither the check nor Behind's.
+#[test]
+fn a_game_that_asks_has_its_own_mark_and_never_the_check() {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+
+    let both = compared_on(FileState::Changed, Some(forgotten_base()));
+    let next = next_backup(&game, &both, &all).unwrap();
+    assert!(matches!(next, Next::ChangedOnBoth { .. }));
+    assert_eq!(next.glyph(), Some(icons::WARNING));
+    let unknown = compared_on(FileState::Changed, None);
+    let next = next_backup(&game, &unknown, &all).unwrap();
+    assert!(matches!(next, Next::UnknownBase { .. }));
+    assert_eq!(next.glyph(), Some(icons::QUESTION));
+
+    let newest = snapshot_from("there");
+    let behind = Next::Behind {
+        newest: &newest,
+        counts: changes::Counts::default(),
+    };
+    assert_eq!(behind.glyph(), Some(icons::ARROW_DOWN));
+
+    // Each warns and keeps the chips of its differences.
+    for preview in [&both, &unknown] {
+        let header = header_of(&game, Some(preview), &all);
+        let Header::Mark { tone, counts, .. } = header else {
+            panic!("a mark");
+        };
+        assert!(matches!(tone, Tone::Warn));
+        assert_eq!(counts.changed, 1);
+    }
+}
+
 #[test]
 fn a_file_that_could_not_be_compared_is_shown_and_never_skipped() {
     let game = game(&[1], false, 0);
     let all = GameSettings::default();
-    // This machine's last backup has the same sizes and mtimes, yet nothing promises a skip.
-    let preview = compared(FileState::Unknown("denied".into()), true);
+    let preview = compared(FileState::Unknown("denied".into()));
     assert_eq!(
         preview_text(&game, &preview, &all).unwrap(),
         "1 could not be compared since the backup from there, 1970-01-01 00:00 UTC"
@@ -372,7 +480,7 @@ fn a_replaced_repository_is_compared_again() {
     let ctx = egui::Context::default();
     let mut tab = listing(&["Game"]);
     tab.start_preview(&ctx, &state);
-    tab.previews = vec![compared(FileState::Same, false)];
+    tab.previews = vec![compared(FileState::Same)];
 
     let replaced = self::state(&dir.path().join("second")).session;
     state.session = replaced;
@@ -390,7 +498,7 @@ fn a_replaced_repository_is_compared_again() {
 fn a_header_is_worked_out_again_only_when_its_game_changes() {
     let dir = tempfile::tempdir().unwrap();
     let mut tab = listing(&["Game"]);
-    tab.previews = vec![compared(FileState::Changed, false)];
+    tab.previews = vec![compared(FileState::Changed)];
     let mut harness = theme::harness(
         |ui, (tab, state)| tab.ui(ui, state, false),
         (tab, state(dir.path())),
@@ -401,7 +509,7 @@ fn a_header_is_worked_out_again_only_when_its_game_changes() {
     };
     assert!(shows(&harness, "1 changed since the backup from there"));
 
-    harness.state_mut().0.previews = vec![compared(FileState::Same, false)];
+    harness.state_mut().0.previews = vec![compared(FileState::Same)];
     harness.step();
     assert!(shows(&harness, "1 changed since the backup from there"));
 
@@ -414,7 +522,7 @@ fn a_header_is_worked_out_again_only_when_its_game_changes() {
     assert!(!shows(&harness, "since the backup from there"));
     harness.get_by_label("Home").click();
     settle(&mut harness);
-    assert!(shows(&harness, "No changes since the backup from there"));
+    assert!(shows(&harness, "Up to date with the backup from there"));
 }
 
 /// A header drawn with the default settings while the repository's settings load is worked
@@ -428,7 +536,7 @@ fn loaded_settings_work_the_headers_out_again() {
     let skip = [Change::Skip(true)];
     selection::save(&mut lock_storage(&storage).unwrap(), "Game", &skip, &stage).unwrap();
     let mut tab = listing(&["Game"]);
-    tab.previews = vec![compared(FileState::Changed, false)];
+    tab.previews = vec![compared(FileState::Changed)];
     let mut harness = theme::harness(|ui, (tab, state)| tab.ui(ui, state, false), (tab, state));
     let shows = |harness: &Harness<'_, (BackupTab, State)>, text| {
         harness.query_all_by_label_contains(text).next().is_some()
@@ -443,7 +551,7 @@ fn loaded_settings_work_the_headers_out_again() {
 
 #[test]
 fn an_unticked_file_in_the_backup_is_badged_removed_unless_staging_keeps_it() {
-    let preview = compared(FileState::Same, false);
+    let preview = compared(FileState::Same);
     let mut settings = GameSettings::default();
     settings.set_path("Home/save", false);
     let game = game(&[1], false, 0);
@@ -607,8 +715,8 @@ fn the_order_by_changes_follows_the_previews_and_the_settings_but_not_a_tick() {
     // B has a changed file, A is unchanged, C has no backup yet. The settings load starts with
     // this poll and ends in a later one.
     let previews = vec![
-        compared(FileState::Changed, false),
-        compared(FileState::Same, false),
+        compared(FileState::Changed),
+        compared(FileState::Same),
         Ok(None),
     ];
     deliver_previews(&mut tab, &ctx, &mut state, previews);
@@ -653,7 +761,7 @@ fn the_previews_arriving_do_not_reorder_another_sort() {
     tab.sort_rows(by_space);
     tab.order = vec![9];
 
-    let previews = vec![compared(FileState::Changed, false), Ok(None)];
+    let previews = vec![compared(FileState::Changed), Ok(None)];
     deliver_previews(&mut tab, &egui::Context::default(), &mut state, previews);
     tab.sort_rows(by_space);
     assert_eq!(
@@ -673,22 +781,16 @@ fn change_count_counts_what_the_header_counts() {
     assert_eq!(count(&one, &Err("broken".into()), &all), None);
     let mut skipped = GameSettings::default();
     skipped.skip = true;
+    assert_eq!(count(&one, &compared(FileState::Changed), &skipped), None);
+    assert_eq!(count(&one, &compared(FileState::Same), &all), Some(0));
+    // Those that ask, and a game that is behind, are counted against the newest.
+    let both = compared_on(FileState::Changed, Some(forgotten_base()));
+    assert_eq!(count(&one, &both, &all), Some(1));
     assert_eq!(
-        count(&one, &compared(FileState::Changed, false), &skipped),
-        None
-    );
-    assert_eq!(
-        count(&one, &compared(FileState::Same, false), &all),
-        Some(0)
-    );
-    assert_eq!(
-        count(&one, &compared(FileState::Changed, true), &all),
-        Some(0)
-    );
-    assert_eq!(
-        count(&one, &compared(FileState::Changed, false), &all),
+        count(&one, &compared_on(FileState::Changed, None), &all),
         Some(1)
     );
+    assert_eq!(count(&one, &compared(FileState::Changed), &all), Some(1));
 
     // No backup yet: the included files, and the registry as one.
     let mut two = game(&[1, 2], false, 0);
@@ -1156,6 +1258,178 @@ fn back_up_returns_only_the_new_snapshots() {
     assert_eq!(made, snapshot_ids(&storage, "Changed")[..1]);
 }
 
+/// The repository in `dir` with two backups of "Game", of the contents `a` then `bb`, and their
+/// ids, the older first. The bases they record go to a folder the tests do not read, so each test
+/// sets this PC's base.
+fn two_backups(dir: &Path) -> (SharedStorage, Vec<String>) {
+    let storage = shared_storage(dir);
+    let stage = dir.join("stage");
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
+    for content in ["a", "bb"] {
+        let games = [saved_game(dir, "Game", content)];
+        let recorded = dir.join("setup-bases");
+        back_up(&storage, &games, &stage, &mapper, &recorded, "repo", |_| {}).unwrap();
+    }
+    let mut ids = snapshot_ids(&storage, "Game");
+    ids.reverse();
+    (storage, ids)
+}
+
+/// What the Backup tab shows of "Game" holding some content.
+struct Shown {
+    glyph: Option<&'static str>,
+    text: String,
+    /// The count it sorts by.
+    count: Option<usize>,
+    warns: bool,
+    /// Whether the preview job read the base's snapshot.
+    read_base: bool,
+}
+
+/// What the Backup tab shows of "Game" holding `content` when this PC's `base` is recorded.
+fn shown(dir: &Path, storage: &SharedStorage, base: Option<sync::Base>, content: &str) -> Shown {
+    let config_dir = dir.join("config");
+    if let Some(base) = base {
+        sync::record(&config_dir, "repo", [(slug("Game"), base)]).unwrap();
+    }
+    let game = saved_game(dir, "Game", content);
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
+    let games = std::slice::from_ref(&game);
+    let previews = preview(storage, games, &mapper, (&config_dir, "repo"), |_| {}).unwrap();
+    let all = GameSettings::default();
+    let next = next_backup(&game, &previews[0], &all).unwrap();
+    let header = header_of(&game, Some(&previews[0]), &all);
+    let Ok(Some(baseline)) = &previews[0] else {
+        panic!("the game has a backup");
+    };
+    Shown {
+        glyph: next.glyph(),
+        text: sentence(&next),
+        count: change_count(&game, &previews[0], &all),
+        warns: matches!(
+            header,
+            Header::Mark {
+                tone: Tone::Warn,
+                ..
+            }
+        ),
+        read_base: baseline.base_backup.is_some(),
+    }
+}
+
+/// A base on the snapshot `id` without a hash list.
+fn base_on(id: &str) -> sync::Base {
+    sync::Base::new(id.to_owned(), None)
+}
+
+/// A base on the snapshot `id` of "Game" that holds the hash list of that backup, as one set by
+/// a Back up.
+fn base_with_list(dir: &Path, storage: &SharedStorage, id: &str) -> sync::Base {
+    let game = saved_game(dir, "Game", "a");
+    let (manifest, config, env) = no_mapping();
+    let mapper = Mapper::new(&manifest, &config, &env);
+    let mut storage = lock_storage(storage).unwrap();
+    let snapshots = storage.snapshots("salvajocs").unwrap();
+    let info = snapshots.iter().find(|snapshot| snapshot.id == id).unwrap();
+    let list = mapper.baseline(&mut storage, info, &game).unwrap().hashes;
+    sync::Base::new(id.to_owned(), list)
+}
+
+/// The reported case: another PC's newer backup differs and this PC's saves are those it last
+/// synced, so the header warns and offers the restore instead of showing a check.
+#[test]
+fn saves_this_pc_has_not_changed_since_a_newer_backup_elsewhere_are_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, ids) = two_backups(dir.path());
+
+    let shown = shown(dir.path(), &storage, Some(base_on(&ids[0])), "a");
+
+    assert_eq!(shown.glyph, Some(icons::ARROW_DOWN));
+    assert!(shown.warns);
+    let text = shown.text;
+    assert!(text.contains(" has newer saves, from "), "{text}");
+    assert!(text.ends_with("no backup will be made. Restore them on the Restore tab."));
+    assert_eq!(shown.count, Some(1));
+    assert!(shown.read_base, "a base without a list needs its backup");
+}
+
+#[test]
+fn a_base_with_a_hash_list_is_not_read_from_the_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, ids) = two_backups(dir.path());
+    let base = base_with_list(dir.path(), &storage, &ids[0]);
+
+    let shown = shown(dir.path(), &storage, Some(base), "a");
+
+    assert_eq!(shown.glyph, Some(icons::ARROW_DOWN));
+    assert!(!shown.read_base);
+}
+
+#[test]
+fn saves_changed_since_the_base_on_top_of_a_newer_backup_are_changed_on_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, ids) = two_backups(dir.path());
+
+    let shown = shown(dir.path(), &storage, Some(base_on(&ids[0])), "ccc");
+
+    assert_eq!(shown.glyph, Some(icons::WARNING));
+    assert!(shown.warns);
+    assert!(shown.text.starts_with("Changed on this PC and on "));
+    assert!(shown.text.ends_with("Back up asks what to do."));
+    assert_eq!(shown.count, Some(1));
+}
+
+#[test]
+fn saves_that_differ_from_the_newest_without_a_base_ask_with_an_unknown_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = two_backups(dir.path());
+
+    let shown = shown(dir.path(), &storage, None, "ccc");
+
+    assert_eq!(shown.glyph, Some(icons::QUESTION));
+    assert!(shown.warns);
+    let text = shown.text;
+    assert!(
+        text.contains("has no record of this PC syncing this game"),
+        "{text}"
+    );
+    assert_eq!(shown.count, Some(1));
+}
+
+#[test]
+fn saves_changed_since_a_base_that_is_the_newest_backup_are_ahead() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, ids) = two_backups(dir.path());
+
+    let shown = shown(dir.path(), &storage, Some(base_on(&ids[1])), "ccc");
+
+    assert_eq!(shown.glyph, None);
+    assert!(!shown.warns);
+    let text = shown.text;
+    assert!(
+        text.starts_with("1 changed since the backup from "),
+        "{text}"
+    );
+    assert_eq!(shown.count, Some(1));
+    assert!(!shown.read_base);
+}
+
+#[test]
+fn saves_equal_to_the_newest_backup_are_up_to_date_whatever_the_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, ids) = two_backups(dir.path());
+
+    let shown = shown(dir.path(), &storage, Some(base_on(&ids[0])), "bb");
+
+    assert_eq!(shown.glyph, Some(icons::CHECK_CIRCLE));
+    assert!(shown.text.starts_with("Up to date with the backup from "));
+    assert!(shown.text.ends_with("; no backup will be made"));
+    assert_eq!(shown.count, Some(0));
+    assert!(!shown.read_base);
+}
+
 #[test]
 fn clean_up_never_forgets_the_snapshots_it_is_given() {
     let dir = tempfile::tempdir().unwrap();
@@ -1199,7 +1473,7 @@ fn a_new_scan_closes_the_open_details() {
     let stage = dir.path().join("stage");
     let games = std::slice::from_ref(&game);
     back_up(&storage, games, &stage, &mapper, dir.path(), "repo", |_| {}).unwrap();
-    let previews = preview(&storage, games, &mapper, |_| {}).unwrap();
+    let previews = preview(&storage, games, &mapper, (dir.path(), "repo"), |_| {}).unwrap();
     let Ok(Some(baseline)) = &previews[0] else {
         panic!("the game has a backup");
     };

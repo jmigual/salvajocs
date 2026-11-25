@@ -317,7 +317,7 @@ fn a_rescan_shows_what_differs_from_the_last_backup() {
     run_until_backed_up(&mut harness, "Alpha: backed up");
     run_until_compared(&mut harness);
     // One check whose tooltip promises the skip.
-    let check = "No changes since the backup from ";
+    let check = "Up to date with the backup from ";
     assert!(shows(&harness, check));
     assert!(
         (harness
@@ -1195,7 +1195,7 @@ fn a_backup_from_the_other_build_compares_through_the_folder_pairs() {
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
 
-    let label = label_of(&harness, "No changes since the backup from ");
+    let label = label_of(&harness, "Up to date with the backup from ");
     assert!(
         label.ends_with(
             "; no backup will be made. The backup is from the other build; its folders were \
@@ -1225,7 +1225,7 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
 
-    let label = label_of(&harness, "1 new, 1 removed since the backup from ");
+    let label = label_of(&harness, "1 new, 1 removed. salvajocs has no record");
     assert!(
         label.contains(
             "The newest backup is from the other build; these folders have no known place here: \
@@ -1268,9 +1268,10 @@ fn a_registry_key_of_one_build_is_not_backed_up_without_a_base() {
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
 
-    let sentence = "No changes to the files since the backup from ";
+    // The files equal the backup's, but without a base the header asks rather than promising one.
+    let sentence = "This PC's files match the newest backup, from ";
     assert!(
-        label_of(&harness, sentence).contains("the registry keys are not compared"),
+        label_of(&harness, sentence).contains("no record of this PC syncing this game"),
         "{}",
         label_of(&harness, sentence)
     );
@@ -1294,7 +1295,7 @@ fn choose_folders_saves_the_choice_and_compares_again() {
     let (mut harness, env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
-    let label = label_of(&harness, "1 new, 1 removed since the backup from ");
+    let label = label_of(&harness, "1 new, 1 removed. salvajocs has no record");
     assert!(label.ends_with("Choose folders… places them."), "{label}");
 
     click(&mut harness, "Choose folders…");
@@ -1307,7 +1308,7 @@ fn choose_folders_saves_the_choice_and_compares_again() {
     run_until(
         &mut harness,
         "the comparison through the chosen folder",
-        |h| shows(h, "No changes since the backup from "),
+        |h| shows(h, "Up to date with the backup from "),
     );
     run_settled(&mut harness);
 

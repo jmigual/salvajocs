@@ -28,6 +28,10 @@ All notable changes to salvajocs. The format follows
   Same or Differs mark after each label and a line on top saying how the content compares. When no
   diff is shown it says "Diff not shown:" and names the copy that is over the limit, not text or
   unreadable.
+- The Backup tab compares a game with the backup this PC last synced with, not with this PC's
+  last backup. A game whose newest backup comes from another PC and that this PC has not changed
+  since it last synced shows a down arrow, "has newer saves", instead of a check; a game changed on
+  both PCs, or that this PC has no record of syncing, has its own mark and says Back up asks.
 - The custom games list says "extends the manifest entry" and "overrides the manifest entry"
   instead of "extends the manifest game" and "overrides the manifest game".
 - Typing a password in Settings for a repository that was set up without one now adds that
