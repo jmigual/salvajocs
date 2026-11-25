@@ -64,9 +64,11 @@ impl Planned {
             labels,
             tree,
             keys,
+            ..
         } = &self.labelled;
         let ticked = tree.ticked(&self.selection);
-        (ticked.contains(&true) || keys.any_ticked()) && blocking(plan, labels, &ticked).is_empty()
+        (ticked.contains(&true) || keys.any_ticked())
+            && blocking(plan, labels, &ticked, &[], &[]).is_empty()
     }
 }
 
@@ -484,7 +486,7 @@ impl RestoreTab {
                     let Labelled {
                         plan, tree, keys, ..
                     } = &labelled;
-                    let plan = ticked_plan(plan, &tree.keys, keys, &selection);
+                    let plan = ticked_plan(plan, &tree.keys, keys, &selection, &[]);
                     Some((fetched, plan))
                 }
                 Outcome::Planned(_)
@@ -627,6 +629,7 @@ fn plan_game(
         prefix_origin: defaults.origin,
         reason: defaults.reason,
         info,
+        today: None,
     };
     match fetched.labelled(fetched.prepare(&[])) {
         Ok(labelled) => Outcome::Planned(Box::new(Planned::new(
@@ -743,6 +746,7 @@ fn planned_ui(
                 labels,
                 tree: WriteTree { tree, .. },
                 keys,
+                ..
             },
         selection,
     } = planned;
@@ -773,7 +777,7 @@ fn planned_ui(
                 theme::status(ui, icons::X_CIRCLE, error_color, text);
             }
         }
-        let blocking = blocking(plan, labels, &ticked);
+        let blocking = blocking(plan, labels, &ticked, &[], &[]);
         if !blocking.is_empty() {
             let text = "Nothing will be restored: the safety backup cannot read these files:";
             theme::status(ui, icons::X_CIRCLE, error_color, text);

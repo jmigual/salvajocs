@@ -108,7 +108,7 @@ fn the_ticked_plan_writes_and_keeps_what_select_gives() {
     tree.ticked[slot2] = false;
     tree.count();
 
-    let ticked = ticked_plan(&plan, &[], &tree, &GameSettings::default());
+    let ticked = ticked_plan(&plan, &[], &tree, &GameSettings::default(), &[]);
 
     let (write, kept) = export().select(&tree.nodes, &tree.ticked);
     assert_eq!(kept, [format!(r"{REG}\Slot2")]);
@@ -118,7 +118,7 @@ fn the_ticked_plan_writes_and_keeps_what_select_gives() {
     // Nothing written: no registry, so nothing kept either.
     tree.ticked.fill(false);
     tree.count();
-    let ticked = ticked_plan(&plan, &[], &tree, &GameSettings::default());
+    let ticked = ticked_plan(&plan, &[], &tree, &GameSettings::default(), &[]);
     assert_eq!(ticked.registry, None);
     assert!(ticked.registry_kept.is_empty());
 }

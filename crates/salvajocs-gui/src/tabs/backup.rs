@@ -26,7 +26,7 @@ use crate::tabs::sort::{self, Line};
 use crate::tabs::space::{Polled, Space};
 use crate::theme::{self, icons};
 use crate::widgets::named_button;
-use choices::{AfterBackup, Choices};
+use choices::{AfterBackup, Choices, Saved};
 use preview::{
     FileAction, Listed, Preview, badges, change_count, files_ui, header_of, preview_ui, to_choose,
     unknown,
@@ -491,6 +491,11 @@ impl BackupTab {
             || self.asking.is_some()
             || self.cleared.is_some()
             || self.running.is_some()
+    }
+
+    /// Whether the pending file holds this PC's latest changes to what to back up.
+    pub(crate) fn choices_saved(&self) -> Saved {
+        self.choices.saved()
     }
 
     /// Whether a backup runs, which closing the app would cut short.

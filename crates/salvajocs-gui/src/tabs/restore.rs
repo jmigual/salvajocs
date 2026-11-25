@@ -16,6 +16,7 @@ use salvajocs_core::stats::BackupStats;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State};
+use crate::tabs::backup::choices::Saved;
 use crate::tabs::count;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::Dialog;
@@ -72,6 +73,9 @@ pub struct RestoreTab {
     /// A Back up checks, asks, waits to start or runs; it holds the repository's lock, so the
     /// tab's controls wait for it.
     backing_up: bool,
+    /// Whether the pending file holds the Backup tab's latest changes to what to back up, which
+    /// a restore that deletes reads (ADR-0036).
+    choices_saved: Saved,
     /// The slug of the chosen game.
     selected: Option<String>,
     /// The slug of the game chosen before a restore or delete, which the listing it started
@@ -193,6 +197,13 @@ impl RestoreTab {
     /// Tells the tab whether a Back up runs, which keeps its controls disabled until it ends.
     pub(crate) fn set_backing_up(&mut self, backing_up: bool) {
         self.backing_up = backing_up;
+    }
+
+    /// Tells the tab whether the Backup tab's latest changes to what to back up are saved: a
+    /// restore that deletes waits while they are being saved and deletes nothing when they could
+    /// not be.
+    pub(crate) fn set_choices_saved(&mut self, saved: Saved) {
+        self.choices_saved = saved;
     }
 
     /// Whether a listing, restore or other job of this tab is running. A plan job only reads,

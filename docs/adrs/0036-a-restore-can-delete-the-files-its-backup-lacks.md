@@ -47,8 +47,9 @@ deleted from that list, never what is on it:
 
 - an unticked row, or a row below an unticked folder, is not deleted;
 - a row below a folder override is dropped (the override sends that folder's writes elsewhere);
-- a file that a write targets after an override (per file or per folder) is not deleted:
-  `restore::run` refuses it and reports it, so a restore never deletes what it writes.
+- a file that a ticked write targets after an override (per file or per folder) is not
+  deleted: the plan marks its row as kept and leaves it out of the count, and `restore::run`
+  refuses it anyway, so a restore never deletes what it writes.
 
 If a folder cannot be listed, nothing in it is offered and the plan says so: a read error never
 removes saves (ADR-0004).
@@ -64,7 +65,13 @@ A file is kept, and not listed, when either selection excludes it, through
   file's path as the backup would hold it and as this PC holds it, since the shared selection
   holds both builds' paths.
 
-If today's settings cannot be read, nothing is deleted. Unticking the whole game
+If today's settings cannot be read, nothing is deleted. The restore reads them again just before
+it runs, for each game of a batch afresh, and deletes only the ticked files `restore::deletions`
+still offers, so a file unticked on the Backup tab after the plan was made is kept, with a
+result line saying so. Restore files waits while the Backup tab still writes its pending
+changes. If they cannot be read then, or the Backup tab's last write of them failed, the restore
+deletes nothing and a failed result line says so; like a failed write, it records no base.
+Unticking the whole game
 (`GameSettings::skip`) only stops its backups: a restore still offers its deletions, and the user
 unticks rows to keep them (user decision 2026-11-25).
 
@@ -97,7 +104,7 @@ through `State::save_config`.
   deleted.
 - The files to delete are rows in the same tree after the writes, with a "will be deleted" badge
   (`Badge::Deletes`), ticked at first, shown only while the box is on. A folder tick covers both
-  writes and deletions below it.
+  writes and deletions below it. A folder that holds only deletions has no Override button.
 - While a deletion is ticked, a line above Restore files says how many files will be deleted and
   that the safety backup keeps them.
 - Each deletion has a result line, "deleted" or "failed: …". A failed deletion blocks the base

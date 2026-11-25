@@ -137,9 +137,9 @@ impl State {
     /// Makes a repository the user just connected the current one and saves the config. Roots,
     /// custom games, their unsent changes and the set-aside ones (which apply only to the
     /// repository they came from), the unsent Old backups rules, the update setting,
-    /// the theme, the sorts and the ignored prefixes come from the current config, which may
-    /// have changed since the form was built. Then reads the custom games of the new
-    /// repository, which writes nothing to it (ADR-0029).
+    /// the theme, the sorts, the games whose restore deletes and the ignored prefixes come from
+    /// the current config, which may have changed since the form was built. Then reads the
+    /// custom games of the new repository, which writes nothing to it (ADR-0029).
     pub fn adopt(&mut self, connected: Connected, ctx: &egui::Context) {
         let Connected {
             mut config,
@@ -158,6 +158,7 @@ impl State {
             config.theme = old.theme;
             config.backup_sort = old.backup_sort;
             config.restore_sort = old.restore_sort;
+            config.restore_deletes = old.restore_deletes.clone();
             config.ignored_prefixes = old.ignored_prefixes.clone();
             self.stale = stale_credentials(old, &config).or(self.stale.take());
         }

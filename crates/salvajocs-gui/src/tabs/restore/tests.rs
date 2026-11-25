@@ -319,6 +319,7 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
         source: None,
+        today: None,
     })
 }
 
@@ -355,6 +356,7 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
         source: None,
+        today: None,
     })
 }
 

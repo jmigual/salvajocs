@@ -208,6 +208,8 @@ pub(super) fn hint(preview: Option<&Preview>, key: &str, badge: Badge) -> String
                 "Could not be compared".to_owned()
             }
         }
+        // Only a restore deletes; the Backup tab draws no such badge.
+        Badge::Deletes => "Will be deleted".to_owned(),
     }
 }
 

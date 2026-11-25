@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -7,8 +8,8 @@ use eframe::egui::{self, Response, Role, TextEdit, Ui, WidgetInfo};
 use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
 use salvajocs_core::layout::{self, Context, GameVars, PrefixOrigin};
 use salvajocs_core::restore::{
-    self, GameInfo, Listed, PrefixReason, PrepareError, RestorePlan, SkippedItem, Targets, Used,
-    Write, WriteState,
+    self, Delete, GameInfo, Listed, PRE_RESTORE_TAG, PrefixReason, PrepareError, RestorePlan,
+    SkippedItem, Targets, Used, Write, WriteState,
 };
 use salvajocs_core::scan::Environment;
 use salvajocs_core::selection::GameSettings;
@@ -18,9 +19,11 @@ use super::dirs::own_dir;
 use super::keys::KeyTree;
 use super::manifest_paths::Source;
 use super::pick::TargetPick;
+use super::run::{selection_of, selections};
 use super::{RestoreTab, batch};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::backup::choices::Saved;
 use crate::tabs::count;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::{Dialog, DialogAction};
@@ -43,6 +46,9 @@ pub(super) struct Fetched {
     pub(super) info: GameInfo,
     /// Where `info.entry` comes from, worked out from the same manifest and custom games.
     pub(super) source: Option<Source>,
+    /// The game's selection now, with this PC's pending changes, which keeps files from being
+    /// deleted; `None` when it cannot be read, so nothing is deleted (ADR-0036).
+    pub(super) today: Option<GameSettings>,
 }
 
 impl Fetched {
@@ -53,22 +59,34 @@ impl Fetched {
         restore::prepare(&self.listed, &self.targets, &self.vars, &self.info, choices)
     }
 
-    /// `plan` with how each write compares with its target, the tree of its writes and the tree
-    /// of its registry keys. Reads the targets and which target folders exist, so it runs in a
-    /// job.
+    /// `plan` with the files on this PC its backup lacks as its `deletes` (ADR-0036), how each
+    /// write compares with its target, the tree of its writes and deletions and the tree of its
+    /// registry keys. Lists and reads the targets and which target folders exist, so it runs in
+    /// a job.
     pub(super) fn labelled(
         &self,
         plan: Result<RestorePlan, PrepareError>,
     ) -> Result<Labelled, PrepareError> {
-        plan.map(|plan| {
-            let labels = (plan.writes.iter())
-                .map(|write| Label::of(write, &self.listed))
+        plan.map(|mut plan| {
+            let (listed, today) = (&self.listed, self.today.as_ref());
+            let found = restore::deletions(listed, &plan, &self.vars, &self.info, today);
+            plan.deletes = found.files;
+            let unlisted = (found.unlisted.iter())
+                .map(|dir| dir.path.display().to_string())
                 .collect();
-            let tree = WriteTree::new(&plan, &self.listed);
+            let labels = (plan.writes.iter())
+                .map(|write| Label::of(write, listed))
+                .collect();
+            let unreadable = (plan.deletes.iter())
+                .map(|delete| unreadable(delete, listed))
+                .collect();
+            let tree = WriteTree::new(&plan, listed);
             let keys = KeyTree::of(&plan);
             Labelled {
                 plan,
                 labels,
+                unreadable,
+                unlisted,
                 tree,
                 keys,
             }
@@ -76,11 +94,24 @@ impl Fetched {
     }
 }
 
-/// A plan with how each write compares with its target, its writes as a tree and its registry
-/// keys as a tree.
+/// Why the safety backup cannot read `delete`'s file, which fails the whole restore; `None`
+/// when it can.
+fn unreadable(delete: &Delete, listed: &Listed) -> Option<String> {
+    let mut plan = RestorePlan::new(Vec::new(), None, Vec::new(), false, Vec::new());
+    plan.deletes = vec![delete.clone()];
+    let compared = restore::compare_writes(&plan, listed);
+    compared.err().map(|err| format!("{:#}", anyhow!(err)))
+}
+
+/// A plan with how each write compares with its target, which of its deletions the safety
+/// backup cannot read, its writes and deletions as a tree and its registry keys as a tree.
 pub(super) struct Labelled {
     pub(super) plan: RestorePlan,
     pub(super) labels: Vec<Label>,
+    /// Why the safety backup cannot read each of `plan.deletes`, in order; `None` when it can.
+    pub(super) unreadable: Vec<Option<String>>,
+    /// The target folders that could not be listed, so nothing in them is deleted.
+    pub(super) unlisted: Vec<String>,
     pub(super) tree: WriteTree,
     pub(super) keys: KeyTree,
 }
@@ -90,25 +121,32 @@ pub(super) struct Labelled {
 /// row, so it stays where the user is.
 pub(super) struct WriteTree {
     pub(super) tree: FileTree,
+    /// The rows of `tree`, then one per deletion of the plan, keyed by its file (ADR-0036); shown
+    /// while the game's box is on. A deletion's row position is its index in the plan's
+    /// `deletes` after the writes. `None` when the plan deletes nothing.
+    pub(super) deleting: Option<FileTree>,
     /// Each write's planned `<Base>/<tail>` key, which its checkbox ticks; an override keeps it.
     pub(super) keys: Vec<String>,
+    /// Each deletion's `<Base>/<tail>` key, by its index in the plan's `deletes`.
+    pub(super) delete_keys: Vec<String>,
     /// What each write's controls are named after: its key, and its row number when another
     /// write lands on the same key, so screen readers tell them apart.
     names: Vec<String>,
 }
 
 impl WriteTree {
-    /// The tree of `plan`'s writes, sized from the listing `listed`. Reads which target folders
-    /// exist, so it runs in a job.
+    /// The tree of `plan`'s writes, sized from the listing `listed`, and with its deletions.
+    /// Reads which target folders exist and each deletion's size, so it runs in a job.
     fn new(plan: &RestorePlan, listed: &Listed) -> Self {
-        let files: Vec<Row> = (plan.writes.iter())
-            .map(|write| Row {
+        let write_rows = || {
+            (plan.writes.iter()).map(|write| Row {
                 key: target_key(write).expect("`restore::plan` gives every write its target's key"),
                 size: listed.source(write).map_or(0, |entry| entry.size),
                 real: Some(write.target.clone()),
                 removed: false,
             })
-            .collect();
+        };
+        let files: Vec<Row> = write_rows().collect();
         let mut shared = HashMap::<&str, usize>::new();
         for file in &files {
             *shared.entry(&file.key).or_default() += 1;
@@ -120,9 +158,29 @@ impl WriteTree {
             })
             .collect();
         let keys = files.iter().map(|file| file.key.clone()).collect();
+        let delete_keys: Vec<String> = (plan.deletes.iter())
+            .map(|delete| {
+                format!(
+                    "{}/{}",
+                    delete.target_file.0.dir_name(),
+                    delete.target_file.1
+                )
+            })
+            .collect();
+        let deleting = (!plan.deletes.is_empty()).then(|| {
+            let deletes = (plan.deletes.iter().zip(&delete_keys)).map(|(delete, key)| Row {
+                key: key.clone(),
+                size: fs::metadata(&delete.target).map_or(0, |meta| meta.len()),
+                real: Some(delete.target.clone()),
+                removed: false,
+            });
+            FileTree::new(write_rows().chain(deletes)).existing_folders_only()
+        });
         Self {
             tree: FileTree::new(files).existing_folders_only(),
+            deleting,
             keys,
+            delete_keys,
             names,
         }
     }
@@ -132,6 +190,22 @@ impl WriteTree {
         (self.keys.iter())
             .map(|key| selection.path_included(key))
             .collect()
+    }
+
+    /// Which deletions the restore runs, by index in the plan's `deletes`: none while the game's
+    /// box is off (`on`), else those `selection` ticks.
+    pub(super) fn deleted(&self, selection: &GameSettings, on: bool) -> Vec<bool> {
+        (self.delete_keys.iter())
+            .map(|key| on && selection.path_included(key))
+            .collect()
+    }
+
+    /// Forgets the cached counts of both trees, as after the badges changed.
+    pub(super) fn invalidate(&mut self) {
+        self.tree.invalidate();
+        if let Some(deleting) = &mut self.deleting {
+            deleting.invalidate();
+        }
     }
 }
 
@@ -191,11 +265,15 @@ pub(super) struct Preview {
     planned: Vec<Write>,
     /// How each write compares with its target.
     labels: Vec<Label>,
+    /// Why the safety backup cannot read each of `plan.deletes`; `None` when it can.
+    unreadable: Vec<Option<String>>,
+    /// The target folders that could not be listed.
+    unlisted: Vec<String>,
     pub(super) tree: WriteTree,
     /// The registry keys with their ticks.
     pub(super) keys: KeyTree,
-    /// Which files the restore writes, by planned key, all ticked at first. Never saved; a new
-    /// plan starts with a new one.
+    /// Which files the restore writes and deletes, by planned key and deleted file's key, all
+    /// ticked at first. Never saved; a new plan starts with a new one.
     pub(super) selection: GameSettings,
     /// The text of each write whose override field is open.
     editing: BTreeMap<usize, String>,
@@ -326,6 +404,8 @@ impl Preview {
         let Labelled {
             plan,
             labels,
+            unreadable,
+            unlisted,
             tree,
             keys,
         } = labelled;
@@ -334,6 +414,8 @@ impl Preview {
             planned: plan.writes.clone(),
             plan,
             labels,
+            unreadable,
+            unlisted,
             tree,
             keys,
             selection: GameSettings::default(),
@@ -359,27 +441,68 @@ impl Preview {
             self.labels[write] = label;
         }
         self.relabelling = None;
-        self.tree.tree.invalidate();
+        self.tree.invalidate();
     }
 
-    /// The tree of the writes, with a checkbox on each file and folder. Each file's name and
-    /// Override button show where it goes on hover; the button opens a field under it for a new
-    /// target, and an overridden file shows its target with a Clear button. A file whose target
-    /// differs also has a Details button. A folder has the same Override button, which sends
-    /// every file below it to a new folder, and a Clear button while that is in force. Applies
-    /// what was clicked and returns the folder the user asked to open and the write whose
-    /// details they asked for.
-    fn files_ui(&mut self, ui: &mut Ui, busy: bool) -> (Option<PathBuf>, Option<usize>) {
+    /// Why the restore keeps each of `plan.deletes`, by index, whatever its tick (ADR-0036): a
+    /// folder override covers it, as the override sends that folder's writes elsewhere, or a
+    /// ticked write now targets it (ASCII case ignored), which `restore::run` would refuse to
+    /// delete. `None` for the others.
+    fn kept(&self) -> Vec<Option<&'static str>> {
+        let mut moved = GameSettings::default();
+        for folder in self.folder_overrides.keys() {
+            moved.set_path(folder, false);
+        }
+        let ticked = self.tree.ticked(&self.selection);
+        let written: HashSet<PathBuf> = (self.plan.writes.iter().zip(ticked))
+            .filter(|(_, ticked)| *ticked)
+            .map(|(write, _)| restore::lowered(&write.target))
+            .collect();
+        (self.tree.delete_keys.iter().zip(&self.plan.deletes))
+            .map(|(key, delete)| {
+                if !moved.path_included(key) {
+                    Some("its folder is overridden for this restore")
+                } else if written.contains(&restore::lowered(&delete.target)) {
+                    Some("the restore writes this file")
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Which of `plan.deletes` the restore runs, by index: none while the game's box is off
+    /// (`on`), else the ticked ones it does not keep ([`Self::kept`]).
+    pub(super) fn deleted(&self, on: bool) -> Vec<bool> {
+        let ticked = self.tree.deleted(&self.selection, on);
+        (ticked.into_iter().zip(self.kept()))
+            .map(|(ticked, kept)| ticked && kept.is_none())
+            .collect()
+    }
+
+    /// The tree of the writes, and of the deletions while the game's box is on (`on`), with a
+    /// checkbox on each file and folder. Each file's name and Override button show where it
+    /// goes on hover; the button opens a field under it for a new target, and an overridden file
+    /// shows its target with a Clear button. A file whose target differs also has a Details
+    /// button. A deletion's name shows its file on hover. A folder has the same Override button,
+    /// which sends every file below it to a new folder and keeps the deletions below it, and a
+    /// Clear button while that is in force. Applies what was clicked and returns the folder the
+    /// user asked to open and the write whose details they asked for.
+    fn files_ui(&mut self, ui: &mut Ui, busy: bool, on: bool) -> (Option<PathBuf>, Option<usize>) {
+        let kept = self.kept();
         let Preview {
             fetched,
             plan,
             planned,
             labels,
+            unreadable,
             tree:
                 WriteTree {
                     tree,
+                    deleting,
                     names,
                     keys: write_keys,
+                    ..
                 },
             selection,
             editing,
@@ -392,16 +515,30 @@ impl Preview {
         } = self;
         // Targets are compared in a job, so another override waits for it.
         let locked = busy || relabelling.is_some();
-        let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
-        let hint = |index: usize, _: &str, _| {
-            (labels[index].badge())
-                .map(|(_, hint)| hint)
-                .unwrap_or_default()
+        // Row positions from here on are deletions.
+        let first_delete = plan.writes.len();
+        let badged = |index: usize| match index.checked_sub(first_delete) {
+            None => labels[index].badge(),
+            Some(at) => delete_badge(unreadable[at].as_deref(), kept[at].is_some()),
         };
+        let badge = |index: usize, _: &str| badged(index).map(|(badge, _)| badge);
+        let hint =
+            |index: usize, _: &str, _| badged(index).map(|(_, hint)| hint).unwrap_or_default();
         let (error_color, muted) = (ui.visuals().error_fg_color, ui.visuals().weak_text_color());
         let mut action = None;
         let mut details = None;
         let mut row = |ui: &mut Ui, index: usize, _: &str, slot: Slot<'_>| {
+            if let Some(at) = index.checked_sub(first_delete) {
+                if let Slot::End(shown) = slot {
+                    shown
+                        .clone()
+                        .on_hover_text(plan.deletes[at].target.display().to_string());
+                    if let Some(why) = kept[at] {
+                        ui.weak(format!("kept: {why}"));
+                    }
+                }
+                return;
+            }
             let (write, name) = (&plan.writes[index], &names[index]);
             let target = write.target.display().to_string();
             if let Slot::End(shown) = slot {
@@ -450,10 +587,18 @@ impl Preview {
             }
         };
         let mut folder_action = None;
+        // A folder's rows past the writes are deletions, which an override does not move.
+        let only_writes = |rows: Vec<usize>| -> Vec<usize> {
+            (rows.into_iter())
+                .filter(|&row| row < first_delete)
+                .collect()
+        };
         let mut folder_row = |ui: &mut Ui,
                               key: &str,
                               writes: &dyn Fn() -> Vec<usize>,
                               slot: FolderSlot<'_>| match slot {
+            // A folder of deletions only has no write to send elsewhere.
+            FolderSlot::End { .. } if on && only_writes(writes()).is_empty() => {}
             FolderSlot::End { open } => {
                 let button = ui.add_enabled(!locked, egui::Button::new("Override").small());
                 let label = format!("Override folder {key}");
@@ -466,7 +611,8 @@ impl Preview {
                 if let Some(over) = folder_overrides.get(key) {
                     let label = format!("Clear the override of folder {key}");
                     if named_button(ui, !locked, "Clear", &label).clicked() {
-                        folder_action = Some(FolderAction::Clear(key.to_owned(), writes()));
+                        folder_action =
+                            Some(FolderAction::Clear(key.to_owned(), only_writes(writes())));
                     }
                     // Last and truncated, so a long path does not push the header wider than
                     // the window.
@@ -486,7 +632,7 @@ impl Preview {
                         ui.add(field).labelled_by(label.id);
                         let label = format!("Apply the new target of folder {key}");
                         if named_button(ui, !locked, "Apply", &label).clicked() {
-                            let action = FolderAction::Apply(key.to_owned(), writes());
+                            let action = FolderAction::Apply(key.to_owned(), only_writes(writes()));
                             folder_action = Some(action);
                         }
                     });
@@ -495,6 +641,11 @@ impl Preview {
                     theme::status(ui, icons::X_CIRCLE, error_color, error);
                 }
             }
+        };
+        // The tree not drawn has its counts forgotten when the box toggles.
+        let tree = match deleting {
+            Some(deleting) if on => deleting,
+            _ => tree,
         };
         let included = |key: &str| selection.path_included(key);
         let mode = Mode::Select {
@@ -623,19 +774,23 @@ impl Preview {
     }
 }
 
-/// `plan` with only what is ticked (ADR-0025, ADR-0026): the writes whose planned key (`keys`,
-/// by write index) `selection` includes, and the registry keys `registry` ticks with the keys
-/// it unticks kept, or no registry when nothing is written. The restore backs up and writes
-/// this one plan, so nothing unticked is written.
+/// `plan` with only what is ticked (ADR-0025, ADR-0026, ADR-0036): the writes whose planned key
+/// (`keys`, by write index) `selection` includes, the registry keys `registry` ticks with the
+/// keys it unticks kept, or no registry when nothing is written, and the deletions `deleted`
+/// says run (by index in `plan.deletes`). The restore backs up, writes and deletes this one
+/// plan, so nothing unticked is written or deleted.
 pub(super) fn ticked_plan(
     plan: &RestorePlan,
     keys: &[String],
     registry: &KeyTree,
     selection: &GameSettings,
+    deleted: &[bool],
 ) -> RestorePlan {
     let mut ticked = plan.clone();
     let mut keys = keys.iter();
     (ticked.writes).retain(|_| keys.next().is_some_and(|key| selection.path_included(key)));
+    let mut deleted = deleted.iter();
+    (ticked.deletes).retain(|_| deleted.next().is_some_and(|deleted| *deleted));
     if let Some((export, _)) = &mut ticked.registry {
         (*export, ticked.registry_kept) = registry.select(export);
     }
@@ -652,13 +807,119 @@ pub(super) fn nothing_to_restore(plan: &RestorePlan) -> bool {
     plan.writes.is_empty() && plan.registry.is_none()
 }
 
-/// The targets of the ticked writes (`ticked`, by write index) the safety backup cannot read,
-/// any of which keeps the whole restore from running.
-pub(super) fn blocking(plan: &RestorePlan, labels: &[Label], ticked: &[bool]) -> Vec<String> {
-    (plan.writes.iter().zip(labels).zip(ticked))
+/// The targets of the ticked writes (`ticked`, by write index) and the files of the deletions
+/// that run (`deleted`, by index in `plan.deletes`) the safety backup cannot read
+/// (`unreadable`), any of which keeps the whole restore from running.
+pub(super) fn blocking(
+    plan: &RestorePlan,
+    labels: &[Label],
+    ticked: &[bool],
+    unreadable: &[Option<String>],
+    deleted: &[bool],
+) -> Vec<String> {
+    let writes = (plan.writes.iter().zip(labels).zip(ticked))
         .filter(|((_, label), ticked)| **ticked && matches!(label, Label::Blocks(_)))
-        .map(|((write, _), _)| write.target.display().to_string())
+        .map(|((write, _), _)| &write.target);
+    let deletes = (plan.deletes.iter().zip(unreadable).zip(deleted))
+        .filter(|((_, unreadable), deleted)| **deleted && unreadable.is_some())
+        .map(|((delete, _), _)| &delete.target);
+    (writes.chain(deletes))
+        .map(|target| target.display().to_string())
         .collect()
+}
+
+/// The icon of a deletion in the plan with its tooltip: why it fails the restore when the
+/// safety backup cannot read its file (`unreadable`), and none when the restore keeps it
+/// (`kept`).
+pub(super) fn delete_badge(unreadable: Option<&str>, kept: bool) -> Option<(Badge, String)> {
+    match unreadable {
+        _ if kept => None,
+        Some(reason) => batch::write_badge(Err(reason)),
+        None => Some((
+            Badge::Deletes,
+            "Will be deleted: the backup does not have it".to_owned(),
+        )),
+    }
+}
+
+/// Whether the box "Delete files the backup does not have" of the game `title` was last left
+/// on, as `state`'s config remembers it (ADR-0036).
+pub(super) fn deletes_on(state: &State, title: &str) -> bool {
+    (state.config.as_ref()).is_some_and(|config| config.restore_deletes.contains(title))
+}
+
+/// The box "Delete files the backup does not have" of the game `fetched` plans, from and to
+/// `state`'s config, which a toggle saves (ADR-0036), with what `plan` deletes and the target
+/// folders that could not be listed (`unlisted`). It is disabled, with why on hover, for a
+/// safety backup, while the game's selection cannot be read and when nothing would be deleted;
+/// a line says so for the last two while the box is remembered on. Returns whether the box is on
+/// and whether it toggled this frame.
+pub(super) fn delete_box_ui(
+    ui: &mut Ui,
+    state: &mut State,
+    fetched: &Fetched,
+    plan: &RestorePlan,
+    unlisted: &[String],
+    enabled: bool,
+) -> (bool, bool) {
+    let title = &fetched.title;
+    let pre_restore = (fetched.listed.snapshot.tags.iter()).any(|tag| tag == PRE_RESTORE_TAG);
+    let unreadable = fetched.today.is_none();
+    let why_not = if pre_restore {
+        Some("A safety backup holds only what a restore replaced, so restoring it deletes nothing.")
+    } else if unreadable {
+        Some("What to back up of this game cannot be read, so no file is deleted.")
+    } else if plan.deletes.is_empty() {
+        Some("This PC has no file the backup lacks in the backup's folders.")
+    } else {
+        None
+    };
+    let remembered = deletes_on(state, title) && !pre_restore;
+    let mut on = remembered && !unreadable;
+    let checkbox = egui::Checkbox::new(&mut on, "Delete files the backup does not have");
+    let response = ui.add_enabled(enabled && why_not.is_none(), checkbox);
+    let toggled = response.changed();
+    match why_not {
+        Some(why) => response.on_disabled_hover_text(why),
+        None => response.on_hover_text(
+            "Deletes the ticked files of this PC in the backup's folders that the backup does \
+             not have, after the safety backup copies them",
+        ),
+    };
+    if toggled && let Some(config) = &mut state.config {
+        if on {
+            config.restore_deletes.insert(title.clone());
+        } else {
+            config.restore_deletes.remove(title);
+        }
+        state.save_config(ui.ctx());
+    }
+    let warn = ui.visuals().warn_fg_color;
+    if remembered && unreadable {
+        let text = "No file will be deleted: what to back up of this game cannot be read.";
+        theme::status(ui, icons::WARNING, warn, text);
+    } else if on && plan.deletes.is_empty() {
+        ui.weak("Nothing to delete: this PC has no file the backup lacks in the backup's folders.");
+    }
+    if on {
+        for dir in unlisted {
+            let text = format!("Nothing is deleted in {dir}: it cannot be listed.");
+            theme::status(ui, icons::WARNING, warn, text);
+        }
+    }
+    (on, toggled)
+}
+
+/// The line above the restore button while `deletes` files will be deleted.
+pub(super) fn deletes_line(ui: &mut Ui, deletes: usize) {
+    if deletes > 0 {
+        let warn = ui.visuals().warn_fg_color;
+        let text = format!(
+            "{} will be deleted. The safety backup keeps them; restoring it brings them back.",
+            count(deletes, "file")
+        );
+        theme::status(ui, icons::WARNING, warn, text);
+    }
 }
 
 /// The cross-build warning and the notes of `plan`.
@@ -864,6 +1125,7 @@ impl RestoreTab {
         );
         let environment = state.env.environment.clone();
         let work_dir = own_dir(&state.env.cache_dir, "restore-work");
+        let config_dir = state.env.config_dir.clone();
         let last_read = (self.last_read.clone()).filter(|listed| listed.snapshot.id == snapshot.id);
         let job = Job::spawn(ctx, move || {
             let targets = targets()?;
@@ -874,6 +1136,10 @@ impl RestoreTab {
                     &snapshot,
                     &work_dir,
                 )?),
+            };
+            let read = match lock_storage(&storage) {
+                Ok(mut storage) => selections(&mut storage, &config_dir, &config.secret_scope()),
+                Err(err) => Err(format!("{err:#}")),
             };
             let info = restore::game_info(&title, &manifest, &config.custom_games);
             let environment = environment.unwrap_or_else(Environment::detect);
@@ -888,6 +1154,7 @@ impl RestoreTab {
                 storage,
                 vars: restore::game_vars(&title, info.entry.as_ref(), &config, &environment),
                 source: Source::of(&title, &manifest, &config.custom_games),
+                today: selection_of(&read, &title),
                 title,
                 listed,
                 targets,
@@ -1004,7 +1271,20 @@ impl RestoreTab {
             },
             |ui| batch::state_chips(ui, &compared),
         );
-        let blocking = blocking(&preview.plan, &preview.labels, &ticked);
+        let (on, toggled) = delete_box_ui(
+            ui,
+            state,
+            &preview.fetched,
+            &preview.plan,
+            &preview.unlisted,
+            !busy,
+        );
+        if toggled {
+            preview.tree.invalidate();
+        }
+        let deleted = preview.deleted(on);
+        let (unreadable, labels) = (&preview.unreadable, &preview.labels);
+        let blocking = blocking(&preview.plan, labels, &ticked, unreadable, &deleted);
         if !blocking.is_empty() {
             let text = "Nothing will be restored: the safety backup cannot read these files:";
             theme::status(ui, icons::X_CIRCLE, error_color, text);
@@ -1013,7 +1293,7 @@ impl RestoreTab {
             }
         }
         let (opened, details) = theme::group(ui, |ui| {
-            let clicked = preview.files_ui(ui, busy);
+            let clicked = preview.files_ui(ui, busy, on);
             preview.registry_ui(ui, busy);
             clicked
         });
@@ -1053,9 +1333,13 @@ impl RestoreTab {
             );
         }
         let blocked = !blocking.is_empty();
-        let nothing = writes == 0 && !preview.keys.any_ticked();
+        let deletes = deleted.iter().filter(|&&deleted| deleted).count();
+        let nothing = writes == 0 && !preview.keys.any_ticked() && deletes == 0;
+        // A deletion reads what to back up from the pending file, so it waits for its write.
+        let saving = deletes > 0 && self.choices_saved == Saved::Saving;
         let ready = !busy
             && !self.backing_up
+            && !saving
             && state.session.is_some()
             && unapplied.is_none()
             && !relabelling
@@ -1071,6 +1355,8 @@ impl RestoreTab {
                 ui.weak("Downloading and restoring…");
             } else if backing_up {
                 ui.weak("Waiting for the running backup to end.");
+            } else if saving {
+                ui.weak("Waiting for the changes to what to back up to be saved.");
             } else if relabelling {
                 ui.weak("Checking the new targets…");
             } else if blocked {
@@ -1085,6 +1371,7 @@ impl RestoreTab {
             }
             paths |= ui.button("Manifest paths").clicked();
         };
+        deletes_line(ui, deletes);
         let restore = theme::row(ui, start, |ui| restore_button(ui, ready)).clicked();
         if paths {
             self.manifest_paths = Some(preview.fetched.clone());
@@ -1263,8 +1550,8 @@ mod tests {
             false,
             Vec::new(),
         );
-        assert_eq!(blocking(&plan, &labels, &[true, true]).len(), 2);
-        assert!(blocking(&plan, &labels, &[false, false]).is_empty());
+        assert_eq!(blocking(&plan, &labels, &[true, true], &[], &[]).len(), 2);
+        assert!(blocking(&plan, &labels, &[false, false], &[], &[]).is_empty());
     }
 
     #[test]

@@ -39,6 +39,7 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         custom_games_unsent: Vec::new(),
         custom_games_not_now: None,
         retention_unsent: None,
+        restore_deletes: Default::default(),
     }
 }
 

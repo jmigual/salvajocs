@@ -1031,6 +1031,24 @@ fn applying_a_new_location_keeps_the_sorts() {
 }
 
 #[test]
+fn applying_a_new_location_keeps_the_games_whose_restore_deletes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.restore_deletes.insert("Alpha".to_owned());
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.restore_deletes, config.restore_deletes);
+}
+
+#[test]
 fn changing_location_offers_to_delete_stale_keyring_entries() {
     let tmp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());

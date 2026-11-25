@@ -26,6 +26,7 @@ fn config(repository: &str, options: &[(&str, &str, bool)]) -> AppConfig {
         custom_games_unsent: Vec::new(),
         custom_games_not_now: None,
         retention_unsent: None,
+        restore_deletes: Default::default(),
     }
 }
 

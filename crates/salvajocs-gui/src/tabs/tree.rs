@@ -39,6 +39,8 @@ pub(crate) enum Badge {
     Unknown,
     /// The restore refuses to write it.
     WillFail,
+    /// The restore deletes it, as the backup lacks it (ADR-0036).
+    Deletes,
 }
 
 impl Badge {
@@ -49,6 +51,7 @@ impl Badge {
             Badge::Removed => "removed",
             Badge::Unknown => "could not be compared",
             Badge::WillFail => "will fail",
+            Badge::Deletes => "will be deleted",
         }
     }
 
@@ -60,6 +63,7 @@ impl Badge {
             Badge::Removed => icons::MINUS_CIRCLE,
             Badge::Unknown => icons::QUESTION,
             Badge::WillFail => icons::X_CIRCLE,
+            Badge::Deletes => icons::X,
         }
     }
 
@@ -67,7 +71,7 @@ impl Badge {
     pub(crate) fn color(self, ui: &Ui) -> Color32 {
         match self {
             Badge::New => theme::palette(ui).accent,
-            Badge::Changed => ui.visuals().warn_fg_color,
+            Badge::Changed | Badge::Deletes => ui.visuals().warn_fg_color,
             Badge::Removed => ui.visuals().weak_text_color(),
             Badge::Unknown | Badge::WillFail => ui.visuals().error_fg_color,
         }
@@ -176,6 +180,7 @@ struct Included {
     removed: usize,
     unknown: usize,
     will_fail: usize,
+    deletes: usize,
 }
 
 /// The files of a game as a tree of Bases and folders. It holds no selection: the caller says
@@ -395,6 +400,7 @@ fn totals<'a>(
                 Some(Badge::Removed) => sum.removed += 1,
                 Some(Badge::Unknown) => sum.unknown += 1,
                 Some(Badge::WillFail) => sum.will_fail += 1,
+                Some(Badge::Deletes) => sum.deletes += 1,
                 None => {}
             }
             totals.push(sum);
@@ -412,6 +418,7 @@ fn badge_chips(ui: &mut Ui, totals: &Included) {
         (Badge::Removed, totals.removed),
         (Badge::Unknown, totals.unknown),
         (Badge::WillFail, totals.will_fail),
+        (Badge::Deletes, totals.deletes),
     ];
     let label: Vec<_> = (counts.iter())
         .filter(|&&(_, count)| count > 0)
@@ -520,6 +527,7 @@ impl Drawing<'_> {
             removed: to.removed - from.removed,
             unknown: to.unknown - from.unknown,
             will_fail: to.will_fail - from.will_fail,
+            deletes: to.deletes - from.deletes,
         };
         let positions = || -> Vec<usize> {
             (self.files[start..end].iter())

@@ -38,7 +38,7 @@ pub(crate) fn read(storage: &mut Storage) -> anyhow::Result<Games> {
 /// `games` with the changes `pending` holds for the repository `scope`
 /// (`AppConfig::secret_scope`) replayed on them. A game whose settings cannot be read keeps its
 /// error.
-pub(super) fn replay(mut games: Games, pending: Option<&Pending>, scope: &str) -> Games {
+pub(crate) fn replay(mut games: Games, pending: Option<&Pending>, scope: &str) -> Games {
     let changes = pending.and_then(|pending| pending.repositories.get(scope));
     for (title, changes) in changes.into_iter().flatten() {
         let settings = games
@@ -71,6 +71,18 @@ pub(super) struct AfterBackup {
     /// The settings read again after saving, with the pending changes replayed; `None` when
     /// they could not be read.
     pub(super) games: Option<Games>,
+}
+
+/// Whether the pending file holds this PC's latest changes to what to back up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Saved {
+    /// It does.
+    #[default]
+    Yes,
+    /// A write runs or waits.
+    Saving,
+    /// The last write failed.
+    Failed,
 }
 
 /// The backup selection of the open repository.
@@ -195,6 +207,18 @@ impl Choices {
     /// Whether a load or a pending file write runs or waits.
     pub(super) fn busy(&self) -> bool {
         self.loading.is_some() || self.writing.is_some() || self.write_again
+    }
+
+    /// Whether the pending file holds the latest changes, which a restore that deletes reads
+    /// (ADR-0036).
+    pub(super) fn saved(&self) -> Saved {
+        if self.writing.is_some() || self.write_again {
+            Saved::Saving
+        } else if self.write_error.is_some() {
+            Saved::Failed
+        } else {
+            Saved::Yes
+        }
     }
 
     /// Applies `change` to the game `title` and writes it to the pending file in the background.
