@@ -13,7 +13,7 @@ use common::{
     run_settled, run_until, run_until_backed_up, run_until_ready, save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{Role, Toggled};
-use eframe::egui::{Key, Vec2};
+use eframe::egui::{Key, OutputCommand, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use salvajocs_core::backup::backup_games;
@@ -1314,12 +1314,22 @@ fn cancelling_choose_folders_saves_nothing() {
 
 /// The folder of the saves of the game `name` in `prefix`.
 fn save_dir(prefix: &Path, name: &str) -> PathBuf {
-    (prefix.join("drive_c/users/steamuser/AppData/Roaming")).join(name)
+    // One join per component, so on Windows the path has one separator, as the scan shows it.
+    let roaming = ["drive_c", "users", "steamuser", "AppData", "Roaming", name];
+    (roaming.iter()).fold(prefix.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Sets the modification time of `path` to `secs` seconds after the Unix epoch.
+fn set_modified(path: &Path, secs: u64) {
+    let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(time).unwrap();
 }
 
 /// The tab of the game `Alpha` after a backup of its file `save.dat` holding `before` and a
 /// scan that finds it holding `after`, with the file's folder open: the file is a changed row.
-/// The scratch folders stay alive with the harness.
+/// The backup's copy was last modified at second 1 700 000 000, this PC's at 1 700 000 100. The
+/// scratch folders stay alive with the harness.
 fn alpha_changed(
     before: &[u8],
     after: &[u8],
@@ -1331,6 +1341,7 @@ fn alpha_changed(
     let save = save_dir(&prefix, "Alpha").join("save.dat");
     fs::create_dir_all(save.parent().unwrap()).unwrap();
     fs::write(&save, before).unwrap();
+    set_modified(&save, 1_700_000_000);
     let games = vec![custom_game("Alpha", false, &prefix)];
     let (mut harness, env, tmp) = open_tab(Vec::new(), games);
     scan(&mut harness, "1 game found");
@@ -1338,6 +1349,7 @@ fn alpha_changed(
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(&mut harness, "Alpha: backed up");
     fs::write(&save, after).unwrap();
+    set_modified(&save, 1_700_000_100);
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
     // Its size reads in KiB for a long file.
@@ -1363,13 +1375,12 @@ fn details_show_that_only_line_endings_differ() {
 
     assert!(shows(&harness, "2 Windows (CRLF), 0 Linux (LF)"));
     assert!(shows(&harness, "0 Windows (CRLF), 2 Linux (LF)"));
-    assert!(shows(&harness, "Backup ("));
     assert!(shows_path(&harness, &save.display().to_string()));
     let local = "58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab";
     let backup = "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2";
     assert!(shows(&harness, local));
     assert!(shows(&harness, backup));
-    assert!(shows(&harness, "(from its hash list)"));
+    assert!(shows(&harness, "from its hash list"));
     assert!(!shows(&harness, "Reading the backup"));
 }
 
@@ -1381,7 +1392,7 @@ fn escape_closes_the_details() {
     harness.key_press(Key::Escape);
     run_settled(&mut harness);
 
-    assert!(!shows(&harness, "Backup ("));
+    assert!(!shows(&harness, "Close details"));
 }
 
 #[test]
@@ -1401,7 +1412,7 @@ fn details_show_the_changed_lines() {
 
     click(&mut harness, "Close details");
     run_settled(&mut harness);
-    assert!(!shows(&harness, "Backup ("));
+    assert!(!shows(&harness, "Close details"));
 }
 
 #[test]
@@ -1435,14 +1446,17 @@ fn a_file_over_the_cap_is_shown_on_request() {
     let (mut harness, _env, _dirs, _save) = alpha_changed(before.as_bytes(), after.as_bytes());
 
     open_details(&mut harness, "Show anyway");
-    assert!(shows(&harness, "Not shown: a copy is over"));
+    assert!(shows(
+        &harness,
+        "Diff not shown: both copies are over 10.0 MiB."
+    ));
     assert!(!shows(&harness, "+ changed_line_xyz"));
 
     click(&mut harness, "Show anyway");
     run_until(&mut harness, "the diff", |h| shows(h, "+ changed_line_xyz"));
     assert!(shows(&harness, "− 0123456789abcdef"));
     assert!(!shows(&harness, "Show anyway"));
-    assert!(!shows(&harness, "Not shown: a copy is over"));
+    assert!(!shows(&harness, "Diff not shown"));
 }
 
 #[test]
@@ -1463,10 +1477,144 @@ fn a_missing_final_newline_shows_in_the_details() {
 fn details_say_a_binary_file_is_not_text() {
     let (mut harness, _env, _dirs, _save) = alpha_changed(b"\0\x01\x02", b"\0\x01\x02\x03");
 
-    open_details(&mut harness, "Not shown: not text.");
+    open_details(&mut harness, "Diff not shown: neither copy is text.");
 
     assert!(!shows(&harness, "Windows (CRLF)"));
-    assert!(shows(&harness, "SHA-256 of This PC"));
+    // The hash has a row of the grid, not a line of its own.
+    harness.get_by_label("SHA-256");
+    assert!(!shows(&harness, "SHA-256 of"));
+}
+
+/// The texts copied to the clipboard by the frame just run.
+fn copied(harness: &Harness<'static, App>) -> Vec<String> {
+    let commands = &harness.output().platform_output.commands;
+    let texts = commands.iter().filter_map(|command| match command {
+        OutputCommand::CopyText(text) => Some(text.clone()),
+        _ => None,
+    });
+    texts.collect()
+}
+
+/// Right-clicks the label `value` and clicks **Copy** in its menu; returns what was copied.
+fn copy_value(harness: &mut Harness<'static, App>, value: &str) -> Vec<String> {
+    harness.get_by_label(value).click_secondary();
+    run_settled(harness);
+    harness.get_by_label("Copy").click();
+    // The command lasts one frame, so read it right after the click is handled.
+    harness.step();
+    copied(harness)
+}
+
+#[test]
+fn right_click_copy_gives_the_whole_hash_and_location_of_a_copy() {
+    let (mut harness, _env, _dirs, save) = alpha_changed(b"a\nb\n", b"a\r\nb\r\n");
+    open_details(&mut harness, "Only the line endings differ.");
+
+    let local = "58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab";
+    assert_eq!(copy_value(&mut harness, local), [local]);
+    let backup = "911169ddaaf146aff539f58c26c489af3b892dff0fe283c1c264c65ae5aa59a2";
+    assert_eq!(copy_value(&mut harness, backup), [backup]);
+    let location = save.display().to_string();
+    assert_eq!(copy_value(&mut harness, &location), [location]);
+    // The key under the heading, the first of the two labels that show it.
+    let key = "WinAppData/Alpha/save.dat";
+    assert_eq!(harness.query_all_by_label(key).count(), 2);
+    harness
+        .query_all_by_label(key)
+        .next()
+        .unwrap()
+        .click_secondary();
+    run_settled(&mut harness);
+    harness.get_by_label("Copy").click();
+    harness.step();
+    assert_eq!(copied(&harness), [key]);
+    // The menu closes with the click, and the dialog stays.
+    run_settled(&mut harness);
+    assert!(harness.query_by_label("Copy").is_none());
+    assert!(shows(&harness, "Close details"));
+}
+
+#[test]
+fn details_mark_each_fact_as_same_or_differing() {
+    // The same size and line endings, one byte different.
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"abc\n", b"abd\n");
+    open_details(&mut harness, "The text differs: 1 line removed, 1 added.");
+
+    // The modified time and the SHA-256 differ; the size and the line endings are the same.
+    assert_eq!(harness.query_all_by_label("Differs").count(), 2);
+    assert_eq!(harness.query_all_by_label("Same").count(), 2);
+}
+
+#[test]
+fn details_mark_differing_line_endings_and_size() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"a\nb\n", b"a\r\nb\r\n");
+    open_details(&mut harness, "Only the line endings differ.");
+
+    // The size, the modified time, the SHA-256 and the line endings.
+    assert_eq!(harness.query_all_by_label("Differs").count(), 4);
+    assert_eq!(harness.query_all_by_label("Same").count(), 0);
+}
+
+#[test]
+fn details_say_which_copy_is_over_the_cap() {
+    // 10.5 MiB on this PC against a few bytes in the backup.
+    let big = "0123456789abcdef\n".repeat(650_000);
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"abc\n", big.as_bytes());
+
+    open_details(&mut harness, "Show anyway");
+
+    let text = "Diff not shown: this PC's copy is 10.5 MiB, over the 10.0 MiB limit.";
+    assert!(shows(&harness, text));
+}
+
+#[test]
+fn details_do_not_mark_what_an_unread_backup_copy_may_share() {
+    // 10.5 MiB in the backup against a few bytes of text on this PC: the backup's copy is not
+    // read, so its line endings are unknown rather than different.
+    let big = "0123456789abcdef\n".repeat(650_000);
+    let (mut harness, _env, _dirs, _save) = alpha_changed(big.as_bytes(), b"abc\n");
+
+    open_details(&mut harness, "Show anyway");
+
+    let text = "Diff not shown: the backup's copy is 10.5 MiB, over the 10.0 MiB limit.";
+    assert!(shows(&harness, text));
+    // The size, the modified time and the SHA-256 differ; the line endings have no mark.
+    assert_eq!(harness.query_all_by_label("Differs").count(), 3);
+    assert_eq!(harness.query_all_by_label("Same").count(), 0);
+    assert!(shows(&harness, "0 Windows (CRLF), 1 Linux (LF)"));
+    assert!(shows(&harness, "not read"));
+    assert!(!shows(&harness, "not text"));
+}
+
+#[test]
+fn details_say_that_this_pcs_copy_is_not_text() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"text\n", b"\0\x01");
+
+    open_details(&mut harness, "Diff not shown: this PC's copy is not text.");
+}
+
+#[test]
+fn details_say_that_the_backups_copy_is_not_text() {
+    let (mut harness, _env, _dirs, _save) = alpha_changed(b"\0\x01", b"text\n");
+
+    open_details(
+        &mut harness,
+        "Diff not shown: the backup's copy is not text.",
+    );
+}
+
+#[test]
+fn details_say_when_this_pcs_copy_could_not_be_read() {
+    let (mut harness, _env, _dirs, save) = alpha_changed(b"abc\n", b"abcd\n");
+    fs::remove_file(save).unwrap();
+
+    open_details(
+        &mut harness,
+        "Diff not shown: this PC's copy could not be read.",
+    );
+
+    assert!(shows(&harness, "could not be read:"));
+    assert!(!shows(&harness, "Show anyway"));
 }
 
 #[test]
@@ -1517,7 +1665,7 @@ fn details_show_a_read_error() {
     open_details(&mut harness, "Could not read the backup");
 
     assert!(!shows(&harness, "Reading the backup"));
-    assert!(!shows(&harness, "SHA-256 of"));
+    assert!(!shows(&harness, "SHA-256"));
     click(&mut harness, "Close details");
     run_settled(&mut harness);
     assert!(!shows(&harness, "Could not read the backup"));
@@ -1693,7 +1841,7 @@ fn details_and_folders_act_on_their_own_game_in_a_sorted_list() {
     assert_eq!(*opened.lock().unwrap(), std::slice::from_ref(&beta));
     click(&mut harness, "Open WinAppData/Beta");
     harness.get_by_label("Details of save.dat").click();
-    run_until(&mut harness, "the details", |h| shows(h, "Backup ("));
+    run_until(&mut harness, "the details", |h| shows(h, "Location"));
     assert!(shows_path(
         &harness,
         &beta.join("save.dat").display().to_string()

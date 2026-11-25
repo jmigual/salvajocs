@@ -140,11 +140,18 @@ holds. A backup made by salvajocs 0.5.0 or older has no such list, and a list th
 its backup's files is not used, so there the modification time decides.
 
 To see what makes a file differ, click the **Details** button after a file with the changed
-icon. The dialog shows, for this PC's copy and the backup's, where the file is (the backup's path
-below `files/`, which for a backup of the other build is its own folder), its size, its
-modification time to the second (UTC) and its SHA-256, which you can select and copy. The
-backup's hash comes from its list of hashes; a backup without one gets it from the downloaded
-file.
+icon. A line at the top says how the content compares: `The text differs: 1 line removed, 1
+added.`, `Only the line endings differ.` or `Same content.`. Below it, the dialog shows this PC's
+copy and the backup's side by side: where the file is (the backup's path below `files/`, which
+for a backup of the other build is its own folder), its size, its modification time to the second
+(UTC) and its SHA-256, which wraps in its column. A mark after each label says whether the two
+are the same or differ. The backup's hash comes from its list of hashes, said under it; a backup
+without one gets it from the downloaded file.
+
+![The Details dialog of a changed text file](../images/details.png)
+
+Right-click a value, such as a path or a hash, and choose **Copy** to copy all of it. To copy
+only a part, select it with the mouse and press Ctrl+C.
 
 A text file also shows the lines that differ, with three lines of context: lines of the backup
 marked `−`, lines on this PC marked `+`. Windows ends a line with CRLF and Linux with LF, so the
@@ -154,9 +161,10 @@ at the start of a file) left out; a copy with a BOM says so. When that leaves no
 says that only the line endings, the BOM or both differ. A last line without a line ending is
 marked `(no newline at end)`.
 A copy is text when it is valid UTF-8 without a NUL byte. When a copy is not text, or either copy
-is larger than 10 MiB, no lines are shown, and nothing is downloaded from the repository for a
-file that large, until you click **Show anyway**, which reads both copies without that limit. A
-file that is not text still shows no lines. A long diff shows its first 1000 lines. The backup's
+is larger than 10 MiB, no lines are shown: the top line says `Diff not shown:` and names the copy,
+and nothing is downloaded from the repository for a file that large until you click **Show
+anyway**, which reads both copies without that limit. A file that is not text still shows no
+lines. A long diff shows its first 1000 lines. The backup's
 copy is read when you click the button, so the repository must be reachable; if it is not, the
 dialog says it could not read the backup.
 

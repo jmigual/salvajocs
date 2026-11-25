@@ -14,9 +14,15 @@ All notable changes to salvajocs. The format follows
 - The Restore plan overrides a whole folder: a folder's **Override** sends every file below it to
   a new absolute path, keeping their places below the folder, and **Clear** puts them back.
   Before, only single files could be overridden.
+- Right-click a value in the file Details dialog (a path, a hash, a size) and choose **Copy** to
+  copy all of it.
 
 ### Changed
 
+- The file Details dialog sets This PC and the backup side by side, with the SHA-256 as a row, a
+  Same or Differs mark after each label and a line on top saying how the content compares. When no
+  diff is shown it says "Diff not shown:" and names the copy that is over the limit, not text or
+  unreadable.
 - The custom games list says "extends the manifest entry" and "overrides the manifest entry"
   instead of "extends the manifest game" and "overrides the manifest game".
 - Typing a password in Settings for a repository that was set up without one now adds that

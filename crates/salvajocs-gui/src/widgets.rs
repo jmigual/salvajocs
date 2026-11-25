@@ -1,7 +1,7 @@
 //! Controls shared by several screens.
 
 use eframe::egui::{
-    Button, Color32, Grid, Label, Response, RichText, Role, TextEdit, Ui, WidgetInfo,
+    Button, Color32, Grid, Label, Response, RichText, Role, TextEdit, Ui, WidgetInfo, WidgetText,
 };
 
 use crate::theme;
@@ -36,6 +36,20 @@ pub fn labelled_edit(ui: &mut Ui, label: &str, text: &mut String, password: bool
 pub fn named_button(ui: &mut Ui, enabled: bool, text: &str, name: &str) -> Response {
     let response = ui.add_enabled(enabled, Button::new(text));
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, name));
+    response
+}
+
+/// A selectable label of `shown` whose right-click menu has one item, **Copy**, that copies
+/// `copied` whole. egui drops a label's selection on any right-click, so the menu copies the
+/// value, not the selection; drag and Ctrl+C still copy a part.
+pub fn copyable(ui: &mut Ui, shown: impl Into<WidgetText>, copied: &str) -> Response {
+    let response = ui.add(Label::new(shown).selectable(true));
+    response.context_menu(|ui| {
+        if ui.button("Copy").clicked() {
+            ui.ctx().copy_text(copied.to_owned());
+            ui.close();
+        }
+    });
     response
 }
 

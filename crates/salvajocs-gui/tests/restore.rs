@@ -2682,7 +2682,7 @@ fn a_changed_file_of_the_plan_has_details() {
     run_settled(&mut harness);
 
     assert!(shows(&harness, "+ 2"));
-    assert!(shows(&harness, "Backup ("));
+    assert!(shows(&harness, "Location"));
     assert!(shows_path(
         &harness,
         &saves.join("save.dat").display().to_string()
@@ -2692,11 +2692,11 @@ fn a_changed_file_of_the_plan_has_details() {
     let backup = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
     let local = "bc85caa9b61bcf3a54ccfc800e2b0eda6c11fa5df4e0481c896d31cda2462eb2";
     assert!(shows(&harness, backup) && shows(&harness, local));
-    assert!(shows(&harness, "(from its hash list)"));
+    assert!(shows(&harness, "from its hash list"));
     assert!(!shows(&harness, "Reading the backup"));
 
     click(&mut harness, "Close details");
-    assert!(!shows(&harness, "Backup ("));
+    assert!(!shows(&harness, "Location"));
     assert!(harness.query_by_label("Close details").is_none());
 }
 
@@ -2713,6 +2713,57 @@ fn only_a_changed_file_of_the_plan_has_a_details_button() {
     let name = format!("Details of {ALPHA_SAVE}");
     let button = harness.get_by_label(&name);
     assert_eq!(button.accesskit_node().role(), Role::Button);
+}
+
+/// Sets the modification time of `path` to `secs` seconds after the Unix epoch.
+fn set_modified(path: &Path, secs: u64) {
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(time).unwrap();
+}
+
+#[test]
+fn details_of_a_big_backup_with_no_hash_list_record_no_hash_and_mark_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, _) = native(&tmp, "Alpha", &[]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[beta_scan]);
+    // A stage as 0.5.0 made it: no hashes.json. Its 10.5 MiB file is over the cap, so the
+    // backup's copy is not read and its hash is unknown.
+    let stage = tmp.path().join("old-stage");
+    let meta = r#"{"format":1,"title":"Alpha","roots":[["XdgData","Alpha"]]}"#;
+    put(&stage.join("salvajocs.json"), meta);
+    let backup_copy = stage.join("files/XdgData/Alpha/save.dat");
+    put(&backup_copy, &"0123456789abcdef\n".repeat(650_000));
+    set_modified(&backup_copy, 1_700_000_000);
+    let slug = salvajocs_core::slug::slug("Alpha");
+    let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
+    let tags = ["salvajocs", game_tag.as_str()];
+    open_repo(&tmp)
+        .backup_dir(&stage, &as_path, &tags, "Alpha")
+        .unwrap()
+        .unwrap();
+    let local = under(&xdg_data(&tmp), "Alpha/save.dat");
+    put(&local, "small\n");
+    set_modified(&local, 1_700_000_100);
+    click(&mut harness, "Load backups");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open XdgData/Alpha");
+
+    harness
+        .get_by_label("Details of XdgData/Alpha/save.dat")
+        .click();
+    run_until(&mut harness, "the details", |h| {
+        shows(h, "not recorded in this backup")
+    });
+
+    // The size and the modified time differ; the unknown hash has no mark.
+    assert_eq!(harness.query_all_by_label("Differs").count(), 2);
+    assert!(shows(
+        &harness,
+        "Diff not shown: the backup's copy is 10.5 MiB"
+    ));
 }
 
 #[test]

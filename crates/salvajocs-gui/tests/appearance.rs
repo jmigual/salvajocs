@@ -251,13 +251,27 @@ fn demo_repository() -> (MutexGuard<'static, ()>, String) {
     (turn, repository)
 }
 
-/// The Backup tab after a scan, compared with a backup of every game from another machine: one
-/// save changed since, so its game shows a `changed` file.
-fn backup_tab(dir: &Path, theme: Theme, name: &str) {
-    let (_turn, repository) = demo_repository();
+/// The Backup tab after a scan and a comparison with a backup of every game from another
+/// machine: one save changed since, so its game shows a `changed` file. `text`, the contents of
+/// Hollow Knight's `settings.dat` before and after the backup, adds a changed text file at fixed
+/// times. The comparison has to count `changed` files. The temp folder and the demo repository's
+/// turn stay alive with the harness.
+fn compared_backup_tab(
+    theme: Theme,
+    height: f32,
+    changed: usize,
+    text: Option<(&str, &str)>,
+) -> (Harness<'static, App>, TempDir, MutexGuard<'static, ()>) {
+    let (turn, repository) = demo_repository();
     let tmp = tempfile::tempdir().unwrap();
     let env = demo_env(&tmp);
     let prefix = windows_prefix();
+    let knight = prefix.join("drive_c/users/steamuser/AppData/LocalLow/Team Cherry/Hollow Knight");
+    let settings = knight.join("settings.dat");
+    if let Some((before, _)) = text {
+        fs::write(&settings, before).unwrap();
+        set_modified(&settings, 1_794_301_950);
+    }
     let mut config = local_config(&repository);
     config.roots = vec![Root::new(prefix.clone(), RootKind::WinePrefix)];
     save_config(&env, &config);
@@ -273,17 +287,36 @@ fn backup_tab(dir: &Path, theme: Theme, name: &str) {
         })
         .collect();
     forge(&tmp, &repository, &snapshots);
-    let knight = prefix.join("drive_c/users/steamuser/AppData/LocalLow/Team Cherry/Hollow Knight");
     write_file(&knight.join("user3.dat"), 18_600);
-    let mut harness = shot_harness(env, theme, 750.0);
+    if let Some((_, after)) = text {
+        fs::write(&settings, after).unwrap();
+        set_modified(&settings, 1_794_854_405);
+    }
+    let mut harness = shot_harness(env, theme, height);
     run_until_ready(&mut harness);
     run_settled(&mut harness);
 
     harness.get_by_label("Scan for games").click();
     run_until(&mut harness, "the scan", |h| shows(h, "5 games found"));
     run_until(&mut harness, "the comparison", |h| {
-        shows(h, "1 changed since the backup from steamdeck")
+        shows(
+            h,
+            &format!("{changed} changed since the backup from steamdeck"),
+        )
     });
+    (harness, tmp, turn)
+}
+
+/// Sets the modification time of `path` to `secs` seconds after the Unix epoch.
+fn set_modified(path: &Path, secs: u64) {
+    let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(time).unwrap();
+}
+
+/// The Backup tab with the changed save of Hollow Knight open in its folder.
+fn backup_tab(dir: &Path, theme: Theme, name: &str) {
+    let (mut harness, _tmp, _turn) = compared_backup_tab(theme, 750.0, 1, None);
     harness.get_by_label("Terraria").click();
     harness
         .get_by_label("3 files, 807.2 KiB, plus registry keys")
@@ -308,6 +341,28 @@ fn backup_tab_dark() {
 fn backup_tab_light() {
     let Some(dir) = output_dir() else { return };
     backup_tab(&dir, Theme::Light, "hero-light");
+}
+
+/// The Details dialog of a changed text save of Hollow Knight on the Backup tab.
+#[test]
+#[ignore = "renders the README screenshots; needs a wgpu adapter and SALVAJOCS_SCREENSHOTS=1"]
+fn details() {
+    let Some(dir) = output_dir() else { return };
+    let before = "volume=0.8\nlanguage=en\nfullscreen=false\nautosave=true\nslot=2\n";
+    let after = "volume=0.6\nlanguage=en\nfullscreen=true\nautosave=true\nslot=2\n";
+    let (mut harness, _tmp, _turn) =
+        compared_backup_tab(Theme::Dark, 900.0, 2, Some((before, after)));
+    harness.get_by_label("Terraria").click();
+    harness.get_by_label_contains("4 files, ").click();
+    run_settled(&mut harness);
+    harness
+        .get_by_label("Open WinLocalAppDataLow/Team Cherry/Hollow Knight")
+        .click();
+    run_settled(&mut harness);
+    harness.get_by_label("Details of settings.dat").click();
+    run_until(&mut harness, "the details", |h| shows(h, "Location"));
+    capture(&mut harness, &dir, "details");
+    fs::remove_dir_all(DEMO_ROOT).unwrap();
 }
 
 /// A snapshot to put into the fixture repository.
