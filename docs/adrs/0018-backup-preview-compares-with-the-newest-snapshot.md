@@ -119,7 +119,8 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
 - The first 0.6.0 backup of each game on each machine makes a snapshot: the staging directory
   gains `hashes.json`, and older snapshots have no list for (B) to compare with.
 - After a (B) skip, this machine's state lives in another machine's snapshot. Retention keeps
-  each host's newest (ADR-0015); once the other machine backs up something newer, (B) is false
+  each host's newest (ADR-0015; amended by ADR-0034: retention no longer keeps each host's
+  newest, only the game's); once the other machine backs up something newer, (B) is false
   here and the next backup stores this machine's own state.
 - A game shown as unchanged can still be backed up when only its registry keys or roots changed.
   Amended by ADR-0023: or when only the Wine prefix recorded in `salvajocs.json` changed, as on

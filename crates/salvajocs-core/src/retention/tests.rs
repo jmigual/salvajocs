@@ -181,14 +181,52 @@ fn newest_of_each_game_always_kept() {
 }
 
 #[test]
-fn newest_per_host_kept() {
+fn keep_last_ranks_across_hosts() {
     let snapshots = [
         game_a("pc-1", 1),
         game_a("pc-2", 2),
-        snap("deck-1", "deck", DAY * 30, &["game:a"]),
-        snap("deck-2", "deck", DAY * 40, &["game:a"]),
+        snap("deck-1", "deck", DAY * 3, &["game:a"]),
+        snap("deck-2", "deck", DAY * 4, &["game:a"]),
     ];
-    assert_eq!(forget(keep_last(1), &snapshots), ["pc-2", "deck-2"]);
+    assert_eq!(forget(keep_last(2), &snapshots), ["deck-1", "deck-2"]);
+}
+
+#[test]
+fn a_stopped_hosts_newest_is_forgotten_by_keep_last() {
+    let snapshots = [
+        game_a("pc-1", 1),
+        game_a("pc-2", 2),
+        snap("old-pc", "old-pc", DAY * 30, &["game:a"]),
+    ];
+    assert_eq!(forget(keep_last(2), &snapshots), ["old-pc"]);
+}
+
+#[test]
+fn a_stopped_hosts_newest_is_forgotten_by_keep_within() {
+    let snapshots = [
+        game_a("pc-newest", 1),
+        snap("old-pc", "old-pc", DAY * 30, &["game:a"]),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["old-pc"]);
+}
+
+#[test]
+fn newest_overall_kept_with_only_keep_within() {
+    let snapshots = [
+        snap("deck-newest", "deck", DAY * 30, &["game:a"]),
+        game_a("pc-old", 40),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["pc-old"]);
+}
+
+#[test]
+fn pre_restore_newest_kept_on_its_own() {
+    let snapshots = [
+        game_a("regular", 1),
+        snap("pre-1", "pc", DAY * 30, &["game:a", PRE_RESTORE_TAG]),
+        snap("pre-2", "deck", DAY * 40, &["game:a", PRE_RESTORE_TAG]),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["pre-2"]);
 }
 
 #[test]

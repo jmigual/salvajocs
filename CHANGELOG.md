@@ -32,6 +32,11 @@ All notable changes to salvajocs. The format follows
   last backup. A game whose newest backup comes from another PC and that this PC has not changed
   since it last synced shows a down arrow, "has newer saves", instead of a check; a game changed on
   both PCs, or that this PC has no record of syncing, has its own mark and says Back up asks.
+- The Old backups rules no longer keep the newest backup of each computer. They keep the last N
+  backups of a game, or those newer than the span, whichever computer made them, plus the newest
+  backup of the game; the safety backups (`pre-restore`) follow the same rules on their own, with
+  their newest kept. The first cleanup after the upgrade may delete each other computer's
+  newest backup of a game when the rules no longer keep it.
 - The custom games list says "extends the manifest entry" and "overrides the manifest entry"
   instead of "extends the manifest game" and "overrides the manifest game".
 - Typing a password in Settings for a repository that was set up without one now adds that

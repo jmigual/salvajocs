@@ -41,15 +41,16 @@ These rules decide which old backups of each game are removed. Tick one or both:
   A month is 30 days and a year 365.
 
 A backup is only made when a game's files changed, so the last N backups are the last N changes.
-A backup is kept if any rule keeps it. The newest backup of each game, and of each computer, is
-always kept. With both rules off, all backups are kept.
+A backup is kept if any rule keeps it. The newest backup of each game is always kept. With both
+rules off, all backups are kept.
 
-The last N backups are ranked by time across all computers. If one computer's clock runs far
-ahead, its backups can take all N places, and the other computers keep only their newest backup
-of the game.
+The last N backups are the last N of the game, whichever computer made them, ranked by time. A
+computer you no longer use keeps no backup of its own: its backups go like any other old ones.
+If one computer's clock runs far ahead, its backups can take all N places.
 
 The same rules also remove the safety backups (`pre-restore`) a restore makes first. They are
-counted on their own, so they never take the place of a game's regular backups.
+counted on their own, so they never take the place of a game's regular backups. The newest one
+of each game is always kept.
 
 Old backups are removed after the next backup. Their disk space comes back at a later cleanup, at
 least 23 hours later.
