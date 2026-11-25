@@ -848,6 +848,27 @@ pub(super) fn deletes_on(state: &State, title: &str) -> bool {
     (state.config.as_ref()).is_some_and(|config| config.restore_deletes.contains(title))
 }
 
+/// Remembers the box "Delete files the backup does not have" of each of the games `titles` as
+/// `on` in `state`'s config and saves it (ADR-0036).
+pub(super) fn remember_deletes<'a>(
+    state: &mut State,
+    ctx: &egui::Context,
+    titles: impl IntoIterator<Item = &'a str>,
+    on: bool,
+) {
+    let Some(config) = &mut state.config else {
+        return;
+    };
+    for title in titles {
+        if on {
+            config.restore_deletes.insert(title.to_owned());
+        } else {
+            config.restore_deletes.remove(title);
+        }
+    }
+    state.save_config(ctx);
+}
+
 /// The box "Delete files the backup does not have" of the game `fetched` plans, from and to
 /// `state`'s config, which a toggle saves (ADR-0036), with what `plan` deletes and the target
 /// folders that could not be listed (`unlisted`). It is disabled, with why on hover, for a
@@ -877,7 +898,11 @@ pub(super) fn delete_box_ui(
     let remembered = deletes_on(state, title) && !pre_restore;
     let mut on = remembered && !unreadable;
     let checkbox = egui::Checkbox::new(&mut on, "Delete files the backup does not have");
-    let response = ui.add_enabled(enabled && why_not.is_none(), checkbox);
+    let usable = enabled && why_not.is_none();
+    let response = ui.add_enabled(usable, checkbox);
+    // Named after the game, as the batch confirm has one per game.
+    let label = format!("Delete files the backup of {title} does not have");
+    response.widget_info(|| WidgetInfo::selected(Role::CheckBox, usable, on, &label));
     let toggled = response.changed();
     match why_not {
         Some(why) => response.on_disabled_hover_text(why),
@@ -886,13 +911,8 @@ pub(super) fn delete_box_ui(
              not have, after the safety backup copies them",
         ),
     };
-    if toggled && let Some(config) = &mut state.config {
-        if on {
-            config.restore_deletes.insert(title.clone());
-        } else {
-            config.restore_deletes.remove(title);
-        }
-        state.save_config(ui.ctx());
+    if toggled {
+        remember_deletes(state, ui.ctx(), [title.as_str()], on);
     }
     let warn = ui.visuals().warn_fg_color;
     if remembered && unreadable {

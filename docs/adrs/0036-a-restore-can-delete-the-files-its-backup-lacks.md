@@ -8,6 +8,9 @@ the folders in the backup are mirrored; the unticks are recorded per backup in `
 both schema additions are approved; it ships in the same PR as the restore fixes. Also on
 2026-11-25: a game unticked as a whole ("Delete as usual") still deletes, and the behaviour must
 stay predictable and simple: do what is expected, no heuristics, the safety backup is the undo.
+Also on 2026-11-25: the batch confirm has one Select all button that turns the box on for every
+game in it, remembered per game like the box, and a Deselect all button that turns them all off
+(the user's OK: "Keep it").
 **Amends:** ADR-0005 (a restore can delete), ADR-0014 (a backup records its rules), ADR-0018
 (a `hashes.json` field), ADR-0019 and ADR-0025 (deletion rows and ticks), ADR-0035 (the effect
 on the base).
@@ -102,6 +105,8 @@ through `State::save_config`.
   confirm, read from and saved to `restore_deletes`. It is disabled, with the reason on hover,
   for a `pre-restore` snapshot, while the settings cannot be read, and when nothing would be
   deleted.
+- Above the games of the batch confirm, **Select all** turns the box on for every planned game
+  and **Deselect all** turns it off, each saved to `restore_deletes` like a click on each box.
 - The files to delete are rows in the same tree after the writes, with a "will be deleted" badge
   (`Badge::Deletes`), ticked at first, shown only while the box is on. A folder tick covers both
   writes and deletions below it. A folder that holds only deletions has no Override button.

@@ -4275,8 +4275,8 @@ fn restoring_a_safety_backup_records_it_as_the_base_like_any_restore() {
     assert!(shows(&harness, NEWER_SAVES));
 }
 
-/// The label of the plan's box that deletes the files the backup lacks (ADR-0036).
-const DELETE_BOX: &str = "Delete files the backup does not have";
+/// The label of the box of Extra's plan that deletes the files its backup lacks (ADR-0036).
+const DELETE_BOX: &str = "Delete files the backup of Extra does not have";
 
 /// Extra, a native game backed up with `Extra/keep.sav` and `Extra/sub/keep.sav` after `adjust`,
 /// with each of `extras` on this PC below its folder only, holding `extra`. Planned, with its
@@ -4687,4 +4687,115 @@ fn a_folder_that_cannot_be_listed_says_so() {
     );
     assert!(shows_path(&harness, &line));
     assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+}
+
+/// Alpha and Beta, native games each backed up with `save.dat` and with an `old.dat` on this PC
+/// only, planned as a batch; returns where `old.dat` is of a game.
+fn extra_batch(tmp: &TempDir) -> (Harness<'static, App>, Env, impl Fn(&str) -> PathBuf) {
+    let (alpha, alpha_scan) = native(tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let saves = xdg_data(tmp);
+    let extra = move |game: &str| saves.join(game).join("old.dat");
+    put(&extra("Alpha"), "extra");
+    put(&extra("Beta"), "extra");
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    (harness, env, extra)
+}
+
+/// The label of the delete box of `game` in the batch confirm.
+fn delete_box(game: &str) -> String {
+    format!("Delete files the backup of {game} does not have")
+}
+
+#[test]
+fn a_batch_deletes_only_for_the_game_whose_box_is_on() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    assert!(!ticked(&harness, &delete_box("Alpha")));
+    assert!(!ticked(&harness, &delete_box("Beta")));
+
+    click(&mut harness, &delete_box("Alpha"));
+
+    assert!(shows(&harness, "1 file will be deleted."));
+    assert!(!ticked(&harness, &delete_box("Beta")));
+    run_until_deletes_saved(&mut harness, &env, &["Alpha"]);
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!extra("Alpha").exists());
+    assert_eq!(fs::read_to_string(extra("Beta")).unwrap(), "extra");
+    let deleted = format!("{}: deleted", extra("Alpha").display());
+    assert!(shows_path(&harness, &deleted));
+}
+
+#[test]
+fn the_batch_select_all_turns_every_games_delete_box_on_and_is_remembered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    let every = "Delete files the backup does not have for every game";
+
+    click(&mut harness, every);
+
+    assert!(ticked(&harness, &delete_box("Alpha")));
+    assert!(ticked(&harness, &delete_box("Beta")));
+    run_until_deletes_saved(&mut harness, &env, &["Alpha", "Beta"]);
+    click(
+        &mut harness,
+        "Delete files the backup does not have for no game",
+    );
+    assert!(!ticked(&harness, &delete_box("Alpha")));
+    run_until_deletes_saved(&mut harness, &env, &[]);
+    click(&mut harness, every);
+    run_until_deletes_saved(&mut harness, &env, &["Alpha", "Beta"]);
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!extra("Alpha").exists());
+    assert!(!extra("Beta").exists());
+}
+
+#[test]
+fn a_batch_game_keeps_its_unticked_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let saves = xdg_data(&tmp).join("Alpha");
+    put(&saves.join("old.dat"), "extra");
+    put(&saves.join("older.dat"), "extra");
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, &delete_box("Alpha"));
+    click(&mut harness, "Open XdgData/Alpha");
+    assert!(ticked(&harness, "older.dat, will be deleted"));
+
+    click(&mut harness, "older.dat, will be deleted");
+
+    assert!(shows(&harness, "1 file will be deleted."));
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!saves.join("old.dat").exists());
+    assert_eq!(
+        fs::read_to_string(saves.join("older.dat")).unwrap(),
+        "extra"
+    );
+}
+
+#[test]
+fn a_batch_keeps_a_file_unticked_in_what_to_back_up_after_the_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    click(
+        &mut harness,
+        "Delete files the backup does not have for every game",
+    );
+    assert!(shows(&harness, "1 file will be deleted."));
+
+    untick_since_the_plan(&tmp, &env, "Beta", "XdgData/Beta/old.dat");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    assert!(!extra("Alpha").exists());
+    assert_eq!(fs::read_to_string(extra("Beta")).unwrap(), "extra");
+    let kept = format!(
+        "{}: kept: unticked in what to back up since the plan",
+        extra("Beta").display()
+    );
+    assert!(shows_path(&harness, &kept));
 }

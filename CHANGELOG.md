@@ -24,9 +24,10 @@ All notable changes to salvajocs. The format follows
 - A restore remembers which backup this PC last synced a game with, and this PC's saves after it,
   so after an undo or a partial restore the game reads behind instead of changed on both. The
   Restore tab marks a game whose newest backup is a different one, with its PC and date.
-- **Delete files the backup does not have** in the Restore plan deletes this PC's files in the
-  backup's folders that the backup lacks, each with its own tick; the box is remembered per game,
-  files unticked in what to back up are kept, and the safety backup keeps every deleted file.
+- **Delete files the backup does not have** in the Restore plan and the batch confirm (where
+  **Select all** turns it on for every game) deletes this PC's files in the backup's folders that
+  the backup lacks, each with its own tick; the box is remembered per game, files unticked in what
+  to back up are kept, and the safety backup keeps every deleted file.
 
 ### Changed
 
