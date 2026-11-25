@@ -48,6 +48,10 @@ All notable changes to salvajocs. The format follows
   never become the newest; nor is one changed both here and on another PC, or one this PC has no
   record of syncing that differs from the newest. A game this PC changed is backed up even when
   its files equal this PC's own last backup.
+- The Backup results say why a game was not backed up and what to do, with their own marks
+  instead of a green check or "failed": an arrow when another PC has newer saves (restore them),
+  a warning when both PCs changed the saves or salvajocs does not know which backup this PC is in
+  sync with.
 
 ## [0.10.0] - 2026-11-22
 

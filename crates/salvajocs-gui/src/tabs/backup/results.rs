@@ -3,7 +3,7 @@ use salvajocs_core::backup::{GameBackup, Stored};
 
 use super::{BackupTab, Cleaned, lock};
 use crate::state::chain;
-use crate::tabs::count;
+use crate::tabs::{count, format_date};
 use crate::theme::{self, icons};
 
 /// What a backup did for one game.
@@ -11,15 +11,82 @@ use crate::theme::{self, icons};
 pub(super) enum Outcome {
     /// A new snapshot was stored.
     Saved,
-    /// Nothing changed since this machine's last snapshot.
+    /// The saves equal the newest snapshot, which is this PC's own.
     Unchanged,
-    /// Nothing changed since this machine's last snapshot, but the newest one, from the host it
-    /// names, differs.
-    UnchangedNewerElsewhere(String),
     /// The saves equal the newest snapshot, from the host it names.
     SameAsNewest(String),
+    /// Another PC has newer saves and this PC has not changed them since it last synced, so
+    /// nothing was backed up.
+    Behind {
+        /// The host of the newest backup.
+        host: String,
+        /// When the newest backup was made.
+        date: String,
+    },
+    /// This PC and the host it names changed the saves since this PC last synced, so nothing was
+    /// backed up.
+    ChangedOnBoth(String),
+    /// This PC has no record of syncing the game and its saves differ from the newest backup,
+    /// from the host it names, so nothing was backed up.
+    UnknownBase(String),
     /// The game could not be backed up; holds why.
     Failed(String),
+}
+
+/// The severity of a result's mark.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Level {
+    Good,
+    Warn,
+    Error,
+}
+
+impl Outcome {
+    /// The icon in front of the game's line.
+    pub(super) fn icon(&self) -> &'static str {
+        match self {
+            Self::Saved | Self::Unchanged | Self::SameAsNewest(_) => icons::CHECK_CIRCLE,
+            Self::Behind { .. } => icons::ARROW_DOWN,
+            Self::ChangedOnBoth(_) | Self::UnknownBase(_) => icons::WARNING,
+            Self::Failed(_) => icons::X_CIRCLE,
+        }
+    }
+
+    /// The severity of the icon and the line.
+    pub(super) fn level(&self) -> Level {
+        match self {
+            Self::Saved | Self::Unchanged | Self::SameAsNewest(_) => Level::Good,
+            Self::Behind { .. } | Self::ChangedOnBoth(_) | Self::UnknownBase(_) => Level::Warn,
+            Self::Failed(_) => Level::Error,
+        }
+    }
+
+    /// The game's line: `title`, then what happened and, when nothing was backed up, why and
+    /// what to do.
+    pub(super) fn line(&self, title: &str) -> String {
+        match self {
+            Self::Saved => format!("{title}: backed up"),
+            Self::Unchanged => format!("{title}: up to date"),
+            Self::SameAsNewest(host) => {
+                format!("{title}: same as the newest backup, from {host}")
+            }
+            Self::Behind { host, date } => format!(
+                "{title}: not backed up: {host} has newer saves, from {date}, and this PC has not \
+                 changed them since it last synced. Restore them on the Restore tab."
+            ),
+            Self::ChangedOnBoth(host) => format!(
+                "{title}: not backed up: both this PC and {host} changed the saves since this PC \
+                 last synced. Nothing was overwritten; open the game to compare them."
+            ),
+            Self::UnknownBase(host) => format!(
+                "{title}: not backed up: salvajocs does not know which backup this PC is in sync \
+                 with (for example after undoing a restore or upgrading), and the saves differ \
+                 from the newest backup, from {host}. Nothing was overwritten; open the game to \
+                 compare them."
+            ),
+            Self::Failed(error) => format!("{title}: failed: {error}"),
+        }
+    }
 }
 
 /// One game's line in the results.
@@ -36,13 +103,12 @@ pub(super) fn summarize(backup: &GameBackup) -> GameResult {
         Ok(Stored::UpToDate {
             elsewhere: Some(newest),
         }) => Outcome::SameAsNewest(newest.host.clone()),
-        Ok(Stored::Behind { newest, .. }) => Outcome::UnchangedNewerElsewhere(newest.host.clone()),
-        Ok(Stored::ChangedOnBoth { newest } | Stored::UnknownBase { newest }) => {
-            Outcome::Failed(format!(
-                "not backed up: differs from the newest backup, from {}",
-                newest.host
-            ))
-        }
+        Ok(Stored::Behind { newest }) => Outcome::Behind {
+            host: newest.host.clone(),
+            date: format_date(newest.time),
+        },
+        Ok(Stored::ChangedOnBoth { newest }) => Outcome::ChangedOnBoth(newest.host.clone()),
+        Ok(Stored::UnknownBase { newest }) => Outcome::UnknownBase(newest.host.clone()),
         Ok(other) => Outcome::Failed(format!("unexpected backup result: {other:?}")),
         Err(err) => Outcome::Failed(chain(err)),
     };
@@ -130,27 +196,12 @@ impl BackupTab {
         ui.heading("Last backup");
         ui.spacing_mut().item_spacing.y = 4.0;
         for GameResult { title, outcome } in &progress.done {
-            let text = match outcome {
-                Outcome::Saved => format!("{title}: backed up"),
-                Outcome::Unchanged => format!("{title}: up to date"),
-                Outcome::UnchangedNewerElsewhere(host) => format!(
-                    "{title}: up to date with this PC's last backup; the newest backup, from \
-                     {host}, differs"
-                ),
-                Outcome::SameAsNewest(host) => {
-                    format!("{title}: same as the newest backup, from {host}")
-                }
-                Outcome::Failed(error) => {
-                    theme::status(
-                        ui,
-                        icons::X_CIRCLE,
-                        error_color,
-                        format!("{title}: failed: {error}"),
-                    );
-                    continue;
-                }
-            };
-            theme::icon_label(ui, icons::CHECK_CIRCLE, accent, text);
+            let text = outcome.line(title);
+            match outcome.level() {
+                Level::Good => theme::icon_label(ui, outcome.icon(), accent, text),
+                Level::Warn => theme::status(ui, outcome.icon(), warn, text),
+                Level::Error => theme::status(ui, outcome.icon(), error_color, text),
+            }
         }
     }
 }

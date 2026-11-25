@@ -1246,7 +1246,7 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(
         &mut harness,
-        "G: failed: not backed up: differs from the newest backup",
+        "G: not backed up: salvajocs does not know which backup this PC is in sync with",
     );
 }
 
@@ -1279,7 +1279,7 @@ fn a_registry_key_of_one_build_is_not_backed_up_without_a_base() {
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(
         &mut harness,
-        "G: failed: not backed up: differs from the newest backup",
+        "G: not backed up: salvajocs does not know which backup this PC is in sync with",
     );
 }
 

@@ -22,6 +22,7 @@ use salvajocs_core::sync;
 use crate::env::{Env, MemorySecrets};
 use crate::state::lock_storage;
 use crate::status_bar;
+use crate::tabs::format_date;
 use crate::tabs::tree::Badge;
 use crate::theme;
 
@@ -29,7 +30,7 @@ use super::preview::{
     Baseline, Header, Next, Tone, change_count, header_of, hint, next_backup, preview,
     preview_text, sentence, summary,
 };
-use super::results::summarize;
+use super::results::{Level, summarize};
 use super::run::{back_up, clean_up};
 use super::unsent::conflict_lines;
 use super::*;
@@ -124,22 +125,103 @@ fn snapshot_from(host: &str) -> SnapshotInfo {
     )
 }
 
+/// The mapped outcome of a backup that stored `stored`.
+fn outcome_of(stored: Stored) -> Outcome {
+    summarize(&backup(Ok(stored))).outcome
+}
+
 #[test]
-fn the_results_name_the_host_of_the_newest_backup() {
-    let behind = Stored::Behind {
-        newest: snapshot_from("there"),
-    };
+fn each_sync_state_has_its_own_result() {
+    let newest = || snapshot_from("there");
+    let date = format_date(SystemTime::UNIX_EPOCH);
     assert_eq!(
-        summarize(&backup(Ok(behind))).outcome,
-        Outcome::UnchangedNewerElsewhere("there".into())
+        outcome_of(Stored::Behind { newest: newest() }),
+        Outcome::Behind {
+            host: "there".into(),
+            date
+        }
     );
-    let same = Stored::UpToDate {
-        elsewhere: Some(snapshot_from("there")),
-    };
     assert_eq!(
-        summarize(&backup(Ok(same))).outcome,
+        outcome_of(Stored::ChangedOnBoth { newest: newest() }),
+        Outcome::ChangedOnBoth("there".into())
+    );
+    assert_eq!(
+        outcome_of(Stored::UnknownBase { newest: newest() }),
+        Outcome::UnknownBase("there".into())
+    );
+    assert_eq!(
+        outcome_of(Stored::UpToDate {
+            elsewhere: Some(newest())
+        }),
         Outcome::SameAsNewest("there".into())
     );
+}
+
+#[test]
+fn a_game_that_was_not_backed_up_is_not_a_failure() {
+    let date = "2026-11-25".to_owned();
+    let behind = Outcome::Behind {
+        host: "there".into(),
+        date,
+    };
+    let both = Outcome::ChangedOnBoth("there".into());
+    let unknown = Outcome::UnknownBase("there".into());
+    assert_eq!(
+        (behind.icon(), behind.level()),
+        (icons::ARROW_DOWN, Level::Warn)
+    );
+    assert_eq!((both.icon(), both.level()), (icons::WARNING, Level::Warn));
+    assert_eq!(
+        (unknown.icon(), unknown.level()),
+        (icons::WARNING, Level::Warn)
+    );
+    let failed = Outcome::Failed("x".into());
+    assert_eq!(
+        (failed.icon(), failed.level()),
+        (icons::X_CIRCLE, Level::Error)
+    );
+    for outcome in [
+        Outcome::Saved,
+        Outcome::Unchanged,
+        Outcome::SameAsNewest("there".into()),
+    ] {
+        assert_eq!(
+            (outcome.icon(), outcome.level()),
+            (icons::CHECK_CIRCLE, Level::Good)
+        );
+    }
+}
+
+#[test]
+fn the_result_lines_say_why_nothing_was_backed_up() {
+    let behind = Outcome::Behind {
+        host: "there".into(),
+        date: "2026-11-25".into(),
+    };
+    assert_eq!(
+        behind.line("Game"),
+        "Game: not backed up: there has newer saves, from 2026-11-25, and this PC has not changed \
+         them since it last synced. Restore them on the Restore tab."
+    );
+    let both = Outcome::ChangedOnBoth("there".into()).line("Game");
+    assert!(
+        both.contains("both this PC and there changed the saves"),
+        "{both}"
+    );
+    let unknown = Outcome::UnknownBase("there".into()).line("Game");
+    assert!(
+        unknown.contains("does not know which backup this PC is in sync with"),
+        "{unknown}"
+    );
+    for line in [both, unknown] {
+        assert!(line.starts_with("Game: not backed up: "), "{line}");
+        assert!(!line.contains("failed"), "{line}");
+    }
+    assert_eq!(
+        Outcome::SameAsNewest("there".into()).line("Game"),
+        "Game: same as the newest backup, from there"
+    );
+    assert_eq!(Outcome::Unchanged.line("Game"), "Game: up to date");
 }
 
 /// A preview of `game(&[1], ..)` against a backup from `there` in which its one file is `state`,
