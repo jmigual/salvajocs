@@ -6,10 +6,14 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+Upgrade salvajocs on all your PCs at the same time: a PC on an older version does not follow the
+new sync rules and can make an older save the newest backup.
+
 ### Added
 
-- A game that is behind, changed on both PCs or of unknown base has a **Back up anyway** button
-  on the Backup tab. It backs up only that game, now, so this PC's saves become the newest.
+- A game that is behind, changed on both PCs or whose last sync is unknown has a **Back up
+  anyway** button on the Backup tab. It backs up only that game, now, so this PC's saves become
+  the newest.
 - The Restore plan has a **Manifest paths** button that lists the game's save path templates and
   registry keys from the manifest or your custom game, with where each applies; right-click one to
   copy it.
@@ -21,13 +25,11 @@ All notable changes to salvajocs. The format follows
   Before, only single files could be overridden.
 - Right-click a value in the file Details dialog (a path, a hash, a size) and choose **Copy** to
   copy all of it.
-- A restore remembers which backup this PC last synced a game with, and this PC's saves after it,
-  so after an undo or a partial restore the game reads behind instead of changed on both. The
-  Restore tab marks a game whose newest backup is a different one, with its PC and date.
 - **Delete files the backup does not have** in the Restore plan and the batch confirm (where
-  **Select all** turns it on for every game) deletes this PC's files in the backup's folders that
-  the backup lacks, each with its own tick; the box is remembered per game, files unticked in what
-  to back up are kept, and the safety backup keeps every deleted file.
+  **Select all** and **Deselect all** turn it on or off for every game) deletes this PC's files in
+  the backup's folders that the backup lacks, each with its own tick; the box is remembered per
+  game, files unticked in what to back up are kept, and the safety backup keeps every deleted
+  file.
 
 ### Changed
 
@@ -35,12 +37,6 @@ All notable changes to salvajocs. The format follows
   Same or Differs mark after each label and a line on top saying how the content compares. When no
   diff is shown it says "Diff not shown:" and names the copy that is over the limit, not text or
   unreadable.
-- The Backup tab compares a game with the backup this PC last synced with, not with this PC's
-  last backup. A game whose newest backup comes from another PC and that this PC has not changed
-  since it last synced shows a down arrow, "has newer saves", instead of a check; a game changed on
-  both PCs, or that this PC has no record of syncing, has its own mark and says Back up asks.
-  Back up now asks first, in the same dialog as the custom games conflicts, for each such game,
-  with "Don't back up" preselected; "Back up this PC's" makes this PC's saves the newest backup.
 - The Old backups rules no longer keep the newest backup of each computer. They keep the last N
   backups of a game, or those newer than the span, whichever computer made them, plus the newest
   backup of the game; the safety backups (`pre-restore`) follow the same rules on their own, with
@@ -51,16 +47,17 @@ All notable changes to salvajocs. The format follows
 - Typing a password in Settings for a repository that was set up without one now adds that
   salvajocs cannot add one to "Wrong encryption password."; the guide shows how to add one with
   restic.
-- Back up decides each game by this PC's saves against the game's newest backup, from any PC, and
-  the backup this PC last synced with, kept in `sync-base.json` in the config folder. A game this
-  PC has not changed while another PC made a newer backup is no longer backed up, so older saves
-  never become the newest; nor is one changed both here and on another PC, or one this PC has no
-  record of syncing that differs from the newest. A game this PC changed is backed up even when
-  its files equal this PC's own last backup.
-- The Backup results say why a game was not backed up and what to do, with their own marks
-  instead of a green check or "failed": an arrow when another PC has newer saves (restore them),
-  a warning when both PCs changed the saves or salvajocs does not know which backup this PC is in
-  sync with.
+- PCs now sync. Each PC remembers, for each game, the backup it last synced with (in
+  `sync-base.json` in the config folder; after a restore, also a list of this PC's files), and the
+  Backup tab compares a game with it, not with this PC's last backup. A game this PC has not
+  changed while a newer backup exists is not backed up, so older saves never become the newest; it
+  shows a down arrow, "has newer saves", instead of a check. A game changed on both PCs, or whose
+  last sync is unknown, makes Back up ask first, in the same dialog as the custom games conflicts,
+  with "Don't back up" preselected; "Back up this PC's" makes this PC's saves the newest backup. A
+  game this PC changed is backed up even when its files equal this PC's own last backup. The
+  Backup results say why a game was not backed up and what to do, with their own marks. The
+  Restore tab marks a game whose newest backup is a different one, with its PC and date. After an
+  undo the game reads behind until this PC's saves change.
 
 ## [0.10.0] - 2026-11-22
 
