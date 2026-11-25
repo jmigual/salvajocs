@@ -69,6 +69,7 @@ fn a_restore_report_shows_a_line_per_write_and_for_the_registry() {
         SafetyBackup::NothingExisted,
         vec![Ok(()), Err(restore::ApplyError::TargetIsSymlink)],
         Some(Err(restore::ApplyError::NoRegistry)),
+        Vec::new(),
     );
 
     let restored = Restored::new("Mix".into(), &plan, report);

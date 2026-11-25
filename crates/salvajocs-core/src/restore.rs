@@ -187,6 +187,9 @@ pub struct RestorePlan {
     /// Facts about the mapping the preview shows, such as the Unity `PlayerPrefs` note; filled
     /// by [`prepare`].
     pub notes: Vec<String>,
+    /// Files [`run`] deletes after the writes, each first in the safety backup (ADR-0036);
+    /// empty from [`Self::new`] and [`plan`], filled from [`deletions`].
+    pub deletes: Vec<Delete>,
     /// Each snapshot root [`plan`] placed a write under, for [`deletions`]; empty from
     /// [`Self::new`].
     placed: Vec<Placed>,
@@ -248,6 +251,7 @@ impl RestorePlan {
             skipped,
             cross_build,
             notes,
+            deletes: Vec::new(),
             placed: Vec::new(),
         }
     }
@@ -710,6 +714,7 @@ pub fn plan(
         skipped: Vec::new(),
         cross_build: false,
         notes: Vec::new(),
+        deletes: Vec::new(),
         placed: Vec::new(),
     };
     let files_dir = staged.root.join(layout::FILES_DIR);
