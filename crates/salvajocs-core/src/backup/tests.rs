@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime};
 
@@ -40,6 +40,7 @@ fn game(title: &str, files: Vec<FoundFile>) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     }
 }
 
@@ -369,6 +370,18 @@ fn restage_keeps_recorded_roots_when_source_unreadable() {
     ));
 }
 
+#[test]
+fn meta_sha256_is_the_hash_stage_lists_unless_a_path_was_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut scan = game("Foo", vec![]);
+    scan.roots = vec![(Base::WinAppData, "A".to_string())];
+    scan.prefix_origin = Some(PrefixOrigin::Proton(70));
+    let staged = stage(&scan, &RegistryExport::default(), tmp.path()).unwrap();
+    assert_eq!(meta_sha256(&scan), Some(staged.meta));
+    scan.unreadable = vec![tmp.path().join("B")];
+    assert_eq!(meta_sha256(&scan), None);
+}
+
 fn init_repo(root: &Path) -> Storage {
     let location = RepoLocation {
         repository: root.join("repo").to_str().unwrap().into(),
@@ -389,7 +402,7 @@ fn written(outcomes: &[GameBackup]) -> Vec<Option<SnapshotInfo>> {
         .iter()
         .map(|outcome| match outcome.result.as_ref().unwrap() {
             Stored::New(snapshot) => Some(snapshot.clone()),
-            Stored::Unchanged { .. } | Stored::SameAsNewest(_) => None,
+            _ => None,
         })
         .collect()
 }
@@ -431,6 +444,7 @@ fn rehash(stage_dir: &Path) -> Hashes {
         meta: sha256(&stage_dir.join(META_FILE)).unwrap(),
         registry: sha256(&stage_dir.join(REGISTRY_FILE)),
         files,
+        selection: BTreeMap::new(),
     }
 }
 
@@ -534,15 +548,7 @@ fn a_backup_stores_the_hash_list() {
     let mut storage = init_repo(tmp.path());
     let games = [game_with_save(tmp.path(), "Foo", "foo")];
     let stage_root = tmp.path().join("stage");
-    let outcomes = backup_games(
-        &mut storage,
-        &games,
-        &stage_root,
-        &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    let outcomes = backup_by_state(&mut storage, &games, &stage_root, &mapper(), &[]);
     let info = written(&outcomes)[0].clone().unwrap();
     let slug = slug("Foo");
     let stored = storage
@@ -569,12 +575,19 @@ fn backup_creates_tagged_labelled_snapshot_per_game() {
     ];
     let stage_root = tmp.path().join("stage");
     let mut seen = Vec::new();
+    let (mapper, bases, back_up_anyway) = (mapper(), Bases::default(), BTreeSet::new());
+    let by_state = ByState {
+        mapper: &mapper,
+        bases: &bases,
+        scope: "repo",
+        back_up_anyway: &back_up_anyway,
+    };
     let outcomes = backup_games(
         &mut storage,
         &games,
         &stage_root,
         &["extra"],
-        Some(&mapper()),
+        Some(&by_state),
         |outcome| seen.push(outcome.title.clone()),
     )
     .unwrap();
@@ -613,7 +626,13 @@ fn unchanged_game_makes_no_new_snapshot() {
     ];
     let stage_root = tmp.path().join("stage");
     let run = |storage: &mut Storage| {
-        written(&backup_games(storage, &games, &stage_root, &[], Some(&mapper()), |_| {}).unwrap())
+        written(&backup_by_state(
+            storage,
+            &games,
+            &stage_root,
+            &mapper(),
+            &[],
+        ))
     };
 
     assert!(run(&mut storage).iter().all(Option::is_some));
@@ -640,15 +659,7 @@ fn registry_exported_from_recorded_source() {
     let stage_root = tmp.path().join("stage");
     let games = [scan];
 
-    let outcomes = backup_games(
-        &mut storage,
-        &games,
-        &stage_root,
-        &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    let outcomes = backup_by_state(&mut storage, &games, &stage_root, &mapper(), &[]);
     assert!(written(&outcomes)[0].is_some());
     let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
     let staged: RegistryExport =
@@ -657,15 +668,7 @@ fn registry_exported_from_recorded_source() {
 
     // The keys are gone from the source: the export is empty and `registry.json` is dropped.
     write(&second.join("user.reg"), "WINE REGISTRY Version 2\n");
-    let outcomes = backup_games(
-        &mut storage,
-        &games,
-        &stage_root,
-        &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    let outcomes = backup_by_state(&mut storage, &games, &stage_root, &mapper(), &[]);
     assert!(written(&outcomes)[0].is_some());
     assert!(!registry_file.exists());
 }
@@ -701,15 +704,7 @@ fn registry_exported_from_recorded_windows_source() {
     let mut storage = init_repo(tmp.path());
     let stage_root = tmp.path().join("stage");
 
-    let outcomes = backup_games(
-        &mut storage,
-        &[scan],
-        &stage_root,
-        &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    let outcomes = backup_by_state(&mut storage, &[scan], &stage_root, &mapper(), &[]);
     assert!(written(&outcomes)[0].is_some());
     let registry_file = stage_root.join(slug("Foo")).join(REGISTRY_FILE);
     let staged: RegistryExport = serde_json::from_slice(&fs::read(registry_file).unwrap()).unwrap();
@@ -725,15 +720,13 @@ fn failed_game_does_not_stop_the_others() {
     let games = [broken, game_with_save(tmp.path(), "Fine", "fine")];
     let mut storage = init_repo(tmp.path());
 
-    let outcomes = backup_games(
+    let outcomes = backup_by_state(
         &mut storage,
         &games,
         &tmp.path().join("stage"),
+        &mapper(),
         &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    );
     assert!(matches!(outcomes[0].result, Err(BackupError::Io { .. })));
     assert!(matches!(outcomes[1].result, Ok(Stored::New(_))));
 
@@ -742,15 +735,13 @@ fn failed_game_does_not_stop_the_others() {
     {
         let mut windows = game("Windows", vec![]);
         windows.registry_source = Some(RegistrySource::Windows);
-        let outcomes = backup_games(
+        let outcomes = backup_by_state(
             &mut storage,
             &[windows],
             &tmp.path().join("stage"),
+            &mapper(),
             &[],
-            Some(&mapper()),
-            |_| {},
-        )
-        .unwrap();
+        );
         assert!(matches!(
             outcomes[0].result,
             Err(BackupError::NoWindowsRegistry)
@@ -783,17 +774,46 @@ fn mapper() -> Mapper<'static> {
     Mapper::new(&MANIFEST, &CONFIG, &ENV)
 }
 
-/// What one backup of the single game in `games` stored, staged below `root/<stage>`.
+/// Backs up `games` by their state on this PC, staged below `stage_root`, as the app does: with
+/// the bases recorded in `stage_root`'s sibling `<name>.bases`, which each outcome's base then
+/// updates, and the slugs `back_up_anyway`. So each stage root is one PC.
+fn backup_by_state(
+    storage: &mut Storage,
+    games: &[GameScan],
+    stage_root: &Path,
+    mapper: &Mapper,
+    back_up_anyway: &[&str],
+) -> Vec<GameBackup> {
+    let dir = stage_root.with_extension("bases");
+    let bases = sync::load(&dir);
+    let back_up_anyway = back_up_anyway.iter().map(|&slug| slug.to_owned()).collect();
+    let by_state = ByState {
+        mapper,
+        bases: &bases,
+        scope: "repo",
+        back_up_anyway: &back_up_anyway,
+    };
+    let outcomes = backup_games(storage, games, stage_root, &[], Some(&by_state), |_| {}).unwrap();
+    let updates =
+        (outcomes.iter()).filter_map(|outcome| Some((outcome.slug.clone(), outcome.base.clone()?)));
+    sync::record(&dir, "repo", updates).unwrap();
+    outcomes
+}
+
+/// What one backup of the single game in `games` stored, staged below `root/<stage>`: by its
+/// state with `mapper` ([`backup_by_state`]), else as the safety backup.
 fn stored(
     storage: &mut Storage,
     root: &Path,
     stage: &str,
     games: &[GameScan],
-    same_as_newest: Option<&Mapper>,
+    mapper: Option<&Mapper>,
 ) -> Stored {
     let stage_root = root.join(stage);
-    let mut outcomes =
-        backup_games(storage, games, &stage_root, &[], same_as_newest, |_| {}).unwrap();
+    let mut outcomes = match mapper {
+        Some(mapper) => backup_by_state(storage, games, &stage_root, mapper, &[]),
+        None => backup_games(storage, games, &stage_root, &[], None, |_| {}).unwrap(),
+    };
     outcomes.remove(0).result.unwrap()
 }
 
@@ -810,9 +830,16 @@ fn a_game_equal_to_another_hosts_newest_makes_no_snapshot() {
     // Another machine's copy of the same save has another mtime, so its content is compared.
     touch(&games[0].files[0].real, 1_000_000);
 
-    let outcome = stored(&mut here, tmp.path(), "here", &games, Some(&mapper()));
-    assert_eq!(outcome, Stored::SameAsNewest(theirs));
+    let stage_root = tmp.path().join("here");
+    let outcomes = backup_by_state(&mut here, &games, &stage_root, &mapper(), &[]);
+    let elsewhere = Some(theirs.clone());
+    let outcome = outcomes[0].result.as_ref().unwrap();
+    assert_eq!(outcome, &Stored::UpToDate { elsewhere });
     assert_eq!(here.snapshots("salvajocs").unwrap().len(), 1);
+    // This PC now syncs with the newest.
+    let staged = hash_list(&stage_root.join(slug("Foo")));
+    let base = sync::Base::new(theirs.id, Some(staged));
+    assert_eq!(outcomes[0].base, Some(base));
     // The safety backup keeps rustic's rule alone, so it stores this machine's own snapshot.
     let outcome = stored(&mut here, tmp.path(), "here", &games, None);
     assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
@@ -832,11 +859,11 @@ fn a_snapshot_without_a_hash_list_is_never_the_same() {
     let tags = ["salvajocs", &format!("game:{slug}")];
     let as_path = format!("/salvajocs/{slug}");
     there
-        .backup_dir(&old_stage, &as_path, &tags, "Foo")
+        .backup_dir(&old_stage, &as_path, &tags, "Foo", true)
         .unwrap();
 
     let outcome = stored(&mut here, tmp.path(), "here", &games, Some(&mapper()));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 /// Stores `stage_dir` as it is as the game `title`'s snapshot, as an older version or a damaged
@@ -846,7 +873,7 @@ fn store_staged(storage: &mut Storage, stage_dir: &Path, title: &str) {
     let tags = ["salvajocs", &format!("game:{slug}")];
     let as_path = format!("/salvajocs/{slug}");
     storage
-        .backup_dir(stage_dir, &as_path, &tags, title)
+        .backup_dir(stage_dir, &as_path, &tags, title, true)
         .unwrap()
         .unwrap();
 }
@@ -863,7 +890,7 @@ fn a_corrupt_hash_list_is_never_the_same() {
     store_staged(&mut there, &theirs, "Foo");
 
     let outcome = stored(&mut here, tmp.path(), "here", &games, Some(&mapper()));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 #[test]
@@ -881,7 +908,7 @@ fn a_hash_list_that_disagrees_with_its_snapshot_is_never_the_same() {
     store_staged(&mut there, &theirs, "Foo");
 
     let outcome = stored(&mut here, tmp.path(), "here", &games, Some(&mapper()));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 #[test]
@@ -895,7 +922,7 @@ fn other_roots_with_the_same_files_are_not_the_same() {
     stored(&mut there, tmp.path(), "there", &theirs, Some(&mapper()));
 
     let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 /// `game_with_save` of `title`, found in the bottle `bottle`.
@@ -914,7 +941,7 @@ fn unchanged_game_from_the_same_prefix_is_skipped() {
     let first = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
     assert!(matches!(first, Stored::New(_)), "{first:?}");
     let second = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
-    assert!(matches!(second, Stored::Unchanged { .. }), "{second:?}");
+    assert_eq!(second, Stored::UpToDate { elsewhere: None });
 }
 
 #[test]
@@ -929,7 +956,7 @@ fn meta_gaining_a_prefix_backs_up_once() {
     let first = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
     assert!(matches!(first, Stored::New(_)), "{first:?}");
     let second = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
-    assert!(matches!(second, Stored::Unchanged { .. }), "{second:?}");
+    assert_eq!(second, Stored::UpToDate { elsewhere: None });
 }
 
 #[test]
@@ -944,7 +971,8 @@ fn same_as_newest_needs_the_same_prefix() {
     };
 
     let same = stored(&mut here, tmp.path(), "here", &theirs, Some(&mapper()));
-    assert_eq!(same, Stored::SameAsNewest(newest));
+    let elsewhere = Some(newest);
+    assert_eq!(same, Stored::UpToDate { elsewhere });
     let mine = [in_bottle(tmp.path(), "Foo", "Other")];
     let other = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
     assert!(matches!(other, Stored::New(_)), "{other:?}");
@@ -1021,38 +1049,175 @@ fn other_registry_values_with_the_same_files_are_not_the_same() {
     stored(&mut there, tmp.path(), "there", &[theirs], Some(&mapper()));
 
     let outcome = stored(&mut here, tmp.path(), "here", &[mine], Some(&mapper()));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
+}
+
+/// Backs up `theirs` from the host `there`, staged below `root/there`, as the newest backup; it
+/// asks, since `there` has no base, so it is backed up anyway.
+fn newer_from_there(there: &mut Storage, root: &Path, theirs: &[GameScan]) -> SnapshotInfo {
+    let slug = slug(&theirs[0].title);
+    let stage_root = root.join("there");
+    let outcomes = backup_by_state(there, theirs, &stage_root, &mapper(), &[&slug]);
+    let Ok(Stored::New(newer)) = &outcomes[0].result else {
+        panic!("{outcomes:?}");
+    };
+    newer.clone()
 }
 
 #[test]
-fn unchanged_here_names_a_newer_different_snapshot_from_another_host() {
+fn behind_makes_no_snapshot_even_once_the_base_is_forgotten() {
     let tmp = tempfile::tempdir().unwrap();
     let mut here = init_repo(tmp.path());
     let mut there = open_as(tmp.path(), "there");
     let mine = [game_with_save(tmp.path(), "Foo", "foo")];
     let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
-    assert!(matches!(
-        stored(&mut here, tmp.path(), "here", &mine, Some(&mapper())),
-        Stored::New(_)
-    ));
-    let Stored::New(newer) = stored(&mut there, tmp.path(), "there", &theirs, Some(&mapper()))
-    else {
-        panic!("another host's first backup is written");
+    let Stored::New(base) = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper())) else {
+        panic!("the first backup is written");
     };
+    let newer = newer_from_there(&mut there, tmp.path(), &theirs);
+    here.forget(&[&base.id]).unwrap();
+
+    let outcomes = backup_by_state(&mut here, &mine, &tmp.path().join("here"), &mapper(), &[]);
+    let behind = Stored::Behind { newest: newer };
+    assert_eq!(outcomes[0].result.as_ref().unwrap(), &behind);
+    assert_eq!(outcomes[0].base, None);
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 1);
+}
+
+#[test]
+fn behind_is_backed_up_as_the_newest_when_the_user_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    let newer = newer_from_there(&mut there, tmp.path(), &theirs);
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    assert_eq!(outcome, Stored::Behind { newest: newer });
+
+    let stage_root = tmp.path().join("here");
+    let slug = slug("Foo");
+    let outcomes = backup_by_state(&mut here, &mine, &stage_root, &mapper(), &[&slug]);
+    let Ok(Stored::New(snapshot)) = &outcomes[0].result else {
+        panic!("{outcomes:?}");
+    };
+    let staged = hash_list(&stage_root.join(&slug));
+    let base = sync::Base::new(snapshot.id.clone(), Some(staged));
+    assert_eq!(outcomes[0].base, Some(base));
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 3);
+
+    // The newest now, so the next backup is up to date rather than behind.
+    let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    assert!(matches!(outcome, Stored::UpToDate { .. }), "{outcome:?}");
+}
+
+#[test]
+fn changed_on_both_is_backed_up_only_when_the_user_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    let newer = newer_from_there(&mut there, tmp.path(), &theirs);
+    write(&mine[0].files[0].real, "baz");
 
     let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
-    assert_eq!(
-        outcome,
-        Stored::Unchanged {
-            newer_elsewhere: Some(newer)
-        }
-    );
+    assert_eq!(outcome, Stored::ChangedOnBoth { newest: newer });
     assert_eq!(here.snapshots("salvajocs").unwrap().len(), 2);
 
-    // Different from both this machine's last backup and the newest.
-    write(&mine[0].files[0].real, "baz");
+    let stage_root = tmp.path().join("here");
+    let slug = slug("Foo");
+    let outcomes = backup_by_state(&mut here, &mine, &stage_root, &mapper(), &[&slug]);
+    let Ok(Stored::New(snapshot)) = &outcomes[0].result else {
+        panic!("{outcomes:?}");
+    };
+    let staged = hash_list(&stage_root.join(&slug));
+    let base = sync::Base::new(snapshot.id.clone(), Some(staged));
+    assert_eq!(outcomes[0].base, Some(base));
+}
+
+/// What `backup_games` did for the single game in `games`, staged below `stage_root`, with no
+/// base recorded, as on a PC upgraded from 0.10.0, and the slugs `back_up_anyway`.
+fn without_records(
+    storage: &mut Storage,
+    games: &[GameScan],
+    stage_root: &Path,
+    back_up_anyway: &[&str],
+) -> GameBackup {
+    let (mapper, bases) = (mapper(), Bases::default());
+    let back_up_anyway = back_up_anyway.iter().map(|&slug| slug.to_owned()).collect();
+    let by_state = ByState {
+        mapper: &mapper,
+        bases: &bases,
+        scope: "repo",
+        back_up_anyway: &back_up_anyway,
+    };
+    let mut outcomes =
+        backup_games(storage, games, stage_root, &[], Some(&by_state), |_| {}).unwrap();
+    outcomes.remove(0)
+}
+
+#[test]
+fn the_reported_case_is_behind_through_the_seed() {
+    // A backed up A1; JOAN-XPS-9730 backed up other saves, now the newest; A did not change.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "JOAN-XPS-9730");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    let stage_root = tmp.path().join("here");
+    let first = without_records(&mut here, &mine, &stage_root, &[]);
+    assert!(matches!(first.result, Ok(Stored::New(_))), "{first:?}");
+    let slug = slug("Foo");
+    let newer = without_records(&mut there, &theirs, &tmp.path().join("there"), &[&slug]);
+    let Ok(Stored::New(newer)) = newer.result else {
+        panic!("{newer:?}");
+    };
+
+    let outcome = without_records(&mut here, &mine, &stage_root, &[]);
+    assert_eq!(outcome.result.unwrap(), Stored::Behind { newest: newer });
+    assert_eq!(outcome.base, None);
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 2);
+}
+
+#[test]
+fn an_upgraded_pc_asks_about_a_game_it_changed_since_its_own_newest_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let games = [game_with_save(tmp.path(), "Foo", "foo")];
+    let stage_root = tmp.path().join("stage");
+    // As 0.10.0 made it: no base recorded.
+    let first = without_records(&mut storage, &games, &stage_root, &[]);
+    let Ok(Stored::New(newest)) = first.result else {
+        panic!("{first:?}");
+    };
+    write(&games[0].files[0].real, "changed");
+
+    let outcome = without_records(&mut storage, &games, &stage_root, &[]);
+    assert_eq!(outcome.result.unwrap(), Stored::UnknownBase { newest });
+    assert_eq!(outcome.base, None);
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
+}
+
+#[test]
+fn ahead_is_backed_up_even_when_the_staged_tree_is_this_hosts_last_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut here = init_repo(tmp.path());
+    let mut there = open_as(tmp.path(), "there");
+    let mine = [game_with_save(tmp.path(), "Foo", "foo")];
+    let theirs = [game_with_save(&tmp.path().join("there"), "Foo", "bar")];
+    stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
+    let newer = newer_from_there(&mut there, tmp.path(), &theirs);
+    // This PC restored the newer saves, then a launcher's cloud sync put its own back.
+    let restored = sync::Base::new(newer.id, None);
+    let bases = tmp.path().join("here.bases");
+    sync::record(&bases, "repo", [(slug("Foo"), restored)]).unwrap();
+
     let outcome = stored(&mut here, tmp.path(), "here", &mine, Some(&mapper()));
     assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert_eq!(here.snapshots("salvajocs").unwrap().len(), 3);
 }
 
 #[test]
@@ -1089,12 +1254,7 @@ fn a_game_equal_to_this_hosts_newest_is_unchanged_whatever_its_mtimes() {
     touch(&games[0].files[0].real, 1_000_000);
 
     let outcome = stored(&mut storage, tmp.path(), "stage", &games, Some(&mapper()));
-    assert_eq!(
-        outcome,
-        Stored::Unchanged {
-            newer_elsewhere: None
-        }
-    );
+    assert_eq!(outcome, Stored::UpToDate { elsewhere: None });
     assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
 }
 
@@ -1147,7 +1307,8 @@ fn a_game_equal_to_the_other_builds_newest_makes_no_snapshot() {
     let mapper = Mapper::new(&manifest, &config, &env);
 
     let outcome = stored(&mut here, tmp.path(), "here", &[linux], Some(&mapper));
-    assert_eq!(outcome, Stored::SameAsNewest(theirs));
+    let elsewhere = Some(theirs);
+    assert_eq!(outcome, Stored::UpToDate { elsewhere });
     assert_eq!(here.snapshots("salvajocs").unwrap().len(), 1);
 }
 
@@ -1162,14 +1323,14 @@ fn the_safety_backup_never_maps() {
     let mapper = Mapper::new(&manifest, &config, &env);
     let games = [linux];
     let outcome = stored(&mut here, tmp.path(), "here", &games, Some(&mapper));
-    assert!(matches!(outcome, Stored::SameAsNewest(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UpToDate { .. }), "{outcome:?}");
 
     let outcome = stored(&mut here, tmp.path(), "here", &games, None);
     assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
 }
 
 #[test]
-fn a_game_with_a_folder_of_the_other_build_without_a_place_is_backed_up() {
+fn a_game_with_a_folder_of_the_other_build_without_a_place_is_not_up_to_date() {
     let tmp = tempfile::tempdir().unwrap();
     let mut here = init_repo(tmp.path());
     let mut there = open_as(tmp.path(), "there");
@@ -1182,11 +1343,11 @@ fn a_game_with_a_folder_of_the_other_build_without_a_place_is_backed_up() {
     let mapper = Mapper::new(&manifest, &config, &env);
 
     let outcome = stored(&mut here, tmp.path(), "here", &[linux], Some(&mapper));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 #[test]
-fn registry_keys_only_one_build_has_make_a_snapshot() {
+fn a_game_with_registry_keys_on_one_build_only_is_not_up_to_date() {
     let tmp = tempfile::tempdir().unwrap();
     let mut here = init_repo(tmp.path());
     let mut there = open_as(tmp.path(), "there");
@@ -1200,7 +1361,7 @@ fn registry_keys_only_one_build_has_make_a_snapshot() {
     let mapper = Mapper::new(&manifest, &config, &env);
 
     let outcome = stored(&mut here, tmp.path(), "here", &[linux], Some(&mapper));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 #[test]
@@ -1220,7 +1381,7 @@ fn a_stale_hash_list_of_the_other_build_is_never_the_same() {
     let mapper = Mapper::new(&manifest, &config, &env);
 
     let outcome = stored(&mut here, tmp.path(), "here", &[linux], Some(&mapper));
-    assert!(matches!(outcome, Stored::New(_)), "{outcome:?}");
+    assert!(matches!(outcome, Stored::UnknownBase { .. }), "{outcome:?}");
 }
 
 /// Hashes a 64 MiB file (ADR-0018):
@@ -1265,15 +1426,7 @@ fn time_twenty_game_backup() {
     let stage_root = tmp.path().join("stage");
     for run in ["new", "unchanged"] {
         let started = std::time::Instant::now();
-        let outcomes = backup_games(
-            &mut storage,
-            &games,
-            &stage_root,
-            &[],
-            Some(&mapper()),
-            |_| {},
-        )
-        .unwrap();
+        let outcomes = backup_by_state(&mut storage, &games, &stage_root, &mapper(), &[]);
         let count = written(&outcomes).iter().flatten().count();
         println!("{run}: {count} snapshots in {:?}", started.elapsed());
     }
@@ -1284,18 +1437,66 @@ fn time_twenty_game_backup() {
     }
     let started = std::time::Instant::now();
     let stage_root = tmp.path().join("there");
-    let outcomes = backup_games(
-        &mut there,
-        &games,
-        &stage_root,
-        &[],
-        Some(&mapper()),
-        |_| {},
-    )
-    .unwrap();
+    let outcomes = backup_by_state(&mut there, &games, &stage_root, &mapper(), &[]);
     let count = written(&outcomes).iter().flatten().count();
     println!(
         "same as newest elsewhere: {count} snapshots in {:?}",
         started.elapsed()
     );
+}
+
+/// Path rules unticking a folder and ticking a file again below it.
+fn rules() -> BTreeMap<String, bool> {
+    BTreeMap::from([
+        ("WinAppData/Game/old".to_owned(), false),
+        ("WinAppData/Game/old/keep.sav".to_owned(), true),
+    ])
+}
+
+#[test]
+fn stage_records_the_selection_in_hashes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = game_with_save(tmp.path(), "Foo", "foo");
+    let unticked = GameScan {
+        selection: rules(),
+        ..plain.clone()
+    };
+    let (with, without) = (tmp.path().join("with"), tmp.path().join("without"));
+
+    let listed = stage(&unticked, &RegistryExport::default(), &with).unwrap();
+    assert_eq!(listed.selection, rules());
+    assert_eq!(hash_list(&with), listed);
+    // Neither the meta hash nor the content comparison sees the rules.
+    let other = stage(&plain, &RegistryExport::default(), &without).unwrap();
+    assert!(other.selection.is_empty());
+    assert_eq!(listed.meta, other.meta);
+    assert!(listed.same_content(&other));
+    assert_eq!(meta_sha256(&unticked), meta_sha256(&plain));
+}
+
+#[test]
+fn a_selection_only_change_backs_up_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = init_repo(tmp.path());
+    let plain = game_with_save(tmp.path(), "Foo", "foo");
+    let stage_root = tmp.path().join("stage");
+    let outcomes = backup_by_state(
+        &mut storage,
+        std::slice::from_ref(&plain),
+        &stage_root,
+        &mapper(),
+        &[],
+    );
+    assert!(written(&outcomes)[0].is_some());
+
+    let unticked = GameScan {
+        selection: rules(),
+        ..plain
+    };
+    let outcomes = backup_by_state(&mut storage, &[unticked], &stage_root, &mapper(), &[]);
+    let outcome = outcomes[0].result.as_ref().unwrap();
+    assert!(matches!(outcome, Stored::UpToDate { .. }), "{outcome:?}");
+    assert_eq!(storage.snapshots("salvajocs").unwrap().len(), 1);
+    // The staged list holds the new rules for the next snapshot.
+    assert_eq!(hash_list(&stage_root.join(slug("Foo"))).selection, rules());
 }

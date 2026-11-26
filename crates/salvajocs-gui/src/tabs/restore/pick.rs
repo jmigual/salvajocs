@@ -1,8 +1,9 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, TextEdit, Ui, Vec2};
-use salvajocs_core::config::ListSort;
+use salvajocs_core::config::{AppConfig, ListSort, SortKey};
 use salvajocs_core::layout::{Context, LinuxFolders, PrefixOrigin, WinFolders};
 use salvajocs_core::prefix;
 use salvajocs_core::restore::{
@@ -11,6 +12,7 @@ use salvajocs_core::restore::{
 use salvajocs_core::scan::Environment;
 use salvajocs_core::stats::{self, BackupStats};
 use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::sync;
 
 use super::delete::Deletion;
 use super::dirs::own_dir;
@@ -19,8 +21,8 @@ use super::{RestoreTab, batch};
 use crate::job::Job;
 use crate::state::{State, lock_storage};
 use crate::tabs::space::Space;
-use crate::tabs::{format_time, sort};
-use crate::theme;
+use crate::tabs::{format_date, format_time, host_name, sort};
+use crate::theme::{self, icons};
 
 /// How a snapshot shows in the picker: time, host and the `pre-restore` label.
 pub(super) fn snapshot_label(snapshot: &SnapshotInfo) -> String {
@@ -29,6 +31,19 @@ pub(super) fn snapshot_label(snapshot: &SnapshotInfo) -> String {
         label += ", pre-restore";
     }
     label
+}
+
+/// The slugs of the `games` whose newest regular snapshot is not this PC's recorded base of them
+/// in the repository `scope`. A game without a record is not among them: a seed is no record.
+fn newer_than_base(games: &[GameBackups], bases: &sync::Bases, scope: &str) -> BTreeSet<String> {
+    (games.iter())
+        .filter(|game| {
+            let newest = game.default.and_then(|index| game.snapshots.get(index));
+            let base = bases.get(scope, &game.slug);
+            matches!((base, newest), (Some(base), Some(newest)) if base.snapshot != newest.id)
+        })
+        .map(|game| game.slug.clone())
+        .collect()
 }
 
 /// The build the user restores into, preselected from `restore::default_targets` (ADR-0005).
@@ -251,7 +266,7 @@ impl RestoreTab {
             })
             .collect();
         let rows: Vec<_> = (self.games.iter().zip(&self.figures))
-            .map(|(game, figures)| (game.title.as_str(), Some(figures)))
+            .map(|(game, figures)| (game.title.as_str(), Some(figures), None))
             .collect();
         self.order = stats::order(&rows, sort);
         self.lines = vec![None; self.games.len()];
@@ -284,8 +299,16 @@ impl RestoreTab {
         };
         let storage = session.storage.clone();
         self.repository = Some(storage.clone());
+        let config_dir = state.env.config_dir.clone();
+        let scope = (state.config.as_ref()).map(AppConfig::secret_scope);
         self.listing = Some(Job::spawn(ctx, move || {
-            Ok(restore::list(&*lock_storage(&storage)?)?)
+            let storage = lock_storage(&storage)?;
+            let games = restore::list(&storage)?;
+            let host = storage.hostname()?;
+            let newer = scope.map_or_else(BTreeSet::new, |scope| {
+                newer_than_base(&games, &sync::load(&config_dir), &scope)
+            });
+            Ok((games, newer, host))
         }));
         true
     }
@@ -376,7 +399,13 @@ impl RestoreTab {
         }
         self.select_all_ui(ui);
         let sort = (state.config.as_ref()).map_or(ListSort::default(), |c| c.restore_sort);
-        if let Some(picked) = sort::sort_ui(ui, "restore_sort", sort)
+        // Changes is a Backup tab key; a hand-edited config that names it sorts by name here.
+        let sort = if sort.by == SortKey::Changes {
+            ListSort::default()
+        } else {
+            sort
+        };
+        if let Some(picked) = sort::sort_ui(ui, "restore_sort", sort::RESTORE_KEYS, sort)
             && let Some(config) = &mut state.config
         {
             config.restore_sort = picked;
@@ -427,6 +456,17 @@ impl RestoreTab {
                     ui.horizontal(|ui| {
                         let indent = title.inner - ui.cursor().left();
                         ui.add_space(indent + ui.spacing().button_padding.x);
+                        if self.newer.contains(&game.slug)
+                            && let Some(newest) = game.default.and_then(|i| game.snapshots.get(i))
+                        {
+                            let hover = format!(
+                                "The newest backup is not the one this PC last synced: from {}, {}",
+                                host_name(&newest.host, newest.host == self.host),
+                                format_date(newest.time)
+                            );
+                            let accent = theme::palette(ui).accent;
+                            theme::labeled_mark(ui, icons::ARROW_DOWN, accent, &hover);
+                        }
                         if line.compact_ui(ui).clicked() && !selected {
                             chosen = Some(game.clone());
                         }
@@ -517,6 +557,34 @@ impl RestoreTab {
                 all: true,
                 focus: true,
             });
+        }
+    }
+
+    /// Selects the game `slug` with its newest backup, as if picked in the sidebar. While the
+    /// backups are not listed, lists them first and selects it when they arrive, unless a
+    /// backup runs or the repository is closed; a game the list lacks stays unselected. Does
+    /// nothing while the tab is not idle (as in [`RestoreTab::ui`], `manifest_loading` is
+    /// whether the manifest job runs) or when the game is already selected, which keeps its
+    /// edited targets, overrides and ticks.
+    pub(crate) fn open_game(
+        &mut self,
+        ctx: &egui::Context,
+        state: &State,
+        slug: String,
+        manifest_loading: bool,
+    ) {
+        let idle = !self.busy() && !manifest_loading && !self.batch.open();
+        if !idle || self.selected.as_ref() == Some(&slug) {
+            return;
+        }
+        if self.repository.is_none() {
+            if !self.backing_up {
+                self.load(ctx, state);
+                // `load` clears `reselect`, so it is set after.
+                self.reselect = self.listing.is_some().then_some(slug);
+            }
+        } else if let Some(game) = (self.games.iter().find(|game| game.slug == slug)).cloned() {
+            self.choose(ctx, state, &game);
         }
     }
 

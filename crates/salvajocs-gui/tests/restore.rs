@@ -8,13 +8,14 @@ use std::time::{Duration, SystemTime};
 
 use common::{
     back_up_unsent, click_at, env, harness, init_repo, local_config, pick, record_opened,
-    replace_text, repo_dir, run_settled, run_until, run_until_ready, save_config, shows,
-    shows_path,
+    replace_text, repo_dir, run_settled, run_until, run_until_backed_up, run_until_ready,
+    save_config, shows, shows_path,
 };
 use eframe::egui::accesskit::{self, Role, Toggled};
 use eframe::egui::epaint::Shape;
 use eframe::egui::{
-    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2,
+    Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, OutputCommand, Pos2, Rect, TouchPhase,
+    Vec2,
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::{AccessKitNode, NodeT, Queryable, by};
@@ -27,8 +28,9 @@ use salvajocs_core::manifest::{
     self, CustomGame, Integration, Manifest, Pair, RegistryRule, parse_yaml,
 };
 use salvajocs_core::scan::{Environment, FoundFile, GameScan, RegistrySource};
-use salvajocs_core::selection::{self, Change};
+use salvajocs_core::selection::{self, Change, Pending};
 use salvajocs_core::storage::{RepoLocation, SnapshotInfo, Storage};
+use salvajocs_core::sync::{self, Base as SyncBase};
 use salvajocs_gui::tabs::Tab;
 use salvajocs_gui::{App, Env};
 use tempfile::TempDir;
@@ -808,7 +810,9 @@ fn a_big_plan_draws_only_its_folders_until_one_is_opened() {
         let rows = (harness.query_all_by_label_contains("file0"))
             .filter(|node| node.accesskit_node().role() == Role::CheckBox)
             .count();
-        let buttons = harness.query_all_by_label_contains("Override ").count();
+        let buttons = harness
+            .query_all_by_label_contains("Override XdgData/")
+            .count();
         (rows, buttons)
     };
 
@@ -1118,6 +1122,54 @@ fn restore_needs_mapping_waits_behind_choose_folders() {
 }
 
 #[test]
+fn manifest_paths_lists_the_templates_and_copies_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _saves) = alpha(&tmp);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    assert!(!shows(&harness, "Save paths of Alpha"));
+
+    click(&mut harness, "Manifest paths");
+    assert!(shows(&harness, "Save paths of Alpha"));
+    assert!(shows(&harness, "Custom game."));
+    assert!(shows(&harness, "Files (1)"));
+    assert!(shows(&harness, "Holds save"));
+
+    let template = "<winAppData>/Alpha";
+    harness.get_by_label(template).click_secondary();
+    run_settled(&mut harness);
+    harness.get_by_label("Copy").click();
+    // The command lasts one frame, so read it right after the click is handled.
+    harness.step();
+    let copied: Vec<_> = (harness.output().platform_output.commands.iter())
+        .filter_map(|command| match command {
+            OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied, [template]);
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Save paths of Alpha"));
+
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Save paths of Alpha"));
+}
+
+#[test]
+fn manifest_paths_is_offered_beside_choose_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env) = mix(&tmp);
+    click(&mut harness, "Cancel");
+
+    click(&mut harness, "Manifest paths");
+    assert!(shows(&harness, "Save paths of Mix"));
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Save paths of Mix"));
+}
+
+#[test]
 fn restore_fetch_preview_restore_reports() {
     let tmp = tempfile::tempdir().unwrap();
     let (mut harness, env, saves) = alpha(&tmp);
@@ -1148,13 +1200,15 @@ fn restore_fetch_preview_restore_reports() {
         !saves.with_file_name("Stray").exists(),
         "a skipped file stays out"
     );
-    // The safety backup was staged apart from the backup mirror.
+    // The safety backup was staged apart from the backup mirror, which holds this PC's saves
+    // after the restore, staged for the base (ADR-0035).
     assert!(env.cache_dir.join("restore-stage").exists());
     let mirror = env
         .cache_dir
         .join("stage")
         .join(salvajocs_core::slug::slug("Alpha"));
-    assert!(!mirror.exists());
+    let staged = under(&mirror, "files/WinAppData/Alpha/save.dat");
+    assert_eq!(fs::read_to_string(staged).unwrap(), "Alpha/save.dat");
 
     // The reloaded list offers the safety backup, but not as the default, and the game stays
     // chosen without a click.
@@ -2485,7 +2539,7 @@ fn batch_confirm_labels_a_pre_0_6_snapshot_by_size_and_mtime() {
     let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
     let tags = ["salvajocs", game_tag.as_str()];
     open_repo(&tmp)
-        .backup_dir(&stage, &as_path, &tags, "Alpha")
+        .backup_dir(&stage, &as_path, &tags, "Alpha", true)
         .unwrap()
         .unwrap();
     // The same bytes with another mtime.
@@ -2680,7 +2734,7 @@ fn a_changed_file_of_the_plan_has_details() {
     run_settled(&mut harness);
 
     assert!(shows(&harness, "+ 2"));
-    assert!(shows(&harness, "Backup ("));
+    assert!(shows(&harness, "Location"));
     assert!(shows_path(
         &harness,
         &saves.join("save.dat").display().to_string()
@@ -2690,11 +2744,11 @@ fn a_changed_file_of_the_plan_has_details() {
     let backup = "b6285c57e8797db5d4c51c80d6f11938afda9b11c6a003549709189e9b4b92a2";
     let local = "bc85caa9b61bcf3a54ccfc800e2b0eda6c11fa5df4e0481c896d31cda2462eb2";
     assert!(shows(&harness, backup) && shows(&harness, local));
-    assert!(shows(&harness, "(from its hash list)"));
+    assert!(shows(&harness, "from its hash list"));
     assert!(!shows(&harness, "Reading the backup"));
 
     click(&mut harness, "Close details");
-    assert!(!shows(&harness, "Backup ("));
+    assert!(!shows(&harness, "Location"));
     assert!(harness.query_by_label("Close details").is_none());
 }
 
@@ -2711,6 +2765,57 @@ fn only_a_changed_file_of_the_plan_has_a_details_button() {
     let name = format!("Details of {ALPHA_SAVE}");
     let button = harness.get_by_label(&name);
     assert_eq!(button.accesskit_node().role(), Role::Button);
+}
+
+/// Sets the modification time of `path` to `secs` seconds after the Unix epoch.
+fn set_modified(path: &Path, secs: u64) {
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+    let file = fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(time).unwrap();
+}
+
+#[test]
+fn details_of_a_big_backup_with_no_hash_list_record_no_hash_and_mark_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, _) = native(&tmp, "Alpha", &[]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[beta_scan]);
+    // A stage as 0.5.0 made it: no hashes.json. Its 10.5 MiB file is over the cap, so the
+    // backup's copy is not read and its hash is unknown.
+    let stage = tmp.path().join("old-stage");
+    let meta = r#"{"format":1,"title":"Alpha","roots":[["XdgData","Alpha"]]}"#;
+    put(&stage.join("salvajocs.json"), meta);
+    let backup_copy = stage.join("files/XdgData/Alpha/save.dat");
+    put(&backup_copy, &"0123456789abcdef\n".repeat(650_000));
+    set_modified(&backup_copy, 1_700_000_000);
+    let slug = salvajocs_core::slug::slug("Alpha");
+    let (as_path, game_tag) = (format!("/salvajocs/{slug}"), format!("game:{slug}"));
+    let tags = ["salvajocs", game_tag.as_str()];
+    open_repo(&tmp)
+        .backup_dir(&stage, &as_path, &tags, "Alpha", true)
+        .unwrap()
+        .unwrap();
+    let local = under(&xdg_data(&tmp), "Alpha/save.dat");
+    put(&local, "small\n");
+    set_modified(&local, 1_700_000_100);
+    click(&mut harness, "Load backups");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open XdgData/Alpha");
+
+    harness
+        .get_by_label("Details of XdgData/Alpha/save.dat")
+        .click();
+    run_until(&mut harness, "the details", |h| {
+        shows(h, "not recorded in this backup")
+    });
+
+    // The size and the modified time differ; the unknown hash has no mark.
+    assert_eq!(harness.query_all_by_label("Differs").count(), 2);
+    assert!(shows(
+        &harness,
+        "Diff not shown: the backup's copy is 10.5 MiB"
+    ));
 }
 
 #[test]
@@ -3516,4 +3621,1196 @@ fn restore_list_sorts_by_space_used_once_computed() {
     assert_eq!(listed_order(&harness, &TITLES), ["Gamma", "Alpha", "Beta"]);
     click(&mut harness, "Largest first");
     assert_eq!(listed_order(&harness, &TITLES), ["Beta", "Alpha", "Gamma"]);
+}
+
+/// The folder of the plan of Deep, whose files are `a.sav`, `sub/b.sav` and `sub/deeper/c.sav`.
+const DEEP: &str = "XdgData/Deep";
+
+/// Deep, a native game with files in nested folders, planned with its folder open; each of
+/// `existing`, a path below the game's folder, already holds `old` at its planned target.
+fn deep_planned(tmp: &TempDir, existing: &[&str]) -> Harness<'static, App> {
+    let tails = ["Deep/a.sav", "Deep/sub/b.sav", "Deep/sub/deeper/c.sav"];
+    let (game, snapshot) = native(tmp, "Deep", &tails);
+    let (mut harness, _env) = open_tab(tmp, vec![game], &[snapshot]);
+    for tail in existing {
+        put(&under(&xdg_data(tmp).join("Deep"), tail), "old");
+    }
+    select(&mut harness, "Deep");
+    preview(&mut harness);
+    click(&mut harness, &format!("Open {DEEP}"));
+    harness
+}
+
+/// Opens the override field of the plan's folder `key`, types `target` and applies it, then
+/// waits for the new targets to be compared.
+fn apply_folder_override(harness: &mut Harness<'static, App>, key: &str, target: &Path) {
+    click(harness, &format!("Override folder {key}"));
+    let field = format!("New target of folder {key}");
+    replace_text(harness, &field, target.to_str().unwrap());
+    click(harness, &format!("Apply the new target of folder {key}"));
+    run_until(harness, "the new targets compared", |h| {
+        !shows(h, "Checking the new targets")
+    });
+}
+
+/// Restores the plan and waits for the result.
+fn restore_deep(harness: &mut Harness<'static, App>) {
+    harness.get_by_label("Restore files").click();
+    run_until(harness, "the restore", |h| shows(h, "Restored Deep"));
+}
+
+#[test]
+fn a_folder_override_sends_every_file_below_it_into_the_new_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &["sub/b.sav"]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+    put(&elsewhere.join("sub/b.sav"), "old");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", elsewhere.display())
+    ));
+    assert!(shows(&harness, "3 files overridden"));
+    let a = under(&elsewhere, "a.sav");
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", a.display())
+    ));
+    click(&mut harness, "Open sub");
+    let b = under(&elsewhere, "sub/b.sav");
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", b.display())
+    ));
+    // The target there holds other bytes, which the label compares afresh.
+    assert!(harness.query_by_label("b.sav, changed").is_some());
+
+    restore_deep(&mut harness);
+
+    assert_eq!(fs::read_to_string(&a).unwrap(), "Deep/a.sav");
+    assert_eq!(fs::read_to_string(&b).unwrap(), "Deep/sub/b.sav");
+    let c = under(&elsewhere, "sub/deeper/c.sav");
+    assert_eq!(fs::read_to_string(c).unwrap(), "Deep/sub/deeper/c.sav");
+    // Nothing went to the planned targets, where `b.sav` is still the old one.
+    let planned = xdg_data(&tmp).join("Deep");
+    assert!(!planned.join("a.sav").exists());
+    assert_eq!(
+        fs::read_to_string(planned.join("sub/b.sav")).unwrap(),
+        "old"
+    );
+    // The safety backup holds what the restore overwrote at the new targets, and only that.
+    let entries = safety_entries(&tmp, "Deep").expect("a safety backup");
+    assert!(
+        entries
+            .iter()
+            .any(|path| path.ends_with("elsewhere/sub/b.sav")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("Deep/sub/b.sav")),
+        "{entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|path| path.ends_with("a.sav")),
+        "{entries:?}"
+    );
+}
+
+#[test]
+fn a_long_override_target_keeps_clear_and_restore_files_inside_the_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), &"a_long_folder_name".repeat(10));
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+
+    // The harness window is 1000 px wide, and a click lands on a widget's center.
+    let width = 1000.0;
+    for label in ["Clear the override of XdgData/Deep/a.sav", "Restore files"] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(rect.max.x <= width, "{label} reaches {}", rect.max.x);
+    }
+}
+
+#[test]
+fn clearing_a_folder_override_restores_to_the_planned_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+    assert!(shows(&harness, "3 files overridden"));
+    click(
+        &mut harness,
+        &format!("Clear the override of folder {DEEP}"),
+    );
+    run_until(&mut harness, "the targets compared", |h| {
+        !shows(h, "Checking the new targets")
+    });
+    assert!(!shows(&harness, "overridden"));
+    assert!(!disabled(&harness, "Restore files"));
+
+    restore_deep(&mut harness);
+
+    let planned = xdg_data(&tmp).join("Deep");
+    assert_eq!(
+        fs::read_to_string(planned.join("a.sav")).unwrap(),
+        "Deep/a.sav"
+    );
+    assert!(planned.join("sub/deeper/c.sav").exists());
+    assert!(!elsewhere.exists());
+}
+
+#[test]
+fn a_folder_override_with_a_relative_path_is_refused_and_changes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+
+    apply_folder_override(&mut harness, DEEP, Path::new("relative/dir"));
+
+    assert!(shows(&harness, "not an absolute path"));
+    assert!(!shows(&harness, "overridden"));
+    assert!(harness.query_by_label("a.sav, new").is_some());
+    assert!(disabled(&harness, "Restore files"));
+    assert!(shows(
+        &harness,
+        "The new target of folder XdgData/Deep is not applied"
+    ));
+
+    // Closing the field drops the text and the error, and the plan restores as planned.
+    click(&mut harness, &format!("Override folder {DEEP}"));
+    assert!(!shows(&harness, "not an absolute path"));
+    assert!(!disabled(&harness, "Restore files"));
+    restore_deep(&mut harness);
+    let planned = xdg_data(&tmp).join("Deep");
+    assert!(planned.join("a.sav").exists());
+    assert!(!tmp.path().join("relative").exists());
+}
+
+#[test]
+fn an_unticked_file_below_an_overridden_folder_is_not_written_or_backed_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+    put(&elsewhere.join("a.sav"), "old");
+    click(&mut harness, "a.sav, new");
+
+    apply_folder_override(&mut harness, DEEP, &elsewhere);
+    assert!(!ticked(&harness, "a.sav, changed"));
+    restore_deep(&mut harness);
+
+    assert_eq!(fs::read_to_string(elsewhere.join("a.sav")).unwrap(), "old");
+    assert!(elsewhere.join("sub/b.sav").exists());
+    assert!(!xdg_data(&tmp).join("Deep").exists());
+    assert!(safety_entries(&tmp, "Deep").is_none_or(|entries| entries.is_empty()));
+}
+
+#[test]
+fn a_folder_override_replaces_the_overrides_it_covers_and_is_replaced_by_a_file_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let (one, two, three) = (
+        under(tmp.path(), "one"),
+        under(tmp.path(), "two"),
+        under(tmp.path(), "three"),
+    );
+
+    // The file's own override gives way to the folder's.
+    apply_override(&mut harness, "XdgData/Deep/a.sav", &one.join("x.sav"));
+    apply_folder_override(&mut harness, DEEP, &two);
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", two.join("a.sav").display())
+    ));
+    assert!(!shows_path(
+        &harness,
+        &one.join("x.sav").display().to_string()
+    ));
+
+    // The inner folder's override leaves the outer folder's header with nothing to clear.
+    click(&mut harness, "Open sub");
+    apply_folder_override(&mut harness, "XdgData/Deep/sub", &three);
+    assert!(
+        harness
+            .query_by_label(&format!("Clear the override of folder {DEEP}"))
+            .is_none()
+    );
+    let clear = "Clear the override of folder XdgData/Deep/sub";
+    assert!(harness.query_by_label(clear).is_some());
+    assert!(shows(&harness, "3 files overridden"));
+
+    // Overriding a file below ends its folder's override too.
+    apply_override(&mut harness, "XdgData/Deep/sub/b.sav", &one.join("y.sav"));
+    assert!(harness.query_by_label(clear).is_none());
+    assert!(shows(&harness, "3 files overridden"));
+    restore_deep(&mut harness);
+    assert!(two.join("a.sav").exists());
+    assert!(one.join("y.sav").exists());
+    assert!(three.join("deeper/c.sav").exists());
+    assert!(!three.join("b.sav").exists());
+}
+
+#[test]
+fn restore_files_waits_while_the_new_targets_of_a_folder_are_compared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    click(&mut harness, &format!("Override folder {DEEP}"));
+    let field = format!("New target of folder {DEEP}");
+    replace_text(&mut harness, &field, elsewhere.to_str().unwrap());
+    // Frame by frame: the job's result is only taken by a frame after the click's.
+    let apply = format!("Apply the new target of folder {DEEP}");
+    harness.get_by_label(&apply).click();
+    run_until(&mut harness, "the comparison to start", |h| {
+        shows(h, "Checking the new targets")
+    });
+    assert!(disabled(&harness, "Restore files"));
+
+    run_until(&mut harness, "the comparison to end", |h| {
+        !shows(h, "Checking the new targets")
+    });
+    assert!(!disabled(&harness, "Restore files"));
+    assert!(!disabled(&harness, &format!("Override folder {DEEP}")));
+}
+
+// NTFS ignores case, so the plan's target there keeps the backup's `my games`: the folder has
+// no other case on disk to keep.
+#[cfg(unix)]
+#[test]
+fn a_folder_override_keeps_the_case_the_target_has_on_disk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = make_prefix(&tmp);
+    let documents = under(&prefix, "drive_c/users/steamuser/Documents");
+    fs::create_dir_all(documents.join("My Games")).unwrap();
+    let files = ["<winDocuments>/my games/Cased", "<winDocuments>/Notes"];
+    let game = custom("Cased", &files, Some(&prefix), Vec::new());
+    // The backup says `my games`, the prefix has `My Games`; `Notes` keeps WinDocuments from
+    // being drawn as a chain with `my games`, so the Base is the folder to override.
+    let snapshot = scan(
+        &tmp,
+        "Cased",
+        &[
+            (Base::WinDocuments, "my games/Cased/save.dat"),
+            (Base::WinDocuments, "Notes/n.dat"),
+        ],
+        &[
+            (Base::WinDocuments, "my games/Cased"),
+            (Base::WinDocuments, "Notes"),
+        ],
+    );
+    let (mut harness, _env) = open_tab(&tmp, vec![game], &[snapshot]);
+    select(&mut harness, "Cased");
+    preview(&mut harness);
+    click(&mut harness, "Open WinDocuments");
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    apply_folder_override(&mut harness, "WinDocuments", &elsewhere);
+
+    click(&mut harness, "Open my games/Cased");
+    let moved = under(&elsewhere, "My Games/Cased/save.dat");
+    let overridden = "(overridden for this restore)";
+    assert!(shows_path(
+        &harness,
+        &format!("{} {overridden}", moved.display())
+    ));
+}
+
+/// The id this PC's recorded base of the game `title` holds in the tests' repository, if any.
+fn recorded_base(tmp: &TempDir, env: &Env, title: &str) -> Option<String> {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let bases = sync::load(&env.config_dir);
+    let base = bases.get(&scope, &salvajocs_core::slug::slug(title))?;
+    Some(base.snapshot.clone())
+}
+
+/// Records `snapshot` as this PC's base of the game `title`, as an earlier Back up did.
+fn record_base(tmp: &TempDir, env: &Env, title: &str, snapshot: &str) {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let update = (
+        salvajocs_core::slug::slug(title),
+        SyncBase::new(snapshot.to_owned(), None),
+    );
+    sync::record(&env.config_dir, &scope, [update]).unwrap();
+}
+
+#[test]
+fn a_restore_records_the_restored_snapshot_as_the_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    let alpha = backups_of(&tmp, "Alpha");
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(alpha[0].clone()));
+    assert!(!shows(&harness, "sync state was not updated"));
+}
+
+#[test]
+fn a_restore_with_a_failed_write_records_no_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = alpha(&tmp);
+    let dir = under(tmp.path(), "elsewhere/slot2.dat");
+    fs::create_dir_all(&dir).unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    apply_override(&mut harness, ALPHA_SLOT2, &dir);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows_path(&harness, "failed"));
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+}
+
+#[test]
+fn a_base_that_cannot_be_updated_does_not_fail_the_restore() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    // A directory where the file belongs cannot be read as one.
+    fs::create_dir_all(env.config_dir.join("sync-base.json")).unwrap();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "sync state was not updated"));
+    assert!(saves.join("save.dat").exists());
+}
+
+#[test]
+fn a_restore_with_a_file_unticked_still_records_the_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    let alpha = backups_of(&tmp, "Alpha");
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    click(&mut harness, "Open WinAppData/Alpha");
+    click(&mut harness, "slot2.dat, new");
+
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(saves.join("save.dat").exists());
+    assert!(
+        !saves.join("slot2.dat").exists(),
+        "the unticked file is left out"
+    );
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(alpha[0].clone()));
+}
+
+#[test]
+fn a_batch_restore_records_the_base_of_each_game_it_restored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    for title in ["Alpha", "Beta"] {
+        let newest = backups_of(&tmp, title)[0].clone();
+        assert_eq!(recorded_base(&tmp, &env, title), Some(newest));
+    }
+}
+
+#[test]
+fn a_batch_game_whose_backup_cannot_be_fetched_records_no_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    let alpha = backups_of(&tmp, "Alpha");
+    open_repo(&tmp).forget(&[&alpha[0]]).unwrap();
+    run_batch(&mut harness, "Restore 2 games", "Restored 1 of 2 games");
+
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), None);
+    let beta = backups_of(&tmp, "Beta");
+    assert_eq!(recorded_base(&tmp, &env, "Beta"), Some(beta[0].clone()));
+}
+/// This PC's recorded base of the game `title` in the tests' repository, if any.
+fn recorded(tmp: &TempDir, env: &Env, title: &str) -> Option<SyncBase> {
+    let scope = local_config(&repo_dir(tmp)).secret_scope();
+    let bases = sync::load(&env.config_dir);
+    bases
+        .get(&scope, &salvajocs_core::slug::slug(title))
+        .cloned()
+}
+
+/// Restores Alpha's default snapshot and waits for the list to reload.
+fn restore_alpha(harness: &mut Harness<'static, App>) {
+    select(harness, "Alpha");
+    preview(harness);
+    harness.get_by_label("Restore files").click();
+    run_until(harness, "the restore", |h| shows(h, "Restored Alpha"));
+    run_until(harness, "the list to reload", |h| {
+        !disabled(h, "Load backups")
+    });
+}
+
+/// Scans and backs up on the Backup tab, where Alpha is up to date.
+fn back_up_alpha_up_to_date(harness: &mut Harness<'static, App>) {
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(harness);
+    harness.get_by_label("Scan for games").click();
+    run_until(harness, "the scan", |h| {
+        shows(h, "1 game found") && !shows(h, "Scanning") && !shows(h, "Checked")
+    });
+    run_settled(harness);
+    harness.get_by_label("Back up 1 game").click();
+    run_until_backed_up(harness, "Alpha: up to date");
+}
+
+#[test]
+fn a_restore_records_this_pcs_saves_as_back_up_stages_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    restore_alpha(&mut harness);
+    let restored = recorded(&tmp, &env, "Alpha").unwrap().saves;
+    let restored = restored.expect("the restore records this PC's saves");
+
+    back_up_alpha_up_to_date(&mut harness);
+
+    assert_eq!(backups_of(&tmp, "Alpha").len(), 1);
+    let backed_up = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+    assert!(restored.same_content(&backed_up));
+}
+
+#[test]
+fn a_restore_lists_this_pcs_saves_without_a_file_a_pending_choice_excludes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    put(
+        &xdg_data(&tmp).join("Alpha").join("slot.dat"),
+        "not backed up",
+    );
+    let excluded = Change::Path {
+        node: "XdgData/Alpha/slot.dat".into(),
+        included: false,
+    };
+    let mut pending = Pending::default();
+    pending
+        .games_mut(&local_config(&repo_dir(&tmp)))
+        .insert("Alpha".into(), vec![excluded]);
+    pending.save(&env(&tmp).config_dir).unwrap();
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    restore_alpha(&mut harness);
+    let restored = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+
+    back_up_alpha_up_to_date(&mut harness);
+
+    let backed_up = recorded(&tmp, &env, "Alpha").unwrap().saves.unwrap();
+    assert!(restored.same_content(&backed_up));
+}
+
+#[test]
+fn a_restored_game_the_scan_does_not_find_records_no_saves() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut harness = deep_planned(&tmp, &[]);
+    // Outside Deep's save folder, where no scan looks.
+    apply_folder_override(&mut harness, DEEP, &under(tmp.path(), "elsewhere"));
+    restore_deep(&mut harness);
+
+    let env = env(&tmp);
+    let deep = recorded(&tmp, &env, "Deep").unwrap();
+    assert_eq!(deep.snapshot, backups_of(&tmp, "Deep")[0]);
+    assert_eq!(deep.saves, None);
+    assert!(!shows(&harness, "were not listed"));
+}
+
+#[test]
+fn saves_that_cannot_be_staged_record_the_base_without_them_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    // A file where Back up's staging mirror belongs.
+    put(&env.cache_dir.join("stage"), "not a folder");
+    restore_alpha(&mut harness);
+
+    assert!(shows(&harness, "were not listed"));
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn pending_choices_that_cannot_be_read_record_the_base_without_saves_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    // A newer version's file: Back up would filter by the choices it shows instead.
+    let newer = r#"{"format": 999, "repositories": {}}"#;
+    put(&env.config_dir.join("pending-selection.json"), newer);
+    restore_alpha(&mut harness);
+
+    assert!(shows(&harness, "were not listed"));
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn settings_that_cannot_be_read_record_the_base_without_saves_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha], &[alpha_scan]);
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    // A snapshot file that is not one: the repository's snapshots cannot be listed again.
+    let snapshots = Path::new(&repo_dir(&tmp)).join("snapshots");
+    let garbage = snapshots.join("0".repeat(64));
+    put(&garbage, "garbage");
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+
+    assert!(shows(&harness, "were not listed"));
+    fs::remove_file(garbage).unwrap();
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert_eq!(alpha.saves, None);
+}
+
+#[test]
+fn a_batch_restore_records_this_pcs_saves_of_each_game_back_up_stores() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    // Back up stores nothing of a skipped game, so its base gets no list.
+    let skip = [Change::Skip(true)];
+    let settings = tmp.path().join("settings");
+    selection::save(&mut open_repo(&tmp), "Beta", &skip, &settings).unwrap();
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    let alpha = recorded(&tmp, &env, "Alpha").unwrap();
+    assert_eq!(alpha.snapshot, backups_of(&tmp, "Alpha")[0]);
+    assert!(alpha.saves.is_some());
+    let beta = recorded(&tmp, &env, "Beta").unwrap();
+    assert_eq!(beta.snapshot, backups_of(&tmp, "Beta")[0]);
+    assert_eq!(beta.saves, None);
+    assert!(!shows(&harness, "were not listed"));
+}
+
+/// What the sidebar's marker says, up to the host and the date.
+const NEWER_SAVES: &str = "The newest backup is not the one this PC last synced";
+
+#[test]
+fn the_sidebar_marks_a_game_whose_base_is_not_its_newest_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let names = ["Alpha", "Beta", "Gamma"];
+    let (games, scans): (Vec<_>, Vec<_>) = (names.iter())
+        .map(|name| native(&tmp, name, &[&format!("{name}/save.dat")]))
+        .unzip();
+    let (mut harness, env) = open_tab(&tmp, games, &scans);
+    assert!(!shows(&harness, NEWER_SAVES), "no record, no marker");
+
+    // Alpha's base is an older backup, Beta's the newest, and Gamma has none.
+    record_base(&tmp, &env, "Alpha", &"0".repeat(64));
+    let beta = backups_of(&tmp, "Beta");
+    record_base(&tmp, &env, "Beta", &beta[0]);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the marker", |h| shows(h, NEWER_SAVES));
+    run_settled(&mut harness);
+    assert_eq!(
+        harness.query_all_by_label_contains(NEWER_SAVES).count(),
+        1,
+        "only Alpha is marked"
+    );
+    // The newest backup is this PC's own, and its date is as the snapshot picker shows it.
+    select(&mut harness, "Alpha");
+    let picked = value(&harness, "Snapshot");
+    let tooltip = format!("{NEWER_SAVES}: from this PC, {}", &picked[..10]);
+    assert!(shows(&harness, &tooltip), "{tooltip}");
+
+    let alpha = backups_of(&tmp, "Alpha");
+    record_base(&tmp, &env, "Alpha", &alpha[0]);
+    harness.get_by_label("Load backups").click();
+    run_until(&mut harness, "the list", |h| {
+        !disabled(h, "Load backups") && !shows(h, NEWER_SAVES)
+    });
+}
+
+#[test]
+fn restoring_a_safety_backup_records_it_as_the_base_like_any_restore() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = alpha(&tmp);
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("save.dat"), "old").unwrap();
+    let regular = backups_of(&tmp, "Alpha")[0].clone();
+    select(&mut harness, "Alpha");
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    run_until(&mut harness, "the restore", |h| shows(h, "Restored Alpha"));
+    assert_eq!(recorded_base(&tmp, &env, "Alpha"), Some(regular));
+    // Another game's base stays.
+    let other = "1".repeat(64);
+    record_base(&tmp, &env, "Other", &other);
+    let safety = snapshots(&tmp, "pre-restore");
+    assert_eq!(safety.len(), 1);
+
+    // The safety backup holds the files the restore replaced: going back to them is deliberate.
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups") && shows(h, "Restore into:")
+    });
+    click(&mut harness, "Snapshot");
+    harness.get_by_label_contains(", pre-restore").click();
+    preview(&mut harness);
+    harness.get_by_label("Restore files").click();
+    let save = saves.join("save.dat");
+    run_until(&mut harness, "the second restore", |h| {
+        shows(h, "Restored Alpha") && fs::read_to_string(&save).is_ok_and(|text| text == "old")
+    });
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups")
+    });
+
+    assert_eq!(fs::read_to_string(saves.join("save.dat")).unwrap(), "old");
+    assert_eq!(
+        recorded_base(&tmp, &env, "Alpha"),
+        Some(safety[0].id.clone())
+    );
+    assert_eq!(recorded_base(&tmp, &env, "Other"), Some(other));
+    // The newest regular backup is not that base, so the sidebar marks the game.
+    assert!(shows(&harness, NEWER_SAVES));
+}
+
+/// The label of the box of Extra's plan that deletes the files its backup lacks (ADR-0036).
+const DELETE_BOX: &str = "Delete files the backup of Extra does not have";
+
+/// Extra, a native game backed up with `Extra/keep.sav` and `Extra/sub/keep.sav` after `adjust`,
+/// with each of `extras` on this PC below its folder only, holding `extra`. Planned, with its
+/// folder open; returns where its saves are.
+fn extra_planned(
+    tmp: &TempDir,
+    extras: &[&str],
+    adjust: impl FnOnce(&mut GameScan),
+) -> (Harness<'static, App>, Env, PathBuf) {
+    let (game, mut snapshot) = native(tmp, "Extra", &["Extra/keep.sav", "Extra/sub/keep.sav"]);
+    adjust(&mut snapshot);
+    let (mut harness, env) = open_tab(tmp, vec![game], &[snapshot]);
+    let saves = xdg_data(tmp).join("Extra");
+    for tail in extras {
+        put(&under(&saves, tail), "extra");
+    }
+    select(&mut harness, "Extra");
+    preview(&mut harness);
+    click(&mut harness, "Open XdgData/Extra");
+    (harness, env, saves)
+}
+
+/// Turns the delete box on and opens the `sub` folder.
+fn delete_extras(harness: &mut Harness<'static, App>) {
+    click(harness, DELETE_BOX);
+    click(harness, "Open sub");
+}
+
+/// Restores the plan of Extra and waits for the result.
+fn restore_extra(harness: &mut Harness<'static, App>) {
+    harness.get_by_label("Restore files").click();
+    run_until(harness, "the restore", |h| shows(h, "Restored Extra"));
+}
+
+/// Runs frames until the saved config remembers the delete box on for exactly `games`.
+fn run_until_deletes_saved(harness: &mut Harness<'static, App>, env: &Env, games: &[&str]) {
+    let config_dir = env.config_dir.clone();
+    let want: Vec<String> = games.iter().map(|&title| title.to_owned()).collect();
+    run_until(harness, "the config to be saved", move |_| {
+        let saved = AppConfig::load(&config_dir).ok().flatten();
+        saved.is_some_and(|config| config.restore_deletes.into_iter().eq(want.iter().cloned()))
+    });
+}
+
+#[test]
+fn the_delete_box_starts_off_and_on_shows_the_rows_ticked_and_is_remembered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, _saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    assert!(!ticked(&harness, DELETE_BOX));
+    assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+    assert!(!shows(&harness, "will be deleted. The safety backup"));
+
+    delete_extras(&mut harness);
+
+    assert!(ticked(&harness, DELETE_BOX));
+    assert!(ticked(&harness, "old.sav, will be deleted"));
+    assert!(ticked(&harness, "older.sav, will be deleted"));
+    assert!(shows(
+        &harness,
+        "2 files will be deleted. The safety backup keeps them; restoring it brings them back."
+    ));
+    run_until_deletes_saved(&mut harness, &env, &["Extra"]);
+
+    click(&mut harness, DELETE_BOX);
+    assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+    run_until_deletes_saved(&mut harness, &env, &[]);
+}
+
+#[test]
+fn a_restore_deletes_the_ticked_extra_files_and_keeps_an_unticked_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    delete_extras(&mut harness);
+    click(&mut harness, "older.sav, will be deleted");
+    assert!(shows(&harness, "1 file will be deleted."));
+
+    restore_extra(&mut harness);
+
+    assert!(!saves.join("old.sav").exists());
+    let kept = fs::read_to_string(under(&saves, "sub/older.sav")).unwrap();
+    assert_eq!(kept, "extra");
+    let keep = fs::read_to_string(saves.join("keep.sav")).unwrap();
+    assert_eq!(keep, "Extra/keep.sav");
+    let deleted = format!("{}: deleted", saves.join("old.sav").display());
+    assert!(shows_path(&harness, &deleted));
+    let older = under(&saves, "sub/older.sav").display().to_string();
+    assert!(!shows_path(&harness, &older), "no result line for it");
+}
+
+#[test]
+fn the_safety_backup_holds_the_deleted_files_and_restoring_it_brings_them_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    delete_extras(&mut harness);
+    restore_extra(&mut harness);
+    assert!(!saves.join("old.sav").exists());
+    assert!(!under(&saves, "sub/older.sav").exists());
+
+    let entries = safety_entries(&tmp, "Extra").expect("a safety backup");
+    for tail in ["Extra/old.sav", "Extra/sub/older.sav"] {
+        assert!(
+            entries.iter().any(|path| path.ends_with(tail)),
+            "{entries:?}"
+        );
+    }
+    run_until(&mut harness, "the list to reload", |h| {
+        !disabled(h, "Load backups") && shows(h, "Restore into:")
+    });
+    click(&mut harness, "Snapshot");
+    harness.get_by_label_contains(", pre-restore").click();
+    preview(&mut harness);
+    // A safety backup holds only what a restore replaced, so restoring it deletes nothing.
+    assert!(disabled(&harness, DELETE_BOX));
+    restore_extra(&mut harness);
+
+    let back = |tail: &str| fs::read_to_string(under(&saves, tail)).ok();
+    run_until(&mut harness, "the files to come back", move |_| {
+        back("old.sav").is_some() && back("sub/older.sav").is_some()
+    });
+    assert_eq!(back("old.sav").as_deref(), Some("extra"));
+    assert_eq!(back("sub/older.sav").as_deref(), Some("extra"));
+}
+
+#[test]
+fn a_file_either_selection_excludes_is_not_offered_for_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Unticked on this PC since the backup: today's selection.
+    let excluded = Change::Path {
+        node: "XdgData/Extra/old.sav".into(),
+        included: false,
+    };
+    let mut pending = Pending::default();
+    pending
+        .games_mut(&local_config(&repo_dir(&tmp)))
+        .insert("Extra".into(), vec![excluded]);
+    pending.save(&env(&tmp).config_dir).unwrap();
+    let extras = ["old.sav", "stray.sav", "sub/older.sav"];
+    // Unticked on the PC that backed up: the backup's recorded selection.
+    let (mut harness, _env, saves) = extra_planned(&tmp, &extras, |snapshot| {
+        (snapshot.files).retain(|file| !file.tail.contains("sub"));
+        (snapshot.selection).insert("XdgData/Extra/sub".into(), false);
+    });
+
+    click(&mut harness, DELETE_BOX);
+
+    assert!(ticked(&harness, "stray.sav, will be deleted"));
+    assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+    assert!(harness.query_by_label("Open sub").is_none());
+    assert!(shows(&harness, "1 file will be deleted."));
+    restore_extra(&mut harness);
+    assert!(!saves.join("stray.sav").exists());
+    assert!(saves.join("old.sav").exists());
+    assert!(under(&saves, "sub/older.sav").exists());
+}
+
+#[test]
+fn a_folder_override_keeps_the_files_to_delete_below_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    delete_extras(&mut harness);
+    let elsewhere = under(tmp.path(), "elsewhere");
+
+    apply_folder_override(&mut harness, "XdgData/Extra/sub", &elsewhere);
+
+    assert!(shows(&harness, "1 file will be deleted."));
+    assert!(shows(&harness, "kept: its folder is overridden"));
+    restore_extra(&mut harness);
+    assert!(!saves.join("old.sav").exists());
+    assert!(under(&saves, "sub/older.sav").exists());
+    let moved = fs::read_to_string(elsewhere.join("keep.sav")).unwrap();
+    assert_eq!(moved, "Extra/sub/keep.sav");
+}
+
+/// Lists the backups again and plans Extra afresh, as choosing it again does not.
+fn plan_extra_again(harness: &mut Harness<'static, App>) {
+    click(harness, "Load backups");
+    run_until(harness, "the list", |h| !disabled(h, "Load backups"));
+    select(harness, "Extra");
+    preview(harness);
+}
+
+#[test]
+fn settings_that_cannot_be_read_delete_nothing_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+    run_until_deletes_saved(&mut harness, &env, &["Extra"]);
+    // A newer version's file: its unticks cannot be read, so they cannot keep a file.
+    let newer = r#"{"format": 999, "repositories": {}}"#;
+    put(&env.config_dir.join("pending-selection.json"), newer);
+
+    plan_extra_again(&mut harness);
+
+    assert!(shows(
+        &harness,
+        "No file will be deleted: what to back up of this game cannot be read."
+    ));
+    assert!(disabled(&harness, DELETE_BOX));
+    assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+    assert!(!shows(&harness, "will be deleted. The safety backup"));
+    restore_extra(&mut harness);
+    assert!(saves.join("old.sav").exists());
+}
+
+#[test]
+fn the_box_on_with_nothing_to_delete_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+    run_until_deletes_saved(&mut harness, &env, &["Extra"]);
+    fs::remove_file(saves.join("old.sav")).unwrap();
+
+    plan_extra_again(&mut harness);
+
+    assert!(shows(&harness, "Nothing to delete"));
+    assert!(ticked(&harness, DELETE_BOX));
+    assert!(disabled(&harness, DELETE_BOX));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_deletion_records_no_base() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let extras = ["old.sav", "only/oldest.sav"];
+    let (mut harness, env, saves) = extra_planned(&tmp, &extras, |_| {});
+    click(&mut harness, DELETE_BOX);
+    // A folder that holds no write: its files can be read but not removed.
+    let only = saves.join("only");
+    fs::set_permissions(&only, fs::Permissions::from_mode(0o555)).unwrap();
+    let unlock = Unlock(only.clone(), 0o755);
+    // Root removes it anyway, so there is nothing to test.
+    let probe = only.join("probe");
+    if fs::write(&probe, "").is_ok() {
+        return;
+    }
+
+    restore_extra(&mut harness);
+    drop(unlock);
+
+    let failed = format!("{}: failed", only.join("oldest.sav").display());
+    assert!(shows_path(&harness, &failed));
+    assert!(only.join("oldest.sav").exists());
+    assert!(!saves.join("old.sav").exists());
+    assert_eq!(recorded_base(&tmp, &env, "Extra"), None);
+}
+
+#[test]
+fn a_deletion_a_ticked_write_now_targets_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    delete_extras(&mut harness);
+    apply_override(
+        &mut harness,
+        "XdgData/Extra/keep.sav",
+        &saves.join("old.sav"),
+    );
+
+    assert!(shows(&harness, "kept: the restore writes this file"));
+    assert!(shows(&harness, "1 file will be deleted."));
+    restore_extra(&mut harness);
+
+    assert!(!shows(&harness, "failed"));
+    let old = fs::read_to_string(saves.join("old.sav")).unwrap();
+    assert_eq!(old, "Extra/keep.sav");
+    assert!(!under(&saves, "sub/older.sav").exists());
+    assert!(recorded_base(&tmp, &env, "Extra").is_some());
+}
+
+#[test]
+fn a_file_unticked_in_what_to_back_up_after_the_plan_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav", "sub/older.sav"], |_| {});
+    delete_extras(&mut harness);
+    assert!(ticked(&harness, "old.sav, will be deleted"));
+
+    untick_since_the_plan(&tmp, &env, "Extra", "XdgData/Extra/old.sav");
+    restore_extra(&mut harness);
+
+    assert!(saves.join("old.sav").exists());
+    assert!(!under(&saves, "sub/older.sav").exists());
+    let kept = format!(
+        "{}: kept: unticked in what to back up since the plan",
+        saves.join("old.sav").display()
+    );
+    assert!(shows_path(&harness, &kept));
+    assert!(recorded_base(&tmp, &env, "Extra").is_some());
+}
+
+/// Unticks the file `node` of the game `title` as the Backup tab does: a pending change.
+fn untick_since_the_plan(tmp: &TempDir, env: &Env, title: &str, node: &str) {
+    let excluded = Change::Path {
+        node: node.into(),
+        included: false,
+    };
+    let mut pending = Pending::default();
+    pending
+        .games_mut(&local_config(&repo_dir(tmp)))
+        .insert(title.into(), vec![excluded]);
+    pending.save(&env.config_dir).unwrap();
+}
+
+#[test]
+fn settings_unreadable_at_the_restore_delete_nothing_and_say_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+    let newer = r#"{"format": 999, "repositories": {}}"#;
+    put(&env.config_dir.join("pending-selection.json"), newer);
+
+    restore_extra(&mut harness);
+
+    assert!(saves.join("old.sav").exists());
+    assert!(shows(
+        &harness,
+        "No file was deleted: what to back up of this game cannot be read, so this PC's sync \
+         state was not updated."
+    ));
+    assert_eq!(recorded_base(&tmp, &env, "Extra"), None);
+}
+
+#[test]
+fn a_folder_of_deletions_only_has_no_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, _saves) = extra_planned(&tmp, &["only/oldest.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+
+    assert!(harness.query_by_label("Open only").is_some());
+    assert!(
+        harness
+            .query_by_label("Override folder XdgData/Extra/only")
+            .is_none()
+    );
+    assert!(
+        harness
+            .query_by_label("Override folder XdgData/Extra/sub")
+            .is_some()
+    );
+}
+
+#[test]
+fn turning_the_box_off_again_deletes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, _env, saves) = extra_planned(&tmp, &["old.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+    click(&mut harness, DELETE_BOX);
+    assert!(!ticked(&harness, DELETE_BOX));
+
+    restore_extra(&mut harness);
+
+    assert_eq!(fs::read_to_string(saves.join("old.sav")).unwrap(), "extra");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deletion_the_safety_backup_cannot_read_blocks_the_restore_while_ticked() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let saves = xdg_data(&tmp).join("Extra");
+    let locked = saves.join("old.sav");
+    put(&locked, "extra");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let unlock = Unlock(locked.clone(), 0o644);
+    // Root reads it anyway, so there is nothing to test.
+    if fs::read(&locked).is_ok() {
+        return;
+    }
+    let (mut harness, _env, _saves) = extra_planned(&tmp, &[], |_| {});
+    click(&mut harness, DELETE_BOX);
+    assert!(shows(&harness, "Nothing will be restored"));
+    assert!(disabled(&harness, "Restore files"));
+
+    click(&mut harness, "old.sav, will fail");
+
+    assert!(!shows(&harness, "Nothing will be restored"));
+    assert!(!disabled(&harness, "Restore files"));
+    restore_extra(&mut harness);
+    drop(unlock);
+    assert!(locked.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_that_cannot_be_listed_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, saves) = extra_planned(&tmp, &["old.sav"], |_| {});
+    click(&mut harness, DELETE_BOX);
+    run_until_deletes_saved(&mut harness, &env, &["Extra"]);
+    let locked = saves.join("locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let unlock = Unlock(locked.clone(), 0o755);
+    // Root lists it anyway, so there is nothing to test.
+    if fs::read_dir(&locked).is_ok() {
+        return;
+    }
+
+    plan_extra_again(&mut harness);
+    drop(unlock);
+
+    let line = format!(
+        "Nothing is deleted in {}: it cannot be listed.",
+        saves.display()
+    );
+    assert!(shows_path(&harness, &line));
+    assert!(harness.query_by_label("old.sav, will be deleted").is_none());
+}
+
+/// Alpha and Beta, native games each backed up with `save.dat` and with an `old.dat` on this PC
+/// only, planned as a batch; returns where `old.dat` is of a game.
+fn extra_batch(tmp: &TempDir) -> (Harness<'static, App>, Env, impl Fn(&str) -> PathBuf) {
+    let (alpha, alpha_scan) = native(tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, env) = open_tab(tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let saves = xdg_data(tmp);
+    let extra = move |game: &str| saves.join(game).join("old.dat");
+    put(&extra("Alpha"), "extra");
+    put(&extra("Beta"), "extra");
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    (harness, env, extra)
+}
+
+/// The label of the delete box of `game` in the batch confirm.
+fn delete_box(game: &str) -> String {
+    format!("Delete files the backup of {game} does not have")
+}
+
+#[test]
+fn a_batch_deletes_only_for_the_game_whose_box_is_on() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    assert!(!ticked(&harness, &delete_box("Alpha")));
+    assert!(!ticked(&harness, &delete_box("Beta")));
+
+    click(&mut harness, &delete_box("Alpha"));
+
+    assert!(shows(&harness, "1 file will be deleted."));
+    assert!(!ticked(&harness, &delete_box("Beta")));
+    run_until_deletes_saved(&mut harness, &env, &["Alpha"]);
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!extra("Alpha").exists());
+    assert_eq!(fs::read_to_string(extra("Beta")).unwrap(), "extra");
+    let deleted = format!("{}: deleted", extra("Alpha").display());
+    assert!(shows_path(&harness, &deleted));
+}
+
+#[test]
+fn the_batch_select_all_turns_every_games_delete_box_on_and_is_remembered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    let every = "Delete files the backup does not have for every game";
+
+    click(&mut harness, every);
+
+    assert!(ticked(&harness, &delete_box("Alpha")));
+    assert!(ticked(&harness, &delete_box("Beta")));
+    run_until_deletes_saved(&mut harness, &env, &["Alpha", "Beta"]);
+    click(
+        &mut harness,
+        "Delete files the backup does not have for no game",
+    );
+    assert!(!ticked(&harness, &delete_box("Alpha")));
+    run_until_deletes_saved(&mut harness, &env, &[]);
+    click(&mut harness, every);
+    run_until_deletes_saved(&mut harness, &env, &["Alpha", "Beta"]);
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!extra("Alpha").exists());
+    assert!(!extra("Beta").exists());
+}
+
+#[test]
+fn a_batch_game_keeps_its_unticked_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (alpha, alpha_scan) = native(&tmp, "Alpha", &["Alpha/save.dat"]);
+    let (beta, beta_scan) = native(&tmp, "Beta", &["Beta/save.dat"]);
+    let (mut harness, _env) = open_tab(&tmp, vec![alpha, beta], &[alpha_scan, beta_scan]);
+    let saves = xdg_data(&tmp).join("Alpha");
+    put(&saves.join("old.dat"), "extra");
+    put(&saves.join("older.dat"), "extra");
+    click(&mut harness, "Select all");
+    plan_batch(&mut harness, "Restore 2 games");
+    click(&mut harness, &delete_box("Alpha"));
+    click(&mut harness, "Open XdgData/Alpha");
+    assert!(ticked(&harness, "older.dat, will be deleted"));
+
+    click(&mut harness, "older.dat, will be deleted");
+
+    assert!(shows(&harness, "1 file will be deleted."));
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+    assert!(!saves.join("old.dat").exists());
+    assert_eq!(
+        fs::read_to_string(saves.join("older.dat")).unwrap(),
+        "extra"
+    );
+}
+
+#[test]
+fn a_batch_keeps_a_file_unticked_in_what_to_back_up_after_the_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut harness, env, extra) = extra_batch(&tmp);
+    click(
+        &mut harness,
+        "Delete files the backup does not have for every game",
+    );
+    assert!(shows(&harness, "1 file will be deleted."));
+
+    untick_since_the_plan(&tmp, &env, "Beta", "XdgData/Beta/old.dat");
+    run_batch(&mut harness, "Restore 2 games", "Restored 2 of 2 games");
+
+    assert!(!extra("Alpha").exists());
+    assert_eq!(fs::read_to_string(extra("Beta")).unwrap(), "extra");
+    let kept = format!(
+        "{}: kept: unticked in what to back up since the plan",
+        extra("Beta").display()
+    );
+    assert!(shows_path(&harness, &kept));
 }

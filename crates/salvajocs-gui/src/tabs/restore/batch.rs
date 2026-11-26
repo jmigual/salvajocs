@@ -14,25 +14,31 @@ use eframe::egui::{self, Role, Ui, WidgetInfo};
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::crossbuild::{Choice, SnapshotRoot};
 use salvajocs_core::manifest::Manifest;
-use salvajocs_core::restore::{self, GameBackups, PrepareError, RestorePlan, WriteState};
+use salvajocs_core::restore::{self, GameBackups, PrepareError, WriteState};
 use salvajocs_core::scan::Environment;
 use salvajocs_core::selection::GameSettings;
 use salvajocs_core::storage::SnapshotInfo;
 
 use super::RestoreTab;
 use super::dirs::{own_dir, remove_dir};
+use super::manifest_paths::Source;
 use super::pick::snapshot_label;
 use super::plan::{
-    Fetched, Label, Labelled, WriteTree, blocking, hover_label, into_line, name_context,
-    nothing_to_restore, offer_ui, skipped_ui, ticked_plan, warnings_ui,
+    Fetched, Label, Labelled, blocking, delete_badge, delete_box_ui, deletes_line, deletes_on,
+    hover_label, into_line, name_context, nothing_to_restore, offer_ui, remember_deletes,
+    skipped_ui, ticked_plan, warnings_ui,
 };
-use super::run::{Restored, describe_run_error};
+use super::run::{
+    BaseUpdate, Restored, describe_run_error, selection_of, selections, unsaved_deletes,
+};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
+use crate::tabs::backup::choices::Saved;
 use crate::tabs::count;
 use crate::tabs::mapping::{Dialog, DialogAction};
 use crate::tabs::tree::{Badge, Clicked, Mode};
 use crate::theme::{self, icons};
+use crate::widgets::named_button;
 
 /// A game of the batch ready to restore.
 struct Planned {
@@ -40,7 +46,8 @@ struct Planned {
     /// The fetched snapshot, as the picker shows it.
     snapshot: String,
     labelled: Labelled,
-    /// What the run restores of the game, all ticked at first; never saved (ADR-0025).
+    /// What the run restores and deletes of the game, all ticked at first; never saved
+    /// (ADR-0025, ADR-0036).
     selection: GameSettings,
 }
 
@@ -55,17 +62,25 @@ impl Planned {
         }
     }
 
-    /// Whether the run restores the game: something is ticked and no ticked write blocks its
-    /// safety backup.
-    fn runs(&self) -> bool {
+    /// Which of the plan's deletions the run makes while the game's box is on (`on`).
+    fn deleted(&self, on: bool) -> Vec<bool> {
+        self.labelled.tree.deleted(&self.selection, on)
+    }
+
+    /// Whether the run restores the game, with its box `on` or off: something is ticked and no
+    /// ticked write or deletion blocks its safety backup.
+    fn runs(&self, on: bool) -> bool {
         let Labelled {
             plan,
             labels,
+            unreadable,
             tree,
             keys,
+            ..
         } = &self.labelled;
-        let ticked = tree.ticked(&self.selection);
-        (ticked.contains(&true) || keys.any_ticked()) && blocking(plan, labels, &ticked).is_empty()
+        let (ticked, deleted) = (tree.ticked(&self.selection), self.deleted(on));
+        (ticked.contains(&true) || keys.any_ticked() || deleted.contains(&true))
+            && blocking(plan, labels, &ticked, unreadable, &deleted).is_empty()
     }
 }
 
@@ -269,8 +284,13 @@ impl RestoreTab {
         );
         let environment = state.env.environment.clone();
         let root = own_dir(&state.env.cache_dir, "restore-batch");
+        let config_dir = state.env.config_dir.clone();
         let job = Job::spawn(ctx, move || {
             let environment = environment.unwrap_or_else(Environment::detect);
+            let read = match lock_storage(&storage) {
+                Ok(mut storage) => selections(&mut storage, &config_dir, &config.secret_scope()),
+                Err(err) => Err(format!("{err:#}")),
+            };
             let games = (games.into_iter().enumerate())
                 .map(|(index, (title, snapshot))| {
                     let outcome = match snapshot {
@@ -280,9 +300,8 @@ impl RestoreTab {
                             &snapshot,
                             &root.join(index.to_string()),
                             &storage,
-                            &manifest,
-                            &config,
-                            &environment,
+                            (&manifest, &config, &environment),
+                            selection_of(&read, &title),
                         ),
                         None => Outcome::Failed("it has only pre-restore backups".to_owned()),
                     };
@@ -412,15 +431,40 @@ impl RestoreTab {
         };
         ui.add_space(16.0);
         ui.heading("Plan");
+        // One switch for the delete box of every planned game, remembered per game (ADR-0036).
+        let titles: Vec<&str> = (games.iter())
+            .filter(|game| matches!(game.outcome, Outcome::Planned(_)))
+            .map(|game| game.title.as_str())
+            .collect();
+        if !titles.is_empty() {
+            let (mut all, mut none) = (false, false);
+            ui.horizontal(|ui| {
+                ui.label("Delete files the backups do not have:");
+                let label = "Delete files the backup does not have for every game";
+                all = named_button(ui, !busy, "Select all", label).clicked();
+                let label = "Delete files the backup does not have for no game";
+                none = named_button(ui, !busy, "Deselect all", label).clicked();
+            });
+            if all || none {
+                remember_deletes(state, ui.ctx(), titles, all);
+                for game in games.iter_mut() {
+                    if let Outcome::Planned(planned) = &mut game.outcome {
+                        planned.labelled.tree.invalidate();
+                    }
+                }
+            }
+        }
         let error_color = ui.visuals().error_fg_color;
-        let mut planned = 0;
+        let (mut planned, mut deleting) = (0, false);
         let mut opened = None;
         for game in games {
             let title = &game.title;
             match &mut game.outcome {
                 Outcome::Planned(game) => {
                     opened = planned_ui(ui, state, title, game, !busy).or(opened);
-                    planned += usize::from(game.runs());
+                    let on = deletes_on(state, title);
+                    planned += usize::from(game.runs(on));
+                    deleting |= game.deleted(on).contains(&true);
                 }
                 Outcome::Skipped => {
                     ui.weak(format!("{title}: skipped in the folder mapping dialog"));
@@ -437,11 +481,15 @@ impl RestoreTab {
         }
         let (mut cancel, mut run) = (false, false);
         let label = format!("Restore {}", count(planned, "game"));
-        let enabled = planned > 0 && state.session.is_some() && !self.backing_up;
+        // A deletion reads what to back up from the pending file, so it waits for its write.
+        let saving = deleting && self.choices_saved == Saved::Saving;
+        let enabled = planned > 0 && state.session.is_some() && !self.backing_up && !saving;
         let backing_up = self.backing_up;
         theme::row_end(ui, |ui| {
             if backing_up {
                 ui.weak("Waiting for the running backup to end.");
+            } else if saving {
+                ui.weak("Waiting for the changes to what to back up to be saved.");
             }
             cancel |= ui.button("Cancel").clicked();
             let glyph = Some(icons::CLOCK_COUNTER_CLOCKWISE);
@@ -465,12 +513,17 @@ impl RestoreTab {
     /// (ADR-0003, ADR-0020), then runs `restore::run` for each, behind its own safety backup
     /// staged under the cache dir. Then the downloads are removed.
     fn start_batch_run(&mut self, ctx: &egui::Context, state: &State) {
+        let Some(config) = &state.config else {
+            return;
+        };
         let Some(games) = self.batch.games.take() else {
             return;
         };
-        let planned: Vec<(Arc<Fetched>, RestorePlan)> = (games.into_iter())
+        let saved = self.choices_saved;
+        let planned: Vec<_> = (games.into_iter())
             .filter_map(|game| match game.outcome {
-                Outcome::Planned(planned) if planned.runs() => {
+                Outcome::Planned(planned) if planned.runs(deletes_on(state, &game.title)) => {
+                    let deleted = planned.deleted(deletes_on(state, &game.title));
                     let Planned {
                         fetched,
                         labelled,
@@ -480,8 +533,9 @@ impl RestoreTab {
                     let Labelled {
                         plan, tree, keys, ..
                     } = &labelled;
-                    let plan = ticked_plan(plan, &tree.keys, keys, &selection);
-                    Some((fetched, plan))
+                    let mut plan = ticked_plan(plan, &tree.keys, keys, &selection, &deleted);
+                    let unsaved = unsaved_deletes(&mut plan, saved);
+                    Some((fetched, plan, unsaved))
                 }
                 Outcome::Planned(_)
                 | Outcome::NeedsMapping(_)
@@ -500,38 +554,46 @@ impl RestoreTab {
         let wineserver_running = state.env.wineserver_running;
         let waker = ctx.clone();
         let cache_dir = state.env.cache_dir.clone();
+        let base_update = BaseUpdate::new(state, config);
         self.batch.running = Some(Job::spawn(ctx, move || {
             remove_stale_restore_dirs(&cache_dir);
             remove_dir(&root).with_context(|| format!("cannot clear {}", root.display()))?;
             let planned: Vec<_> = (planned.into_iter())
-                .map(|(fetched, plan)| {
+                .map(|(fetched, plan, unsaved)| {
                     // A failure to lock fails this game, not the job.
                     let fetch = lock_storage(&fetched.storage).and_then(|mut storage| {
                         Ok(restore::download(&mut storage, &fetched.listed)?)
                     });
                     downloaded.fetch_add(1, Ordering::Relaxed);
                     waker.request_repaint();
-                    (fetched, plan, fetch)
+                    (fetched, plan, unsaved, fetch)
                 })
                 .collect();
             let restored = (planned.into_iter())
-                .map(|(fetched, plan, fetch)| {
+                .map(|(fetched, mut plan, unsaved, fetch)| {
                     let title = fetched.title.clone();
                     let fetch = fetch.context("the backup cannot be fetched");
                     let storage = fetch.and_then(|()| lock_storage(&fetched.storage));
-                    let report = storage.and_then(|mut storage| {
-                        Ok(restore::run(
+                    // The base is updated under the storage lock, as a Back up does.
+                    let restored = storage.and_then(|mut storage| {
+                        let kept = base_update.recheck_deletes(&mut storage, &fetched, &mut plan);
+                        let report = restore::run(
                             &mut storage,
                             &title,
                             &plan,
                             &stage_root,
                             wineserver_running,
-                        )?)
+                        )?;
+                        let mut restored = Restored::new(title.clone(), &plan, report);
+                        restored.lines.extend(unsaved.into_iter().chain(kept));
+                        let snapshot = &fetched.listed.snapshot;
+                        base_update.apply(&mut storage, &mut restored, snapshot);
+                        Ok(restored)
                     });
                     done.fetch_add(1, Ordering::Relaxed);
                     waker.request_repaint();
-                    match report {
-                        Ok(report) => GameRestored::Restored(Restored::new(title, &plan, report)),
+                    match restored {
+                        Ok(restored) => GameRestored::Restored(restored),
                         Err(err) => GameRestored::Failed {
                             error: describe_run_error(&err),
                             title,
@@ -588,15 +650,15 @@ impl RestoreTab {
 }
 
 /// Reads `snapshot` of `title`, to be downloaded into `work_dir`, and plans its restore into its
-/// default targets, then labels each write as the single game's plan does.
+/// default targets, then labels each write and finds what it may delete as the single game's
+/// plan does, with `today` the game's selection now.
 fn plan_game(
     title: String,
     snapshot: &SnapshotInfo,
     work_dir: &Path,
     storage: &SharedStorage,
-    manifest: &Manifest,
-    config: &AppConfig,
-    environment: &Environment,
+    (manifest, config, environment): (&Manifest, &AppConfig, &Environment),
+    today: Option<GameSettings>,
 ) -> Outcome {
     let listed = lock_storage(storage)
         .and_then(|mut storage| Ok(restore::read(&mut storage, snapshot, work_dir)?));
@@ -610,12 +672,14 @@ fn plan_game(
     let fetched = Fetched {
         storage: storage.clone(),
         vars: restore::game_vars(&title, info.entry.as_ref(), config, environment),
+        source: Source::of(&title, manifest, &config.custom_games),
         title,
         listed,
         targets: defaults.targets,
         prefix_origin: defaults.origin,
         reason: defaults.reason,
         info,
+        today,
     };
     match fetched.labelled(fetched.prepare(&[])) {
         Ok(labelled) => Outcome::Planned(Box::new(Planned::new(
@@ -711,13 +775,14 @@ fn remove_stale(parent: &Path) {
 }
 
 /// One planned game of the confirm: its snapshot with how many ticked files are new, changed or
-/// unchanged, its targets, the ticked writes that will fail or block it, the tree of its files
-/// with a checkbox on each, the plan's warnings, the registry with a checkbox per key and the
-/// skipped items, with [`offer_ui`] from `state`. `enabled` false greys the checkboxes. Returns
-/// the folder the user asked to open.
+/// unchanged, its targets, its delete box (ADR-0036), the ticked writes that will fail or block
+/// it, the tree of its files, with its deletions while the box is on, with a checkbox on each,
+/// the plan's warnings, the registry with a checkbox per key, the skipped items and how many
+/// files it deletes, with [`offer_ui`] from `state`, whose config the box reads and saves.
+/// `enabled` false greys the checkboxes. Returns the folder the user asked to open.
 fn planned_ui(
     ui: &mut Ui,
-    state: &State,
+    state: &mut State,
     title: &str,
     planned: &mut Planned,
     enabled: bool,
@@ -730,7 +795,9 @@ fn planned_ui(
             Labelled {
                 plan,
                 labels,
-                tree: WriteTree { tree, .. },
+                unreadable,
+                unlisted,
+                tree: write_tree,
                 keys,
             },
         selection,
@@ -753,6 +820,11 @@ fn planned_ui(
         let used = restore::used_targets(plan, &fetched.targets);
         let (into, hover) = into_line(&used, fetched.prefix_origin.as_ref(), fetched.reason);
         hover_label(ui, into, hover);
+        let (on, toggled) = delete_box_ui(ui, state, fetched, plan, unlisted, enabled);
+        if toggled {
+            write_tree.invalidate();
+        }
+        let deleted = write_tree.deleted(selection, on);
         let error_color = ui.visuals().error_fg_color;
         for ((write, label), _) in
             (plan.writes.iter().zip(labels.iter()).zip(&ticked)).filter(|(_, ticked)| **ticked)
@@ -762,7 +834,7 @@ fn planned_ui(
                 theme::status(ui, icons::X_CIRCLE, error_color, text);
             }
         }
-        let blocking = blocking(plan, labels, &ticked);
+        let blocking = blocking(plan, labels, &ticked, unreadable, &deleted);
         if !blocking.is_empty() {
             let text = "Nothing will be restored: the safety backup cannot read these files:";
             theme::status(ui, icons::X_CIRCLE, error_color, text);
@@ -772,19 +844,26 @@ fn planned_ui(
             ui.weak("Untick them to restore the rest of this game.");
         } else if nothing_to_restore(plan) {
             ui.weak("Nothing to restore, so this game will not be restored.");
-        } else if !ticked.contains(&true) && !keys.any_ticked() {
+        } else if !ticked.contains(&true) && !keys.any_ticked() && !deleted.contains(&true) {
             ui.weak("Nothing ticked, so this game will not be restored.");
         }
-        let badge = |index: usize, _: &str| labels[index].badge().map(|(badge, _)| badge);
-        let hint = |index: usize, _: &str, _| {
-            (labels[index].badge())
-                .map(|(_, hint)| hint)
-                .unwrap_or_default()
+        // Row positions from here on are deletions.
+        let first_delete = plan.writes.len();
+        let badged = |index: usize| match index.checked_sub(first_delete) {
+            None => labels[index].badge(),
+            Some(at) => delete_badge(unreadable[at].as_deref(), false),
         };
+        let badge = |index: usize, _: &str| badged(index).map(|(badge, _)| badge);
+        let hint =
+            |index: usize, _: &str, _| badged(index).map(|(_, hint)| hint).unwrap_or_default();
         let included = |key: &str| selection.path_included(key);
         let mode = Mode::Select {
             included: &included,
             enabled,
+        };
+        let tree = match &mut write_tree.deleting {
+            Some(deleting) if on => deleting,
+            _ => &mut write_tree.tree,
         };
         let clicked = ui.push_id(title, |ui| {
             tree.ui_with_rows(ui, mode, &badge, &hint, &mut |_, _, _, _| {})
@@ -802,6 +881,7 @@ fn planned_ui(
             ui.push_id((title, "registry"), |ui| keys.ui(ui, enabled));
         }
         skipped_ui(ui, plan);
+        deletes_line(ui, deleted.iter().filter(|&&deleted| deleted).count());
         match clicked.inner {
             Some(Clicked::Open(path)) => Some(path),
             Some(Clicked::Toggle(key, included)) => {

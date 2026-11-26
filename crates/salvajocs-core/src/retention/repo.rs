@@ -132,7 +132,7 @@ fn write(
         .and_then(|()| fs::write(&file, json))
         .map_err(|source| RetentionError::Io { path: file, source })?;
     let written = storage
-        .backup_dir(&dir, AS_PATH, &[SETTINGS_TAG, POLICY_TAG], LABEL)?
+        .backup_dir(&dir, AS_PATH, &[SETTINGS_TAG, POLICY_TAG], LABEL, true)?
         .ok_or(RetentionError::NotWritten)?;
     match settle(storage, POLICY_TAG, ids, &written.id)? {
         Settled::Raced => Err(RetentionError::NotWritten),

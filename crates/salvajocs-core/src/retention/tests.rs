@@ -181,14 +181,52 @@ fn newest_of_each_game_always_kept() {
 }
 
 #[test]
-fn newest_per_host_kept() {
+fn keep_last_ranks_across_hosts() {
     let snapshots = [
         game_a("pc-1", 1),
         game_a("pc-2", 2),
-        snap("deck-1", "deck", DAY * 30, &["game:a"]),
-        snap("deck-2", "deck", DAY * 40, &["game:a"]),
+        snap("deck-1", "deck", DAY * 3, &["game:a"]),
+        snap("deck-2", "deck", DAY * 4, &["game:a"]),
     ];
-    assert_eq!(forget(keep_last(1), &snapshots), ["pc-2", "deck-2"]);
+    assert_eq!(forget(keep_last(2), &snapshots), ["deck-1", "deck-2"]);
+}
+
+#[test]
+fn a_stopped_hosts_newest_is_forgotten_by_keep_last() {
+    let snapshots = [
+        game_a("pc-1", 1),
+        game_a("pc-2", 2),
+        snap("old-pc", "old-pc", DAY * 30, &["game:a"]),
+    ];
+    assert_eq!(forget(keep_last(2), &snapshots), ["old-pc"]);
+}
+
+#[test]
+fn a_stopped_hosts_newest_is_forgotten_by_keep_within() {
+    let snapshots = [
+        game_a("pc-newest", 1),
+        snap("old-pc", "old-pc", DAY * 30, &["game:a"]),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["old-pc"]);
+}
+
+#[test]
+fn newest_overall_kept_with_only_keep_within() {
+    let snapshots = [
+        snap("deck-newest", "deck", DAY * 30, &["game:a"]),
+        game_a("pc-old", 40),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["pc-old"]);
+}
+
+#[test]
+fn pre_restore_newest_kept_on_its_own() {
+    let snapshots = [
+        game_a("regular", 1),
+        snap("pre-1", "pc", DAY * 30, &["game:a", PRE_RESTORE_TAG]),
+        snap("pre-2", "deck", DAY * 40, &["game:a", PRE_RESTORE_TAG]),
+    ];
+    assert_eq!(forget(keep_days(7), &snapshots), ["pre-2"]);
 }
 
 #[test]
@@ -310,7 +348,7 @@ impl Repo {
         self.storage.reindex().unwrap();
         let src = self.save(contents);
         self.storage
-            .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+            .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A", true)
             .unwrap()
             .unwrap()
     }
@@ -382,7 +420,7 @@ fn a_backup_reusing_a_marked_pack_is_recovered_by_the_next_cleanup() {
     // Its backup reuses the "old" data, which is now only in a marked pack.
     let src = repo.save("old");
     let theirs = other
-        .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A")
+        .backup_dir(&src, "/salvajocs/a", &[APP_TAG, "game:a"], "A", true)
         .unwrap()
         .unwrap();
     assert!(!repo.restores(&theirs, "old"));
@@ -554,7 +592,7 @@ fn delete_refuses_a_snapshot_retention_never_picks() {
         ("settings", &[APP_TAG, SETTINGS_TAG, "game:a"][..]),
     ] {
         let as_path = format!("/salvajocs/{label}");
-        let other = (repo.storage.backup_dir(&src, &as_path, tags, label))
+        let other = (repo.storage.backup_dir(&src, &as_path, tags, label, true))
             .unwrap()
             .unwrap();
         let before = repo.ids(APP_TAG);

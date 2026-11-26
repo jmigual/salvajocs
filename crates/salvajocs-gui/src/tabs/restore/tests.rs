@@ -69,6 +69,7 @@ fn a_restore_report_shows_a_line_per_write_and_for_the_registry() {
         SafetyBackup::NothingExisted,
         vec![Ok(()), Err(restore::ApplyError::TargetIsSymlink)],
         Some(Err(restore::ApplyError::NoRegistry)),
+        Vec::new(),
     );
 
     let restored = Restored::new("Mix".into(), &plan, report);
@@ -115,6 +116,23 @@ fn a_cleanup_dropping_the_list_closes_the_delete_dialog() {
     harness.step();
     assert!(harness.state().0.confirm_delete.is_none());
     assert!(harness.query_by_label("Cancel").is_none());
+}
+
+#[test]
+fn the_manifest_paths_dialog_closes_when_the_plan_or_listing_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = tab_harness(dir.path(), with_mix);
+    for drop_it in [RestoreTab::forget_plan, RestoreTab::drop_listing] {
+        let fetched = fetched(&storage(&harness));
+        harness.state_mut().0.manifest_paths = Some(fetched);
+        harness.step();
+        harness.step();
+        assert!(harness.query_by_label("Save paths of Mix").is_some());
+
+        drop_it(&mut harness.state_mut().0);
+        harness.step();
+        assert!(harness.query_by_label("Save paths of Mix").is_none());
+    }
 }
 
 #[test]
@@ -300,6 +318,8 @@ fn fetched(storage: &SharedStorage) -> Arc<Fetched> {
         reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
+        source: None,
+        today: None,
     })
 }
 
@@ -335,6 +355,8 @@ fn backed_up(storage: &SharedStorage, dir: &Path) -> Arc<Fetched> {
         reason: None,
         vars: GameVars::new("Mix", Vec::new(), &[], None),
         info: GameInfo::default(),
+        source: None,
+        today: None,
     })
 }
 
@@ -552,7 +574,11 @@ fn a_new_snapshot_in_the_list_keeps_the_chosen_older_one_and_the_plan() {
     assert!(state.0.preview.is_some(), "a backup removes no snapshot");
     // The new list has a snapshot in front, which shifts the older one's index.
     state.0.listing = Some(Job::spawn(&ctx, || {
-        Ok(vec![mix_snapshots(&["c", "b", "a"])])
+        Ok((
+            vec![mix_snapshots(&["c", "b", "a"])],
+            Default::default(),
+            String::new(),
+        ))
     }));
     step_until(&mut harness, "the list", |h| h.state().0.listing.is_none());
 
@@ -1112,4 +1138,68 @@ fn forgetting_the_plan_closes_the_open_details() {
 
     assert!(harness.state().0.details.is_none());
     assert!(harness.query_by_label("Close details").is_none());
+}
+
+/// A tab listing Mix with one snapshot and nothing chosen, over the open repository of a state
+/// in `dir`.
+fn unchosen_mix(dir: &Path) -> (RestoreTab, State) {
+    let state = state(dir);
+    let mut tab = with_mix(&state.session.as_ref().unwrap().storage);
+    tab.selected = None;
+    tab.snapshot = None;
+    (tab, state)
+}
+
+#[test]
+fn open_game_selects_the_game_with_its_default_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+
+    tab.open_game(&egui::Context::default(), &state, "mix".into(), false);
+
+    assert_eq!(tab.selected.as_deref(), Some("mix"));
+    assert_eq!(tab.snapshot, Some(0));
+}
+
+#[test]
+fn open_game_keeps_the_plan_of_the_game_already_selected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+    let ctx = egui::Context::default();
+    tab.open_game(&ctx, &state, "mix".into(), false);
+    // Choosing again would drop the plan and the edited targets with it.
+    let generation = tab.generation;
+
+    tab.open_game(&ctx, &state, "mix".into(), false);
+
+    assert_eq!(tab.generation, generation);
+}
+
+#[test]
+fn open_game_selects_nothing_while_the_tab_is_not_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+    let ctx = egui::Context::default();
+
+    // The manifest loads.
+    tab.open_game(&ctx, &state, "mix".into(), true);
+    assert_eq!(tab.selected, None);
+
+    // A job of the tab runs.
+    tab.listing = Some(Job::spawn(&ctx, || Err(anyhow!("cannot list"))));
+    tab.open_game(&ctx, &state, "mix".into(), false);
+    assert_eq!(tab.selected, None);
+    assert_eq!(tab.reselect, None);
+}
+
+#[test]
+fn open_game_lists_the_backups_first_and_selects_the_game_when_they_arrive() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let mut tab = RestoreTab::default();
+
+    tab.open_game(&egui::Context::default(), &state, "mix".into(), false);
+
+    assert!(tab.listing.is_some());
+    assert_eq!(tab.reselect.as_deref(), Some("mix"));
 }

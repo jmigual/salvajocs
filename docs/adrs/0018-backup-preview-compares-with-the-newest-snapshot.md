@@ -2,6 +2,11 @@
 
 **Status:** Accepted
 **Date:** 2026-11-19
+**Amended:** 2026-11-25: the skip rule and the preview become the states of ADR-0035 (up to date,
+ahead, behind, changed on both, unknown base) against the newest backup and this PC's recorded
+base; (A) is off for regular backups.
+**Amended:** 2026-11-25: `hashes.json` gains `selection`, the backup's path rules; the format stays
+1 and `same_content` ignores it (ADR-0036).
 
 ## Context
 
@@ -64,6 +69,9 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
     called; never a tree id compare, since tree ids differ across machines.
     Amended by ADR-0021: a newest snapshot of the other build is compared through the folder
     pairs, without `salvajocs.json`.
+    Amended by ADR-0035: (A) only for the pre-restore safety backup; (B) is "up to date", and a
+    game that differs is stored only when ahead of this PC's base, never when behind, and asked
+    about when changed on both.
   - The outcome is `Stored::New`, `Stored::Unchanged { newer_elsewhere }` or
     `Stored::SameAsNewest(newest)`. When (B) holds and the newest is this machine's own
     snapshot, the outcome is `Unchanged { newer_elsewhere: None }`: an unchanged rerun reads
@@ -97,6 +105,8 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
 - **Size and mtime only:** another machine's copy of the same save has other mtimes, so every
   file would show as changed. Kept only as the fallback for snapshots without a list.
 - **Baseline = this machine's last backup:** hides that another machine has a newer save.
+  Amended by ADR-0035: still rejected as the comparison; this PC's last sync is its base, which
+  tells behind from ahead.
 
 ## Consequences
 
@@ -111,7 +121,8 @@ SHA-256 hashes, written by salvajocs itself, need nothing from rustic.
 - The first 0.6.0 backup of each game on each machine makes a snapshot: the staging directory
   gains `hashes.json`, and older snapshots have no list for (B) to compare with.
 - After a (B) skip, this machine's state lives in another machine's snapshot. Retention keeps
-  each host's newest (ADR-0015); once the other machine backs up something newer, (B) is false
+  each host's newest (ADR-0015; amended by ADR-0034: retention no longer keeps each host's
+  newest, only the game's); once the other machine backs up something newer, (B) is false
   here and the next backup stores this machine's own state.
 - A game shown as unchanged can still be backed up when only its registry keys or roots changed.
   Amended by ADR-0023: or when only the Wine prefix recorded in `salvajocs.json` changed, as on

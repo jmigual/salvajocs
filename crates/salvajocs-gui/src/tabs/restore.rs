@@ -16,6 +16,7 @@ use salvajocs_core::stats::BackupStats;
 
 use crate::job::Job;
 use crate::state::{SharedStorage, State};
+use crate::tabs::backup::choices::Saved;
 use crate::tabs::count;
 use crate::tabs::details::Details;
 use crate::tabs::mapping::Dialog;
@@ -27,6 +28,7 @@ mod batch;
 mod delete;
 mod dirs;
 mod keys;
+mod manifest_paths;
 mod pick;
 mod plan;
 mod run;
@@ -34,6 +36,7 @@ mod run;
 use batch::Batch;
 use delete::{Deletion, describe_delete_error};
 use pick::{Detected, TargetPick};
+pub(crate) use plan::deletes_on;
 use plan::{Fetched, Prepared, Preview};
 use run::{Restored, describe_run_error};
 
@@ -43,13 +46,22 @@ const SIDEBAR_WIDTH: f32 = 240.0;
 /// The width the plan beside the games sidebar keeps, which the sidebar cannot be dragged into.
 const PLAN_WIDTH: f32 = 600.0;
 
+/// What the listing job reads: the games, their `newer` slugs and this PC's host name.
+type Listing = (Vec<GameBackups>, BTreeSet<String>, String);
+
 /// The state of the Restore tab.
 #[derive(Default)]
 pub struct RestoreTab {
     /// The repository the list came from.
     repository: Option<SharedStorage>,
-    listing: Option<Job<Vec<GameBackups>>>,
+    /// The listed games and their `newer` slugs.
+    listing: Option<Job<Listing>>,
     games: Vec<GameBackups>,
+    /// The slugs of `games` whose newest regular snapshot is not this PC's recorded base of them
+    /// (ADR-0035).
+    newer: BTreeSet<String>,
+    /// The host name this PC's backups are stored with; empty before the first listing.
+    host: String,
     /// The backup figures of each of `games`, in its order, built with `order` (ADR-0027).
     figures: Vec<BackupStats>,
     /// Works out the space of each listed game's backups.
@@ -67,6 +79,9 @@ pub struct RestoreTab {
     /// A Back up checks, asks, waits to start or runs; it holds the repository's lock, so the
     /// tab's controls wait for it.
     backing_up: bool,
+    /// Whether the pending file holds the Backup tab's latest changes to what to back up, which
+    /// a restore that deletes reads (ADR-0036).
+    choices_saved: Saved,
     /// The slug of the chosen game.
     selected: Option<String>,
     /// The slug of the game chosen before a restore or delete, which the listing it started
@@ -90,6 +105,8 @@ pub struct RestoreTab {
     /// Whether the mapping dialog waits behind its "Choose folders…" button.
     dialog_hidden: bool,
     preview: Option<Preview>,
+    /// The plan whose **Manifest paths** dialog is open.
+    manifest_paths: Option<Arc<Fetched>>,
     /// The open details of a file the plan overwrites.
     details: Option<Details>,
     restoring: Option<Job<Restored>>,
@@ -150,6 +167,7 @@ impl RestoreTab {
         self.mapping_ui(ui.ctx(), state);
         self.batch_mapping_ui(ui.ctx(), state);
         self.delete_ui(ui.ctx());
+        self.manifest_paths_ui(ui.ctx());
         if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
@@ -166,6 +184,7 @@ impl RestoreTab {
         self.repository = None;
         self.listing = None;
         self.games.clear();
+        self.newer.clear();
         self.space = None;
         self.list_changes += 1;
         self.selected = None;
@@ -184,6 +203,13 @@ impl RestoreTab {
     /// Tells the tab whether a Back up runs, which keeps its controls disabled until it ends.
     pub(crate) fn set_backing_up(&mut self, backing_up: bool) {
         self.backing_up = backing_up;
+    }
+
+    /// Tells the tab whether the Backup tab's latest changes to what to back up are saved: a
+    /// restore that deletes waits while they are being saved and deletes nothing when they could
+    /// not be.
+    pub(crate) fn set_choices_saved(&mut self, saved: Saved) {
+        self.choices_saved = saved;
     }
 
     /// Whether a listing, restore or other job of this tab is running. A plan job only reads,
@@ -232,6 +258,7 @@ impl RestoreTab {
     fn forget_plan(&mut self) {
         self.preview = None;
         self.details = None;
+        self.manifest_paths = None;
         self.mapping = None;
         self.generation += 1;
     }
@@ -299,7 +326,9 @@ impl RestoreTab {
         {
             self.listing = None;
             match result {
-                Ok(games) => {
+                Ok((games, newer, host)) => {
+                    self.newer = newer;
+                    self.host = host;
                     // A delete may have taken a ticked game's last regular backup, or the game.
                     self.checked.retain(|slug| {
                         (games.iter()).any(|game| game.slug == *slug && game.default.is_some())

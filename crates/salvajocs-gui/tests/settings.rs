@@ -548,6 +548,49 @@ fn a_wrong_keyring_password_prompts_instead_of_looping() {
     );
 }
 
+/// Types `password` into the Settings form and applies it, then waits for the wrong-password
+/// message.
+fn apply_password(harness: &mut Harness<'static, App>, password: &str) {
+    fill(harness, "Encryption password", password);
+    harness.get_by_label("Apply").click();
+    run_until(harness, "the wrong password message", |h| {
+        shows(h, "Wrong encryption password")
+    });
+}
+
+#[test]
+fn a_password_typed_for_the_repository_without_one_says_salvajocs_cannot_add_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let mut harness = open_settings(env.clone());
+
+    apply_password(&mut harness, "x");
+
+    assert!(shows(&harness, "cannot add one"));
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.password, PasswordMode::None);
+}
+
+#[test]
+fn a_wrong_password_for_another_repository_stays_plain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    save_config(&env, &local_config(&repository));
+    let other = other_repo_dir(&tmp);
+    init_repo_with(&other, "right", Compression::Default);
+    let mut harness = open_settings(env);
+
+    replace_text(&mut harness, "Location", &other);
+    apply_password(&mut harness, "x");
+
+    assert!(!shows(&harness, "cannot add one"));
+}
+
 const REMEMBER: &str = "Remember passwords in the system keyring";
 
 /// A repository at `repository` without encryption password whose secret option `access_key`
@@ -985,6 +1028,24 @@ fn applying_a_new_location_keeps_the_sorts() {
     let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
     assert_eq!(saved.backup_sort, config.backup_sort);
     assert_eq!(saved.restore_sort, config.restore_sort);
+}
+
+#[test]
+fn applying_a_new_location_keeps_the_games_whose_restore_deletes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = env(&tmp);
+    let repository = repo_dir(&tmp);
+    init_repo(&repository);
+    let mut config = local_config(&repository);
+    config.restore_deletes.insert("Alpha".to_owned());
+    save_config(&env, &config);
+    let mut harness = open_settings(env.clone());
+
+    let other = other_repo_dir(&tmp);
+    apply_new_location(&mut harness, &env, &other);
+
+    let saved = AppConfig::load(&env.config_dir).unwrap().unwrap();
+    assert_eq!(saved.restore_deletes, config.restore_deletes);
 }
 
 #[test]
@@ -1513,6 +1574,7 @@ fn an_unreadable_policy_is_reported_and_not_editable() {
             "/salvajocs-settings/retention",
             &["salvajocs-settings", "settings:retention"],
             "Retention policy",
+            true,
         )
         .unwrap()
         .unwrap();

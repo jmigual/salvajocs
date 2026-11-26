@@ -1,7 +1,7 @@
 //! Stages each game into a mirror directory and backs it up as one snapshot (ADR-0004,
 //! ADR-0010).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +24,7 @@ use crate::registry::{RegistryError, RegistryExport};
 use crate::scan::{GameScan, RegistrySource};
 use crate::slug::slug;
 use crate::storage::{SnapshotInfo, Storage, StorageError};
+use crate::sync::{self, Bases, Saves, State};
 
 /// Errors from staging or backing up one game.
 #[derive(Debug, thiserror::Error)]
@@ -165,9 +166,24 @@ pub fn stage(
         meta: sha256_file(&meta_file).map_err(io_error(&meta_file))?,
         registry,
         files,
+        selection: game.selection.clone(),
     };
     write_if_changed(&hashes_file, &json(&hashes))?;
     Ok(hashes)
+}
+
+/// The SHA-256 of the `salvajocs.json` [`stage`] writes for `game`; `None` when
+/// `game.unreadable` is not empty, since `stage` then keeps the staged meta's roots and prefix.
+pub(crate) fn meta_sha256(game: &GameScan) -> Option<String> {
+    let meta = SnapshotMeta {
+        format: SNAPSHOT_FORMAT,
+        title: game.title.clone(),
+        roots: game.roots.clone(),
+        prefix: game.prefix_origin.clone(),
+    };
+    game.unreadable
+        .is_empty()
+        .then(|| sha256_bytes(&json(&meta)))
 }
 
 /// The staged `hashes.json`; `None` when there is none or it cannot be parsed, so every file
@@ -396,19 +412,39 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), BackupError> {
     }
 }
 
-/// What [`backup_games`] stored for one game.
+/// What [`backup_games`] did for one game, by its [`State`] on this PC (ADR-0035).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Stored {
-    /// A snapshot was written.
+    /// A snapshot was written: the game had no backup yet, was ahead, or was behind, changed on
+    /// both sides or of unknown base and in [`ByState::back_up_anyway`]; or it is a safety backup.
     New(SnapshotInfo),
-    /// Nothing changed since this machine's last backup of the game.
-    Unchanged {
-        /// The newest snapshot of the game, when another host made it.
-        newer_elsewhere: Option<SnapshotInfo>,
+    /// The saves equal the game's newest backup, so none was made.
+    UpToDate {
+        /// The newest backup, when another host made it.
+        elsewhere: Option<SnapshotInfo>,
     },
-    /// The staged content equals this snapshot, the game's newest, which another host made.
-    SameAsNewest(SnapshotInfo),
+    /// Another PC made a newer backup and this PC's saves are still its base, and the game is not
+    /// in [`ByState::back_up_anyway`], so none was made: it would make older saves the newest.
+    Behind {
+        /// The newest backup.
+        newest: SnapshotInfo,
+    },
+    /// This PC and another changed the saves since the base, and the game is not in
+    /// [`ByState::back_up_anyway`], so none was made.
+    ChangedOnBoth {
+        /// The newest backup.
+        newest: SnapshotInfo,
+    },
+    /// No base is known, the saves differ from the newest backup, and the game is not in
+    /// [`ByState::back_up_anyway`], so none was made.
+    UnknownBase {
+        /// The newest backup.
+        newest: SnapshotInfo,
+    },
+    /// A safety backup, which rustic found unchanged since this host's last snapshot, so none
+    /// was made.
+    Unchanged,
 }
 
 /// The outcome of one game in [`backup_games`].
@@ -421,26 +457,53 @@ pub struct GameBackup {
     pub slug: String,
     /// What was stored, or why it failed.
     pub result: Result<Stored, BackupError>,
+    /// The base to record for the game ([`sync::record`]): the new snapshot, or the newest
+    /// backup the saves equal, with the staged list. `None` when the base stays as it was, the
+    /// game failed, or for a safety backup.
+    pub base: Option<sync::Base>,
 }
 
 impl GameBackup {
-    /// The `result` of backing up game `title` with `slug`.
+    /// The `result` of backing up game `title` with `slug`, with no base to record.
     pub fn new(title: String, slug: String, result: Result<Stored, BackupError>) -> Self {
         Self {
             title,
             slug,
             result,
+            base: None,
         }
     }
 }
 
-/// What [`backup_game`] compares a staged game with.
-struct Baseline {
-    /// The game's newest snapshot that is not a pre-restore one, from any host.
-    newest: Option<SnapshotInfo>,
-    /// It as the staged game is compared with it; `None` when it cannot be read or the
-    /// same-as-newest rule is off.
-    compared: Option<changes::Baseline>,
+/// What [`backup_games`] decides each game's [`State`] on this PC with (ADR-0035).
+pub struct ByState<'a> {
+    /// Reads each game's newest backup, and its base snapshot when needed, mapped through the
+    /// folder pairs when of the other build (ADR-0021).
+    pub mapper: &'a changes::Mapper<'a>,
+    /// This PC's bases, as [`sync::load`] reads them.
+    pub bases: &'a Bases,
+    /// The repository's key in `bases` ([`crate::config::AppConfig::secret_scope`]).
+    pub scope: &'a str,
+    /// The slugs of the games the user chose to back up even when behind, changed on both sides
+    /// or of unknown base.
+    pub back_up_anyway: &'a BTreeSet<String>,
+}
+
+/// A staged game, as [`backup_games`] read it before writing: its staged list, and what to
+/// report instead of storing it with the base to record then; `None` to store it.
+type Decided = (Hashes, Option<(Stored, Option<sync::Base>)>);
+
+/// Stages `game` in `stage_root/<slug>` as [`backup_games`] does, with its registry keys read
+/// fresh from the scan's `registry_source`, and returns the staged hash list.
+///
+/// # Errors
+/// [`BackupError`] when the registry cannot be read or the game cannot be staged.
+pub fn stage_game(game: &GameScan, stage_root: &Path) -> Result<Hashes, BackupError> {
+    stage(
+        game,
+        &read_registry(game)?,
+        &stage_root.join(slug(&game.title)),
+    )
 }
 
 /// Backs up each of `games` as its own snapshot (ADR-0010), one after another: the game is
@@ -448,51 +511,73 @@ struct Baseline {
 /// `registry_source`, then stored as `/salvajocs/<slug>` with label = title and tags
 /// `salvajocs`, `game:<slug>` and `extra_tags` (which must not contain commas).
 ///
-/// A game makes no snapshot when nothing changed since this machine's last backup of it, or,
-/// with a `same_as_newest` mapper, when its staged content equals that of the game's newest
-/// snapshot that is not a pre-restore one, from any host (ADR-0018), mapped through the folder
-/// pairs when that snapshot is of the other build ([`changes::Baseline::same_content`],
-/// ADR-0021). The pre-restore safety backup passes `None`.
+/// With `by_state`, the game's [`State`] on this PC decides ([`sync::state`] on the staged list):
+/// it is stored when it has no backup yet or is ahead, and when behind, changed on both sides or
+/// of unknown base only if in [`ByState::back_up_anyway`]; otherwise its [`Stored`] says why not.
+/// Its newest snapshot that is not a pre-restore one, from any host, is read through the mapper;
+/// so is its base snapshot, only when [`sync::Base::to_read`] names it and the repository still
+/// has it. A base not recorded is seeded from this host's newest backup of the game. Without
+/// `by_state`, as the pre-restore safety backup does, a game is stored unless rustic finds it
+/// unchanged since this host's last snapshot.
 ///
 /// The repository is reindexed and its snapshots listed once first; only those failures are
-/// returned as `Err`. A game's failure is in its [`GameBackup`] and does not stop the others.
-/// `progress` gets each outcome as it is done.
+/// returned as `Err`. Every game is staged and read before any is stored. A game's failure is in
+/// its [`GameBackup`] and does not stop the others. `progress` gets each outcome as it is done.
 pub fn backup_games(
     storage: &mut Storage,
     games: &[GameScan],
     stage_root: &Path,
     extra_tags: &[&str],
-    same_as_newest: Option<&changes::Mapper<'_>>,
+    by_state: Option<&ByState<'_>>,
     mut progress: impl FnMut(&GameBackup),
 ) -> Result<Vec<GameBackup>, BackupError> {
     storage.reindex()?;
     let snapshots = storage.snapshots("salvajocs")?;
     let host = storage.hostname()?;
     // Read before anything is written: a read after a write would reindex first (ADR-0003).
-    let baselines: Vec<Baseline> = (games.iter())
+    let decided: Vec<Result<Decided, BackupError>> = (games.iter())
         .map(|game| {
             let slug = slug(&game.title);
-            let newest = changes::newest(&snapshots, &slug).cloned();
-            // A list that cannot be read or verified only costs a snapshot rustic may still
-            // skip; failing the game would block its backups for good.
-            let compared = match (&newest, same_as_newest) {
-                (Some(newest), Some(mapper)) => mapper.baseline(storage, newest, game).ok(),
-                _ => None,
+            let staged = stage_game(game, stage_root)?;
+            let skip = match by_state {
+                Some(by_state) => {
+                    decide(storage, by_state, game, &slug, &staged, &snapshots, &host)
+                }
+                None => None,
             };
-            Baseline { newest, compared }
+            Ok((staged, skip))
         })
         .collect();
     let mut outcomes = Vec::with_capacity(games.len());
-    for (game, baseline) in games.iter().zip(baselines) {
+    for (game, decided) in games.iter().zip(decided) {
         let slug = slug(&game.title);
-        let stage_dir = stage_root.join(&slug);
-        let result = backup_game(
-            storage, game, &stage_dir, &slug, extra_tags, baseline, &host,
-        );
+        let (result, base) = match decided {
+            Err(err) => (Err(err), None),
+            Ok((_, Some((stored, base)))) => (Ok(stored), base),
+            Ok((staged, None)) => {
+                let stage_dir = stage_root.join(&slug);
+                let result = backup_game(
+                    storage,
+                    game,
+                    &stage_dir,
+                    &slug,
+                    extra_tags,
+                    by_state.is_none(),
+                );
+                let base = match (&result, by_state) {
+                    (Ok(Stored::New(snapshot)), Some(_)) => {
+                        Some(sync::Base::new(snapshot.id.clone(), Some(staged)))
+                    }
+                    _ => None,
+                };
+                (result, base)
+            }
+        };
         let outcome = GameBackup {
             title: game.title.clone(),
             slug,
             result,
+            base,
         };
         progress(&outcome);
         outcomes.push(outcome);
@@ -500,42 +585,70 @@ pub fn backup_games(
     Ok(outcomes)
 }
 
-/// Stages `game` and stores it unless it equals `baseline`'s content or rustic finds it
-/// unchanged; `host` is this machine's.
+/// What to report instead of storing the game `slug` (`game`, staged as `staged`), with the base
+/// to record then, by its [`State`] on this PC; `None` to store it. Reads its newest of
+/// `snapshots` and, when [`sync::Base::to_read`] names one of them, its base snapshot; `host` is
+/// this PC's, for the seed.
+fn decide(
+    storage: &mut Storage,
+    by_state: &ByState<'_>,
+    game: &GameScan,
+    slug: &str,
+    staged: &Hashes,
+    snapshots: &[SnapshotInfo],
+    host: &str,
+) -> Option<(Stored, Option<sync::Base>)> {
+    let newest = changes::newest(snapshots, slug)?;
+    // Failing the game would block its backups for good (ADR-0018): a newest that cannot be read
+    // is never equal, as one without a list, and a base that cannot be read is as one forgotten.
+    let newest = (by_state.mapper.baseline(storage, newest, game))
+        .unwrap_or_else(|_| changes::Baseline::new(newest.clone(), Vec::new(), None, None));
+    let base = by_state.bases.base(by_state.scope, slug, snapshots, host);
+    let saves = Saves::Staged(staged);
+    let to_read = (base.as_deref()).and_then(|base| base.to_read(&saves, &newest));
+    let base_backup = (to_read.and_then(|id| snapshots.iter().find(|found| found.id == id)))
+        .and_then(|snapshot| by_state.mapper.baseline(storage, snapshot, game).ok());
+    let state = sync::state(&saves, Some(&newest), base.as_deref(), base_backup.as_ref());
+    let back_up_anyway = by_state.back_up_anyway.contains(slug);
+    match state {
+        State::NoBackupYet | State::Ahead => None,
+        State::Behind | State::ChangedOnBoth | State::UnknownBase if back_up_anyway => None,
+        State::UpToDate => {
+            let base = sync::Base::new(newest.snapshot.id.clone(), Some(staged.clone()));
+            let elsewhere = (newest.snapshot.host != host).then_some(newest.snapshot);
+            Some((Stored::UpToDate { elsewhere }, Some(base)))
+        }
+        State::Behind => {
+            let newest = newest.snapshot;
+            Some((Stored::Behind { newest }, None))
+        }
+        State::ChangedOnBoth => {
+            let newest = newest.snapshot;
+            Some((Stored::ChangedOnBoth { newest }, None))
+        }
+        State::UnknownBase => {
+            let newest = newest.snapshot;
+            Some((Stored::UnknownBase { newest }, None))
+        }
+    }
+}
+
+/// Stores the staged `stage_dir` of `game` as its snapshot; with `skip_if_unchanged`, nothing
+/// when rustic finds it unchanged since this host's last snapshot.
 fn backup_game(
     storage: &mut Storage,
     game: &GameScan,
     stage_dir: &Path,
     slug: &str,
     extra_tags: &[&str],
-    baseline: Baseline,
-    host: &str,
+    skip_if_unchanged: bool,
 ) -> Result<Stored, BackupError> {
-    let staged = stage(game, &read_registry(game)?, stage_dir)?;
-    let Baseline { newest, compared } = baseline;
-    if let (Some(newest), Some(compared)) = (&newest, compared)
-        && compared.same_content(&staged)
-    {
-        return Ok(if newest.host == host {
-            Stored::Unchanged {
-                newer_elsewhere: None,
-            }
-        } else {
-            Stored::SameAsNewest(newest.clone())
-        });
-    }
     let game_tag = format!("game:{slug}");
     let mut tags = vec!["salvajocs", game_tag.as_str()];
     tags.extend_from_slice(extra_tags);
     let as_path = format!("/salvajocs/{slug}");
-    Ok(
-        match storage.backup_dir(stage_dir, &as_path, &tags, &game.title)? {
-            Some(snapshot) => Stored::New(snapshot),
-            None => Stored::Unchanged {
-                newer_elsewhere: newest.filter(|newest| newest.host != host),
-            },
-        },
-    )
+    let written = (storage.backup_dir(stage_dir, &as_path, &tags, &game.title, skip_if_unchanged))?;
+    Ok(written.map_or(Stored::Unchanged, Stored::New))
 }
 
 /// Exports `game.registry_keys` from the source the scan recorded. A source that cannot be read

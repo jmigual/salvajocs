@@ -322,7 +322,7 @@ fn write(
         .and_then(|()| fs::write(&path, file.to_json()))
         .map_err(|source| CustomGameError::Io { path, source })?;
     let written = storage
-        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], name)?
+        .backup_dir(&dir, &as_path(&slug), &[SETTINGS_TAG, &tag], name, true)?
         .ok_or(CustomGameError::NotWritten)?;
     match settle(storage, &tag, &read.ids, &written.id)? {
         Settled::Raced => Err(CustomGameError::NotWritten),

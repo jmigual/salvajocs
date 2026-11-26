@@ -1,7 +1,7 @@
 //! The app config in the OS config dir (ADR-0009): repository, roots and custom games. The
 //! password and secret option values are never part of it; they live in [`crate::secret`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -129,6 +129,9 @@ pub enum SortKey {
     LastBackupSize,
     /// The space all of the game's backups use in the repository.
     SpaceUsed,
+    /// How many files the next backup would add, change or remove (ADR-0032). The Backup tab
+    /// only.
+    Changes,
 }
 
 impl SortKey {
@@ -138,9 +141,11 @@ impl SortKey {
         SortKey::LastBackup,
         SortKey::LastBackupSize,
         SortKey::SpaceUsed,
+        SortKey::Changes,
     ];
 
-    /// The key's natural direction: names A to Z, sizes largest first, times newest first.
+    /// The key's natural direction: names A to Z, sizes largest first, times newest first,
+    /// changes most first.
     pub fn descending_by_default(self) -> bool {
         self != SortKey::Name
     }
@@ -173,6 +178,15 @@ impl ListSort {
 /// A sort that does not parse, such as a key a newer version added, reads as the default, so
 /// the rest of the config still loads.
 fn lenient_sort<'de, D>(deserializer: D) -> Result<ListSort, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Titles that do not parse read as none, so the rest of the config still loads.
+fn lenient_titles<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -407,6 +421,14 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub retention_unsent: Option<retention::Unsent>,
+    /// The titles of the games whose "Delete files the backup does not have" box was last left
+    /// on; off for every other game (ADR-0036).
+    #[serde(
+        default,
+        deserialize_with = "lenient_titles",
+        skip_serializing_if = "BTreeSet::is_empty"
+    )]
+    pub restore_deletes: BTreeSet<String>,
 }
 
 fn default_true() -> bool {
@@ -421,8 +443,8 @@ pub fn default_dir() -> Option<PathBuf> {
 impl AppConfig {
     /// A config for `repository` and `password` with every other field as an omitted field
     /// reads from the file: no options, roots or custom games, update checks on, the system
-    /// theme, both lists sorted by name, no repository's custom games mirrored and nothing
-    /// unsent or set aside.
+    /// theme, both lists sorted by name, no repository's custom games mirrored, nothing
+    /// unsent or set aside and no restore that deletes.
     pub fn new(repository: String, password: PasswordMode) -> Self {
         Self {
             repository,
@@ -439,6 +461,7 @@ impl AppConfig {
             custom_games_unsent: Vec::new(),
             custom_games_not_now: None,
             retention_unsent: None,
+            restore_deletes: BTreeSet::new(),
         }
     }
 

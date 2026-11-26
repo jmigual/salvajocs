@@ -1,11 +1,11 @@
-//! The dialog that shows what makes a changed file differ from its backup: both copies' size,
-//! mtime and SHA-256, their line endings, and the changed lines of a text file (ADR-0024). The
-//! Backup and Restore tabs share it.
+//! The dialog that shows what makes a changed file differ from its backup: a verdict, both
+//! copies' size, mtime and SHA-256 side by side, their line endings, and the changed lines of a
+//! text file (ADR-0024, ADR-0031). The Backup and Restore tabs share it.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use eframe::egui::{self, Label, RichText, ScrollArea, Ui, WidgetText};
+use eframe::egui::{self, Label, RichText, ScrollArea, Ui};
 use salvajocs_core::changes::BackedUp;
 use salvajocs_core::changes::details::{
     self, BackupHash, Content, FileDetails, Hunk, LineEndings, LineKind, LocalFile, TEXT_CAP,
@@ -15,7 +15,7 @@ use crate::job::Job;
 use crate::state::{SharedStorage, lock_storage};
 use crate::tabs::{format_size, format_time, format_time_seconds};
 use crate::theme::{self, icons};
-use crate::widgets::form_grid;
+use crate::widgets::{copyable, form_grid};
 
 /// The most diff lines the dialog draws; the rest are counted.
 const MAX_LINES: usize = 1000;
@@ -102,7 +102,7 @@ impl Details {
         let (mut closed, mut anyway) = (false, false);
         let ((), dismissed) = theme::modal_dismissible(ctx, "backup_file_details", 720.0, |ui| {
             ui.heading(&self.name);
-            ui.weak(&self.key);
+            copyable(ui, RichText::new(&self.key).weak(), &self.key);
             match &self.result {
                 None => {
                     ui.horizontal(|ui| {
@@ -125,15 +125,32 @@ impl Details {
         closed || dismissed
     }
 
-    /// The two copies' facts, then how their content compares; `anyway` is set when the
-    /// **Show anyway** button of a copy over the cap is clicked.
+    /// How the content compares, the two copies' facts side by side, then the changed lines of a
+    /// text; `anyway` is set when the **Show anyway** button of a copy over the cap is clicked.
     fn found_ui(&self, ui: &mut Ui, found: &FileDetails, anyway: &mut bool) {
+        ui.add_space(4.0);
+        verdict_ui(ui, found, anyway);
+        ui.add_space(8.0);
+        self.facts_ui(ui, found);
+        if let Content::Diff(hunks) = &found.content {
+            ui.add_space(8.0);
+            diff_ui(ui, hunks);
+        }
+    }
+
+    /// The facts grid: a column for this PC's copy and one for the backup's, with a mark after
+    /// each label whose two values are the same or differ.
+    fn facts_ui(&self, ui: &mut Ui, found: &FileDetails) {
         let (snapshot, backup) = (&self.backed_up.snapshot, &found.backup);
         let local = found.local.as_ref();
-        let unknown = || "unknown".to_owned();
-        let time = |time: Option<SystemTime>| time.map_or_else(unknown, format_time_seconds);
-        let ends = |ends: Option<LineEndings>| {
-            ends.map_or_else(
+        let time = |time: Option<SystemTime>| {
+            time.map_or_else(|| "unknown".to_owned(), format_time_seconds)
+        };
+        let ends = |ends: Option<LineEndings>, read: bool| {
+            if !read {
+                return Value::weak("not read");
+            }
+            Value::text(ends.map_or_else(
                 || "not text".to_owned(),
                 |ends| {
                     let mut text = format!("{} Windows (CRLF), {} Linux (LF)", ends.crlf, ends.lf);
@@ -142,117 +159,297 @@ impl Details {
                     }
                     text
                 },
-            )
+            ))
         };
-        let bom = |bom: bool| {
-            if bom { "yes" } else { "no" }
+        let bom = |bom: bool, read: bool| {
+            if !read {
+                Value::weak("not read")
+            } else {
+                Value::text(if bom { "yes" } else { "no" })
+            }
         };
-        let size = match local {
-            Ok(file) => format_size(file.size),
-            Err(error) => format!("could not be read: {error}"),
+        let here = |text: &dyn Fn(&LocalFile) -> String| {
+            local.map_or_else(|_| Value::weak("unknown"), |file| Value::text(text(file)))
         };
-        let here = |text: &dyn Fn(&LocalFile) -> String| local.map_or_else(|_| unknown(), text);
-        let there = format!("Backup ({}, {})", snapshot.host, format_time(snapshot.time));
-        // A grid's text only wraps below a column width: a long path would otherwise widen the
-        // dialog past the window and push Close out of sight.
+        // `None` when this PC's copy could not be read, so there is nothing to compare.
+        let same = |same: &dyn Fn(&LocalFile) -> bool| local.ok().map(same);
+        // A copy over the size cap is not read, so it has no line endings or byte order mark to
+        // compare; the backup's is not read whenever either copy is over the cap.
+        let capped = matches!(found.content, Content::TooLarge);
+        let local_read = !(capped && local.is_ok_and(|file| file.size > TEXT_CAP));
+        let widths = Widths::new(ui);
         form_grid("backup_file_facts")
-            .num_columns(3)
-            .max_col_width(ui.available_width() / 2.0)
+            .num_columns(4)
             .show(ui, |ui| {
-                row(ui, "", theme::semibold("This PC"), theme::semibold(there));
+                ui.label("");
+                ui.label("");
+                column(ui, widths.value, |ui| {
+                    ui.label(theme::semibold("This PC"));
+                });
+                column(ui, widths.value, |ui| {
+                    ui.label(theme::semibold("Backup"));
+                    ui.weak(format!("{}, {}", snapshot.host, format_time(snapshot.time)));
+                });
+                ui.end_row();
+
+                let (local_path, path) = (self.local.display().to_string(), &self.backed_up.path);
                 row(
                     ui,
+                    &widths,
                     "Location",
-                    self.local.display().to_string(),
-                    &self.backed_up.path,
+                    None,
+                    Value::text(local_path),
+                    Value::text(path),
                 );
-                row(ui, "Size", size, format_size(backup.size));
+
+                let local_size = match local {
+                    Ok(file) => Value::text(format_size(file.size)),
+                    Err(error) => Value::error(ui, format!("could not be read: {error}")),
+                };
+                let same_size = same(&|file| file.size == backup.size);
+                let size = Value::text(format_size(backup.size));
+                row(ui, &widths, "Size", same_size, local_size, size);
+
                 let modified = here(&|file| time(file.modified));
-                row(ui, "Modified", modified, time(backup.modified));
+                // Only a time that both copies have can differ.
+                let same_time = backup.modified.and_then(|there| {
+                    let here = local.ok()?.modified?;
+                    Some(format_time_seconds(here) == format_time_seconds(there))
+                });
+                let there = Value::text(time(backup.modified));
+                row(ui, &widths, "Modified", same_time, modified, there);
+
+                let local_hash = local.map_or_else(
+                    |_| Value::weak("unknown"),
+                    |file| Value::hash(&file.sha256, None),
+                );
+                let backup_hash = match &backup.sha256 {
+                    BackupHash::List(hash) => Value::hash(hash, Some("from its hash list")),
+                    BackupHash::Content(hash) => Value::hash(hash, Some("from its content")),
+                    _ => Value::weak("not recorded in this backup"),
+                };
+                let same_hash =
+                    (backup.sha256.hex()).and_then(|hex| same(&|file| file.sha256 == hex));
+                row(ui, &widths, "SHA-256", same_hash, local_hash, backup_hash);
+
                 if backup.line_endings.is_some() || local.is_ok_and(|f| f.line_endings.is_some()) {
-                    let local_ends = here(&|file| ends(file.line_endings));
-                    row(ui, "Line endings", local_ends, ends(backup.line_endings));
+                    let local_ends = local.map_or_else(
+                        |_| Value::weak("unknown"),
+                        |file| ends(file.line_endings, local_read),
+                    );
+                    let same_ends =
+                        same(&|file| file.line_endings == backup.line_endings).filter(|_| !capped);
+                    let there = ends(backup.line_endings, !capped);
+                    row(ui, &widths, "Line endings", same_ends, local_ends, there);
                 }
                 // Only a mark is worth a row: most files have none.
                 if backup.bom || local.is_ok_and(|file| file.bom) {
-                    let local_bom = here(&|file| bom(file.bom).to_owned());
-                    row(ui, "Byte order mark", local_bom, bom(backup.bom));
+                    let local_bom = local
+                        .map_or_else(|_| Value::weak("unknown"), |file| bom(file.bom, local_read));
+                    let same_bom = same(&|file| file.bom == backup.bom).filter(|_| !capped);
+                    let there = bom(backup.bom, !capped);
+                    row(ui, &widths, WIDEST_LABEL, same_bom, local_bom, there);
                 }
             });
-        if let Ok(file) = local {
-            hash_ui(ui, "This PC", &file.sha256, None);
-        }
-        match &backup.sha256 {
-            BackupHash::List(hash) => hash_ui(ui, "the backup", hash, Some("from its hash list")),
-            BackupHash::Content(hash) => hash_ui(ui, "the backup", hash, Some("from its content")),
-            _ => {
-                ui.weak("SHA-256 of the backup: not recorded in this backup");
-            }
-        }
-        ui.add_space(8.0);
-        content_ui(ui, found, anyway);
     }
 }
 
-/// One row of the facts grid: `label`, then `local` and `backup`.
-fn row(ui: &mut Ui, label: &str, local: impl Into<WidgetText>, backup: impl Into<WidgetText>) {
-    ui.label(label);
-    ui.label(local);
-    ui.label(backup);
-    ui.end_row();
+/// The gap between the facts grid's columns, as [`form_grid`] sets it.
+const COLUMN_GAP: f32 = 8.0;
+
+/// The side of the mark after a label, which has a column of its own so the marks line up.
+const MARK_SIZE: f32 = 16.0;
+
+/// The widest label of the facts grid, the byte order mark's, which sizes its label column.
+const WIDEST_LABEL: &str = "Byte order mark";
+
+/// The widths of the cells of the facts grid.
+struct Widths {
+    /// Each of the two value columns, which split what the label and mark columns leave.
+    value: f32,
 }
 
-/// The SHA-256 `hash` of `side`'s copy in monospace, selectable to copy, with where it comes
-/// from.
-fn hash_ui(ui: &mut Ui, side: &str, hash: &str, source: Option<&str>) {
-    ui.horizontal_wrapped(|ui| {
-        ui.weak(format!("SHA-256 of {side}"));
-        ui.add(Label::new(RichText::new(hash).monospace()).selectable(true));
-        if let Some(source) = source {
-            ui.weak(format!("({source})"));
+impl Widths {
+    /// The widths for a grid across `ui`. A grid's text only wraps below a column width: a long
+    /// path would otherwise widen the dialog past the window and push Close out of sight.
+    fn new(ui: &Ui) -> Self {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let text =
+            (ui.painter()).layout_no_wrap(WIDEST_LABEL.to_owned(), font, ui.visuals().text_color());
+        let value = (ui.available_width() - text.size().x - MARK_SIZE - 3.0 * COLUMN_GAP) / 2.0;
+        Widths {
+            value: value.max(0.0),
         }
+    }
+}
+
+/// One value of the facts grid: what it shows, what **Copy** copies and a weak line below it.
+struct Value {
+    shown: RichText,
+    copied: String,
+    note: Option<&'static str>,
+}
+
+impl Value {
+    /// A value in the body text.
+    fn text(text: impl Into<String>) -> Self {
+        let text = text.into();
+        Value {
+            shown: RichText::new(&text),
+            copied: text,
+            note: None,
+        }
+    }
+
+    /// A value in the weak text, for what is missing.
+    fn weak(text: &'static str) -> Self {
+        Value {
+            shown: RichText::new(text).weak(),
+            copied: text.to_owned(),
+            note: None,
+        }
+    }
+
+    /// A value in the error color.
+    fn error(ui: &Ui, text: String) -> Self {
+        Value {
+            shown: RichText::new(&text).color(ui.visuals().error_fg_color),
+            copied: text,
+            note: None,
+        }
+    }
+
+    /// A SHA-256 in monospace; it wraps in its column, and **Copy** gives the bare hex.
+    fn hash(hex: &str, note: Option<&'static str>) -> Self {
+        Value {
+            shown: RichText::new(hex).monospace(),
+            copied: hex.to_owned(),
+            note,
+        }
+    }
+}
+
+/// A cell of `width` of the facts grid, holding what `add_contents` draws.
+fn column(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui)) {
+    ui.vertical(|ui| {
+        ui.set_width(width);
+        add_contents(ui);
     });
 }
 
-/// What the content comparison found: a sentence, or the changed lines. `anyway` is set by the
-/// button that lifts the size cap.
-fn content_ui(ui: &mut Ui, found: &FileDetails, anyway: &mut bool) {
-    match &found.content {
-        Content::Same if matches!(found.backup.sha256, BackupHash::Content(_)) => {
-            ui.label(
-                "Same content: the file was marked changed only by its modified time, as this \
-                 backup has no list of hashes.",
-            );
+/// One row of the facts grid: `label` with a mark that says whether the copies are the `same`
+/// (none when `None`), then the values of this PC's copy and the backup's.
+fn row(ui: &mut Ui, widths: &Widths, label: &str, same: Option<bool>, local: Value, backup: Value) {
+    // Vertical cells sit at the top of a row that a wrapped value makes tall.
+    ui.vertical(|ui| ui.add(Label::new(label).extend()));
+    ui.vertical(|ui| match same {
+        Some(true) => {
+            let weak = ui.visuals().weak_text_color();
+            theme::labeled_mark(ui, icons::EQUALS, weak, "Same");
         }
+        Some(false) => {
+            let warn = ui.visuals().warn_fg_color;
+            theme::labeled_mark(ui, icons::PENCIL_SIMPLE, warn, "Differs");
+        }
+        None => {}
+    });
+    for value in [local, backup] {
+        column(ui, widths.value, |ui| {
+            copyable(ui, value.shown, &value.copied);
+            if let Some(note) = value.note {
+                ui.weak(note);
+            }
+        });
+    }
+    ui.end_row();
+}
+
+/// The sentence that says how the content compares, after its icon, and the button that lifts
+/// the size cap when a copy is over it; `anyway` is set when it is clicked.
+fn verdict_ui(ui: &mut Ui, found: &FileDetails, anyway: &mut bool) {
+    let (warn, weak) = (ui.visuals().warn_fg_color, ui.visuals().weak_text_color());
+    let accent = theme::palette(ui).accent;
+    let not_shown = |text: String| (icons::MINUS, weak, RichText::new(text).weak());
+    let (glyph, color, text) = match &found.content {
         // Identical text whose listed hash differs: the list is stale, the content is the same.
         Content::Same
         | Content::FormatOnly {
             line_endings: false,
             bom: false,
-        } => {
-            ui.label("Same content.");
-        }
+        } => (
+            icons::CHECK_CIRCLE,
+            accent,
+            theme::semibold("Same content."),
+        ),
         Content::FormatOnly { line_endings, bom } => {
             let what = match (line_endings, bom) {
                 (true, true) => "the line endings and the byte order mark differ",
                 (false, true) => "the byte order mark differs",
                 _ => "the line endings differ",
             };
-            ui.label(format!("Only {what}."));
+            let text = theme::semibold(format!("Only {what}."));
+            (icons::PENCIL_SIMPLE, warn, text)
         }
-        Content::Diff(hunks) => diff_ui(ui, hunks),
-        Content::NotText => {
-            ui.weak("Not shown: not text.");
+        Content::Diff(hunks) => {
+            let count = |kind| {
+                let lines = hunks.iter().flat_map(|hunk| &hunk.lines);
+                lines.filter(|line| line.kind == kind).count()
+            };
+            let removed = count(LineKind::Removed);
+            let line = if removed == 1 { "line" } else { "lines" };
+            let added = count(LineKind::Added);
+            let text = format!("The text differs: {removed} {line} removed, {added} added.");
+            (icons::PENCIL_SIMPLE, warn, theme::semibold(text))
         }
-        Content::TooLarge => {
-            ui.horizontal(|ui| {
-                let text = format!("Not shown: a copy is over {}.", format_size(TEXT_CAP));
-                ui.weak(text);
-                *anyway |= ui.button("Show anyway").clicked();
-            });
+        Content::NotText => not_shown(not_text(found)),
+        Content::TooLarge => not_shown(too_large(found)),
+        _ => not_shown("Diff not shown: this PC's copy could not be read.".to_owned()),
+    };
+    theme::icon_label(ui, glyph, color, text);
+    if matches!(found.content, Content::Same)
+        && matches!(found.backup.sha256, BackupHash::Content(_))
+    {
+        ui.weak(
+            "It was marked changed only by its modified time, as this backup has no list of \
+             hashes.",
+        );
+    }
+    if matches!(found.content, Content::TooLarge) {
+        let button = ui.button("Show anyway");
+        *anyway |= button
+            .on_hover_text("Downloads the backup's copy and compares the whole file")
+            .clicked();
+    }
+}
+
+/// Why no diff is shown when a copy is not text, naming the copy.
+fn not_text(found: &FileDetails) -> String {
+    let local = (found.local.as_ref()).is_ok_and(|file| file.line_endings.is_none());
+    let who = match (local, found.backup.line_endings.is_none()) {
+        (true, true) => "neither copy is text",
+        (true, false) => "this PC's copy is not text",
+        _ => "the backup's copy is not text",
+    };
+    format!("Diff not shown: {who}.")
+}
+
+/// Why no diff is shown when a copy is over [`TEXT_CAP`], naming the copy.
+fn too_large(found: &FileDetails) -> String {
+    let cap = format_size(TEXT_CAP);
+    let backup = found.backup.size;
+    match found.local.as_ref().ok().map(|file| file.size) {
+        Some(local) if local > TEXT_CAP && backup > TEXT_CAP => {
+            format!("Diff not shown: both copies are over {cap}.")
         }
-        // This PC's copy could not be read; the facts above say why.
-        _ => {}
+        Some(local) if local > TEXT_CAP => {
+            let local = format_size(local);
+            format!("Diff not shown: this PC's copy is {local}, over the {cap} limit.")
+        }
+        _ if backup > TEXT_CAP => {
+            let backup = format_size(backup);
+            format!("Diff not shown: the backup's copy is {backup}, over the {cap} limit.")
+        }
+        _ => format!("Diff not shown: a copy is over the {cap} limit."),
     }
 }
 

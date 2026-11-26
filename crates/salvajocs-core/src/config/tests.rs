@@ -43,6 +43,7 @@ fn sample() -> AppConfig {
         custom_games_unsent: Vec::new(),
         custom_games_not_now: None,
         retention_unsent: None,
+        restore_deletes: BTreeSet::from(["Homebrew".to_owned()]),
     }
 }
 
@@ -611,6 +612,24 @@ fn sort_round_trips() {
 }
 
 #[test]
+fn the_changes_sort_is_written_and_read_as_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    fs::write(
+        &file,
+        "repository: /backups\npassword: none\n\
+         backup_sort: { by: changes, descending: true }\n",
+    )
+    .unwrap();
+    let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+    assert_eq!(config.backup_sort, ListSort::new(SortKey::Changes, true));
+
+    config.save(tmp.path()).unwrap();
+    assert!(fs::read_to_string(&file).unwrap().contains("changes"));
+    assert_eq!(AppConfig::load(tmp.path()).unwrap(), Some(config));
+}
+
+#[test]
 fn unknown_sort_value_reads_as_default() {
     let tmp = tempfile::tempdir().unwrap();
     fs::write(
@@ -639,6 +658,29 @@ fn a_valid_sort_next_to_an_invalid_one_is_kept() {
     assert_eq!(config.backup_sort, ListSort::default());
     let kept = ListSort::new(SortKey::LastBackupSize, true);
     assert_eq!(config.restore_sort, kept);
+}
+
+#[test]
+fn a_malformed_restore_deletes_reads_as_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join(CONFIG_FILE);
+    for value in ["3", "{ Alpha: true }", "[Alpha, [1]]"] {
+        let yaml = format!("repository: /backups\npassword: none\nrestore_deletes: {value}\n");
+        fs::write(&file, yaml).unwrap();
+        let config = AppConfig::load(tmp.path()).unwrap().unwrap();
+        assert_eq!(config.repository, "/backups", "{value}");
+        assert!(config.restore_deletes.is_empty(), "{value}");
+    }
+}
+
+#[test]
+fn restore_deletes_is_left_out_when_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = AppConfig::new("/backups".into(), PasswordMode::None);
+    config.save(tmp.path()).unwrap();
+
+    let yaml = fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+    assert!(!yaml.contains("restore_deletes"), "{yaml}");
 }
 
 #[test]

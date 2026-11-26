@@ -46,6 +46,7 @@ fn game_with_save(root: &Path, title: &str, contents: &str) -> GameScan {
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     }
 }
 
@@ -125,7 +126,7 @@ fn crafted_snapshot(storage: &mut Storage, stage: &Path) -> SnapshotInfo {
     let as_path = format!("/salvajocs/{slug}");
     let tags = ["salvajocs", game_tag.as_str()];
     storage
-        .backup_dir(stage, &as_path, &tags, "Foo")
+        .backup_dir(stage, &as_path, &tags, "Foo", true)
         .unwrap()
         .unwrap()
 }
@@ -212,19 +213,28 @@ fn crafted_game_stage(stage: PathBuf) -> PathBuf {
     stage
 }
 
-/// The restore plan of `staged` into the prefix `ctx`, declaring `<winAppData>/Game` and `FOO`.
-fn plan_into(staged: &StagedGame, ctx: &Context) -> RestorePlan {
+/// What the manifest says of Foo: it declares `<winAppData>/Game` and `FOO`.
+fn foo_info() -> GameInfo {
     let manifest = crate::manifest::parse_yaml(
         "Foo:\n  files:\n    <winAppData>/Game: {}\n  registry:\n    \
          HKEY_CURRENT_USER/Software/Foo: {}\n",
     )
     .unwrap();
+    game_info("Foo", &manifest, &[])
+}
+
+fn foo_vars() -> GameVars {
+    GameVars::new("Foo", vec![], &[], None)
+}
+
+/// The restore plan of `staged` into the prefix `ctx`, declaring `<winAppData>/Game` and `FOO`.
+fn plan_into(staged: &StagedGame, ctx: &Context) -> RestorePlan {
     let targets = Targets {
         linux: None,
         win: Some(ctx.clone()),
     };
-    let vars = GameVars::new("Foo", vec![], &[], None);
-    super::super::plan(staged, &targets, &vars, manifest.games.get("Foo"), &[], &[]).unwrap()
+    let entry = foo_info().entry;
+    super::super::plan(staged, &targets, &foo_vars(), entry.as_ref(), &[], &[]).unwrap()
 }
 
 #[test]
@@ -1508,6 +1518,8 @@ fn plan_of(writes: Vec<Write>, registry: Option<(RegistryExport, Context)>) -> R
         skipped: vec![],
         cross_build: false,
         notes: vec![],
+        deletes: vec![],
+        placed: vec![],
     }
 }
 
@@ -2220,6 +2232,7 @@ fn backed_up_plan(f: &mut Fixture, files: &[(&str, &str)]) -> (Listed, RestorePl
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: vec![],
+        selection: BTreeMap::new(),
     };
     back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
     let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
@@ -2549,6 +2562,7 @@ fn config(roots: Vec<Root>) -> AppConfig {
         custom_games_unsent: Vec::new(),
         custom_games_not_now: None,
         retention_unsent: None,
+        restore_deletes: Default::default(),
     }
 }
 
@@ -2704,4 +2718,255 @@ fn prefix_registry_restores_into_other_prefix() {
     let keys: Vec<&str> = old.keys.keys().map(String::as_str).collect();
     assert_eq!(keys, [FOO, "HKEY_CURRENT_USER\\Software\\Foo\\Old"]);
     assert_eq!(old.keys[FOO], foo_registry("b").keys[FOO]);
+}
+
+/// Foo backed up with `Game/save.sav`, downloaded and planned into the prefix, with the
+/// deletions of everything else in `Game` ticked.
+fn deleting_plan(f: &mut Fixture) -> (Listed, RestorePlan) {
+    let (listed, mut plan) = backed_up_plan(f, &[("save.sav", "new")]);
+    download(&mut f.storage, &listed).unwrap();
+    let today = crate::selection::GameSettings::default();
+    let found = super::super::deletions(&listed, &plan, &foo_vars(), &foo_info(), Some(&today));
+    plan.deletes = found.files;
+    (listed, plan)
+}
+
+#[test]
+fn run_backs_up_a_file_before_deleting_it() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old bytes");
+    let (_, plan) = deleting_plan(&mut f);
+    let targets: Vec<&Path> = plan.deletes.iter().map(|d| d.target.as_path()).collect();
+    assert_eq!(targets, [old.as_path()]);
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(matches!(report.deletes[..], [Ok(())]), "{report:?}");
+    assert!(!old.exists());
+    assert_eq!(read(&f.folders.app_data.join("Game/save.sav")), "new");
+    let dir = f.restored(created(&report));
+    assert_eq!(
+        read(&dir.join("files/WinAppData/Game/old.sav")),
+        "old bytes"
+    );
+    assert!(
+        staged_meta(&dir)
+            .roots
+            .contains(&(Base::WinAppData, "Game".into()))
+    );
+}
+
+#[test]
+fn undo_brings_back_a_deleted_file() {
+    let mut f = fixture();
+    let bytes = "old\r\nbytes\0";
+    let old = write(&f.folders.app_data.join("Game/old.sav"), bytes);
+    let (_, plan) = deleting_plan(&mut f);
+    let report = f.run(&plan, false).unwrap();
+    assert!(!old.exists());
+
+    let work = f.tmp.path().join("undo");
+    let listed = super::read(&mut f.storage, created(&report), &work).unwrap();
+    download(&mut f.storage, &listed).unwrap();
+    let undo = plan_into(&listed.staged, &f.ctx());
+    let report = f.run(&undo, false).unwrap();
+    assert!(report.files.iter().all(Result::is_ok), "{report:?}");
+    assert_eq!(fs::read(&old).unwrap(), bytes.as_bytes());
+}
+
+#[test]
+fn a_failed_safety_backup_deletes_nothing() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let (_, plan) = deleting_plan(&mut f);
+    let repo = f.tmp.path().join("repo");
+    fs::rename(&repo, f.tmp.path().join("moved")).unwrap();
+
+    assert!(matches!(
+        f.run(&plan, false),
+        Err(RunError::SafetyBackup(BackupError::Storage(_)))
+    ));
+    assert_eq!(read(&old), "old");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_deletion_target_blocks_the_restore() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let (listed, plan) = deleting_plan(&mut f);
+    fs::set_permissions(&old, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&old).is_ok() {
+        // Root reads it anyway.
+        return;
+    }
+
+    assert!(compare_writes(&plan, &listed).is_err());
+    assert!(matches!(
+        f.run(&plan, false),
+        Err(RunError::SafetyBackup(_))
+    ));
+    assert!(old.exists());
+    assert!(!f.folders.app_data.join("Game/save.sav").exists());
+    // Unticked, it blocks nothing.
+    let unticked = RestorePlan {
+        deletes: Vec::new(),
+        ..plan
+    };
+    assert!(compare_writes(&unticked, &listed).is_ok());
+}
+
+#[test]
+fn run_never_deletes_a_folder() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let (_, mut plan) = deleting_plan(&mut f);
+    // The file became a folder since the plan.
+    fs::remove_file(&old).unwrap();
+    write(&old.join("inside.sav"), "inside");
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(matches!(
+        report.deletes[..],
+        [Err(ApplyError::TargetNotAFile)]
+    ));
+    assert_eq!(read(&old.join("inside.sav")), "inside");
+    // A file gone since the plan is no failure.
+    fs::remove_dir_all(&old).unwrap();
+    plan.writes.clear();
+    let report = f.run(&plan, false).unwrap();
+    assert!(matches!(report.deletes[..], [Ok(())]));
+}
+
+#[test]
+fn run_keeps_a_file_a_write_of_the_restore_targets() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let (_, mut plan) = deleting_plan(&mut f);
+    plan.override_target(0, old.clone()).unwrap();
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(
+        matches!(report.deletes[..], [Err(ApplyError::WrittenByTheRestore)]),
+        "{report:?}"
+    );
+    assert_eq!(read(&old), "new");
+}
+
+#[test]
+fn run_keeps_a_file_a_write_names_with_other_components() {
+    // A `.` and a repeated separator, as a mix of `/` and `\` names one file on Windows.
+    for spelling in ["./old.sav", "/old.sav"] {
+        let mut f = fixture();
+        let game = f.folders.app_data.join("Game");
+        let old = write(&game.join("old.sav"), "old");
+        let (_, mut plan) = deleting_plan(&mut f);
+        let target = PathBuf::from(format!("{}/{spelling}", game.display()));
+        plan.override_target(0, target).unwrap();
+
+        let report = f.run(&plan, false).unwrap();
+        assert!(
+            matches!(report.deletes[..], [Err(ApplyError::WrittenByTheRestore)]),
+            "{spelling}: {report:?}"
+        );
+        assert_eq!(read(&old), "new", "{spelling}");
+    }
+}
+
+/// [`deleting_plan`] with Foo's registry too, so `run` asks whether a wineserver runs before
+/// and after the safety backup.
+fn deleting_plan_with_registry(f: &mut Fixture) -> RestorePlan {
+    user_reg(&f.prefix, "old");
+    let (_, mut plan) = deleting_plan(f);
+    plan.registry = Some((foo_registry("new"), f.ctx()));
+    plan
+}
+
+/// Runs `plan`, calling `after_backup` once the safety backup is made.
+fn run_then(f: &mut Fixture, plan: &RestorePlan, after_backup: impl Fn()) -> RestoreReport {
+    let asked = std::cell::Cell::new(0);
+    f.run_probing(plan, || {
+        asked.set(asked.get() + 1);
+        if asked.get() == 2 {
+            after_backup();
+        }
+        false
+    })
+    .unwrap()
+}
+
+#[test]
+fn run_keeps_a_file_changed_after_the_safety_backup() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let plan = deleting_plan_with_registry(&mut f);
+
+    let report = run_then(&mut f, &plan, || {
+        // The same size: the mtime tells.
+        write(&old, "OLD");
+        set_mtime(&old, 1);
+    });
+    assert!(
+        matches!(
+            report.deletes[..],
+            [Err(ApplyError::ChangedSinceSafetyBackup)]
+        ),
+        "{report:?}"
+    );
+    assert_eq!(read(&old), "OLD");
+}
+
+#[test]
+fn run_keeps_a_file_created_after_the_safety_backup() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let plan = deleting_plan_with_registry(&mut f);
+    fs::remove_file(&old).unwrap();
+
+    let report = run_then(&mut f, &plan, || {
+        write(&old, "created");
+    });
+    assert!(matches!(report.deletes[..], [Ok(())]), "{report:?}");
+    assert_eq!(read(&old), "created");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_refuses_a_file_to_delete_that_became_a_symlink() {
+    let mut f = fixture();
+    let old = write(&f.folders.app_data.join("Game/old.sav"), "old");
+    let (_, plan) = deleting_plan(&mut f);
+    let elsewhere = write(&f.tmp.path().join("elsewhere.sav"), "elsewhere");
+    fs::remove_file(&old).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &old).unwrap();
+
+    let report = f.run(&plan, false).unwrap();
+    assert!(
+        matches!(report.deletes[..], [Err(ApplyError::TargetIsSymlink)]),
+        "{report:?}"
+    );
+    assert!(fs::symlink_metadata(&old).unwrap().is_symlink());
+    assert_eq!(read(&elsewhere), "elsewhere");
+}
+
+#[test]
+fn a_safety_backup_records_no_selection() {
+    let mut f = fixture();
+    write(&f.folders.app_data.join("Game/save.sav"), "old");
+    let rules = BTreeMap::from([("WinAppData/Game/other".to_owned(), false)]);
+    let game = GameScan {
+        selection: rules.clone(),
+        ..game_with_save(f.tmp.path(), "Foo", "new")
+    };
+    back_up(&mut f.storage, f.tmp.path(), &[game], &[]);
+    let snapshot = list(&f.storage).unwrap()[0].snapshots[0].clone();
+    let (listed, plan) = read_and_plan(&mut f, &snapshot);
+    assert_eq!(listed.hashes.as_ref().unwrap().selection, rules);
+    download(&mut f.storage, &listed).unwrap();
+
+    let report = f.run(&plan, false).unwrap();
+    let work = f.tmp.path().join("safety");
+    let safety = super::read(&mut f.storage, created(&report), &work).unwrap();
+    assert!(safety.hashes.unwrap().selection.is_empty());
 }

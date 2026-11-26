@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-20
+**Amended:** 2026-11-25: the Backup tab also sorts by Changes; the Restore tab does not list it (ADR-0032)
 
 ## Context
 

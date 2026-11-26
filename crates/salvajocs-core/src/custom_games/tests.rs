@@ -63,6 +63,7 @@ impl Fixture {
                 &as_path(&slug),
                 &[SETTINGS_TAG, &game_tag(&slug)],
                 name,
+                true,
             )
             .unwrap()
             .unwrap()

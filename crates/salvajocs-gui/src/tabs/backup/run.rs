@@ -1,18 +1,22 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use eframe::egui;
-use salvajocs_core::backup::{self, GameBackup, Stored};
+use salvajocs_core::backup::{self, ByState, Stored};
 use salvajocs_core::changes::Mapper;
 use salvajocs_core::config::AppConfig;
 use salvajocs_core::custom_games;
+use salvajocs_core::manifest::Manifest;
 use salvajocs_core::retention::{self, Cleanup, Retention};
 use salvajocs_core::scan::{self, Environment, GameScan, ScanReport};
 use salvajocs_core::selection::{self, Pending};
+use salvajocs_core::slug::slug;
+use salvajocs_core::sync::{self, SyncError};
 
 use super::choices::{self, AfterBackup, Games};
-use super::results::summarize;
+use super::results::{GameResult, Outcome, summarize};
 use super::unsent::{
     Answer, Checked, Shared, conflict_lines, conflict_ui, has_unsent, rule_lines, send_unsent,
 };
@@ -22,8 +26,8 @@ use crate::state::{SharedStorage, State, chain, lock_storage};
 use crate::theme::{self, icons};
 
 impl BackupTab {
-    /// The dialog asking which version to keep of each change made on another PC: this PC's
-    /// version from the config, the repository's from the check. **Back up** puts the choices
+    /// The dialog asking which version to keep of each change made on another PC (this PC's
+    /// version from the config, the repository's from the check). **Back up** puts the choices
     /// into the config and starts the backup; **Cancel** drops it and writes nothing.
     pub(super) fn asking_ui(&mut self, ctx: &egui::Context, state: &mut State) {
         let (Some(asking), Some(config)) = (&mut self.asking, &mut state.config) else {
@@ -81,8 +85,9 @@ impl BackupTab {
     /// change and is the file's only writer. With unsent custom games or rules, the repository
     /// is checked first for changes made on another PC to them, and the backup starts once the
     /// check passed or its question is answered, also only with no pending file write running.
+    /// It also waits for the comparison, as the games it leaves out are found from it.
     pub(super) fn start_requested(&mut self, ctx: &egui::Context, state: &State) {
-        if self.choices.busy() || self.running.is_some() {
+        if self.choices.busy() || self.running.is_some() || self.previewing.is_some() {
             return;
         }
         if self.backup_requested {
@@ -122,15 +127,18 @@ impl BackupTab {
 
     /// Backs up the chosen games in a job, with the staging mirrors under the cache dir
     /// (ADR-0004). The job first saves this PC's unsent custom games and rules (ADR-0029), then
-    /// the pending selection changes, and reads every game's settings again, so another
-    /// machine's newer choices count. Then it scans again, so a save made since the last scan
-    /// is included, and filters each game by its settings. Last, it removes old backups by the
-    /// repository's retention policy. With no game chosen it only saves the unsent changes.
+    /// the pending selection changes, and reads every game's settings again, so another machine's
+    /// newer choices count. Then it scans again, so a save made since the last scan is included,
+    /// and filters each game by its settings. Core stores a [`BackupTab::held_back`] game only if
+    /// it no longer waits, and its "not backed up" result is not shown. Last, it removes old
+    /// backups by the repository's retention policy. With no game chosen it only saves the unsent
+    /// changes.
     pub(super) fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
         };
         let chosen = self.chosen();
+        let held_back = self.held_back();
         let selection = match chosen {
             0 => None,
             _ => match self.choices.for_backup() {
@@ -159,6 +167,7 @@ impl BackupTab {
         );
         let config_dir = state.env.config_dir.clone();
         let environment = state.env.environment.clone();
+        let back_up_anyway = std::mem::take(&mut self.back_up_anyway);
         self.running = Some(Job::spawn(ctx, move || {
             let source = Arc::downgrade(&storage);
             // First, so the scan and the cleanup go by this PC's custom games and rules.
@@ -186,30 +195,56 @@ impl BackupTab {
                 ),
                 None => (SaveProblems::default(), None),
             };
-            let reloaded = choices::load(&storage)
-                .map(|games| choices::replay(games, pending.as_ref(), &config.secret_scope()));
-            let filter = match &reloaded {
-                Ok(games) => games,
-                Err(err) => {
-                    saving.warnings.push(format!(
-                        "What to back up could not be read again, so the choices shown are \
-                         used: {err:#}"
-                    ));
-                    &settings
-                }
-            };
             let environment = environment.unwrap_or_else(Environment::detect);
-            let report = scan::scan(&manifest, &config, &environment, scanned);
-            let games = chosen_files(&report, filter);
-            lock(&progress).total = games.len();
+            let (reloaded, report, games) = to_stage(
+                choices::load(&storage),
+                pending.as_ref(),
+                &settings,
+                (&manifest, &config, &environment),
+                |_| true,
+                scanned,
+            );
+            if let Err(err) = &reloaded {
+                saving.warnings.push(format!(
+                    "What to back up could not be read again, so the choices shown are used: \
+                     {err:#}"
+                ));
+            }
+            // Counted as the button counts them: a held-back game only once its result shows.
+            let held = (games.iter()).filter(|game| held_back.contains(&slug(&game.title)));
+            lock(&progress).total = games.len() - held.count();
             let mapper = Mapper::new(&manifest, &config, &environment);
-            let backed_up = back_up(&storage, &games, &stage_root, &mapper, |backup| {
-                lock(&progress).done.push(summarize(backup));
-                waker.request_repaint();
-            });
-            // A failed game still cleans up; a run that stopped early does not.
+            let scope = config.secret_scope();
+            let backed_up = back_up(
+                &storage,
+                &games,
+                &stage_root,
+                &mapper,
+                (&config_dir, &scope),
+                &back_up_anyway,
+                |result| {
+                    let mut progress = lock(&progress);
+                    // The list showed it unticked, so "not backed up" is no news.
+                    if !hidden(&result, &held_back) {
+                        if held_back.contains(&slug(&result.title)) {
+                            progress.total += 1;
+                        }
+                        progress.done.push(result);
+                    }
+                    drop(progress);
+                    waker.request_repaint();
+                },
+            );
+            // A failed game or base record still cleans up; a run that stopped early does not.
             let (error, cleanup) = match backed_up {
-                Ok(made) => {
+                Ok((made, unrecorded)) => {
+                    if let Some(err) = unrecorded {
+                        saving.warnings.push(format!(
+                            "This PC's sync record (sync-base.json) was not updated, so the next \
+                             Back up may ask about the games backed up now: {}",
+                            chain(&err)
+                        ));
+                    }
                     lock(&progress).cleaning = true;
                     waker.request_repaint();
                     (None, Some(clean_up(&storage, &made, shared.rules_failed)))
@@ -234,32 +269,59 @@ impl BackupTab {
     }
 }
 
-/// Backs up `games` into `storage`, comparing each with its newest backup through `mapper`, and
-/// calling `progress` as each game is done. Returns the ids of the new snapshots.
+/// Whether the backup's `result` is left out of the results: a game of `held_back`, which the list
+/// showed waiting for a choice, unticked, that core did not back up for the same reason.
+fn hidden(result: &GameResult, held_back: &BTreeSet<String>) -> bool {
+    let waited = matches!(
+        result.outcome,
+        Outcome::Behind { .. } | Outcome::ChangedOnBoth { .. } | Outcome::UnknownBase(_)
+    );
+    waited && held_back.contains(&slug(&result.title))
+}
+
+/// Backs up `games` into `storage` by each one's state on this PC, from its newest backup read
+/// through `mapper` and its base in the `sync-base.json` of `config_dir` under the repository's
+/// `scope`, calling `progress` with each game's result as it is done, then records the new bases there. A game
+/// whose slug is in `back_up_anyway` is backed up even when behind, changed on both PCs or of
+/// unknown base. Returns the ids of the new snapshots, and why the bases were not recorded when
+/// they were not.
 pub(super) fn back_up(
     storage: &SharedStorage,
     games: &[GameScan],
     stage_root: &Path,
     mapper: &Mapper,
-    progress: impl FnMut(&GameBackup),
-) -> anyhow::Result<Vec<String>> {
+    (config_dir, scope): (&Path, &str),
+    back_up_anyway: &BTreeSet<String>,
+    mut progress: impl FnMut(GameResult),
+) -> anyhow::Result<(Vec<String>, Option<SyncError>)> {
     let mut storage = lock_storage(storage)?;
-    let same_as_newest = Some(mapper);
+    let host = storage.hostname()?;
+    // Read under the storage lock, which every job that records a base holds.
+    let bases = sync::load(config_dir);
+    let by_state = ByState {
+        mapper,
+        bases: &bases,
+        scope,
+        back_up_anyway,
+    };
     let backups = backup::backup_games(
         &mut storage,
         games,
         stage_root,
         &[],
-        same_as_newest,
-        progress,
+        Some(&by_state),
+        |backup| progress(summarize(backup, back_up_anyway, &host)),
     )?;
+    let bases =
+        (backups.iter()).filter_map(|backup| Some((backup.slug.clone(), backup.base.clone()?)));
+    let unrecorded = sync::record(config_dir, scope, bases).err();
     let made = backups
         .into_iter()
         .filter_map(|backup| match backup.result {
             Ok(Stored::New(snapshot)) => Some(snapshot.id),
             _ => None,
         });
-    Ok(made.collect())
+    Ok((made.collect(), unrecorded))
 }
 
 /// Forgets and prunes by the repository's retention policy, never the snapshots `made`
@@ -352,6 +414,25 @@ fn save_selection(
         }
     }
     (problems, written)
+}
+
+/// What a Back up stages now (ADR-0014): the scan of the games whose title `keep` accepts, each
+/// filtered by its settings. They are `read`, the repository's settings read again, with
+/// `pending`, this PC's unsaved changes, replayed for the repository of `config`; when `read`
+/// failed, `fallback`. Returns the replayed settings or why they could not be read, the scan,
+/// and its games as [`chosen_files`] filters them.
+pub(crate) fn to_stage(
+    read: anyhow::Result<Games>,
+    pending: Option<&Pending>,
+    fallback: &Games,
+    (manifest, config, environment): (&Manifest, &AppConfig, &Environment),
+    keep: impl Fn(&str) -> bool,
+    progress: impl FnMut(usize, usize),
+) -> (anyhow::Result<Games>, ScanReport, Vec<GameScan>) {
+    let reloaded = read.map(|games| choices::replay(games, pending, &config.secret_scope()));
+    let report = scan::scan_where(manifest, config, environment, keep, progress);
+    let games = chosen_files(&report, reloaded.as_ref().unwrap_or(fallback));
+    (reloaded, report, games)
 }
 
 /// The games of `report` as `settings` filter them; a game skipped or with nothing left is

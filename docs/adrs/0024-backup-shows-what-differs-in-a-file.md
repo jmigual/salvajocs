@@ -25,6 +25,8 @@ reads no file content: ADR-0018 rejected downloading every compared file.
   (UTC) and SHA-256. The backup's hash comes from its verified hash list, else from the
   downloaded content, else it is said not to be recorded. This PC's file is read and hashed when
   the button is clicked, not taken from the scan.
+  Amended by ADR-0031: the hashes are rows of one grid of the two copies, each with a Same or
+  Differs mark.
 - **Text diff.** Each copy is text when it is valid UTF-8 without a NUL byte. The diff is over the
   texts with every line ending (CRLF, LF, bare CR) read as LF and a byte order mark left out
   (each copy that has one is named), the backup's lines as removed and this PC's as added, with
@@ -40,6 +42,7 @@ reads no file content: ADR-0018 rejected downloading every compared file.
   1000 drawn lines and the text check stay). `read_backed_up` and `details` take the cap as an
   `Option<u64>`, `None` for no cap. Hashing and the diff run after the lock is released. The job
   only reads, so it is not counted as busy, as the preview.
+  Amended by ADR-0031: the dialog says "Diff not shown" and names the copy over the limit.
 - **Finding the file.** `Baseline::backed_up(key)` finds the backup's entry with the lookup
   `compare_game` uses (exact key, else the first case-folded one below Windows-family bases),
   now one helper. `Mapped.sources` records each re-keyed file's own snapshot key, so a mapped

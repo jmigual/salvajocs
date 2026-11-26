@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-19
+**Amended:** 2026-11-25: each game's block of the batch confirm has its own "Delete files the backup
+does not have" box and deletion rows (ADR-0036).
 
 ## Context
 

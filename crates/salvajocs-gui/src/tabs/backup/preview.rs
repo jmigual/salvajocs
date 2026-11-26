@@ -1,24 +1,25 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use eframe::egui::{self, Checkbox, RichText, Role, Ui, WidgetInfo};
 use salvajocs_core::changes::{self, Comparison, Counts, FileState, Mapper, NoSkip};
 use salvajocs_core::crossbuild::{self, Confidence, MappingEntry, ResolveError};
-use salvajocs_core::layout::HASHES_FILE;
 use salvajocs_core::scan::{Environment, GameScan};
 use salvajocs_core::selection::{self, Change, GameSettings};
 use salvajocs_core::slug::slug;
 use salvajocs_core::stats;
 use salvajocs_core::storage::SnapshotInfo;
+use salvajocs_core::sync::{self, Saves};
 
 use super::{BackupTab, lock};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, lock_storage};
 use crate::tabs::mapping::DialogAction;
 use crate::tabs::tree::{Badge, Clicked, FileTree, Mode, Row, Slot};
-use crate::tabs::{count, format_size, format_time};
+use crate::tabs::{count, format_size, format_time, host_name};
 use crate::theme::{self, icons};
 
 /// What the scan found for a game: the count and size of the files backed up, given as
@@ -50,12 +51,17 @@ pub(super) fn summary(
 /// when it is of the other build (ADR-0021).
 pub(super) struct Baseline {
     pub(super) newest: changes::Baseline,
+    /// Whether the newest backup was made by this PC, not another.
+    pub(super) own: bool,
     pub(super) comparison: Comparison,
     /// The state of each found file, by its path key.
     pub(super) states: HashMap<String, FileState>,
-    /// This machine's last backup of the game and its files; `None` when it has none or it has
-    /// no hash list, which staging now adds, so rustic finds no backup unchanged.
-    pub(super) parent: Option<(SnapshotInfo, BackedUpFiles)>,
+    /// This PC's base for the game (ADR-0035); `None` when it has none.
+    pub(super) base: Option<sync::Base>,
+    /// When the base's snapshot was made; `None` when the repository no longer lists it.
+    pub(super) base_time: Option<SystemTime>,
+    /// The base's snapshot, read only when [`sync::Base::to_read`] names it.
+    pub(super) base_backup: Option<changes::Baseline>,
 }
 
 impl Baseline {
@@ -66,21 +72,19 @@ impl Baseline {
     }
 }
 
-/// The size and mtime of each file below `files/` of a backup, by path key.
-type BackedUpFiles = HashMap<String, (u64, Option<SystemTime>)>;
-
 /// One game's preview: `None` when the repository has no backup of it, `Err` when it could not
 /// be compared.
 pub(super) type Preview = Result<Option<Baseline>, String>;
 
-/// Lists each of `games`' newest backup and this machine's last one, and compares the found
-/// files with the newest (ADR-0018), through `mapper` when it is of the other build (ADR-0021).
-/// Hands the repository's snapshots to `listed` before comparing. Locks the repository for one
-/// game at a time.
+/// Lists each of `games`' newest backup and compares the found files with it (ADR-0018), through
+/// `mapper` when it is of the other build (ADR-0021). Also reads this PC's bases for the
+/// repository `scope` from `config_dir` (ADR-0035). Hands the repository's snapshots to `listed`
+/// before comparing. Locks the repository for one game at a time.
 pub(super) fn preview(
     storage: &SharedStorage,
     games: &[GameScan],
     mapper: &Mapper,
+    (config_dir, scope): (&Path, &str),
     listed: impl FnOnce(&[SnapshotInfo]),
 ) -> anyhow::Result<Vec<Preview>> {
     let (snapshots, host) = {
@@ -89,8 +93,11 @@ pub(super) fn preview(
         (storage.snapshots("salvajocs")?, storage.hostname()?)
     };
     listed(&snapshots);
+    let bases = sync::load(config_dir);
     let previews = games.iter().map(|game| {
-        preview_game(storage, game, &snapshots, &host, mapper).map_err(|err| format!("{err:#}"))
+        let base = bases.base(scope, &slug(&game.title), &snapshots, &host);
+        preview_game(storage, game, (&snapshots, &host), base, mapper)
+            .map_err(|err| format!("{err:#}"))
     });
     Ok(previews.collect())
 }
@@ -98,54 +105,52 @@ pub(super) fn preview(
 fn preview_game(
     storage: &SharedStorage,
     game: &GameScan,
-    snapshots: &[SnapshotInfo],
-    host: &str,
+    (snapshots, host): (&[SnapshotInfo], &str),
+    base: Option<Cow<'_, sync::Base>>,
     mapper: &Mapper,
 ) -> anyhow::Result<Option<Baseline>> {
-    let slug = slug(&game.title);
-    let Some(newest) = changes::newest(snapshots, &slug) else {
+    let Some(newest) = changes::newest(snapshots, &slug(&game.title)) else {
         return Ok(None);
     };
-    let game_tag = format!("game:{slug}");
-    // rustic's parent: the latest of this host, label and path, `pre-restore` included.
-    let parent = snapshots.iter().find(|snapshot| {
-        snapshot.host == host && snapshot.label == game.title && snapshot.tags.contains(&game_tag)
-    });
-    let as_path = format!("/salvajocs/{slug}");
-    let (baseline, parent_listing) = {
+    let baseline = {
         let mut storage = lock_storage(storage)?;
-        let baseline = mapper.baseline(&mut storage, newest, game)?;
-        let parent_listing = match parent {
-            Some(parent) if parent.id != newest.id => {
-                Some(storage.snapshot_files(&parent.id, &as_path)?)
-            }
-            _ => None,
-        };
-        (baseline, parent_listing)
+        mapper.baseline(&mut storage, newest, game)?
     };
     let (listing, hashes) = baseline.compared();
     let comparison = changes::compare_game(game, listing, hashes);
     let states = (game.files.iter().map(selection::path_key))
         .zip(comparison.found.iter().cloned())
         .collect();
-    // rustic compares trees by path, so (A) is predicted against the snapshot's own paths.
-    let parent_listing = parent_listing.as_ref().unwrap_or(&baseline.listing);
-    let parent = (parent.filter(|_| parent_listing.iter().any(|file| file.path == HASHES_FILE)))
-        .map(|parent| {
-            let prefix = "files/";
-            let files = (parent_listing.iter())
-                .filter_map(|file| {
-                    let key = file.path.strip_prefix(prefix)?;
-                    Some((key.to_owned(), (file.size, file.modified)))
-                })
-                .collect();
-            (parent.clone(), files)
-        });
+    let base = base.map(Cow::into_owned);
+    let base_info = (base.as_ref()).and_then(|base| {
+        snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == base.snapshot)
+    });
+    // The job does not know which files the game's settings tick, so it decides with all of them.
+    let settings = GameSettings::default();
+    let saves = Saves::Scanned {
+        game,
+        settings: &settings,
+        compared: &comparison,
+    };
+    let needed = (base.as_ref()).is_some_and(|base| base.to_read(&saves, &baseline).is_some());
+    // A base the repository no longer lists is left unread: the game waits for a choice.
+    let base_backup = match base_info {
+        Some(info) if needed => {
+            let mut storage = lock_storage(storage)?;
+            Some(mapper.baseline(&mut storage, info, game)?)
+        }
+        _ => None,
+    };
     Ok(Some(Baseline {
+        own: newest.host == host,
         newest: baseline,
         comparison,
         states,
-        parent,
+        base_time: base_info.map(|info| info.time),
+        base,
+        base_backup,
     }))
 }
 
@@ -207,6 +212,8 @@ pub(super) fn hint(preview: Option<&Preview>, key: &str, badge: Badge) -> String
                 "Could not be compared".to_owned()
             }
         }
+        // Only a restore deletes; the Backup tab draws no such badge.
+        Badge::Deletes => "Will be deleted".to_owned(),
     }
 }
 
@@ -263,12 +270,30 @@ pub(super) enum Next<'a> {
         newest: &'a SnapshotInfo,
         blocker: Option<NoSkip>,
     },
-    /// Unchanged since this PC's last backup, `parent`, so it is skipped, though the newest
-    /// backup differs by `counts`.
-    UnchangedHere {
-        parent: &'a SnapshotInfo,
+    /// Another PC made the newest backup, which differs by `counts`, and this PC has not changed
+    /// the saves since its base: no backup is made without the user's consent, the newest is
+    /// restored instead (ADR-0035).
+    Behind {
         newest: &'a SnapshotInfo,
         counts: Counts,
+        /// Whether this PC made the newest backup, for instance by restoring an older one.
+        own: bool,
+    },
+    /// This PC and another changed the saves since the base, made at `base_time` when the
+    /// repository lists it; the newest backup differs by `counts`. No backup is made without the
+    /// user's consent.
+    ChangedOnBoth {
+        newest: &'a SnapshotInfo,
+        counts: Counts,
+        base_time: Option<SystemTime>,
+        own: bool,
+    },
+    /// This PC has no base for the game and the newest backup differs by `counts`. No backup is
+    /// made without the user's consent.
+    UnknownBase {
+        newest: &'a SnapshotInfo,
+        counts: Counts,
+        own: bool,
     },
     /// Made, with `counts` of differences from the newest backup.
     Changes {
@@ -279,18 +304,21 @@ pub(super) enum Next<'a> {
 }
 
 impl Next<'_> {
-    /// The one icon its header shows: a check when no backup will be made, an equals sign when
-    /// the same files are backed up again, a plus when there is no backup yet. `None` when the
-    /// header counts the changes, or for a failed preview, which is text.
+    /// The one icon its header shows: a check when the saves are the newest backup's, an equals
+    /// sign when the same files are backed up again, a plus when there is no backup yet, a down
+    /// arrow when this PC is behind, a warning sign when both changed and a question mark when
+    /// the base is unknown. `None` when the header counts the changes, or for a failed preview,
+    /// which is text.
     pub(super) fn glyph(&self) -> Option<&'static str> {
         match self {
             Next::NoBackupYet => Some(icons::PLUS_CIRCLE),
             Next::Same {
                 blocker: Some(_), ..
             } => Some(icons::EQUALS),
-            Next::Same { blocker: None, .. } | Next::UnchangedHere { .. } => {
-                Some(icons::CHECK_CIRCLE)
-            }
+            Next::Same { blocker: None, .. } => Some(icons::CHECK_CIRCLE),
+            Next::Behind { .. } => Some(icons::ARROW_DOWN),
+            Next::ChangedOnBoth { .. } => Some(icons::WARNING),
+            Next::UnknownBase { .. } => Some(icons::QUESTION),
             Next::Failed(_) | Next::Changes { .. } => None,
         }
     }
@@ -310,28 +338,77 @@ pub(super) fn next_backup<'a>(
     };
     let counts = changes::counts(game, &baseline.comparison, settings)?;
     let newest = &baseline.newest.snapshot;
-    if counts == Counts::default() {
+    let own = baseline.own;
+    let blocker = if counts == Counts::default() {
         // The scan the backup stores, whose registry keys may all be unticked.
         let applied = selection::apply(game, settings)?;
-        return Some(Next::Same {
-            newest,
-            blocker: baseline.newest.skip_blocker(&applied),
-        });
-    }
-    Some(match &baseline.parent {
-        Some((parent, files)) if counts.unknown == 0 && unchanged_since(game, settings, files) => {
-            Next::UnchangedHere {
-                parent,
+        let blocker = baseline.newest.skip_blocker(&applied);
+        if blocker.is_none() {
+            return Some(Next::Same {
+                newest,
+                blocker: None,
+            });
+        }
+        blocker
+    } else {
+        None
+    };
+    let saves = Saves::Scanned {
+        game,
+        settings,
+        compared: &baseline.comparison,
+    };
+    let (base, base_backup) = (baseline.base.as_ref(), baseline.base_backup.as_ref());
+    Some(
+        match sync::state(&saves, Some(&baseline.newest), base, base_backup) {
+            sync::State::Behind => Next::Behind {
                 newest,
                 counts,
-            }
-        }
-        _ => Next::Changes {
-            newest,
-            counts,
-            hashed: baseline.hashed(),
+                own,
+            },
+            sync::State::ChangedOnBoth => Next::ChangedOnBoth {
+                newest,
+                counts,
+                base_time: baseline.base_time,
+                own,
+            },
+            sync::State::UnknownBase => Next::UnknownBase {
+                newest,
+                counts,
+                own,
+            },
+            // Ahead, which is neither up to date nor missing here.
+            _ if blocker.is_some() => Next::Same { newest, blocker },
+            _ => Next::Changes {
+                newest,
+                counts,
+                hashed: baseline.hashed(),
+            },
         },
-    })
+    )
+}
+
+/// How many files the next backup would add, change or remove, for sorting by changes
+/// (ADR-0032): all included files, and the registry as one, when there is no backup yet; none
+/// when the game is unchanged; the differences from the newest backup when it is behind or asks.
+/// `None` when the preview failed or the game would not be backed up at all.
+pub(super) fn change_count(
+    game: &GameScan,
+    preview: &Preview,
+    settings: &GameSettings,
+) -> Option<usize> {
+    match next_backup(game, preview, settings)? {
+        Next::NoBackupYet => (selection::apply(game, settings))
+            .map(|kept| kept.files.len() + usize::from(kept.registry_source.is_some())),
+        Next::Failed(_) => None,
+        Next::Same { .. } => Some(0),
+        Next::Behind { counts, .. }
+        | Next::Changes { counts, .. }
+        | Next::ChangedOnBoth { counts, .. }
+        | Next::UnknownBase { counts, .. } => {
+            Some(counts.new + counts.changed + counts.removed + counts.unknown)
+        }
+    }
 }
 
 /// [`next_backup`] as a sentence, with what [`noted`] adds; `None` when the game would not be
@@ -408,7 +485,9 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
             let (host, date) = since(newest);
             let same = format!("No changes since the backup from {host}, {date}");
             match blocker {
-                None => format!("{same}; no backup will be made"),
+                None => format!(
+                    "Up to date with the backup from {host}, {date}; no backup will be made"
+                ),
                 Some(NoSkip::NoHashList) => {
                     format!("{same}, but a backup will be made, as it has no list of hashes")
                 }
@@ -423,19 +502,33 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
                 Some(_) => format!("{same}, but a backup will be made"),
             }
         }
-        Next::UnchangedHere {
-            parent,
+        Next::Behind { newest, own, .. } => {
+            let (host, date) = since(newest);
+            let host = host_name(&host, own);
+            format!("Behind: {host} made a newer backup, {date}. Click to compare")
+        }
+        Next::ChangedOnBoth {
             newest,
-            counts,
+            base_time,
+            own,
+            ..
         } => {
             let (host, date) = since(newest);
+            // After an undo the base is a safety backup made after the newest one.
+            let synced = (base_time.filter(|time| *time <= newest.time))
+                .map_or(String::new(), |time| format!(" ({})", format_time(time)));
+            if own {
+                return format!(
+                    "Changed on both: this PC changed the saves since it restored an older \
+                     backup{synced}. Its newest backup is from {date}. Click to compare"
+                );
+            }
             format!(
-                "Unchanged since this PC's last backup ({}), so no backup will be made. The newest \
-                 backup, from {host} on {date}, differs: {}",
-                format_time(parent.time),
-                counted(&counts)
+                "Changed on both: this PC and {host} changed the saves since the last \
+                 sync{synced}. Click to compare"
             )
         }
+        Next::UnknownBase { .. } => "No sync record: compare before Back up stores it.".to_owned(),
         Next::Changes {
             newest,
             counts,
@@ -452,6 +545,128 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
     }
 }
 
+/// How this PC's saves differ from the backup `backup` names (`the newest backup`), by `counts`,
+/// as sentences from this PC's side; empty when they do not differ.
+fn differences(counts: &Counts, backup: &str) -> String {
+    let files = |count| crate::tabs::count(count, "file");
+    let differ = if counts.changed == 1 {
+        "differs"
+    } else {
+        "differ"
+    };
+    let sentences = [
+        (counts.new > 0).then(|| {
+            format!(
+                "This PC has {} the {backup} does not have.",
+                files(counts.new)
+            )
+        }),
+        (counts.removed > 0).then(|| {
+            format!(
+                "The {backup} has {} that Back up would not store.",
+                files(counts.removed)
+            )
+        }),
+        (counts.changed > 0).then(|| format!("{} {differ}.", files(counts.changed))),
+        (counts.unknown > 0).then(|| format!("{} could not be compared.", files(counts.unknown))),
+    ];
+    sentences
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What to do when restoring the newest backup writes no file to this PC.
+const MATCH: &str =
+    "Restoring it changes no files. To match it, untick the files it does not have.";
+
+/// Whether restoring the newest backup writes nothing to this PC but, with the box "Delete files
+/// the backup does not have" on, deletes: the only differences are files this PC has and the
+/// backup does not, and the backup has no registry keys, which a restore always applies.
+fn restore_writes_nothing(counts: &Counts, registry: bool) -> bool {
+    !registry && counts.new > 0 && counts.changed + counts.removed + counts.unknown == 0
+}
+
+/// `first`, how the saves differ from `backup` by `counts` and `last`, which says what to do
+/// next, as one line.
+fn compare_text(first: &str, counts: &Counts, backup: &str, last: &str) -> String {
+    let differences = differences(counts, backup);
+    [first, &differences, last]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The line of the compare window of a game that waits for the user's choice, by `next`: why it
+/// waits, how this PC's saves differ from the newest backup and how to use that backup instead;
+/// `None` for a game that does not wait. `registry` is whether the newest backup has registry
+/// keys. The second line is for a restore that writes nothing ([`restore_writes_nothing`]).
+pub(super) fn compare_line(next: &Next<'_>, registry: bool) -> Option<(String, Option<String>)> {
+    let since = |newest: &SnapshotInfo, own| {
+        let host = host_name(&newest.host, own).to_owned();
+        (host, format_time(newest.time))
+    };
+    let restore = "To use the newest backup, restore it on the Restore tab.";
+    let (first, counts, backup, last) = match *next {
+        Next::Behind {
+            newest,
+            ref counts,
+            own,
+        } => {
+            let (host, date) = since(newest, own);
+            let first = format!("A newer backup exists, from {host}, {date}.");
+            let last = "To use it, restore it on the Restore tab.";
+            (first, counts, "newer backup", last)
+        }
+        Next::ChangedOnBoth {
+            ref counts,
+            own: true,
+            ..
+        } => {
+            let first = "This PC changed the saves since it restored an older backup.";
+            (first.to_owned(), counts, "newest backup", restore)
+        }
+        Next::ChangedOnBoth {
+            newest, ref counts, ..
+        } => {
+            let first = format!(
+                "This PC and {} changed the saves since the last sync.",
+                newest.host
+            );
+            (first, counts, "newest backup", restore)
+        }
+        Next::UnknownBase {
+            newest,
+            ref counts,
+            own,
+        } => {
+            let none = "This PC has no sync record for this game yet.";
+            let first = if own {
+                let date = format_time(newest.time);
+                format!(
+                    "{none} The newest backup, {date}, has this PC's name, but another PC can \
+                     have the same name."
+                )
+            } else {
+                let (host, date) = since(newest, false);
+                format!("{none} The newest backup is from {host}, {date}.")
+            };
+            (
+                first,
+                counts,
+                "newest backup",
+                "Compare the files, then choose.",
+            )
+        }
+        _ => return None,
+    };
+    let matching = restore_writes_nothing(counts, registry)
+        .then(|| compare_text(&first, counts, backup, MATCH));
+    Some((compare_text(&first, counts, backup, last), matching))
+}
+
 /// What a game's header shows of its next backup, each with [`preview_text`] for its hover.
 pub(super) enum Header {
     /// Nothing: no preview yet, the game would not be backed up, or the preview failed, which
@@ -459,12 +674,33 @@ pub(super) enum Header {
     Nothing,
     /// How many files are new, changed, removed or could not be compared.
     Chips(Counts, String),
-    /// One icon of [`Next::glyph`], `muted` when the same files are backed up again.
+    /// One icon of [`Next::glyph`], in its `tone`.
     Mark {
         glyph: &'static str,
-        muted: bool,
+        tone: Tone,
         text: String,
     },
+    /// One icon of [`Next::glyph`] in the warning color, as the button that opens the game's
+    /// compare window, whose `line` says why: the game waits for the user's choice (behind,
+    /// changed on both PCs or of unknown base, ADR-0035).
+    Compare {
+        glyph: &'static str,
+        text: String,
+        line: String,
+        /// The line when restoring the newest backup writes no file, which the window shows
+        /// instead of `line` and without its Open in Restore button, unless the game's box
+        /// "Delete files the backup does not have" is on.
+        matching: Option<String>,
+    },
+}
+
+/// The color of a [`Header::Mark`].
+#[derive(Clone, Copy)]
+pub(super) enum Tone {
+    /// The brand green.
+    Accent,
+    /// Weak: the same files are backed up again, which is no news.
+    Muted,
 }
 
 /// The [`Header`] of `game` by `preview` and `settings`. [`next_backup`] keys and clones every
@@ -482,45 +718,71 @@ pub(super) fn header_of(
     };
     let text = noted(sentence(&next), preview);
     if let Next::Changes { counts, .. } = next {
-        Header::Chips(counts, text)
-    } else if let Some(glyph) = next.glyph() {
-        // The same files backed up again is no news, so it is muted.
-        let muted = matches!(
-            next,
-            Next::Same {
-                blocker: Some(_),
-                ..
-            }
-        );
-        Header::Mark { glyph, muted, text }
-    } else {
-        Header::Nothing
+        return Header::Chips(counts, text);
+    }
+    let Some(glyph) = next.glyph() else {
+        return Header::Nothing;
+    };
+    let hashes = (preview.as_ref().ok().and_then(Option::as_ref))
+        .and_then(|baseline| baseline.newest.hashes.as_ref());
+    // Without a hash list, the backup may hold registry keys.
+    let registry = hashes.is_none_or(|hashes| hashes.registry.is_some());
+    if let Some((line, matching)) = compare_line(&next, registry) {
+        return Header::Compare {
+            glyph,
+            text,
+            line,
+            matching,
+        };
+    }
+    let tone = match next {
+        Next::Same {
+            blocker: Some(_), ..
+        } => Tone::Muted,
+        _ => Tone::Accent,
+    };
+    Header::Mark { glyph, tone, text }
+}
+
+impl Header {
+    /// Whether the game waits for the user's choice before Back up stores it (behind, changed on
+    /// both PCs or of unknown base): Back up leaves it out unless the user consents (ADR-0035).
+    pub(super) fn asks(&self) -> bool {
+        matches!(self, Header::Compare { .. })
     }
 }
 
-/// What the next backup would do to a game, in its header, by its `header`.
-pub(super) fn preview_ui(ui: &mut Ui, header: &Header) {
+/// What the next backup would do to the game `title`, in its header, by its `header`. Returns
+/// whether its compare button was clicked.
+pub(super) fn preview_ui(ui: &mut Ui, header: &Header, title: &str) -> bool {
     match header {
         Header::Nothing => {}
-        Header::Chips(counts, text) => {
-            let chips = [
-                (Badge::New, counts.new),
-                (Badge::Changed, counts.changed),
-                (Badge::Removed, counts.removed),
-                (Badge::Unknown, counts.unknown),
-            ]
-            .map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
-            theme::chips(ui, &chips, text);
-        }
-        Header::Mark { glyph, muted, text } => {
-            let color = if *muted {
-                ui.visuals().weak_text_color()
-            } else {
-                theme::palette(ui).accent
+        Header::Chips(counts, text) => chips(ui, counts, text),
+        Header::Mark { glyph, tone, text } => {
+            let color = match tone {
+                Tone::Accent => theme::palette(ui).accent,
+                Tone::Muted => ui.visuals().weak_text_color(),
             };
             theme::labeled_mark(ui, glyph, color, text);
         }
+        Header::Compare { glyph, text, .. } => {
+            let (color, name) = (ui.visuals().warn_fg_color, format!("Compare {title}"));
+            return theme::mark_button(ui, glyph, color, &name, text).clicked();
+        }
     }
+    false
+}
+
+/// The chips of `counts`, with `text` on hover.
+fn chips(ui: &mut Ui, counts: &Counts, text: &str) {
+    let chips = [
+        (Badge::New, counts.new),
+        (Badge::Changed, counts.changed),
+        (Badge::Removed, counts.removed),
+        (Badge::Unknown, counts.unknown),
+    ]
+    .map(|(badge, count)| (badge.glyph(), badge.color(ui), count));
+    theme::chips(ui, &chips, text);
 }
 
 /// A game of the report as the list shows it: its file tree and its header, kept until
@@ -548,20 +810,6 @@ impl Listed {
     }
 }
 
-/// Whether the files of `game` that `settings` include are exactly `files` (a backup's, by path
-/// key) by size and mtime, so rustic would find the game unchanged (ADR-0010).
-fn unchanged_since(game: &GameScan, settings: &GameSettings, files: &BackedUpFiles) -> bool {
-    let mut included = 0;
-    game.files.iter().all(|file| {
-        let key = selection::path_key(file);
-        if !settings.path_included(&key) {
-            return true;
-        }
-        included += 1;
-        files.get(&key) == Some(&(file.size, file.modified))
-    }) && included == files.len()
-}
-
 /// What the user clicked in a game's file tree besides a checkbox.
 pub(super) enum FileAction {
     /// A folder's open button: the folder on disk.
@@ -571,8 +819,8 @@ pub(super) enum FileAction {
 }
 
 /// What the scan found for one game, with its files as a checkbox tree and its registry keys
-/// folded away. Returns the change the user made this frame; a folder to open or a file's
-/// details to show goes to `action`.
+/// folded away, unfolded at first when `open`. Returns the change the user made this frame, and
+/// a folder to open or a file's details to show.
 pub(super) fn files_ui(
     ui: &mut Ui,
     game: &GameScan,
@@ -580,8 +828,9 @@ pub(super) fn files_ui(
     preview: Option<&Preview>,
     settings: &GameSettings,
     enabled: bool,
-    action: &mut Option<FileAction>,
-) -> Option<Change> {
+    open: bool,
+) -> (Option<Change>, Option<FileAction>) {
+    let mut action = None;
     let included = |key: &str| settings.path_included(key);
     let badge = badges(game, preview, settings);
     let summary = summary(game, tree.included(&included, &badge), settings);
@@ -593,11 +842,12 @@ pub(super) fn files_ui(
     }
     if game.files.is_empty() && game.registry_source.is_none() {
         ui.weak(summary);
-        return None;
+        return (None, None);
     }
     let summary = RichText::new(summary).color(ui.visuals().weak_text_color());
-    egui::CollapsingHeader::new(summary)
+    let change = egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
+        .default_open(open)
         .show(ui, |ui| {
             let mode = Mode::Select {
                 included: &included,
@@ -616,7 +866,7 @@ pub(super) fn files_ui(
                     let button = ui.add(egui::Button::new("Details").small());
                     button.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
                     if button.clicked() {
-                        *action = Some(FileAction::Details(index));
+                        action = Some(FileAction::Details(index));
                     }
                 }
             };
@@ -626,7 +876,7 @@ pub(super) fn files_ui(
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {
-                    *action = Some(FileAction::Open(path));
+                    action = Some(FileAction::Open(path));
                     None
                 }
                 None => None,
@@ -649,7 +899,8 @@ pub(super) fn files_ui(
             change
         })
         .body_returned
-        .flatten()
+        .flatten();
+    (change, action)
 }
 
 impl BackupTab {
@@ -664,6 +915,7 @@ impl BackupTab {
         };
         let (storage, games) = (session.storage.clone(), report.games.clone());
         let (manifest, config) = (state.manifest_or_empty(), config.clone());
+        let (config_dir, scope) = (state.env.config_dir.clone(), config.secret_scope());
         let environment = state.env.environment.clone();
         self.compared_in = Some(storage.clone());
         // A fresh slot, so a replaced job's listing never lands.
@@ -672,10 +924,16 @@ impl BackupTab {
         self.previewing = Some(Job::spawn(ctx, move || {
             let environment = environment.unwrap_or_else(Environment::detect);
             let mapper = Mapper::new(&manifest, &config, &environment);
-            preview(&storage, &games, &mapper, |snapshots| {
-                *lock(&listed_stats) = Some(stats::by_game(snapshots));
-                waker.request_repaint();
-            })
+            preview(
+                &storage,
+                &games,
+                &mapper,
+                (&config_dir, &scope),
+                |snapshots| {
+                    *lock(&listed_stats) = Some(stats::by_game(snapshots));
+                    waker.request_repaint();
+                },
+            )
         }));
     }
 

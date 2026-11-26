@@ -619,7 +619,10 @@ fn custom_games_pair_saved_by_the_restore_dialog_can_be_edited_and_deleted() {
     // What the mapping dialog leaves behind for a manifest game the user never added.
     let (mut harness, env, _tmp) = open_tab(vec![dialog_game("Manifest Game")], &["Manifest Game"]);
 
-    assert!(shows(&harness, "Manifest Game (extends the manifest game)"));
+    assert!(shows(
+        &harness,
+        "Manifest Game (extends the manifest entry)"
+    ));
     harness.get_by_label("Edit").click();
     run_settled(&mut harness);
     assert_eq!(
@@ -1217,7 +1220,7 @@ fn custom_games_written_by_a_newer_version_cannot_be_changed() {
     let tag = format!("custom-game:{slug}");
     let as_path = format!("/salvajocs-settings/custom-games/{slug}");
     let tags = ["salvajocs-settings", tag.as_str()];
-    let snapshot = other_pc(&tmp).backup_dir(&dir, &as_path, &tags, "Newer");
+    let snapshot = other_pc(&tmp).backup_dir(&dir, &as_path, &tags, "Newer", true);
     snapshot.unwrap().unwrap();
 
     let local = dialog_game("Newer");

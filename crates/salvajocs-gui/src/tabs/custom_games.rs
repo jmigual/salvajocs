@@ -528,8 +528,8 @@ fn rows<T>(ui: &mut Ui, items: &mut [T], mut row: impl FnMut(&mut Ui, usize, &mu
 fn relation(game: &CustomGame, in_manifest: bool) -> &'static str {
     match (in_manifest, game.integration) {
         (false, _) => "custom game",
-        (true, Integration::Override) => "overrides the manifest game",
-        (true, Integration::Extend) => "extends the manifest game",
+        (true, Integration::Override) => "overrides the manifest entry",
+        (true, Integration::Extend) => "extends the manifest entry",
     }
 }
 

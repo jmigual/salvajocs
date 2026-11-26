@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-11-16
+**Amended:** 2026-11-25: `skip_if_unchanged` is kept only for the pre-restore safety backup; each
+PC's state against the newest backup decides whether a game is backed up (ADR-0035).
 
 ## Context
 
@@ -35,6 +37,8 @@ and paths by default.
   - Amended by ADR-0018: a game is also skipped when its staged hash list equals that of the
     newest non-`pre-restore` snapshot of the game from any host. The pre-restore safety backup
     keeps only `skip_if_unchanged`.
+  - Amended by ADR-0035: regular backups no longer set `skip_if_unchanged`; the game's state
+    on this PC (up to date, ahead, behind, changed on both) decides.
 
 ## Alternatives considered
 

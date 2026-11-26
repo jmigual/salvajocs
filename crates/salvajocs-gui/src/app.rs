@@ -239,6 +239,7 @@ impl App {
         }
         self.settings.set_backing_up(self.backup.backing_up());
         self.restore.set_backing_up(self.backup.backing_up());
+        self.restore.set_choices_saved(self.backup.choices_saved());
         self.restore
             .poll(ctx, &mut self.state, self.manifest.is_some());
         // After the poll, which drops the state of a repository Settings replaced: `relist` would
@@ -248,6 +249,11 @@ impl App {
             self.restore.drop_listing();
         } else if saved {
             self.restore.relist(ctx, &self.state);
+        }
+        if let Some(slug) = self.backup.take_restore_request() {
+            self.tab = Tab::Restore;
+            let loading = self.manifest.is_some();
+            self.restore.open_game(ctx, &self.state, slug, loading);
         }
         // A restore adds safety backups and a delete removes backups, which the comparison and
         // the figures of the Backup tab show.

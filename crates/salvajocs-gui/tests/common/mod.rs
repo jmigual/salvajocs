@@ -234,9 +234,35 @@ pub fn run_until(
         if ready(harness) {
             return;
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}; the screen shows:\n{}",
+            screen(harness)
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// The text of every node on screen, one line each with its role and a disabled one marked, so
+/// a timeout says what the app showed instead.
+pub fn screen(harness: &Harness<'static, App>) -> String {
+    let lines: Vec<String> = (harness.query_all(by()))
+        .filter_map(|node| {
+            let node = node.accesskit_node();
+            let text = match node.role() {
+                Role::Label => node.value(),
+                _ => node.label(),
+            }
+            .filter(|text| !text.is_empty())?;
+            let disabled = if node.is_disabled() {
+                " (disabled)"
+            } else {
+                ""
+            };
+            Some(format!("{:?}: {text}{disabled}", node.role()))
+        })
+        .collect();
+    lines.join("\n")
 }
 
 /// Runs frames until the results show `result` and the backup job has ended, the cleanup after
@@ -272,7 +298,11 @@ pub fn back_up_unsent(harness: &mut Harness<'static, App>, result: &str) {
 pub fn run_settled(harness: &mut Harness<'static, App>) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while harness.run_ok().is_none() {
-        assert!(Instant::now() < deadline, "timed out waiting to settle");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting to settle; the screen shows:\n{}",
+            screen(harness)
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }

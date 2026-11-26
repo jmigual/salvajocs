@@ -2,6 +2,9 @@
 
 **Status:** Accepted
 **Date:** 2026-11-20
+**Amended:** 2026-11-25: ticks also hold below an overridden folder (ADR-0033).
+**Amended:** 2026-11-25: the plan's deletion rows are ticked like writes, ticked at first, and a
+folder tick covers both (ADR-0036).
 
 ## Context
 

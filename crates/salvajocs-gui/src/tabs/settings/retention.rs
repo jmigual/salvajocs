@@ -139,7 +139,7 @@ impl RetentionSection {
         }
         ui.weak(
             "A backup is only made when a game's files changed. A backup is kept if any rule \
-             keeps it, and the newest backup of each game, and of each computer, is always kept. \
+             keeps it, and the newest backup of each game is always kept. \
              Old backups are removed after the next backup; their disk space comes back at a \
              later cleanup, at least a day later.",
         );

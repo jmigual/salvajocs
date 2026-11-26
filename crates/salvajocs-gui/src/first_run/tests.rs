@@ -104,3 +104,18 @@ fn no_password_stores_no_password_entry() {
 
     assert_eq!(store.get(&scope, &SecretKey::Password).unwrap(), None);
 }
+
+#[test]
+fn a_secret_value_held_in_memory_does_not_hide_the_unencrypted_repository() {
+    // `take_rest_password` leaves the REST password in the running config, unlike the form.
+    let mut current = AppConfig::new("rest:http://host:8000/".to_string(), PasswordMode::None);
+    current.repository_options = vec![RepoOption::new(
+        "rest-password".to_string(),
+        Some("secret".to_string()),
+        true,
+    )];
+    let mut form = Connect::editing(&current, &Credentials::default());
+    form.password = "typed".to_string();
+
+    assert!(form.adds_password(&form.form_config()));
+}

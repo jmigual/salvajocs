@@ -20,4 +20,5 @@ pub mod selection;
 pub mod slug;
 pub mod stats;
 pub mod storage;
+pub mod sync;
 pub mod update;

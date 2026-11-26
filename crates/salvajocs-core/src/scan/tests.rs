@@ -39,6 +39,7 @@ fn config(roots: Vec<Root>, custom_games: Vec<CustomGame>) -> AppConfig {
         custom_games_unsent: Vec::new(),
         custom_games_not_now: None,
         retention_unsent: None,
+        restore_deletes: Default::default(),
     }
 }
 
@@ -313,6 +314,32 @@ fn named_prefix(
     prefix.launcher = launcher;
     prefix.name = name.to_owned();
     prefix
+}
+
+/// Bar's own prefix is not scanned for Foo, even when only Foo is scanned: without Bar in the
+/// scan it would look shared, and Foo would be found there first.
+#[test]
+fn a_scan_of_some_games_finds_each_as_the_full_scan_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let bar = make_prefix(&dir.path().join("bar"));
+    let bottle = make_prefix(&dir.path().join("bottle"));
+    write(&bar.join(FOO_SAVE), "in bar's prefix");
+    write(&bottle.join(FOO_SAVE), "in the bottle");
+    let manifest = parse_yaml(&format!("{FOO}Bar: {{}}\n")).unwrap();
+    let env = launcher_env(vec![
+        named_prefix(Launcher::Lutris, &bar, Some("Bar"), "bar"),
+        named_prefix(Launcher::Bottles, &bottle, None, "Generic-Game"),
+    ]);
+    let config = config(vec![], vec![]);
+
+    let full = scan(&manifest, &config, &env, |_, _| {});
+    let only = scan_where(&manifest, &config, &env, |title| title == "Foo", |_, _| {});
+
+    assert_eq!(only, full);
+    assert_eq!(only.games.len(), 1);
+    assert_eq!(only.games[0].files[0].real, bottle.join(FOO_SAVE));
+    let origin = PrefixOrigin::Bottles("Generic-Game".into());
+    assert_eq!(only.games[0].prefix_origin, Some(origin));
 }
 
 #[test]

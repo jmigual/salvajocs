@@ -1,0 +1,198 @@
+# ADR-0035: Each PC syncs against the newest backup through a recorded base
+
+**Status:** Accepted (the user's OK, 2026-11-25)
+**Date:** 2026-11-25
+**Amended:** 2026-11-25: after a restore that deletes the files its backup lacks, with nothing kept,
+the base reads Up to date, not Ahead (ADR-0036).
+**Amended:** 2026-11-26 (the user's request): Back up no longer asks. A game behind, changed on
+both or of unknown base waits for a choice: unticked, with a compare window that holds it.
+
+## Context
+
+The user wants two things from salvajocs: "Backup games" (every version stays one to go back to
+until the Old backups rules remove it) and "Sync PCs" (each game has one history, ordered by
+time and shared by every PC; its newest backup is "the saves").
+
+Until 0.10.0 a game makes no snapshot when (A) rustic's `skip_if_unchanged` finds the staged
+tree equal to this host's latest snapshot (ADR-0010), or (B) its staged hash list equals the
+newest backup's from any host (ADR-0018, mapped by ADR-0021). Rule (A) keeps a per-host line of
+history. The reported case: PC A backs up A1, JOAN-XPS-9730 backs up other saves J1, and A's
+saves do not change. The preview counts the differences from J1 but shows a green check
+("unchanged since this PC's last backup"), Back up skips by (A) and reports "up to date with
+this PC's last backup". A is in fact behind: J1 is newer, nothing offers it, and A goes on as a
+parallel branch.
+
+## Decision
+
+- **Three things, compared by content** with the existing rules (ADR-0018, mapped for the other
+  build by ADR-0021; no new comparison):
+  - **L**: this PC's saves now (the scan in the preview, the staged hash list at Back up);
+  - **N**: the game's newest backup from any PC, not `pre-restore` (`changes::newest`);
+  - **B**: this PC's **base**, the backup it last synced with: what it last backed up, last
+    found equal to the newest, or last restored.
+- **States** (`sync::State`):
+
+  | State | Condition | Back up does |
+  | --- | --- | --- |
+  | No backup yet | no N | backs up; base := it |
+  | Up to date | L = N | nothing; base := N |
+  | Ahead | L ≠ N, N = B | backs up (the new newest); base := it |
+  | Behind | L = B, N ≠ B | waits for a choice; base unchanged; the preview offers the restore |
+  | Changed on both | L ≠ N, L ≠ B, N ≠ B | waits for a choice |
+  | Unknown base | no B, L ≠ N | waits for a choice, as changed on both |
+
+  A game that waits for a choice is stored only with the user's consent (below). Behind never
+  backs up by itself: storing L would make older saves the newest and put every other PC
+  behind them, a silent revert. Changed on both and unknown base wait too, since a silent backup
+  is "last writer wins" and a silent skip leaves this PC's changes in no backup.
+- **Equalities.** L = N is rule (B) at Back up, and in the preview counts all zero with no
+  `skip_blocker`; a newest without a verified list is never equal. N = B is the same snapshot
+  id, else the base's hash list against N (`Baseline::same_content`). L = B is the base's hash
+  list against L, else, when the base has no list, B's snapshot read through the `Mapper` and
+  compared as N; a base without a list whose snapshot is gone is not equal. A newest that Back
+  up cannot read counts as one without a list, and a base snapshot it cannot read as gone: Back
+  up cannot confirm an equality then, so the game waits (or is stored, when ahead); nothing is
+  lost. The preview, which reads neither the registry nor `salvajocs.json`, finds L = B only
+  when neither side has registry keys and the scan would stage the same `salvajocs.json`, so it
+  never predicts behind for a game Back up finds changed on both.
+- **One pure function decides**: `sync::state(saves, newest, base, base_backup)` in
+  `core::sync`, called by the preview (`Saves::Scanned`) and by `backup_games`
+  (`Saves::Staged`), with the same rules. A scan does not read the registry or
+  `salvajocs.json`, so the two can differ; Back up's decision then wins and its results line
+  says so, never silently. The preview never predicts behind for a game Back up finds changed
+  on both, but
+  against a newest of the same build it can read up to date when the registry or
+  `salvajocs.json` differs and Back up decides otherwise. It reads nothing from the
+  repository; `Base::to_read` names the base snapshot a caller must read for it, only when
+  L ≠ N, so an up-to-date game reads nothing more.
+- **The base record** is local, per PC: `<config_dir>/sync-base.json`, keyed by the
+  repository's `AppConfig::secret_scope()`, then by game slug:
+
+  ```json
+  { "format": 1,
+    "repositories": { "<secret_scope>": {
+      "<slug>": { "snapshot": "<64 hex>", "saves": { …hashes.json object… } } } } }
+  ```
+
+  `saves` is this PC's saves as Back up stages them right after the sync: after a Back up, the
+  staged `hashes.json` list; after a restore, the restored game staged into Back up's mirror
+  (`backup::stage_game`), right after it under the same storage lock, from a scan of only that
+  game filtered as Back up filters it (the settings read again, the pending file's changes
+  replayed). With it a base snapshot forgotten by the rules still compares. It is absent for a
+  seed, or when the scan does not find the game, its settings skip it, or the settings, the
+  pending file or the staging fail (Back up would then filter by the choices it shows, which a
+  restore does not have); L = B then falls back to reading the snapshot. `sync::load` reads
+  a file that is missing, cannot be read, does not parse or is of a newer format as empty (the
+  worst case is an unknown base, which waits for a choice). `sync::record` rewrites it atomically
+  (`fsutil::write_atomic`) from a strict read: a missing file starts empty and one that does not
+  parse is replaced, but one that cannot be read (an antivirus lock, a permission) or is of a
+  newer format fails the record and is left as it was, since a rewrite would drop every other
+  game's base. The GUI jobs call it while they hold the session's storage lock.
+- **Set by:** a Back up that stored a snapshot → `{ new id, staged }`; a Back up that found
+  L = N → `{ N, staged }`; behind or "don't back up" → unchanged; a restore of S that wrote every
+  planned write (ticks allowed, an undo too) → `{ S, saves after it }`; a restore with a failed
+  write or a failed safety backup → unchanged; the preview never writes. A ticked restore sets
+  the base to S on purpose: the unticked files are this PC's choice, so the next Back up stores
+  the mix. Once another PC backs up first, the mix reads behind (accepted by the user); the
+  user's consent still stores it.
+- **Seed** (upgrade, or a lost file): with no record, the base is this PC's own newest regular
+  snapshot of the game, by hostname, without a list. It is used, never written, so the reported
+  case reads "behind" on the first preview after the upgrade. A seed never makes a game ahead:
+  when it is the newest and L ≠ N, the state is unknown base, so the game waits. PCs can share a
+  hostname (every Steam Deck is `steamdeck`), and their seed would then be another PC's backup,
+  read as this PC's own; storing L silently would bury that PC's saves (user decision,
+  2026-11-25: nothing is lost silently).
+- **Rustic's `skip_if_unchanged` is off for regular backups** and kept for the `pre-restore`
+  safety backup. The state decides; rustic only stores (it still reads unchanged files from the
+  parent). With it on, a game the state says to store would be skipped whenever the staging
+  tree equals this host's last snapshot, and reported up to date.
+- **User decisions (2026-11-25):**
+  - **The choice** (2026-11-26, the user's request; replaces Back up's question and the **Back
+    up anyway** button of 2026-11-25): a game that waits for a choice shows its mark only, no
+    counts and no file tree, and its box shows unticked. Ticking the box consents. The mark opens
+    a compare window: one line on why, the game's tree with its marks and the list's ticks, and
+    **Back up this PC's saves** (consents; this PC's saves become the newest and the other PC's
+    stay in the history) or **Don't back up** (takes the consent back; restore the newest
+    later). The consent is in memory for the next Back up of the shown scan only, never saved;
+    a new scan or another repository drops it. **Deselect all** drops every consent; **Select
+    all** gives none. Once the game no longer waits (a restore, or unticking the files the
+    newest lacks), the box shows the saved choice again. Back up asks nothing and does not count
+    a waiting game without consent. When it backs up at least one game, it still hands such a
+    game to core, which decides from the fresh scan (a Back up that only saves custom games and
+    rules does not): it stores it only if it no longer waits, and records the base when up to date. Its
+    "not backed up" result line is hidden, since the list showed it unticked; a game core
+    refuses that the preview did not show waiting keeps its line.
+  - `pre-restore` safety backups keep their own retention list, same rules, newest kept
+    (ADR-0034). A restore always stores this PC's files that way first (ADR-0005).
+  - The base is stored with its hash list in `sync-base.json`.
+  - Restoring a `pre-restore` safety backup records it as the base like any restore, with this
+    PC's saves after it, so the game reads behind until its saves change, then changed on both
+    (2026-11-25; replaces clearing the base).
+  - **List after every restore** (2026-11-25): after a restore or an undo, salvajocs scans the
+    game once and stores this PC's file list with the base in `sync-base.json`, as Back up does.
+    After a restore that leaves files the backup lacks (a partial restore, or saves this PC never
+    backed up), the game reads behind once another PC backs up; the user's consent can still
+    store the mix.
+  - **Files the restored backup lacks** (2026-11-25, accepted by the user, no change): they are
+    in the recorded list, so when another PC backs up first the game reads behind and Back up
+    skips it. A save this PC never backed up stays on disk but is in no backup until this PC's
+    saves change or the user consents; the guide says so.
+- **Restore tab:** the default snapshot stays the newest regular one; a game whose recorded base
+  (no seed) is not its newest gets a marker.
+
+### Amends ADR-0010, ADR-0018 and ADR-0029
+
+- *ADR-0010:* `skip_if_unchanged` only for the `pre-restore` safety backup.
+- *ADR-0018:* the skip rule and the preview's lines become the states above; `Stored` and the
+  preview's `Next` follow them; "Baseline = this machine's last backup" is still rejected as the
+  comparison, and this PC's last sync is the base instead.
+- *ADR-0029:* none since 2026-11-26; until then its dialog also asked about each game changed on
+  both.
+- ADR-0021's mapping is reused unchanged; ADR-0019, ADR-0020 and ADR-0023 are unchanged except
+  that a restore records the base.
+
+## Alternatives considered
+
+- **Keep rule (A) everywhere:** a smaller change, but a game to store is skipped silently when
+  the staging tree equals this host's last snapshot.
+- **Changed on both backs up silently** (last writer wins): the other PC is then offered these
+  saves as newer with no warning.
+- **Back up asks** (2026-11-25, dropped 2026-11-26): the list promised a backup with its counts
+  and tick that the question then withheld, and the question showed no files to decide by.
+- **A "conflict copy"** that is never the newest (a new tag): a second line of history and a
+  repository format change, which is what the user wants gone.
+- **Base without its hash list** (only the id): a PC whose base snapshot the rules removed can
+  no longer tell behind from changed on both.
+- **Compare a safety-backup base without its meta:** a safety backup holds only the overwritten
+  files, so untouched and created files never compare.
+- **Base in `config.yaml`:** hash lists are bulky machine data, and `State::save_config` is the
+  only config writer, on the GUI thread; the base is written by the backup and restore jobs.
+  **In the cache dir:** clearing caches must not reset sync state. **In the repository:** only
+  Back up writes there (ADR-0029), and the base is per PC.
+
+## Consequences
+
+- No repository format change; existing per-host snapshots become one list per game by time.
+- A renamed PC without a record has no seed: a game whose saves differ from the newest reads
+  "unknown base" and waits for a choice.
+- A PC whose clock runs far ahead makes the "newest" backup; the others read behind against it
+  (as ADR-0015's clock-skew consequence).
+- A PC still on 0.10.0 or older backs up by rules (A) and (B) and can make a behind PC's saves
+  the newest; every PC should be upgraded.
+- The preview reads one more snapshot listing and list per game whose base has no list and is
+  not the newest, the cost it paid for the "parent" before.
+- A restore scans each restored game once more and stages it into Back up's mirror, holding
+  the storage lock. The settings and the pending choices it filters by are read once per
+  restore job, so a later game of a batch may be listed by settings that changed meanwhile: its
+  list is then stale, and the game reads changed.
+- On each upgraded PC every game it changed since its own last backup, which it made the
+  newest, waits for a choice once: its seed is that backup, which reads unknown base, not ahead.
+- `secret_scope()` also holds non-secret option values of the repository, so editing one of
+  them keys every base anew: each game falls back to its seed, which waits rather than stores.
+- A game with registry keys, or whose `salvajocs.json` would change (a new prefix or root), never
+  reads behind in the preview; it reads changed on both there, and Back up decides from the
+  staged list.
+- When some paths of a game could not be read, the preview cannot predict its `salvajocs.json`,
+  so the list may show it changed on both while Back up decides behind from the staged list.
+  With consent core stores it either way (behind, changed on both and unknown base all store
+  with consent); without it, its result line is hidden as for any game that waited.

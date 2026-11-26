@@ -18,6 +18,21 @@ impl BackupTab {
         state.config.is_some() && (self.report.is_some() || has_unsent(state.config.as_ref()))
     }
 
+    /// Whether a backup can be requested now: the repository is open, what to back up is loaded
+    /// and no scan or backup is running or waits to. A pending file write does not hold it back:
+    /// the click waits for it.
+    pub(super) fn can_start(&self, state: &State, manifest_loading: bool) -> bool {
+        state.session.is_some()
+            && self.choices.loaded()
+            && !manifest_loading
+            && self.scanning.is_none()
+            && self.running.is_none()
+            && !self.backup_requested
+            && self.checking.is_none()
+            && self.asking.is_none()
+            && self.cleared.is_none()
+    }
+
     /// Draws the bottom bar in `bar`, the room [`status_bar::reserve`] took, with the app's
     /// `start` and `end`: then where backups go, or while a backup runs its progress, on the left,
     /// and the backup button last on the right. Call it after the page, when [`Self::has_bar`].
@@ -33,17 +48,7 @@ impl BackupTab {
         let selected = self.chosen();
         // With no game chosen, the backup only saves the unsent changes (ADR-0029).
         let unsent = has_unsent(state.config.as_ref());
-        // A pending file write does not hold the button back: the click waits for it.
-        let ready = state.session.is_some()
-            && self.choices.loaded()
-            && (selected > 0 || unsent)
-            && !manifest_loading
-            && self.scanning.is_none()
-            && self.running.is_none()
-            && !self.backup_requested
-            && self.checking.is_none()
-            && self.asking.is_none()
-            && self.cleared.is_none();
+        let ready = self.can_start(state, manifest_loading) && (selected > 0 || unsent);
         let label = if selected == 0 && unsent {
             "Back up".to_owned()
         } else {

@@ -7,6 +7,8 @@ since is asked about, and the cleanup forgets nothing when this PC's rules could
 (ADR-0029).
 **Amended:** 2026-11-22: a save that finds another machine's policy snapshot written meanwhile
 forgets its own and fails with `NotWritten` (see Consequences).
+**Amended:** 2026-11-25: the "newest of its host" rule is dropped, the sequence's newest stays
+(ADR-0034).
 
 ## Context
 
@@ -40,7 +42,10 @@ label and paths, so two machines with the same files each write their own snapsh
 - **Rules, within one sequence:** a snapshot is kept when any of these holds (union):
   - it is among the newest `keep_last`;
   - its time is at or after now minus `keep_within`;
-  - it is the newest of its host. This also keeps the sequence's newest.
+  - it is the newest of the sequence.
+
+  Amended by ADR-0034: the rule "newest of its host" is dropped; only the sequence's newest is
+  kept.
 - `to_forget(policy, snapshots, keep, now)` returns the ids to forget. It is pure and has no
   rustic types. Ids in `keep` are never forgotten: the caller passes the snapshots the backup
   just made, which an older snapshot from a clock that ran ahead would otherwise outrank.
@@ -50,9 +55,9 @@ label and paths, so two machines with the same files each write their own snapsh
   since uses, so marks must not wait for the next forget. This holds also with every rule off. It
   uses rustic's default `PruneOptions` and never `instant_delete`. After a prune the session
   reindexes, so its next backup does not reuse data that is only in a marked pack.
-- **Own rule function** instead of rustic's `KeepOptions`: the guards (newest per host,
-  separate `pre-restore` sequence, `keep_within` from now) do not map onto it, and it keeps rustic
-  types inside `core::storage` (ADR-0003).
+- **Own rule function** instead of rustic's `KeepOptions`: the guards (newest of the
+  sequence, separate `pre-restore` sequence, `keep_within` from now) do not map onto it, and it
+  keeps rustic types inside `core::storage` (ADR-0003).
 
 ## Alternatives considered
 
@@ -62,7 +67,8 @@ label and paths, so two machines with the same files each write their own snapsh
   keep its whole last-year history. The user wants age measured from now.
 - **Group per host and game:** every machine would keep its own N, so the total grows with the
   number of machines. **Group per game without a host guard:** a machine that plays less would
-  lose all its snapshots to another machine's newer ones.
+  lose all its snapshots to another machine's newer ones. (Amended by ADR-0034: the user chose
+  this, since the last N are the last N whichever PC made them.)
 - **`pre-restore` never forgotten:** they would accumulate forever. **`pre-restore` only aged out
   by `keep_within`:** with only `keep_last` set they would never go.
 - **Prune after every backup, or weekly:** every backup would pay a full prune on remote backends;
@@ -106,10 +112,10 @@ label and paths, so two machines with the same files each write their own snapsh
 - The Settings tab reloads the policy each time it is shown, unless an edit is still being
   saved, but a tab left open shows its own copy until then.
 - `keep_last` ranks a game's snapshots across all hosts by time, so a machine whose clock runs
-  far ahead can take all the `keep_last` places and the other machines keep only their newest
-  snapshot each.
+  far ahead can take all the `keep_last` places. (Amended by ADR-0034: the other machines keep
+  nothing of their own then.)
 - `keep_within` counts from the local clock: a machine whose clock jumps far ahead forgets
-  everything that `keep_last` and the newest-per-host guard do not keep.
+  everything that `keep_last` and the sequence's newest do not keep.
 - Clock skew also affects `keep_delete`: a pruning machine whose clock is about 23 h or more
   ahead can delete marked packs early, including one that another machine's in-flight backup
   reuses.

@@ -665,3 +665,82 @@ fn rows_that_share_a_key_get_their_badges_by_position() {
         assert_eq!(harness.query_all_by_label(row).count(), 1, "{row}");
     }
 }
+
+#[test]
+fn the_folder_slot_gets_the_deepest_folders_key_and_its_files_positions() {
+    // Given out of order, so positions differ from where the tree lists the files. `Top` only
+    // holds `x`, so both are drawn as one row; `old.sav` is not a present file.
+    let rows = [
+        row("Top/x/b.sav"),
+        row("Top/x/a.sav"),
+        row("Top/x/sub/c.sav"),
+        removed("Top/x/old.sav"),
+        row("Other/d.sav"),
+    ];
+    let mut harness = theme::harness(
+        |ui, tree: &mut FileTree| {
+            let mut folder =
+                |ui: &mut Ui, key: &str, at: &dyn Fn() -> Vec<usize>, slot: FolderSlot<'_>| {
+                    let place = match slot {
+                        FolderSlot::End { .. } => "End",
+                        FolderSlot::Top => "Top",
+                    };
+                    ui.label(format!("{place} {key} {:?}", at()));
+                };
+            let (badge, hint) = (
+                |_: usize, _: &str| None,
+                |_: usize, _: &str, _| String::new(),
+            );
+            let mode = Mode::Select {
+                included: &|_| true,
+                enabled: true,
+            };
+            let row = &mut |_: &mut Ui, _: usize, _: &str, _: Slot<'_>| {};
+            tree.ui_with_folder_rows(ui, mode, &badge, &hint, row, &mut folder);
+        },
+        FileTree::new(rows),
+    );
+    harness.run();
+    for label in ["End Top/x [1, 0, 2]", "End Other [4]"] {
+        assert_eq!(harness.query_all_by_label(label).count(), 1, "{label}");
+    }
+    assert_eq!(harness.query_all_by_label_contains("Top ").count(), 0);
+
+    harness.get_by_label("Open Top/x").click();
+    harness.run();
+    assert!(harness.query_by_label("Top Top/x [1, 0, 2]").is_some());
+    assert!(harness.query_by_label("End Top/x/sub [2]").is_some());
+}
+
+#[test]
+fn the_folder_slot_can_open_its_folder() {
+    let mut harness = theme::harness(
+        |ui, tree: &mut FileTree| {
+            let mut folder =
+                |ui: &mut Ui, _: &str, _: &dyn Fn() -> Vec<usize>, slot: FolderSlot<'_>| {
+                    if let FolderSlot::End { open } = slot
+                        && ui.button("Open it").clicked()
+                    {
+                        *open = true;
+                    }
+                };
+            let (badge, hint) = (
+                |_: usize, _: &str| None,
+                |_: usize, _: &str, _| String::new(),
+            );
+            let mode = Mode::Select {
+                included: &|_| true,
+                enabled: true,
+            };
+            let row = &mut |_: &mut Ui, _: usize, _: &str, _: Slot<'_>| {};
+            tree.ui_with_folder_rows(ui, mode, &badge, &hint, row, &mut folder);
+        },
+        tree(&["Base/a.sav"]),
+    );
+    harness.run();
+    assert!(harness.query_by_label("a.sav").is_none());
+
+    harness.get_by_label("Open it").click();
+    harness.run();
+    assert!(harness.query_by_label("a.sav").is_some());
+}

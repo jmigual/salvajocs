@@ -3,12 +3,12 @@
 //! ADR-0015, ADR-0018).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use eframe::egui::{self, Checkbox, Ui};
-use salvajocs_core::config::ListSort;
+use salvajocs_core::config::{ListSort, SortKey};
 use salvajocs_core::crossbuild::MappingEntry;
 use salvajocs_core::retention::Cleanup;
 use salvajocs_core::scan::{self, Environment, ProblemKind, ScanProblem, ScanReport};
@@ -25,18 +25,20 @@ use crate::tabs::mapping::Dialog;
 use crate::tabs::sort::{self, Line};
 use crate::tabs::space::{Polled, Space};
 use crate::theme::{self, icons};
-use choices::{AfterBackup, Choices};
+use choices::{AfterBackup, Choices, Saved};
 use preview::{
-    FileAction, Listed, Preview, badges, files_ui, header_of, preview_ui, to_choose, unknown,
+    FileAction, Listed, Preview, badges, change_count, files_ui, header_of, preview_ui, to_choose,
+    unknown,
 };
 use results::{GameResult, Outcome};
 use unsent::{Asking, Checked, Shared, is_session};
 
 mod bar;
-mod choices;
+pub(crate) mod choices;
+mod compare;
 mod preview;
 mod results;
-mod run;
+pub(crate) mod run;
 pub(crate) mod unsent;
 
 fn describe_problem(problem: &ScanProblem) -> String {
@@ -133,7 +135,8 @@ pub struct BackupTab {
     listed_stats: Arc<Mutex<Option<HashMap<String, BackupStats>>>>,
     /// Works out the space of each game's backups.
     space: Option<Space>,
-    /// Counts the changes of `report` and of the figures, which the order is built from.
+    /// Counts the changes of `report`, of the figures, and under Changes of the previews and the
+    /// loaded settings, which the order is built from.
     generation: u64,
     /// The indices of `report.games` in the order shown.
     order: Vec<usize>,
@@ -164,6 +167,15 @@ pub struct BackupTab {
     /// The repository a passed check, or the answered question, was for: the backup starts once
     /// no pending file write runs.
     cleared: Option<Weak<Mutex<Storage>>>,
+    /// The slugs of the games that wait for a choice (behind, changed on both PCs or of unknown
+    /// base) that the user ticked in the list or chose to back up in their compare window; for
+    /// the next backup of the shown scan only, never saved (ADR-0035).
+    back_up_anyway: BTreeSet<String>,
+    /// The title of the game whose compare window is open.
+    comparing: Option<String>,
+    /// The slug of the game whose compare window asked to show it in the Restore tab, until
+    /// [`BackupTab::take_restore_request`] takes it.
+    restore_request: Option<String>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
     /// A backup saved this PC's rules, or the question about them was answered, since
@@ -203,6 +215,8 @@ impl BackupTab {
         });
         self.mapping_ui(ui.ctx(), state);
         self.asking_ui(ui.ctx(), state);
+        // Before the details, which it opens, so they show on top of it.
+        self.compare_ui(ui.ctx(), state);
         if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
@@ -245,8 +259,9 @@ impl BackupTab {
                     self.run_error = error;
                     self.saving = saving;
                     // A game saved before the run stopped early counts too.
-                    self.saved |= (lock(&self.progress).done.iter())
-                        .any(|game| matches!(game.outcome, Outcome::Saved));
+                    self.saved |= (lock(&self.progress).done.iter()).any(|game| {
+                        matches!(game.outcome, Outcome::Saved | Outcome::SavedAsNewest)
+                    });
                     self.removed |= cleanup.as_ref().is_some_and(|c| c.done.forgotten > 0);
                     self.cleanup = cleanup;
                     if let Some(after) = after
@@ -273,6 +288,9 @@ impl BackupTab {
             self.compared_in = None;
             self.previewing = None;
             self.details = None;
+            // Given against the other repository's newest backups.
+            self.back_up_anyway.clear();
+            self.comparing = None;
             self.previews = Vec::new();
             self.stats = None;
             self.space = None;
@@ -296,6 +314,8 @@ impl BackupTab {
                 Polled::Nothing => {}
             }
         }
+        let by_changes =
+            (state.config.as_ref()).is_some_and(|c| c.backup_sort.by == SortKey::Changes);
         if let Some(job) = &mut self.previewing
             && let Some(result) = job.take_result()
         {
@@ -305,6 +325,10 @@ impl BackupTab {
                 Ok(previews) => previews,
                 Err(err) => (0..games).map(|_| Err(format!("{err:#}"))).collect(),
             };
+            // Other keys must not reorder on previews: the space figures arrive on their own.
+            if by_changes {
+                self.generation += 1;
+            }
             if let Some(report) = &self.report {
                 let games = report.games.iter().zip(&self.previews);
                 self.listed = games
@@ -317,6 +341,10 @@ impl BackupTab {
         }
         if self.choices.poll(ctx, state) {
             self.listed.iter_mut().for_each(Listed::invalidate);
+            // The loaded settings change the counts the order by changes was built from.
+            if by_changes {
+                self.generation += 1;
+            }
         }
         if let Some((source, job)) = &mut self.checking
             && let Some(result) = job.take_result()
@@ -361,6 +389,11 @@ impl BackupTab {
         std::mem::take(&mut self.removed)
     }
 
+    /// The slug of the game the user asked to open in the Restore tab since the last call.
+    pub(crate) fn take_restore_request(&mut self) -> Option<String> {
+        self.restore_request.take()
+    }
+
     /// Whether a finished backup saved snapshots since the last call, so a loaded list of
     /// backups misses them. A flag for the same reason as [`BackupTab::take_removed`].
     pub(crate) fn take_saved(&mut self) -> bool {
@@ -394,7 +427,7 @@ impl BackupTab {
     }
 
     /// Builds the order of the games by `sort`, and drops the lines of figures, when the sort,
-    /// the report or the figures changed since it was last built.
+    /// the report, the figures or (under Changes) the previews changed since it was last built.
     fn sort_rows(&mut self, sort: ListSort) {
         if self.sorted == Some((sort, self.generation)) {
             return;
@@ -408,8 +441,19 @@ impl BackupTab {
             }
         }
         let figures = self.stats.as_ref();
-        let rows: Vec<_> = (report.games.iter().zip(&self.slugs))
-            .map(|(game, slug)| (game.title.as_str(), figures.and_then(|f| f.get(slug))))
+        let rows: Vec<_> = (report.games.iter().zip(&self.slugs).enumerate())
+            .map(|(index, (game, slug))| {
+                // Read once per build: a tick must not move the game under the cursor.
+                let changes = (self.previews.get(index)).and_then(|preview| {
+                    let settings = self.choices.game(&game.title).unwrap_or_default();
+                    change_count(game, preview, &settings)
+                });
+                (
+                    game.title.as_str(),
+                    figures.and_then(|f| f.get(slug)),
+                    changes,
+                )
+            })
             .collect();
         self.order = stats::order(&rows, sort);
         self.lines = vec![None; report.games.len()];
@@ -426,6 +470,9 @@ impl BackupTab {
         self.previews = Vec::new();
         self.previewing = None;
         self.details = None;
+        self.comparing = None;
+        // Given against the shown scan; a new one is compared, and chosen, again.
+        self.back_up_anyway.clear();
         self.prefixes = report
             .games
             .iter()
@@ -457,6 +504,11 @@ impl BackupTab {
             || self.running.is_some()
     }
 
+    /// Whether the pending file holds this PC's latest changes to what to back up.
+    pub(crate) fn choices_saved(&self) -> Saved {
+        self.choices.saved()
+    }
+
     /// Whether a backup runs, which closing the app would cut short.
     pub(crate) fn writing(&self) -> bool {
         self.running.is_some()
@@ -468,9 +520,10 @@ impl BackupTab {
     }
 
     /// How many games of the report a backup would store: those its settings leave something
-    /// of, as [`selection::apply`] decides, and those whose settings cannot be read. Counts
-    /// files from each tree's cached totals.
+    /// of, as [`selection::apply`] decides, and those whose settings cannot be read, but not the
+    /// [`BackupTab::held_back`] ones. Counts files from each tree's cached totals.
     fn chosen(&mut self) -> usize {
+        let held_back = self.held_back();
         let Some(report) = &self.report else {
             return 0;
         };
@@ -479,6 +532,7 @@ impl BackupTab {
         let previews = &self.previews;
         games
             .enumerate()
+            .filter(|&(index, _)| !held_back.contains(&self.slugs[index]))
             .map(|(index, (game, listed))| match choices.game(&game.title) {
                 Ok(settings) => {
                     let badge = badges(game, previews.get(index), &settings);
@@ -495,6 +549,26 @@ impl BackupTab {
             })
             .filter(|&chosen| chosen)
             .count()
+    }
+
+    /// The slugs of the report's games that Back up leaves out: those that wait for a choice
+    /// (behind, changed on both PCs or of unknown base) by their preview, unless in
+    /// [`BackupTab::back_up_anyway`] (ADR-0035). Works out the headers not yet drawn.
+    fn held_back(&mut self) -> BTreeSet<String> {
+        let Some(report) = &self.report else {
+            return BTreeSet::new();
+        };
+        let games = report.games.iter().zip(&mut self.listed).zip(&self.slugs);
+        games
+            .enumerate()
+            .filter_map(|(index, ((game, listed), slug))| {
+                let settings = self.choices.game(&game.title).unwrap_or_default();
+                let preview = self.previews.get(index);
+                let header =
+                    (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
+                (header.asks() && !self.back_up_anyway.contains(slug)).then(|| slug.clone())
+            })
+            .collect()
     }
 
     /// Before the first scan: what the tab is for and the scan as its one action.
@@ -604,16 +678,25 @@ impl BackupTab {
         };
         // By index into `report.games`, applied after drawing, like the folder to open.
         let mut changes = Vec::new();
+        // Ticks of games that wait for a choice: whether to back them up, never saved.
+        let mut consents = Vec::new();
         // The game's index and what was clicked in its tree.
         let mut clicked: Option<(usize, FileAction)> = None;
         let mut choose = None;
+        let mut compare = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
-                if self
-                    .choices
-                    .game(&game.title)
-                    .is_ok_and(|s| s.skip == select)
-                {
+                let settings = self.choices.game(&game.title);
+                let shown = settings.clone().unwrap_or_default();
+                let preview = self.previews.get(index);
+                let header = (self.listed[index].header)
+                    .get_or_insert_with(|| header_of(game, preview, &shown));
+                // A waiting game's box is its consent: Select all never gives it.
+                if header.asks() {
+                    if !select {
+                        consents.push((index, false));
+                    }
+                } else if settings.is_ok_and(|settings| settings.skip == select) {
                     changes.push((index, Change::Skip(!select)));
                 }
             }
@@ -639,10 +722,13 @@ impl BackupTab {
             );
             return;
         }
-        let picked = sort::sort_ui(ui, "backup_sort", sort);
+        let picked = sort::sort_ui(ui, "backup_sort", SortKey::ALL, sort);
         let (choices, listed, prefixes) = (&self.choices, &mut self.listed, &self.prefixes);
         let (previews, order, lines) = (&self.previews, &self.order, &mut self.lines);
         let (figures, space, slugs) = (&self.stats, &self.space, &self.slugs);
+        let anyway = &self.back_up_anyway;
+        // A consent writes nothing, so it does not wait for a pending write.
+        let consentable = self.choices.loaded() && self.running.is_none();
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -661,17 +747,32 @@ impl BackupTab {
                 let preview = previews.get(index);
                 let header =
                     (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
-                theme::row(
+                // A game that waits for a choice is ticked only by consent, so the list shows
+                // what Back up does.
+                let asks = header.asks();
+                let comparing = theme::row(
                     ui,
                     |ui| {
-                        let mut checked = !settings.skip;
+                        let mut checked = if asks {
+                            anyway.contains(&slugs[index])
+                        } else {
+                            !settings.skip
+                        };
                         let checkbox = Checkbox::new(&mut checked, &game.title);
-                        if ui.add_enabled(enabled, checkbox).changed() {
-                            changes.push((index, Change::Skip(!checked)));
+                        let box_enabled = if asks { consentable } else { enabled };
+                        if ui.add_enabled(box_enabled, checkbox).changed() {
+                            if asks {
+                                consents.push((index, checked));
+                            } else {
+                                changes.push((index, Change::Skip(!checked)));
+                            }
                         }
                     },
-                    |ui| preview_ui(ui, header),
+                    |ui| preview_ui(ui, header, &game.title),
                 );
+                if comparing {
+                    compare = Some(index);
+                }
                 // Under the title, without the indent line: the row already groups them.
                 ui.scope(|ui| {
                     ui.visuals_mut().indent_has_left_vline = false;
@@ -711,10 +812,13 @@ impl BackupTab {
                                 }
                             });
                         }
+                        // Its tree is in its compare window, where its choice is made.
+                        if asks {
+                            return;
+                        }
                         let tree = &mut listed.tree;
-                        let mut action = None;
-                        let change =
-                            files_ui(ui, game, tree, preview, &settings, enabled, &mut action);
+                        let (change, action) =
+                            files_ui(ui, game, tree, preview, &settings, enabled, false);
                         if let Some(change) = change {
                             changes.push((index, change));
                         }
@@ -734,34 +838,67 @@ impl BackupTab {
                 .change(ui.ctx(), state, &report.games[index].title, change);
             self.listed[index].invalidate();
         }
-        match clicked {
-            Some((_, FileAction::Open(path))) => {
+        if let Some(index) = choose
+            && let Some(entries) = to_choose(self.previews.get(index))
+        {
+            let title = report.games[index].title.clone();
+            self.mapping = Some((title, entries.to_vec(), Dialog::new(entries.to_vec())));
+        }
+        if let Some(index) = compare {
+            self.comparing = Some(report.games[index].title.clone());
+            self.listed[index].tree.open_differing();
+        }
+        for (index, back_up) in consents {
+            self.consent(index, back_up);
+        }
+        if let Some((index, action)) = clicked {
+            self.file_action(ui.ctx(), state, index, action);
+        }
+    }
+
+    /// Adds the report's game at `index` to [`BackupTab::back_up_anyway`] when `back_up`, else
+    /// takes it out.
+    fn consent(&mut self, index: usize, back_up: bool) {
+        let slug = &self.slugs[index];
+        if back_up {
+            self.back_up_anyway.insert(slug.clone());
+        } else {
+            self.back_up_anyway.remove(slug);
+        }
+    }
+
+    /// Does what was clicked in the file tree of the report's game at `index`: opens a folder,
+    /// or the details of a changed file.
+    fn file_action(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut State,
+        index: usize,
+        action: FileAction,
+    ) {
+        match action {
+            FileAction::Open(path) => {
                 if let Err(err) = (state.env.open_folder)(&path) {
                     let path = path.display();
                     state.notices.push(format!("Could not open {path}: {err}"));
                 }
             }
-            Some((index, FileAction::Details(file))) => {
-                let game = &report.games[index];
+            FileAction::Details(file) => {
+                let Some(game) = self.report.as_ref().map(|report| &report.games[index]) else {
+                    return;
+                };
                 let key = selection::path_key(&game.files[file]);
                 if let Some(Ok(Some(baseline))) = self.previews.get(index)
                     && let Some(backed_up) = baseline.newest.backed_up(&key)
                     && let Some(session) = &state.session
                 {
-                    let (ctx, storage) = (ui.ctx(), &session.storage);
+                    let storage = &session.storage;
                     let local = game.files[file].real.clone();
                     let details =
                         Details::start(ctx, storage, slug(&game.title), key, local, backed_up);
                     self.details = Some(details);
                 }
             }
-            None => {}
-        }
-        if let Some(index) = choose
-            && let Some(entries) = to_choose(self.previews.get(index))
-        {
-            let title = report.games[index].title.clone();
-            self.mapping = Some((title, entries.to_vec(), Dialog::new(entries.to_vec())));
         }
     }
 }

@@ -107,8 +107,8 @@ pub enum Unit {
 /// Only snapshots tagged `salvajocs` and `game:<slug>`, and not `salvajocs-settings`, are
 /// candidates. Each game has two sequences, regular and `pre-restore`, across all hosts. In each,
 /// a snapshot is kept when it is among the newest `keep_last`, when it is no older than
-/// `keep_within` before `now`, or when it is the newest of its host. Ids in `keep`, such as the
-/// snapshots a backup just made, are never forgotten. An off policy forgets nothing.
+/// `keep_within` before `now`, or when it is the newest of the sequence (ADR-0034). Ids in `keep`,
+/// such as the snapshots a backup just made, are never forgotten. An off policy forgets nothing.
 pub fn to_forget(
     policy: &Retention,
     snapshots: &[SnapshotInfo],
@@ -135,17 +135,15 @@ pub fn to_forget(
     let mut forget = HashSet::new();
     for mut sequence in sequences.into_values() {
         sequence.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| a.id.cmp(&b.id)));
-        // The sequence's newest is also the newest of its host, so this guard covers both.
-        let mut hosts = HashSet::new();
         for (position, snapshot) in sequence.into_iter().enumerate() {
-            let newest_of_host = hosts.insert(snapshot.host.as_str());
+            let newest = position == 0;
             let in_last = policy
                 .keep_last
                 .is_some_and(|n| position < n.get() as usize);
             let in_window =
                 cutoff.is_some_and(|cutoff| cutoff.is_none_or(|cutoff| snapshot.time >= cutoff));
             let pinned = keep.contains(&snapshot.id.as_str());
-            if !(pinned || newest_of_host || in_last || in_window) {
+            if !(pinned || newest || in_last || in_window) {
                 forget.insert(snapshot.id.as_str());
             }
         }

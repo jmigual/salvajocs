@@ -6,6 +6,59 @@ All notable changes to salvajocs. The format follows
 
 ## [Unreleased]
 
+Upgrade salvajocs on all your PCs at the same time: a PC on an older version does not follow the
+new sync rules and can make an older save the newest backup.
+
+### Added
+
+- A game that is behind, changed on both PCs or whose last sync is unknown shows only its mark on
+  the Backup tab, with its box unticked, and Back up leaves it out. Click the mark to compare its
+  files with the newest backup and choose **Back up this PC's saves** or **Don't back up**.
+  Ticking its box also backs it up at the next Back up. The choice is not saved.
+- The Restore plan has a **Manifest paths** button that lists the game's save path templates and
+  registry keys from the manifest or your custom game, with where each applies; right-click one to
+  copy it.
+- The Backup tab can sort its games by **Changes**: the number of files the next backup would
+  add, change or remove, most first by default, so the games with changes are on top or at the
+  bottom.
+- The Restore plan overrides a whole folder: a folder's **Override** sends every file below it to
+  a new absolute path, keeping their places below the folder, and **Clear** puts them back.
+  Before, only single files could be overridden.
+- Right-click a value in the file Details dialog (a path, a hash, a size) and choose **Copy** to
+  copy all of it.
+- **Delete files the backup does not have** in the Restore plan and the batch confirm (where
+  **Select all** and **Deselect all** turn it on or off for every game) deletes this PC's files in
+  the backup's folders that the backup lacks, each with its own tick; the box is remembered per
+  game, files unticked in what to back up are kept, and the safety backup keeps every deleted
+  file.
+
+### Changed
+
+- The file Details dialog sets This PC and the backup side by side, with the SHA-256 as a row, a
+  Same or Differs mark after each label and a line on top saying how the content compares. When no
+  diff is shown it says "Diff not shown:" and names the copy that is over the limit, not text or
+  unreadable.
+- The Old backups rules no longer keep the newest backup of each computer. They keep the last N
+  backups of a game, or those newer than the span, whichever computer made them, plus the newest
+  backup of the game; the safety backups (`pre-restore`) follow the same rules on their own, with
+  their newest kept. The first cleanup after the upgrade may delete each other computer's
+  newest backup of a game when the rules no longer keep it.
+- The custom games list says "extends the manifest entry" and "overrides the manifest entry"
+  instead of "extends the manifest game" and "overrides the manifest game".
+- Typing a password in Settings for a repository that was set up without one now adds that
+  salvajocs cannot add one to "Wrong encryption password."; the guide shows how to add one with
+  restic.
+- PCs now sync. Each PC remembers, for each game, the backup it last synced with (in
+  `sync-base.json` in the config folder; after a restore, also a list of this PC's files), and the
+  Backup tab compares a game with it, not with this PC's last backup. A game this PC has not
+  changed while a newer backup exists is not backed up, so older saves never become the newest; it
+  shows a down arrow instead of a check. A game changed on both PCs, or whose last sync is
+  unknown, is not backed up either until you choose to. A game this PC changed is backed up even
+  when its files equal this PC's own last backup. The Backup results say why a game was not
+  backed up and what to do, with their own marks. The Restore tab marks a game whose newest
+  backup is a different one, with its PC and date. After an undo the game reads behind until this
+  PC's saves change.
+
 ## [0.10.0] - 2026-11-22
 
 ### Added

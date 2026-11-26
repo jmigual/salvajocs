@@ -1,16 +1,18 @@
 //! The runtime side of a restore: the restore list, the default targets, fetching a snapshot
 //! and running a plan behind a safety backup (ADR-0005, ADR-0006, ADR-0010).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::slice;
+use std::time::SystemTime;
 
 use serde::Deserialize;
 use serde::de::{DeserializeOwned, IntoDeserializer, value};
 
-use super::{RestorePlan, StagedGame, Write};
+use super::delete::lowered;
+use super::{Delete, RestorePlan, StagedGame, Write};
 use crate::backup::{BackupError, Stored, backup_games};
 use crate::changes::{BackedUp, FileState};
 use crate::config::AppConfig;
@@ -565,6 +567,15 @@ pub enum ApplyError {
     /// The target's final component is a symlink, which is never written through.
     #[error("target is a symlink")]
     TargetIsSymlink,
+    /// The file to delete is a directory or anything else but a regular file.
+    #[error("the file to delete is not a regular file")]
+    TargetNotAFile,
+    /// A write of the same restore targets the file to delete, which it keeps.
+    #[error("the restore writes this file")]
+    WrittenByTheRestore,
+    /// The file to delete changed after the safety backup copied it, so it is kept.
+    #[error("the file changed after the safety backup")]
+    ChangedSinceSafetyBackup,
     /// Reading or writing failed.
     #[error("I/O failed on {path}")]
     Io {
@@ -617,6 +628,8 @@ pub struct RestoreReport {
     pub files: Vec<Result<(), ApplyError>>,
     /// The outcome of the registry restore; `None` when the plan has none.
     pub registry: Option<Result<(), ApplyError>>,
+    /// The outcome of each of the plan's deletions, in order; a file already gone is `Ok`.
+    pub deletes: Vec<Result<(), ApplyError>>,
 }
 
 impl RestoreReport {
@@ -625,11 +638,13 @@ impl RestoreReport {
         safety_backup: SafetyBackup,
         files: Vec<Result<(), ApplyError>>,
         registry: Option<Result<(), ApplyError>>,
+        deletes: Vec<Result<(), ApplyError>>,
     ) -> Self {
         Self {
             safety_backup,
             files,
             registry,
+            deletes,
         }
     }
 }
@@ -645,9 +660,14 @@ impl RestoreReport {
 ///    since staging removes files. Nothing existing at the targets counts as success;
 /// 3. each write is copied into a temp file renamed over its target, then the registry keys
 ///    are replaced. A staged source that is not a regular file and a target that is a symlink
-///    are refused; symlinked parent directories are followed (Proton's legacy dirs).
+///    are refused; symlinked parent directories are followed (Proton's legacy dirs);
+/// 4. each of `plan.deletes` that the safety backup holds is removed (ADR-0036). A symlink, a
+///    directory or anything else but a regular file is refused, so no folder is ever removed,
+///    and so are a file a write of the plan targets (ASCII case ignored) and a file whose size
+///    or mtime changed since the safety backup.
 ///
-/// Per-file and registry failures in step 3 are in the [`RestoreReport`]; the rest goes on.
+/// Per-file, registry and deletion failures in steps 3 and 4 are in the [`RestoreReport`]; the
+/// rest goes on.
 ///
 /// # Errors
 /// [`RunError::WineserverRunning`], [`RunError::UnstageableTarget`] or
@@ -666,6 +686,16 @@ pub fn run(
         return Err(RunError::WineserverRunning);
     }
     let checks: Vec<_> = plan.writes.iter().map(check).collect();
+    // An override can move a write onto a file to delete; the restore keeps what it writes.
+    let written: HashSet<PathBuf> = (plan.writes.iter())
+        .map(|write| lowered(&write.target))
+        .collect();
+    let delete_checks: Vec<_> = (plan.deletes.iter())
+        .map(|delete| match written.contains(&lowered(&delete.target)) {
+            true => Err(ApplyError::WrittenByTheRestore),
+            false => check_delete(delete),
+        })
+        .collect();
     let mut existing = GameScan {
         title: title.to_owned(),
         files: Vec::new(),
@@ -675,6 +705,8 @@ pub fn run(
         prefixes: Vec::new(),
         prefix_origin: None,
         unreadable: Vec::new(),
+        // A safety backup is not filtered by the selection, so it records no rules.
+        selection: BTreeMap::new(),
     };
     for (write, check) in plan.writes.iter().zip(&checks) {
         let Ok(Some(size)) = *check else {
@@ -693,6 +725,21 @@ pub fn run(
             existing.roots.push(root);
         }
     }
+    for (delete, check) in plan.deletes.iter().zip(&delete_checks) {
+        let Ok(Some((size, _))) = *check else {
+            continue;
+        };
+        existing.files.push(FoundFile {
+            base: delete.target_file.0,
+            tail: delete.target_file.1.clone(),
+            real: delete.target.clone(),
+            size,
+            modified: None,
+        });
+        if !existing.roots.contains(&delete.target_root) {
+            existing.roots.push(delete.target_root.clone());
+        }
+    }
     if let Some((export, ctx)) = &plan.registry {
         // Whole subtrees, kept keys below included, so an undo needs no record of them.
         existing.registry_keys = safety_keys(export, &plan.registry_kept, ctx);
@@ -707,7 +754,12 @@ pub fn run(
         let outcome = outcomes.pop().expect("one outcome per game");
         match outcome.result? {
             Stored::New(snapshot) => SafetyBackup::Created(snapshot),
-            Stored::Unchanged { .. } | Stored::SameAsNewest(_) => SafetyBackup::Unchanged,
+            Stored::Unchanged => SafetyBackup::Unchanged,
+            // Only a backup by state reports these; the safety backup is not one.
+            Stored::UpToDate { .. }
+            | Stored::Behind { .. }
+            | Stored::ChangedOnBoth { .. }
+            | Stored::UnknownBase { .. } => SafetyBackup::Unchanged,
         }
     };
 
@@ -720,10 +772,14 @@ pub fn run(
         .collect();
     let registry = (plan.registry.as_ref())
         .map(|(export, ctx)| apply_registry(export, &plan.registry_kept, ctx));
+    let deletes = (plan.deletes.iter().zip(delete_checks))
+        .map(|(delete, check)| check.and_then(|seen| apply_delete(delete, seen)))
+        .collect();
     Ok(RestoreReport {
         safety_backup,
         files,
         registry,
+        deletes,
     })
 }
 
@@ -864,6 +920,35 @@ fn check_target(write: &Write) -> Result<Option<u64>, ApplyError> {
     }
 }
 
+/// Whether `delete` may be deleted: its target is a regular file, or gone. Gives its size and
+/// mtime when it exists, to back up it and to find it unchanged at the deletion.
+fn check_delete(delete: &Delete) -> Result<Option<(u64, Option<SystemTime>)>, ApplyError> {
+    match fs::symlink_metadata(&delete.target) {
+        Ok(target) if target.is_symlink() => Err(ApplyError::TargetIsSymlink),
+        Ok(target) if target.is_file() => Ok(Some((target.len(), target.modified().ok()))),
+        Ok(_) => Err(ApplyError::TargetNotAFile),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(apply_io(&delete.target)(err)),
+    }
+}
+
+/// Deletes `delete`'s target as [`check_delete`] found it, `seen`, before the safety backup; a
+/// target that did not exist then is left alone.
+fn apply_delete(
+    delete: &Delete,
+    seen: Option<(u64, Option<SystemTime>)>,
+) -> Result<(), ApplyError> {
+    let Some(seen) = seen else {
+        return Ok(());
+    };
+    // Checked again: a file replaced since the safety backup has no copy in it.
+    match check_delete(delete)? {
+        None => Ok(()),
+        Some(now) if now != seen => Err(ApplyError::ChangedSinceSafetyBackup),
+        Some(_) => fs::remove_file(&delete.target).map_err(apply_io(&delete.target)),
+    }
+}
+
 /// What a write of a plan does to its target, as the confirm before a restore shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -879,7 +964,7 @@ pub enum WriteState {
 }
 
 /// Why [`compare_writes`] finds that [`run`] would write nothing for a plan: an existing target
-/// file cannot be read, so the safety backup of it fails.
+/// file, or file to delete, cannot be read, so the safety backup of it fails.
 #[derive(Debug, thiserror::Error)]
 #[error("the safety backup cannot read {path}")]
 #[non_exhaustive]
@@ -901,15 +986,31 @@ pub struct UnreadableTarget {
 /// at the target.
 ///
 /// # Errors
-/// [`UnreadableTarget`] when an existing target file cannot be opened, as [`run`] would then
-/// write nothing at all.
+/// [`UnreadableTarget`] when an existing target file, or a file of `plan.deletes`, cannot be
+/// opened, as [`run`] would then write nothing at all.
 pub fn compare_writes(
     plan: &RestorePlan,
     listed: &Listed,
 ) -> Result<Vec<Result<WriteState, ApplyError>>, UnreadableTarget> {
+    for delete in &plan.deletes {
+        if let Ok(Some(_)) = check_delete(delete) {
+            readable(&delete.target)?;
+        }
+    }
     (plan.writes.iter())
         .map(|write| compare_write(write, listed))
         .collect()
+}
+
+/// Fails when the file at `path` exists but cannot be opened, as the safety backup then fails.
+fn readable(path: &Path) -> Result<(), UnreadableTarget> {
+    match File::open(path) {
+        Err(source) if source.kind() != io::ErrorKind::NotFound => Err(UnreadableTarget {
+            path: path.to_path_buf(),
+            source,
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn compare_write(
@@ -938,12 +1039,7 @@ fn compare_write(
         });
     }
     // The safety backup copies an existing target file, and fails the whole run when it cannot.
-    if let Err(source) = File::open(&write.target)
-        && source.kind() != io::ErrorKind::NotFound
-    {
-        let path = write.target.clone();
-        return Err(UnreadableTarget { path, source });
-    }
+    readable(&write.target)?;
     // By the snapshot-side key, so a cross-build write finds its hash.
     let sha256 = (entry.path.strip_prefix(&format!("{FILES_DIR}/")))
         .zip(listed.hashes.as_ref())

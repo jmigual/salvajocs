@@ -59,15 +59,15 @@ pub fn by_game(snapshots: &[SnapshotInfo]) -> HashMap<String, BackupStats> {
         .collect()
 }
 
-/// The indices of `rows`, each a title and its stats, in the order `sort` shows them. A row
-/// without a value for the key sorts after every row with one, in both directions. Ties fall
-/// back to the title in byte order, then to the index, so name A to Z keeps a list already in
-/// that order as it is.
-pub fn order(rows: &[(&str, Option<&BackupStats>)], sort: ListSort) -> Vec<usize> {
+/// The indices of `rows`, each a title, its stats and its number of changes (ADR-0032), in the
+/// order `sort` shows them. A row without a value for the key sorts after every row with one, in
+/// both directions. Ties fall back to the title in byte order, then to the index, so name A to Z
+/// keeps a list already in that order as it is.
+pub fn order(rows: &[(&str, Option<&BackupStats>, Option<usize>)], sort: ListSort) -> Vec<usize> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
     // A stable sort, so equal rows keep their index order.
     order.sort_by(|&a, &b| {
-        let ((title_a, a), (title_b, b)) = (rows[a], rows[b]);
+        let ((title_a, a, changes_a), (title_b, b, changes_b)) = (rows[a], rows[b]);
         let titles = title_a.cmp(title_b);
         let by_value = match sort.by {
             SortKey::Name if sort.descending => titles.reverse(),
@@ -75,6 +75,7 @@ pub fn order(rows: &[(&str, Option<&BackupStats>)], sort: ListSort) -> Vec<usize
             SortKey::LastBackup => valued(a, b, sort.descending, |s| s.last),
             SortKey::LastBackupSize => valued(a, b, sort.descending, |s| s.last_size),
             SortKey::SpaceUsed => valued(a, b, sort.descending, |s| s.space_used),
+            SortKey::Changes => present(changes_a, changes_b, sort.descending),
         };
         by_value.then(titles)
     });
@@ -89,7 +90,12 @@ fn valued<T: Ord>(
     descending: bool,
     value: impl Fn(&BackupStats) -> Option<T>,
 ) -> Ordering {
-    match (a.and_then(&value), b.and_then(&value)) {
+    present(a.and_then(&value), b.and_then(&value), descending)
+}
+
+/// [`valued`] for values already read.
+fn present<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> Ordering {
+    match (a, b) {
         (Some(a), Some(b)) if descending => b.cmp(&a),
         (Some(a), Some(b)) => a.cmp(&b),
         (Some(_), None) => Ordering::Less,
