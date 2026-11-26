@@ -58,8 +58,8 @@ pub struct Deletions {
 /// (the game not backed up) protects nothing.
 ///
 /// Nothing is found for a `pre-restore` snapshot, without `today`, under a root or mapping
-/// target that is a whole base (a bare `WinAbsolute` drive too), or below a target dir that
-/// cannot be listed.
+/// target that is a whole base (a bare `WinAbsolute` drive too) or a single file, or below a
+/// target dir that cannot be listed.
 pub fn deletions(
     listed: &Listed,
     plan: &RestorePlan,
@@ -98,6 +98,10 @@ pub fn deletions(
         let Ok(dir) = resolve_path(target_base, &placed.target.1, ctx, vars) else {
             continue;
         };
+        // The target here is no folder (a save path naming one file): nothing lies below it.
+        if fs::metadata(&dir).is_ok_and(|meta| !meta.is_dir()) {
+            continue;
+        }
         let mut below = Vec::new();
         if let Err(source) = list_files(&dir, "", &mut below) {
             found.unlisted.push(UnlistedDir { path: dir, source });

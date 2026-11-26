@@ -325,6 +325,23 @@ fn deletions_in_a_prefix_keep_a_case_variant_of_a_write() {
     assert_eq!(paths(&found), [foo.join("other.dat")]);
 }
 
+#[test]
+fn a_root_that_is_one_file_lists_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let share = home.path().join(".local/share");
+    put(&share.join("Game/one.sav"));
+    let staged = staged(
+        &[(Base::XdgData, "Game/one.sav")],
+        &[(Base::XdgData, "Game/one.sav")],
+    );
+    let info = info(Some(&entry_of(&staged)), &[], &[]);
+    let listed = listed_at(staged, &[]);
+
+    let found = found_any(&listed, &linux(home.path()), &info);
+    assert!(found.files.is_empty(), "{found:?}");
+    assert!(found.unlisted.is_empty(), "{found:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn an_unreadable_root_dir_deletes_nothing_there() {
