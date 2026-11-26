@@ -560,6 +560,34 @@ impl RestoreTab {
         }
     }
 
+    /// Selects the game `slug` with its newest backup, as if picked in the sidebar. While the
+    /// backups are not listed, lists them first and selects it when they arrive, unless a
+    /// backup runs or the repository is closed; a game the list lacks stays unselected. Does
+    /// nothing while the tab is not idle (as in [`RestoreTab::ui`], `manifest_loading` is
+    /// whether the manifest job runs) or when the game is already selected, which keeps its
+    /// edited targets, overrides and ticks.
+    pub(crate) fn open_game(
+        &mut self,
+        ctx: &egui::Context,
+        state: &State,
+        slug: String,
+        manifest_loading: bool,
+    ) {
+        let idle = !self.busy() && !manifest_loading && !self.batch.open();
+        if !idle || self.selected.as_ref() == Some(&slug) {
+            return;
+        }
+        if self.repository.is_none() {
+            if !self.backing_up {
+                self.load(ctx, state);
+                // `load` clears `reselect`, so it is set after.
+                self.reselect = self.listing.is_some().then_some(slug);
+            }
+        } else if let Some(game) = (self.games.iter().find(|game| game.slug == slug)).cloned() {
+            self.choose(ctx, state, &game);
+        }
+    }
+
     /// Selects `game` with its default snapshot and looks up its default targets.
     fn choose(&mut self, ctx: &egui::Context, state: &State, game: &GameBackups) {
         if state.config.is_none() {

@@ -9,6 +9,7 @@ use salvajocs_core::selection::GameSettings;
 use super::BackupTab;
 use super::preview::{Header, files_ui, header_of};
 use crate::state::State;
+use crate::tabs::restore::deletes_on;
 use crate::theme;
 use crate::widgets::named_button;
 
@@ -18,6 +19,8 @@ enum Choice {
     BackUp,
     /// Do not back them up.
     Skip,
+    /// Close the window, change nothing and show the game in the Restore tab.
+    OpenInRestore,
     /// Close the window and change nothing.
     Close,
 }
@@ -53,11 +56,17 @@ impl BackupTab {
         let listed = &mut self.listed[index];
         let header = (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
         let tree = &mut listed.tree;
+        // The restore deletes the files this PC has and the backup does not, when its box is on.
+        let deletes = deletes_on(state, &game.title);
         let mut clicked = (None, None);
         let (choice, dismissed) = theme::modal_dismissible(ctx, "backup_compare", 720.0, |ui| {
             ui.heading(&game.title);
+            let matching = match &*header {
+                Header::Compare { matching, .. } => matching.as_deref().filter(|_| !deletes),
+                _ => None,
+            };
             ui.label(match &*header {
-                Header::Compare { line, .. } => line.as_str(),
+                Header::Compare { line, .. } => matching.unwrap_or(line),
                 Header::Mark { text, .. } | Header::Chips(_, text) => text.as_str(),
                 Header::Nothing => "Nothing of this game is ticked, so Back up leaves it out.",
             });
@@ -65,21 +74,33 @@ impl BackupTab {
             let enabled = editable && readable;
             clicked = files_ui(ui, game, tree, preview, &settings, enabled, true);
             ui.add_space(8.0);
-            theme::row_end(ui, |ui| {
-                if !header.asks() {
-                    // Named apart from the Close of the app's title bar.
-                    let close = named_button(ui, true, "Close", "Close comparison");
-                    return close.clicked().then_some(Choice::Close);
-                }
-                if ui
-                    .add_enabled(consentable, Button::new("Don't back up"))
-                    .clicked()
-                {
-                    return Some(Choice::Skip);
-                }
-                let back_up = Button::new("Back up this PC's saves");
-                (ui.add_enabled(consentable, back_up).clicked()).then_some(Choice::BackUp)
-            })
+            let asks = header.asks();
+            let mut restore = false;
+            let choice = theme::row(
+                ui,
+                |ui| {
+                    if asks && matching.is_none() {
+                        let name = format!("Open {} in Restore", game.title);
+                        restore = named_button(ui, true, "Open in Restore", &name).clicked();
+                    }
+                },
+                |ui| {
+                    if !asks {
+                        // Named apart from the Close of the app's title bar.
+                        let close = named_button(ui, true, "Close", "Close comparison");
+                        return close.clicked().then_some(Choice::Close);
+                    }
+                    if ui
+                        .add_enabled(consentable, Button::new("Don't back up"))
+                        .clicked()
+                    {
+                        return Some(Choice::Skip);
+                    }
+                    let back_up = Button::new("Back up this PC's saves");
+                    (ui.add_enabled(consentable, back_up).clicked()).then_some(Choice::BackUp)
+                },
+            );
+            restore.then_some(Choice::OpenInRestore).or(choice)
         });
         let (change, action) = clicked;
         if let Some(change) = change {
@@ -95,6 +116,10 @@ impl BackupTab {
         match choice {
             Choice::BackUp => self.consent(index, true),
             Choice::Skip => self.consent(index, false),
+            Choice::OpenInRestore => {
+                self.restore_request = Some(self.slugs[index].clone());
+                ctx.request_repaint();
+            }
             Choice::Close => {}
         }
         self.comparing = None;

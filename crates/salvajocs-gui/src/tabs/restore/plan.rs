@@ -852,7 +852,7 @@ pub(super) fn delete_badge(unreadable: Option<&str>, kept: bool) -> Option<(Badg
 
 /// Whether the box "Delete files the backup does not have" of the game `title` was last left
 /// on, as `state`'s config remembers it (ADR-0036).
-pub(super) fn deletes_on(state: &State, title: &str) -> bool {
+pub(crate) fn deletes_on(state: &State, title: &str) -> bool {
     (state.config.as_ref()).is_some_and(|config| config.restore_deletes.contains(title))
 }
 

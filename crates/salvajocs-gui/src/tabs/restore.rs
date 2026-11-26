@@ -36,6 +36,7 @@ mod run;
 use batch::Batch;
 use delete::{Deletion, describe_delete_error};
 use pick::{Detected, TargetPick};
+pub(crate) use plan::deletes_on;
 use plan::{Fetched, Prepared, Preview};
 use run::{Restored, describe_run_error};
 

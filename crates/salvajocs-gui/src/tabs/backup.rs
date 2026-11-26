@@ -173,6 +173,9 @@ pub struct BackupTab {
     back_up_anyway: BTreeSet<String>,
     /// The title of the game whose compare window is open.
     comparing: Option<String>,
+    /// The slug of the game whose compare window asked to show it in the Restore tab, until
+    /// [`BackupTab::take_restore_request`] takes it.
+    restore_request: Option<String>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
     /// A backup saved this PC's rules, or the question about them was answered, since
@@ -384,6 +387,11 @@ impl BackupTab {
     /// too and would swallow it.
     pub(crate) fn take_removed(&mut self) -> bool {
         std::mem::take(&mut self.removed)
+    }
+
+    /// The slug of the game the user asked to open in the Restore tab since the last call.
+    pub(crate) fn take_restore_request(&mut self) -> Option<String> {
+        self.restore_request.take()
     }
 
     /// Whether a finished backup saved snapshots since the last call, so a loaded list of
@@ -838,6 +846,7 @@ impl BackupTab {
         }
         if let Some(index) = compare {
             self.comparing = Some(report.games[index].title.clone());
+            self.listed[index].tree.open_differing();
         }
         for (index, back_up) in consents {
             self.consent(index, back_up);

@@ -1,6 +1,7 @@
 //! A tree of a game's files, with a checkbox on every folder and file to choose what to back up
 //! or restore (ADR-0025), and a badge on each file that differs from a backup (ADR-0018).
 
+use std::cell::Cell;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -191,6 +192,8 @@ pub(crate) struct FileTree {
     /// `included[i]` is the [`Included`] total of `files[..i]`, so a folder's is a difference of
     /// two entries. `None` until the next frame draws, after [`FileTree::invalidate`].
     included: Option<Vec<Included>>,
+    /// Set by [`FileTree::open_differing`] until every folder with a difference is open.
+    opening: bool,
 }
 
 impl FileTree {
@@ -259,7 +262,14 @@ impl FileTree {
             files,
             root,
             included: None,
+            opening: false,
         }
+    }
+
+    /// Opens, over the next frames, every folder that holds a new, changed, removed or
+    /// not comparable file, so those files show without a click.
+    pub(crate) fn open_differing(&mut self) {
+        self.opening = true;
     }
 
     /// The tree without the open button of each folder that is not a directory now. Checks each
@@ -335,6 +345,7 @@ impl FileTree {
             files,
             root,
             included: cache,
+            opening,
         } = self;
         let Mode::Select { included, .. } = mode;
         let drawing = Drawing {
@@ -343,9 +354,12 @@ impl FileTree {
             mode,
             badge,
             hint,
+            opening: *opening,
+            waiting: Cell::new(false),
         };
         let mut clicked = None;
         drawing.children(ui, root, &mut clicked, row, &mut folder);
+        *opening = drawing.waiting.get();
         clicked
     }
 }
@@ -438,6 +452,11 @@ struct Drawing<'a> {
     mode: Mode<'a>,
     badge: &'a dyn Fn(usize, &str) -> Option<Badge>,
     hint: &'a dyn Fn(usize, &str, Badge) -> String,
+    /// Whether to open the folders with a difference, see [`FileTree::open_differing`].
+    opening: bool,
+    /// Set when a folder to open does not show its body yet: it shows a frame after the folder
+    /// opens, and holds the folders below it until then.
+    waiting: Cell<bool>,
 }
 
 impl Drawing<'_> {
@@ -537,9 +556,14 @@ impl Drawing<'_> {
         };
         let mut open_now = false;
         let id = ui.make_persistent_id(&folder.key);
-        let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        let differs = totals.new + totals.changed + totals.removed + totals.unknown > 0;
+        let opening = self.opening && differs;
+        if opening {
+            state.set_open(true);
+        }
         let verb = if state.is_open() { "Close" } else { "Open" };
-        let (arrow, ..) = state
+        let (arrow, _, body) = state
             .show_header(ui, |ui| {
                 match &self.mode {
                     Mode::Select { enabled, .. } if totals.present > 0 => {
@@ -587,6 +611,10 @@ impl Drawing<'_> {
                 }
                 self.children(ui, folder, clicked, row, folder_row);
             });
+        if opening && body.is_none() {
+            self.waiting.set(true);
+            ui.ctx().request_repaint();
+        }
         if open_now {
             let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
             state.set_open(true);

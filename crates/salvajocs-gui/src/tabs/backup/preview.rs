@@ -528,24 +528,7 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
                  sync{synced}. Click to compare"
             )
         }
-        Next::UnknownBase {
-            newest,
-            counts,
-            own,
-        } => {
-            let (host, date) = since(newest);
-            let host = host_name(&host, own);
-            if counts == Counts::default() {
-                format!(
-                    "Last sync unknown: the newest backup is from {host}, {date}. Click to compare"
-                )
-            } else {
-                format!(
-                    "Last sync unknown: this PC's saves differ from the newest backup, from {host}, \
-                     {date}. Click to compare"
-                )
-            }
-        }
+        Next::UnknownBase { .. } => "No sync record: compare before Back up stores it.".to_owned(),
         Next::Changes {
             newest,
             counts,
@@ -562,38 +545,126 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
     }
 }
 
+/// How this PC's saves differ from the backup `backup` names (`the newest backup`), by `counts`,
+/// as sentences from this PC's side; empty when they do not differ.
+fn differences(counts: &Counts, backup: &str) -> String {
+    let files = |count| crate::tabs::count(count, "file");
+    let differ = if counts.changed == 1 {
+        "differs"
+    } else {
+        "differ"
+    };
+    let sentences = [
+        (counts.new > 0).then(|| {
+            format!(
+                "This PC has {} the {backup} does not have.",
+                files(counts.new)
+            )
+        }),
+        (counts.removed > 0).then(|| {
+            format!(
+                "The {backup} has {} that Back up would not store.",
+                files(counts.removed)
+            )
+        }),
+        (counts.changed > 0).then(|| format!("{} {differ}.", files(counts.changed))),
+        (counts.unknown > 0).then(|| format!("{} could not be compared.", files(counts.unknown))),
+    ];
+    sentences
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What to do when restoring the newest backup writes no file to this PC.
+const MATCH: &str =
+    "Restoring it changes no files. To match it, untick the files it does not have.";
+
+/// Whether restoring the newest backup writes nothing to this PC but, with the box "Delete files
+/// the backup does not have" on, deletes: the only differences are files this PC has and the
+/// backup does not, and the backup has no registry keys, which a restore always applies.
+fn restore_writes_nothing(counts: &Counts, registry: bool) -> bool {
+    !registry && counts.new > 0 && counts.changed + counts.removed + counts.unknown == 0
+}
+
+/// `first`, how the saves differ from `backup` by `counts` and `last`, which says what to do
+/// next, as one line.
+fn compare_text(first: &str, counts: &Counts, backup: &str, last: &str) -> String {
+    let differences = differences(counts, backup);
+    [first, &differences, last]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The line of the compare window of a game that waits for the user's choice, by `next`: why it
-/// waits and how to use the newest backup instead; `None` for a game that does not wait.
-fn compare_line(next: &Next<'_>) -> Option<String> {
+/// waits, how this PC's saves differ from the newest backup and how to use that backup instead;
+/// `None` for a game that does not wait. `registry` is whether the newest backup has registry
+/// keys. The second line is for a restore that writes nothing ([`restore_writes_nothing`]).
+pub(super) fn compare_line(next: &Next<'_>, registry: bool) -> Option<(String, Option<String>)> {
     let since = |newest: &SnapshotInfo, own| {
         let host = host_name(&newest.host, own).to_owned();
         (host, format_time(newest.time))
     };
-    Some(match *next {
-        Next::Behind { newest, own, .. } => {
+    let restore = "To use the newest backup, restore it on the Restore tab.";
+    let (first, counts, backup, last) = match *next {
+        Next::Behind {
+            newest,
+            ref counts,
+            own,
+        } => {
             let (host, date) = since(newest, own);
-            format!(
-                "A newer backup exists, from {host}, {date}. To use it, restore it on the \
-                 Restore tab."
-            )
+            let first = format!("A newer backup exists, from {host}, {date}.");
+            let last = "To use it, restore it on the Restore tab.";
+            (first, counts, "newer backup", last)
         }
-        Next::ChangedOnBoth { own: true, .. } => "This PC changed the saves since it restored \
-             an older backup. To use the newest backup, restore it on the Restore tab."
-            .to_owned(),
-        Next::ChangedOnBoth { newest, .. } => format!(
-            "This PC and {} changed the saves since the last sync. To use the newest backup, \
-             restore it on the Restore tab.",
-            newest.host
-        ),
-        Next::UnknownBase { newest, own, .. } => {
-            let (host, date) = since(newest, own);
-            format!(
-                "This PC has no record of its last sync. To use the newest backup, from {host}, \
-                 {date}, restore it on the Restore tab."
+        Next::ChangedOnBoth {
+            ref counts,
+            own: true,
+            ..
+        } => {
+            let first = "This PC changed the saves since it restored an older backup.";
+            (first.to_owned(), counts, "newest backup", restore)
+        }
+        Next::ChangedOnBoth {
+            newest, ref counts, ..
+        } => {
+            let first = format!(
+                "This PC and {} changed the saves since the last sync.",
+                newest.host
+            );
+            (first, counts, "newest backup", restore)
+        }
+        Next::UnknownBase {
+            newest,
+            ref counts,
+            own,
+        } => {
+            let none = "This PC has no sync record for this game yet.";
+            let first = if own {
+                let date = format_time(newest.time);
+                format!(
+                    "{none} The newest backup, {date}, has this PC's name, but another PC can \
+                     have the same name."
+                )
+            } else {
+                let (host, date) = since(newest, false);
+                format!("{none} The newest backup is from {host}, {date}.")
+            };
+            (
+                first,
+                counts,
+                "newest backup",
+                "Compare the files, then choose.",
             )
         }
         _ => return None,
-    })
+    };
+    let matching = restore_writes_nothing(counts, registry)
+        .then(|| compare_text(&first, counts, backup, MATCH));
+    Some((compare_text(&first, counts, backup, last), matching))
 }
 
 /// What a game's header shows of its next backup, each with [`preview_text`] for its hover.
@@ -616,6 +687,10 @@ pub(super) enum Header {
         glyph: &'static str,
         text: String,
         line: String,
+        /// The line when restoring the newest backup writes no file, which the window shows
+        /// instead of `line` and without its Open in Restore button, unless the game's box
+        /// "Delete files the backup does not have" is on.
+        matching: Option<String>,
     },
 }
 
@@ -648,8 +723,17 @@ pub(super) fn header_of(
     let Some(glyph) = next.glyph() else {
         return Header::Nothing;
     };
-    if let Some(line) = compare_line(&next) {
-        return Header::Compare { glyph, text, line };
+    let hashes = (preview.as_ref().ok().and_then(Option::as_ref))
+        .and_then(|baseline| baseline.newest.hashes.as_ref());
+    // Without a hash list, the backup may hold registry keys.
+    let registry = hashes.is_none_or(|hashes| hashes.registry.is_some());
+    if let Some((line, matching)) = compare_line(&next, registry) {
+        return Header::Compare {
+            glyph,
+            text,
+            line,
+            matching,
+        };
     }
     let tone = match next {
         Next::Same {

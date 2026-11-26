@@ -157,12 +157,15 @@ newest backup's, and stays behind until this PC's saves change. Then it reads ch
 
 A game that is changed on both, or whose last sync is unknown, needs a decision from you:
 salvajocs cannot tell which saves should win, and it will not overwrite either silently. The last
-sync is unknown when this PC has no record yet, for example after an upgrade. Changing the
+sync is unknown when this PC has no sync record yet, for example after an upgrade. Changing the
 repository or its options in Settings does the same for every game, since this PC has no record
 for the new repository, and each game that differs then waits for your choice. salvajocs first
 guesses that this PC's own last backup of the game is the last synced one. The last sync stays
 unknown when this PC has no such backup, or when that backup is the newest one and the saves
 changed since.
+
+A game has a sync record from its first Back up or restore with this version of salvajocs, so
+the choice for an unknown last sync is needed once per game and repository.
 
 Upgrade salvajocs on all your PCs at the same time. A PC that still runs an older version does
 not follow these rules and can make an older save the newest.
@@ -173,15 +176,22 @@ A game that is behind, changed on both or has an unknown last sync shows only it
 box is unticked: Back up leaves it out. It shows no counts and no file tree in the list. Back up
 asks nothing about it.
 
-Click the mark to open the game's compare window. It shows one line on why the game waits, and
-the game's file tree with the same marks and ticks as the list: a file only on this PC is new, a
-file only in the newest backup is removed. Ticks you change there are saved as in the list. Then
-choose:
+Click the mark to open the game's compare window. It shows one line on why the game waits and
+how this PC's saves differ from the newest backup, and the game's file tree with the same marks
+and ticks as the list: a file only on this PC is new, a file only in the newest backup is
+removed. The folders that hold a difference are open, with a **Details** button on each changed
+file. Ticks you change there are saved as in the list. Then choose:
 
 - **Back up this PC's saves**: the box is ticked, and the next Back up stores the game. This PC's
   saves become the newest backup. The other PC's backup stays in the history as an older version.
   The other PC will then show as behind, so choose this only when this PC's saves are the ones to
   keep.
+- **Open in Restore**, at the left: closes the window, changes no choice and opens the game with
+  its newest backup in the [Restore tab](restore.md). If the game is already open there, or the
+  Restore tab is busy, it only shows the tab. The window does not offer it when a restore would
+  write nothing: the only differences are files this PC has and the newest backup does not, the
+  backup has no registry keys, and the game's box "Delete files the backup does not have" is
+  off. Untick those files to match the backup instead.
 - **Don't back up**: the box stays unticked, and Back up leaves the game out. Restore the newest
   backup on the Restore tab instead; a restore first saves this PC's files as a safety backup, so
   they are not lost.
@@ -220,7 +230,7 @@ out. Hover the icons to read the full sentence, such as
 | Plus in a circle, no number | No backup yet: the repository has no backup of the game. |
 | Arrow pointing down, in amber | Behind: a newer backup exists, usually from another PC, and this PC has not changed the saves since it last synced. Hover it to read `Behind: <host> made a newer backup, <date>. Click to compare`; `<host>` is "this PC" when this PC made the newest backup. |
 | Warning sign, in amber | Changed on both: a newer backup exists, and this PC changed the saves too since it last synced. |
-| Question mark without a number, in amber | Last sync unknown: salvajocs has no record of this PC syncing this game, and its saves differ from the newest backup. |
+| Question mark without a number, in amber | Last sync unknown: salvajocs has no sync record of this PC syncing this game, and its saves differ from the newest backup. Hover it to read `No sync record: compare before Back up stores it.` |
 
 The three amber marks are buttons: each game waits for your choice, and clicking the mark opens
 its compare window (see [Choosing for a game that waits](#choosing-for-a-game-that-waits)).

@@ -1139,3 +1139,67 @@ fn forgetting_the_plan_closes_the_open_details() {
     assert!(harness.state().0.details.is_none());
     assert!(harness.query_by_label("Close details").is_none());
 }
+
+/// A tab listing Mix with one snapshot and nothing chosen, over the open repository of a state
+/// in `dir`.
+fn unchosen_mix(dir: &Path) -> (RestoreTab, State) {
+    let state = state(dir);
+    let mut tab = with_mix(&state.session.as_ref().unwrap().storage);
+    tab.selected = None;
+    tab.snapshot = None;
+    (tab, state)
+}
+
+#[test]
+fn open_game_selects_the_game_with_its_default_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+
+    tab.open_game(&egui::Context::default(), &state, "mix".into(), false);
+
+    assert_eq!(tab.selected.as_deref(), Some("mix"));
+    assert_eq!(tab.snapshot, Some(0));
+}
+
+#[test]
+fn open_game_keeps_the_plan_of_the_game_already_selected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+    let ctx = egui::Context::default();
+    tab.open_game(&ctx, &state, "mix".into(), false);
+    // Choosing again would drop the plan and the edited targets with it.
+    let generation = tab.generation;
+
+    tab.open_game(&ctx, &state, "mix".into(), false);
+
+    assert_eq!(tab.generation, generation);
+}
+
+#[test]
+fn open_game_selects_nothing_while_the_tab_is_not_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut tab, state) = unchosen_mix(dir.path());
+    let ctx = egui::Context::default();
+
+    // The manifest loads.
+    tab.open_game(&ctx, &state, "mix".into(), true);
+    assert_eq!(tab.selected, None);
+
+    // A job of the tab runs.
+    tab.listing = Some(Job::spawn(&ctx, || Err(anyhow!("cannot list"))));
+    tab.open_game(&ctx, &state, "mix".into(), false);
+    assert_eq!(tab.selected, None);
+    assert_eq!(tab.reselect, None);
+}
+
+#[test]
+fn open_game_lists_the_backups_first_and_selects_the_game_when_they_arrive() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let mut tab = RestoreTab::default();
+
+    tab.open_game(&egui::Context::default(), &state, "mix".into(), false);
+
+    assert!(tab.listing.is_some());
+    assert_eq!(tab.reselect.as_deref(), Some("mix"));
+}

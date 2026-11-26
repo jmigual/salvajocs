@@ -27,8 +27,8 @@ use crate::tabs::tree::Badge;
 use crate::theme;
 
 use super::preview::{
-    Baseline, Header, Next, change_count, header_of, hint, next_backup, preview, preview_text,
-    sentence, summary,
+    Baseline, Header, Next, change_count, compare_line, header_of, hint, next_backup, preview,
+    preview_text, sentence, summary,
 };
 use super::results::{Level, summarize};
 use super::run::{back_up, clean_up};
@@ -293,10 +293,7 @@ fn the_newest_backup_of_this_pc_is_not_named_like_another_pc() {
     let next = next_backup(&game, &unknown, &all).unwrap();
     assert_eq!(
         sentence(&next),
-        format!(
-            "Last sync unknown: this PC's saves differ from the newest backup, from this PC, \
-             {date}. Click to compare"
-        )
+        "No sync record: compare before Back up stores it.".to_owned()
     );
 
     // Another PC's backup still names it.
@@ -470,10 +467,7 @@ fn the_preview_says_what_the_next_backup_would_do() {
     );
     assert_eq!(
         text(&compared_on(FileState::Changed, None)).unwrap(),
-        format!(
-            "Last sync unknown: this PC's saves differ from the newest backup, from there, \
-             {date}. Click to compare"
-        )
+        "No sync record: compare before Back up stores it.".to_owned()
     );
     let newest = snapshot_from("there");
     let mut counts = changes::Counts::default();
@@ -566,7 +560,7 @@ fn a_backup_made_anyway_is_judged_against_the_base_too() {
     assert!(matches!(next, Next::UnknownBase { .. }));
     assert_eq!(
         sentence(&next),
-        format!("Last sync unknown: the newest backup is from there, {date}. Click to compare")
+        "No sync record: compare before Back up stores it.".to_owned()
     );
     assert_eq!(change_count(&game, &unknown, &all), Some(0));
 }
@@ -645,14 +639,149 @@ fn a_game_that_asks_has_its_own_mark_and_never_the_check() {
     assert_eq!(behind.glyph(), Some(icons::ARROW_DOWN));
 
     // Each is a compare button without chips, and its window says how to use the newest backup.
-    for preview in [&both, &unknown] {
+    for (preview, last) in [
+        (&both, "restore it on the Restore tab."),
+        (&unknown, "Compare the files, then choose."),
+    ] {
         let header = header_of(&game, Some(preview), &all);
         assert!(header.asks());
         let Header::Compare { line, .. } = header else {
             panic!("a compare button");
         };
-        assert!(line.ends_with("restore it on the Restore tab."), "{line}");
+        assert!(line.ends_with(last), "{line}");
     }
+}
+
+fn counts(new: usize, changed: usize, removed: usize, unknown: usize) -> changes::Counts {
+    let mut counts = changes::Counts::default();
+    (counts.new, counts.changed, counts.removed, counts.unknown) = (new, changed, removed, unknown);
+    counts
+}
+
+#[test]
+fn the_compare_line_says_how_this_pcs_saves_differ_from_the_backup() {
+    let newest = snapshot_from("there");
+    let date = "1970-01-01 00:00 UTC";
+    let line = |next| compare_line(&next, false).unwrap().0;
+    let behind = |counts| Next::Behind {
+        newest: &newest,
+        counts,
+        own: false,
+    };
+
+    // Every kind in turn, from this PC's side, leaving out the ones there are none of.
+    assert_eq!(
+        line(behind(counts(1, 2, 1, 1))),
+        format!(
+            "A newer backup exists, from there, {date}. This PC has 1 file the newer backup does \
+             not have. The newer backup has 1 file that Back up would not store. 2 files differ. 1 \
+             file could not be compared. To use it, restore it on the Restore tab."
+        )
+    );
+    assert_eq!(
+        line(behind(counts(0, 1, 0, 0))),
+        format!(
+            "A newer backup exists, from there, {date}. 1 file differs. To use it, restore it \
+             on the Restore tab."
+        )
+    );
+    // A restore leaves the files only this PC has alone, so it is no way to match the backup.
+    let new_only = behind(counts(1, 0, 0, 0));
+    assert_eq!(
+        compare_line(&new_only, false).unwrap().1.unwrap(),
+        format!(
+            "A newer backup exists, from there, {date}. This PC has 1 file the newer backup does \
+             not have. Restoring it changes no files. To match it, untick the files it does not \
+             have."
+        )
+    );
+    // But it applies the backup's registry keys, and deletes the files with the box on.
+    assert_eq!(compare_line(&new_only, true).unwrap().1, None);
+    assert_eq!(
+        line(behind(counts(2, 0, 1, 0))),
+        format!(
+            "A newer backup exists, from there, {date}. This PC has 2 files the newer backup \
+             does not have. The newer backup has 1 file that Back up would not store. To use it, \
+             restore it on the Restore tab."
+        )
+    );
+
+    let both = |own| Next::ChangedOnBoth {
+        newest: &newest,
+        counts: counts(0, 1, 0, 0),
+        base_time: None,
+        own,
+    };
+    assert_eq!(
+        line(both(false)),
+        "This PC and there changed the saves since the last sync. 1 file differs. To use the \
+         newest backup, restore it on the Restore tab."
+    );
+    assert_eq!(
+        line(both(true)),
+        "This PC changed the saves since it restored an older backup. 1 file differs. To use \
+         the newest backup, restore it on the Restore tab."
+    );
+
+    let unknown = |own, counts| Next::UnknownBase {
+        newest: &newest,
+        counts,
+        own,
+    };
+    assert_eq!(
+        line(unknown(false, counts(0, 1, 0, 0))),
+        format!(
+            "This PC has no sync record for this game yet. The newest backup is from there, \
+             {date}. 1 file differs. Compare the files, then choose."
+        )
+    );
+    assert_eq!(
+        line(unknown(true, counts(0, 0, 0, 0))),
+        format!(
+            "This PC has no sync record for this game yet. The newest backup, {date}, has this \
+             PC's name, but another PC can have the same name. Compare the files, then choose."
+        )
+    );
+}
+
+/// The line a restore that writes nothing swaps in, which a game with the files only this PC has
+/// shows, in a header made from `preview`.
+fn matching(preview: &Preview) -> Option<String> {
+    let (game, all) = (game(&[1], false, 0), GameSettings::default());
+    match header_of(&game, Some(preview), &all) {
+        Header::Compare { matching, .. } => matching,
+        _ => panic!("a compare button"),
+    }
+}
+
+#[test]
+fn only_a_restore_that_writes_nothing_swaps_the_line() {
+    // The file differs from the backup's, or is unreadable: a restore writes it.
+    assert_eq!(matching(&compared_on(FileState::Changed, None)), None);
+    let unreadable = compared_on(FileState::Unknown("denied".into()), None);
+    assert_eq!(matching(&unreadable), None);
+    // The file is not in the backup: a restore leaves it alone.
+    let line = matching(&compared_on(FileState::New, None)).unwrap();
+    assert!(line.ends_with(
+        "Restoring it changes no files. To match it, untick the files it does not have."
+    ));
+}
+
+#[test]
+fn a_backup_with_registry_keys_is_restored_even_when_only_new_files_differ() {
+    let mut preview = compared_on(FileState::New, None);
+    let Ok(Some(baseline)) = &mut preview else {
+        panic!("a baseline");
+    };
+    let with_registry = br#"{"format": 1, "meta": "", "registry": "abc", "files": {}}"#;
+    baseline.newest.hashes = Hashes::from_json(with_registry);
+    assert_eq!(matching(&preview), None);
+    // No hash list: the backup may hold registry keys.
+    let Ok(Some(baseline)) = &mut preview else {
+        panic!("a baseline");
+    };
+    baseline.newest.hashes = None;
+    assert_eq!(matching(&preview), None);
 }
 
 #[test]
@@ -1686,7 +1815,7 @@ fn saves_that_differ_from_the_newest_without_a_base_ask_with_an_unknown_base() {
     assert!(shown.warns);
     let text = shown.text;
     assert!(
-        text.starts_with("Last sync unknown: this PC's saves differ from the newest backup"),
+        text.starts_with("No sync record: compare before Back up stores it."),
         "{text}"
     );
     assert_eq!(shown.count, Some(1));

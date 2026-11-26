@@ -250,6 +250,11 @@ impl App {
         } else if saved {
             self.restore.relist(ctx, &self.state);
         }
+        if let Some(slug) = self.backup.take_restore_request() {
+            self.tab = Tab::Restore;
+            let loading = self.manifest.is_some();
+            self.restore.open_game(ctx, &self.state, slug, loading);
+        }
         // A restore adds safety backups and a delete removes backups, which the comparison and
         // the figures of the Backup tab show.
         if self.restore.take_written() {

@@ -1230,7 +1230,7 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
     let label = hover_text(
         &mut harness,
         "G",
-        "Last sync unknown: this PC's saves differ from the newest backup",
+        "No sync record: compare before Back up stores it.",
     );
     assert!(
         label.contains(
@@ -1242,8 +1242,6 @@ fn a_folder_of_the_other_build_with_no_known_place_says_why() {
     // The tree is in the compare window, open from the start.
     assert!(!shows(&harness, "1 file, 3 B"));
     click(&mut harness, "Compare G");
-    click(&mut harness, "Open Home/G");
-    click(&mut harness, "Open WinAppData/G");
     assert!(shows(&harness, "save.dat, removed"));
     assert!(shows(&harness, "save.dat, new"));
     let why = "Removed: the newest backup is from the other build, and this file has no place \
@@ -1278,7 +1276,7 @@ fn a_registry_key_of_one_build_is_not_backed_up_without_a_base() {
     hover_text(
         &mut harness,
         "G",
-        "Last sync unknown: the newest backup is from ",
+        "No sync record: compare before Back up stores it.",
     );
     assert_left_out(&harness, "G");
 }
@@ -1438,7 +1436,6 @@ fn back_up_this_pcs_saves_in_the_compare_window_makes_a_behind_game_the_newest()
         &pcs.here,
         "To use it, restore it on the Restore tab."
     ));
-    click(&mut pcs.here, "Open WinAppData/G");
     assert!(shows(&pcs.here, "save.dat, changed"));
     click(&mut pcs.here, "Back up this PC's saves");
     assert!(
@@ -1710,10 +1707,9 @@ fn the_choice_to_back_up_is_not_remembered_for_the_next_back_up() {
     assert_eq!(backups_of_g(&pcs.tmp), 4);
 }
 
-/// The reported case: this PC has one file the newest backup lacks. Unticking it leaves the
-/// saves Back up would store equal to the newest backup, so the game is up to date and ticked.
-#[test]
-fn unticking_the_only_file_the_newest_backup_lacks_makes_the_game_up_to_date() {
+/// The reported case: this PC has one file the newest backup lacks, so G is behind with only a
+/// new file. Returns this PC's app, scanned and compared, and the folders that stay alive with it.
+fn behind_with_an_extra_file() -> (Harness<'static, App>, TempDir, TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     init_repo(&repo_dir(&tmp));
     let (prefix, games) = game_g(&tmp, "one");
@@ -1729,10 +1725,17 @@ fn unticking_the_only_file_the_newest_backup_lacks_makes_the_game_up_to_date() {
 
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
+    (harness, tmp, other)
+}
+
+/// Unticking the only file the newest backup lacks leaves the saves Back up would store equal to
+/// the newest backup, so the game is up to date and ticked.
+#[test]
+fn unticking_the_only_file_the_newest_backup_lacks_makes_the_game_up_to_date() {
+    let (mut harness, tmp, _other) = behind_with_an_extra_file();
     hover_text(&mut harness, "G", "Behind: ");
     assert_left_out(&harness, "G");
     click(&mut harness, "Compare G");
-    click(&mut harness, "Open WinAppData/G");
     click(&mut harness, "extra.dat, new");
 
     // The window stays open and says so, with Close in place of the choice.
@@ -1744,6 +1747,114 @@ fn unticking_the_only_file_the_newest_backup_lacks_makes_the_game_up_to_date() {
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(&mut harness, "G: up to date");
     assert_eq!(backups_of_g(&tmp), 2);
+}
+
+#[test]
+fn the_compare_window_says_what_this_pc_has_that_the_backup_lacks() {
+    let (mut harness, _tmp, _other) = behind_with_an_extra_file();
+    click(&mut harness, "Compare G");
+
+    // The new file is in view, and restoring would write nothing, so it is not offered.
+    assert!(shows(&harness, "extra.dat, new"));
+    assert!(shows(
+        &harness,
+        "This PC has 1 file the newer backup does not have. Restoring it changes no files. \
+         To match it, untick the files it does not have."
+    ));
+    assert!(!shows(&harness, "restore it on the Restore tab"));
+    assert!(harness.query_by_label("Open G in Restore").is_none());
+}
+
+#[test]
+fn the_compare_window_shows_the_differing_files_and_keeps_its_details_on_top() {
+    let pcs = behind_another_pc();
+    let mut harness = pcs.here;
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    click(&mut harness, "Compare G");
+
+    // Open at once, with the file's row and Details, and how the saves differ.
+    assert!(shows(&harness, "save.dat, changed"));
+    assert!(shows(&harness, "1 file differs. To use it, restore it"));
+    harness.get_by_label("Details of save.dat").click();
+    run_until(&mut harness, "the details", |h| shows(h, "Close details"));
+    run_settled(&mut harness);
+    assert!(shows(&harness, "Back up this PC's saves"));
+
+    // Neither Escape nor a click inside the details dismisses the window under them.
+    harness.key_press(Key::Escape);
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Close details"));
+    assert!(shows(&harness, "Back up this PC's saves"));
+    harness.get_by_label("Details of save.dat").click();
+    run_until(&mut harness, "the details", |h| shows(h, "Close details"));
+    run_settled(&mut harness);
+    click(&mut harness, "Close details");
+    run_settled(&mut harness);
+    assert!(!shows(&harness, "Close details"));
+    assert!(shows(&harness, "Back up this PC's saves"));
+}
+
+#[test]
+fn open_in_restore_selects_the_game_in_the_restore_tab() {
+    let pcs = behind_another_pc();
+    let mut harness = pcs.here;
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    click(&mut harness, "Compare G");
+
+    harness.get_by_label("Open G in Restore").click();
+    run_until(&mut harness, "the plan", |h| shows(h, "Files to write"));
+
+    // The window is closed and nothing was chosen for G.
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    assert!(harness.query_by_label("Back up this PC's saves").is_none());
+    assert!(!checked(&harness, "G"));
+}
+
+/// Lists G in the Restore tab and selects it, waiting for its plan.
+fn plan_g_in_restore(harness: &mut Harness<'static, App>) {
+    harness.state_mut().set_tab(Tab::Restore);
+    run_settled(harness);
+    harness.get_by_label("Load backups").click();
+    run_until(harness, "the list", |h| shows(h, "G"));
+    harness.get_by_label("G").click();
+    run_until(harness, "the plan", |h| shows(h, "Files to write"));
+}
+
+#[test]
+fn a_restore_that_deletes_the_extra_files_is_offered_from_the_compare_window() {
+    let (mut harness, _tmp, _other) = behind_with_an_extra_file();
+    plan_g_in_restore(&mut harness);
+    click(&mut harness, "Delete files the backup of G does not have");
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    click(&mut harness, "Compare G");
+
+    assert!(shows(&harness, "To use it, restore it on the Restore tab."));
+    assert!(!shows(&harness, "Restoring it changes no files."));
+    assert!(harness.query_by_label("Open G in Restore").is_some());
+}
+
+#[test]
+fn open_in_restore_keeps_the_edits_of_the_game_already_open_there() {
+    let pcs = behind_another_pc();
+    let mut harness = pcs.here;
+    scan(&mut harness, "1 game found");
+    run_until_compared(&mut harness);
+    plan_g_in_restore(&mut harness);
+    click(&mut harness, "Open WinAppData/G");
+    click(&mut harness, "Override WinAppData/G/save.dat");
+    assert!(shows(&harness, "New target of WinAppData/G/save.dat"));
+    harness.state_mut().set_tab(Tab::Backup);
+    run_settled(&mut harness);
+    click(&mut harness, "Compare G");
+
+    harness.get_by_label("Open G in Restore").click();
+    run_settled(&mut harness);
+
+    assert!(shows(&harness, "New target of WinAppData/G/save.dat"));
 }
 
 #[test]
@@ -1787,7 +1898,10 @@ fn a_game_of_unknown_base_is_backed_up_from_its_compare_window() {
     assert_left_out(&harness, "G");
 
     click(&mut harness, "Compare G");
-    assert!(shows(&harness, "This PC has no record of its last sync."));
+    assert!(shows(
+        &harness,
+        "This PC has no sync record for this game yet."
+    ));
     click(&mut harness, "Back up this PC's saves");
     harness.get_by_label("Back up 1 game").click();
     run_until_backed_up(
@@ -2020,7 +2134,7 @@ fn choose_folders_saves_the_choice_and_compares_again() {
     let (mut harness, env) = open_app(&tmp, &repository, Vec::new(), vec![game], true);
     scan(&mut harness, "1 game found");
     run_until_compared(&mut harness);
-    let label = hover_text(&mut harness, "G", "Last sync unknown: ");
+    let label = hover_text(&mut harness, "G", "No sync record: ");
     assert!(label.ends_with("Choose folders… places them."), "{label}");
 
     click(&mut harness, "Choose folders…");
@@ -2449,7 +2563,6 @@ fn details_of_the_other_build_name_its_path_in_the_backup() {
     run_until_compared(&mut harness);
     // This PC has no record of syncing G, so its tree is in its compare window, under the details.
     click(&mut harness, "Compare G");
-    click(&mut harness, "Open WinAppData/G");
 
     harness.get_by_label("Details of save.dat").click();
     run_until(&mut harness, "the details", |h| shows(h, "Location"));
