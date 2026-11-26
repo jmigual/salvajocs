@@ -84,7 +84,6 @@ impl BackupTab {
             },
         );
         if back_up.clicked() {
-            self.only = None;
             self.backup_requested = true;
             self.start_requested(ui.ctx(), state);
         }

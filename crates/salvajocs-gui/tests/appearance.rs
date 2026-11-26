@@ -348,7 +348,7 @@ fn compared_backup_tab(
         shows(
             h,
             &format!("{changed} changed since the backup from steamdeck"),
-        ) && shows(h, "A newer backup exists, from steamdeck")
+        ) && shows(h, "Compare Hades")
     });
     (harness, tmp, turn)
 }

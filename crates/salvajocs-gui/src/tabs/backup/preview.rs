@@ -135,7 +135,7 @@ fn preview_game(
         compared: &comparison,
     };
     let needed = (base.as_ref()).is_some_and(|base| base.to_read(&saves, &baseline).is_some());
-    // A base the repository no longer lists is left unread: Back up asks.
+    // A base the repository no longer lists is left unread: the game waits for a choice.
     let base_backup = match base_info {
         Some(info) if needed => {
             let mut storage = lock_storage(storage)?;
@@ -243,7 +243,7 @@ fn file_tree(game: &GameScan, preview: Option<&Preview>) -> FileTree {
 
 /// `2 new, 1 changed, 1 removed, 1 could not be compared`, leaving out the kinds there are none
 /// of; empty when there is none of any.
-pub(super) fn counted(counts: &Counts) -> String {
+fn counted(counts: &Counts) -> String {
     let parts = [
         (counts.new, "new"),
         (counts.changed, "changed"),
@@ -271,7 +271,8 @@ pub(super) enum Next<'a> {
         blocker: Option<NoSkip>,
     },
     /// Another PC made the newest backup, which differs by `counts`, and this PC has not changed
-    /// the saves since its base: no backup is made, the newest is restored instead (ADR-0035).
+    /// the saves since its base: no backup is made without the user's consent, the newest is
+    /// restored instead (ADR-0035).
     Behind {
         newest: &'a SnapshotInfo,
         counts: Counts,
@@ -279,14 +280,16 @@ pub(super) enum Next<'a> {
         own: bool,
     },
     /// This PC and another changed the saves since the base, made at `base_time` when the
-    /// repository lists it; the newest backup differs by `counts` and Back up asks.
+    /// repository lists it; the newest backup differs by `counts`. No backup is made without the
+    /// user's consent.
     ChangedOnBoth {
         newest: &'a SnapshotInfo,
         counts: Counts,
         base_time: Option<SystemTime>,
         own: bool,
     },
-    /// This PC has no base for the game and the newest backup differs by `counts`: Back up asks.
+    /// This PC has no base for the game and the newest backup differs by `counts`. No backup is
+    /// made without the user's consent.
     UnknownBase {
         newest: &'a SnapshotInfo,
         counts: Counts,
@@ -472,41 +475,6 @@ pub(super) fn unknown(entries: &[MappingEntry]) -> usize {
         .count()
 }
 
-/// ` It differs from this PC's saves: this PC has 2 files it does not have, 1 changed, and it
-/// has 1 file this PC does not have.`, naming only the kinds there are, from the side of this PC
-/// (`new` is on this PC only, `removed` in the backup only); empty when none differs.
-fn differs_from_newest(counts: &Counts) -> String {
-    let files = |count: usize| format!("{count} file{}", if count == 1 { "" } else { "s" });
-    let parts = [
-        (
-            counts.new,
-            format!("this PC has {} it does not have", files(counts.new)),
-        ),
-        (counts.changed, format!("{} changed", counts.changed)),
-        (
-            counts.removed,
-            format!("it has {} this PC does not have", files(counts.removed)),
-        ),
-        (
-            counts.unknown,
-            format!("{} could not be compared", counts.unknown),
-        ),
-    ];
-    let mut parts: Vec<_> = (parts.into_iter())
-        .filter(|&(count, _)| count > 0)
-        .map(|(_, part)| part)
-        .collect();
-    let Some(last) = parts.pop() else {
-        return String::new();
-    };
-    let list = match parts.len() {
-        0 => last,
-        1 => format!("{} and {last}", parts[0]),
-        _ => format!("{}, and {last}", parts.join(", ")),
-    };
-    format!(" It differs from this PC's saves: {list}.")
-}
-
 /// `next` as the sentence its header shows on hover.
 pub(super) fn sentence(next: &Next<'_>) -> String {
     let since = |newest: &SnapshotInfo| (newest.host.clone(), format_time(newest.time));
@@ -534,54 +502,30 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
                 Some(_) => format!("{same}, but a backup will be made"),
             }
         }
-        Next::Behind {
-            newest,
-            counts,
-            own,
-        } => {
+        Next::Behind { newest, own, .. } => {
             let (host, date) = since(newest);
-            let differs = differs_from_newest(&counts);
-            if own {
-                return format!(
-                    "This PC has a newer backup, from {date}.{differs} You restored an older one \
-                     and have not changed the saves since, so no backup will be made. To go back \
-                     to the newer one, restore it on the Restore tab. To keep these saves, use \
-                     Back up anyway under the game."
-                );
-            }
-            format!(
-                "A newer backup exists, from {host}, {date}.{differs} This PC has not changed its \
-                 saves since it last synced, so no backup will be made. To use the newer backup, \
-                 restore it on the Restore tab. To keep this PC's saves instead, use Back up \
-                 anyway under the game."
-            )
+            let host = host_name(&host, own);
+            format!("Behind: {host} made a newer backup, {date}. Click to compare")
         }
         Next::ChangedOnBoth {
             newest,
-            counts,
             base_time,
             own,
+            ..
         } => {
             let (host, date) = since(newest);
-            let host = host_name(&host, own);
             // After an undo the base is a safety backup made after the newest one.
             let synced = (base_time.filter(|time| *time <= newest.time))
                 .map_or(String::new(), |time| format!(" ({})", format_time(time)));
-            let differs = counted(&counts);
-            let against = if differs.is_empty() {
-                format!("no file differs from the backup from {host}, {date}")
-            } else {
-                format!("{differs} against the backup from {host}, {date}")
-            };
             if own {
                 return format!(
-                    "Changed on this PC since it restored an older backup{synced}. A newer \
-                     backup of this PC exists, from {date}: {against}. Back up asks what to do."
+                    "Changed on both: this PC changed the saves since it restored an older \
+                     backup{synced}. Its newest backup is from {date}. Click to compare"
                 );
             }
             format!(
-                "Changed on this PC and on {host} since this PC last synced{synced}: {against}. \
-                 Back up asks what to do."
+                "Changed on both: this PC and {host} changed the saves since the last \
+                 sync{synced}. Click to compare"
             )
         }
         Next::UnknownBase {
@@ -591,18 +535,16 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
         } => {
             let (host, date) = since(newest);
             let host = host_name(&host, own);
-            let differs = counted(&counts);
-            let saves = if differs.is_empty() {
-                format!("This PC's files match the newest backup, from {host}, {date}")
+            if counts == Counts::default() {
+                format!(
+                    "Last sync unknown: the newest backup is from {host}, {date}. Click to compare"
+                )
             } else {
                 format!(
-                    "This PC's saves differ from the newest backup, from {host}, {date}: {differs}"
+                    "Last sync unknown: this PC's saves differ from the newest backup, from {host}, \
+                     {date}. Click to compare"
                 )
-            };
-            format!(
-                "{saves}. salvajocs has no record of this PC syncing this game. Back up asks what \
-                 to do."
-            )
+            }
         }
         Next::Changes {
             newest,
@@ -620,6 +562,40 @@ pub(super) fn sentence(next: &Next<'_>) -> String {
     }
 }
 
+/// The line of the compare window of a game that waits for the user's choice, by `next`: why it
+/// waits and how to use the newest backup instead; `None` for a game that does not wait.
+fn compare_line(next: &Next<'_>) -> Option<String> {
+    let since = |newest: &SnapshotInfo, own| {
+        let host = host_name(&newest.host, own).to_owned();
+        (host, format_time(newest.time))
+    };
+    Some(match *next {
+        Next::Behind { newest, own, .. } => {
+            let (host, date) = since(newest, own);
+            format!(
+                "A newer backup exists, from {host}, {date}. To use it, restore it on the \
+                 Restore tab."
+            )
+        }
+        Next::ChangedOnBoth { own: true, .. } => "This PC changed the saves since it restored \
+             an older backup. To use the newest backup, restore it on the Restore tab."
+            .to_owned(),
+        Next::ChangedOnBoth { newest, .. } => format!(
+            "This PC and {} changed the saves since the last sync. To use the newest backup, \
+             restore it on the Restore tab.",
+            newest.host
+        ),
+        Next::UnknownBase { newest, own, .. } => {
+            let (host, date) = since(newest, own);
+            format!(
+                "This PC has no record of its last sync. To use the newest backup, from {host}, \
+                 {date}, restore it on the Restore tab."
+            )
+        }
+        _ => return None,
+    })
+}
+
 /// What a game's header shows of its next backup, each with [`preview_text`] for its hover.
 pub(super) enum Header {
     /// Nothing: no preview yet, the game would not be backed up, or the preview failed, which
@@ -627,13 +603,19 @@ pub(super) enum Header {
     Nothing,
     /// How many files are new, changed, removed or could not be compared.
     Chips(Counts, String),
-    /// One icon of [`Next::glyph`], in its `tone`, followed by the `counts` of differences when
-    /// there are any.
+    /// One icon of [`Next::glyph`], in its `tone`.
     Mark {
         glyph: &'static str,
         tone: Tone,
-        counts: Counts,
         text: String,
+    },
+    /// One icon of [`Next::glyph`] in the warning color, as the button that opens the game's
+    /// compare window, whose `line` says why: the game waits for the user's choice (behind,
+    /// changed on both PCs or of unknown base, ADR-0035).
+    Compare {
+        glyph: &'static str,
+        text: String,
+        line: String,
     },
 }
 
@@ -644,8 +626,6 @@ pub(super) enum Tone {
     Accent,
     /// Weak: the same files are backed up again, which is no news.
     Muted,
-    /// The warning color: this PC is behind, or Back up asks.
-    Warn,
 }
 
 /// The [`Header`] of `game` by `preview` and `settings`. [`next_backup`] keys and clones every
@@ -663,65 +643,50 @@ pub(super) fn header_of(
     };
     let text = noted(sentence(&next), preview);
     if let Next::Changes { counts, .. } = next {
-        Header::Chips(counts, text)
-    } else if let Some(glyph) = next.glyph() {
-        let (tone, counts) = match next {
-            Next::Same {
-                blocker: Some(_), ..
-            } => (Tone::Muted, Counts::default()),
-            Next::Behind { counts, .. }
-            | Next::ChangedOnBoth { counts, .. }
-            | Next::UnknownBase { counts, .. } => (Tone::Warn, counts),
-            _ => (Tone::Accent, Counts::default()),
-        };
-        Header::Mark {
-            glyph,
-            tone,
-            counts,
-            text,
-        }
-    } else {
-        Header::Nothing
+        return Header::Chips(counts, text);
     }
+    let Some(glyph) = next.glyph() else {
+        return Header::Nothing;
+    };
+    if let Some(line) = compare_line(&next) {
+        return Header::Compare { glyph, text, line };
+    }
+    let tone = match next {
+        Next::Same {
+            blocker: Some(_), ..
+        } => Tone::Muted,
+        _ => Tone::Accent,
+    };
+    Header::Mark { glyph, tone, text }
 }
 
 impl Header {
-    /// Whether Back up would not store the game (behind, changed on both PCs or of unknown
-    /// base), so **Back up anyway** is offered for it.
-    pub(super) fn offers_anyway(&self) -> bool {
-        matches!(
-            self,
-            Header::Mark {
-                tone: Tone::Warn,
-                ..
-            }
-        )
+    /// Whether the game waits for the user's choice before Back up stores it (behind, changed on
+    /// both PCs or of unknown base): Back up leaves it out unless the user consents (ADR-0035).
+    pub(super) fn asks(&self) -> bool {
+        matches!(self, Header::Compare { .. })
     }
 }
 
-/// What the next backup would do to a game, in its header, by its `header`.
-pub(super) fn preview_ui(ui: &mut Ui, header: &Header) {
+/// What the next backup would do to the game `title`, in its header, by its `header`. Returns
+/// whether its compare button was clicked.
+pub(super) fn preview_ui(ui: &mut Ui, header: &Header, title: &str) -> bool {
     match header {
         Header::Nothing => {}
         Header::Chips(counts, text) => chips(ui, counts, text),
-        Header::Mark {
-            glyph,
-            tone,
-            counts,
-            text,
-        } => {
+        Header::Mark { glyph, tone, text } => {
             let color = match tone {
                 Tone::Accent => theme::palette(ui).accent,
                 Tone::Muted => ui.visuals().weak_text_color(),
-                Tone::Warn => ui.visuals().warn_fg_color,
             };
             theme::labeled_mark(ui, glyph, color, text);
-            if *counts != Counts::default() {
-                // Named by the counts alone: the mark already carries the sentence.
-                chips(ui, counts, &counted(counts));
-            }
+        }
+        Header::Compare { glyph, text, .. } => {
+            let (color, name) = (ui.visuals().warn_fg_color, format!("Compare {title}"));
+            return theme::mark_button(ui, glyph, color, &name, text).clicked();
         }
     }
+    false
 }
 
 /// The chips of `counts`, with `text` on hover.
@@ -770,8 +735,8 @@ pub(super) enum FileAction {
 }
 
 /// What the scan found for one game, with its files as a checkbox tree and its registry keys
-/// folded away. Returns the change the user made this frame; a folder to open or a file's
-/// details to show goes to `action`.
+/// folded away, unfolded at first when `open`. Returns the change the user made this frame, and
+/// a folder to open or a file's details to show.
 pub(super) fn files_ui(
     ui: &mut Ui,
     game: &GameScan,
@@ -779,8 +744,9 @@ pub(super) fn files_ui(
     preview: Option<&Preview>,
     settings: &GameSettings,
     enabled: bool,
-    action: &mut Option<FileAction>,
-) -> Option<Change> {
+    open: bool,
+) -> (Option<Change>, Option<FileAction>) {
+    let mut action = None;
     let included = |key: &str| settings.path_included(key);
     let badge = badges(game, preview, settings);
     let summary = summary(game, tree.included(&included, &badge), settings);
@@ -792,11 +758,12 @@ pub(super) fn files_ui(
     }
     if game.files.is_empty() && game.registry_source.is_none() {
         ui.weak(summary);
-        return None;
+        return (None, None);
     }
     let summary = RichText::new(summary).color(ui.visuals().weak_text_color());
-    egui::CollapsingHeader::new(summary)
+    let change = egui::CollapsingHeader::new(summary)
         .id_salt(&game.title)
+        .default_open(open)
         .show(ui, |ui| {
             let mode = Mode::Select {
                 included: &included,
@@ -815,7 +782,7 @@ pub(super) fn files_ui(
                     let button = ui.add(egui::Button::new("Details").small());
                     button.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
                     if button.clicked() {
-                        *action = Some(FileAction::Details(index));
+                        action = Some(FileAction::Details(index));
                     }
                 }
             };
@@ -825,7 +792,7 @@ pub(super) fn files_ui(
             let mut change = match clicked.inner {
                 Some(Clicked::Toggle(node, included)) => Some(Change::Path { node, included }),
                 Some(Clicked::Open(path)) => {
-                    *action = Some(FileAction::Open(path));
+                    action = Some(FileAction::Open(path));
                     None
                 }
                 None => None,
@@ -848,7 +815,8 @@ pub(super) fn files_ui(
             change
         })
         .body_returned
-        .flatten()
+        .flatten();
+    (change, action)
 }
 
 impl BackupTab {

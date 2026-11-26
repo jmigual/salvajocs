@@ -16,36 +16,29 @@ use salvajocs_core::slug::slug;
 use salvajocs_core::sync::{self, SyncError};
 
 use super::choices::{self, AfterBackup, Games};
-use super::preview::{Next, counted, next_backup};
-use super::results::{GameResult, summarize};
+use super::results::{GameResult, Outcome, summarize};
 use super::unsent::{
-    Answer, Asking, Checked, Reason, Shared, SyncAsk, conflict_lines, conflict_ui, has_unsent,
-    rule_lines, send_unsent, sync_ui,
+    Answer, Checked, Shared, conflict_lines, conflict_ui, has_unsent, rule_lines, send_unsent,
 };
 use super::{Backed, BackupTab, Cleaned, Progress, SaveProblems, lock, scan_progress};
 use crate::job::Job;
 use crate::state::{SharedStorage, State, chain, lock_storage};
-use crate::tabs::format_date;
 use crate::theme::{self, icons};
 
 impl BackupTab {
     /// The dialog asking which version to keep of each change made on another PC (this PC's
-    /// version from the config, the repository's from the check) and whether to back up each game
-    /// whose saves differ from the newest backup (ADR-0035). **Back up** puts the choices into the
-    /// config and starts the backup, with the games to back up anyway; **Cancel** drops it and
-    /// writes nothing.
+    /// version from the config, the repository's from the check). **Back up** puts the choices
+    /// into the config and starts the backup; **Cancel** drops it and writes nothing.
     pub(super) fn asking_ui(&mut self, ctx: &egui::Context, state: &mut State) {
         let (Some(asking), Some(config)) = (&mut self.asking, &mut state.config) else {
             return;
         };
         let (answer, dismissed) = theme::modal_dismissible(ctx, "backup_conflicts", 720.0, |ui| {
-            if !asking.games.is_empty() || asking.rules.is_some() {
-                ui.heading("Changed on another PC");
-                ui.label(
-                    "Another PC changed these in the repository since this PC's changes started. \
-                     Choose which version to keep; the backup then saves this PC's choices.",
-                );
-            }
+            ui.heading("Changed on another PC");
+            ui.label(
+                "Another PC changed these in the repository since this PC's changes started. \
+                 Choose which version to keep; the backup then saves this PC's choices.",
+            );
             for (index, (conflict, keep)) in asking.games.iter_mut().enumerate() {
                 let here = (config.custom_games.iter()).find(|game| game.name == conflict.name);
                 let (here, theirs) = conflict_lines(here, conflict.newest.as_ref());
@@ -60,16 +53,6 @@ impl BackupTab {
                 ui.push_id("rules", |ui| {
                     conflict_ui(ui, "Old backups rules", &here, &theirs, keep);
                 });
-            }
-            if !asking.syncs.is_empty() {
-                ui.add_space(8.0);
-                ui.heading("Saves that differ from the newest backup");
-                ui.label(
-                    "Backing up this PC's saves makes them the newest backup. Choose for each game.",
-                );
-            }
-            for (index, ask) in asking.syncs.iter_mut().enumerate() {
-                ui.push_id(("sync", index), |ui| sync_ui(ui, ask));
             }
             ui.add_space(8.0);
             // After the blocks, so the choice made in this frame counts.
@@ -88,14 +71,9 @@ impl BackupTab {
                 if let Some(asking) = self.asking.take() {
                     self.cleared = Some(asking.source.clone());
                     self.rules_changed |= asking.rules.is_some();
-                    let anyway = asking.syncs.iter().filter(|ask| ask.back_up);
-                    self.back_up_anyway = anyway.map(|ask| ask.slug.clone()).collect();
-                    let changes_config = !asking.games.is_empty() || asking.rules.is_some();
                     asking.apply(config);
-                    if changes_config {
-                        state.save_config(ctx);
-                    }
                 }
+                state.save_config(ctx);
                 self.start_requested(ctx, state);
             }
             Some(Answer::Cancel) => self.asking = None,
@@ -103,93 +81,25 @@ impl BackupTab {
         }
     }
 
-    /// Requests a backup of only the game `slug`, whatever its state, with no question about it:
-    /// **Back up anyway**. It goes the way of Back up otherwise: unsent custom games and rules
-    /// are checked and saved first, pending selection changes are saved, and the repository's
-    /// cleanup runs after.
-    pub(super) fn request_anyway(&mut self, ctx: &egui::Context, state: &State, slug: String) {
-        self.only = Some(slug);
-        self.backup_requested = true;
-        self.start_requested(ctx, state);
-    }
-
     /// Starts the requested backup once no pending file write runs, so the backup saves every
     /// change and is the file's only writer. With unsent custom games or rules, the repository
     /// is checked first for changes made on another PC to them, and the backup starts once the
     /// check passed or its question is answered, also only with no pending file write running.
-    /// It also waits for the comparison, as the question about games that differ is built from it.
+    /// It also waits for the comparison, as the games it leaves out are found from it.
     pub(super) fn start_requested(&mut self, ctx: &egui::Context, state: &State) {
         if self.choices.busy() || self.running.is_some() || self.previewing.is_some() {
             return;
         }
         if self.backup_requested {
             self.backup_requested = false;
-            self.back_up_anyway.clear();
             if has_unsent(state.config.as_ref()) {
                 self.start_check(ctx, state);
             } else {
-                self.ask_or_start(ctx, state);
+                self.start_backup(ctx, state);
             }
         } else if self.cleared.take().is_some() {
             self.start_backup(ctx, state);
         }
-    }
-
-    /// Opens the question about the games whose saves differ from the newest backup, or starts
-    /// the backup when there is none.
-    fn ask_or_start(&mut self, ctx: &egui::Context, state: &State) {
-        let syncs = self.sync_asks();
-        match &state.session {
-            Some(session) if !syncs.is_empty() => {
-                self.asking = Some(Asking {
-                    source: Arc::downgrade(&session.storage),
-                    games: Vec::new(),
-                    rules: None,
-                    syncs,
-                });
-            }
-            _ => self.start_backup(ctx, state),
-        }
-    }
-
-    /// The chosen games that, by their preview, are changed on both this PC and another or have
-    /// an unknown base (ADR-0035); none for a backup of `only` one game, which is not asked.
-    /// Reads nothing; a game with no preview yet is left to the backup, which does not back it
-    /// up either.
-    pub(super) fn sync_asks(&self) -> Vec<SyncAsk> {
-        let Some(report) = self.report.as_ref().filter(|_| self.only.is_none()) else {
-            return Vec::new();
-        };
-        let games = report.games.iter().zip(&self.slugs).zip(&self.previews);
-        games
-            .filter_map(|((game, slug), preview)| {
-                let settings = self.choices.game(&game.title).unwrap_or_default();
-                let (newest, counts, own, reason) = match next_backup(game, preview, &settings)? {
-                    Next::ChangedOnBoth {
-                        newest,
-                        counts,
-                        own,
-                        ..
-                    } => (newest, counts, own, Reason::ChangedOnBoth),
-                    Next::UnknownBase {
-                        newest,
-                        counts,
-                        own,
-                    } => (newest, counts, own, Reason::UnknownBase),
-                    _ => return None,
-                };
-                Some(SyncAsk {
-                    slug: slug.clone(),
-                    title: game.title.clone(),
-                    reason,
-                    host: newest.host.clone(),
-                    own,
-                    date: format_date(newest.time),
-                    differs: counted(&counts),
-                    back_up: false,
-                })
-            })
-            .collect()
     }
 
     /// Reads the repository's copies of this PC's unsent custom games and rules in a job, for
@@ -215,17 +125,20 @@ impl BackupTab {
         self.checking = Some((Arc::downgrade(&session.storage), job));
     }
 
-    /// Backs up the chosen games, or only `only`, in a job, with the staging mirrors under the
-    /// cache dir (ADR-0004). The job first saves this PC's unsent custom games and rules
-    /// (ADR-0029), then the pending selection changes, and reads every game's settings again, so
-    /// another machine's newer choices count. Then it scans again, so a save made since the last
-    /// scan is included, and filters each game by its settings. Last, it removes old backups by
-    /// the repository's retention policy. With no game chosen it only saves the unsent changes.
+    /// Backs up the chosen games in a job, with the staging mirrors under the cache dir
+    /// (ADR-0004). The job first saves this PC's unsent custom games and rules (ADR-0029), then
+    /// the pending selection changes, and reads every game's settings again, so another machine's
+    /// newer choices count. Then it scans again, so a save made since the last scan is included,
+    /// and filters each game by its settings. Core stores a [`BackupTab::held_back`] game only if
+    /// it no longer waits, and its "not backed up" result is not shown. Last, it removes old
+    /// backups by the repository's retention policy. With no game chosen it only saves the unsent
+    /// changes.
     pub(super) fn start_backup(&mut self, ctx: &egui::Context, state: &State) {
         let (Some(session), Some(config)) = (&state.session, &state.config) else {
             return;
         };
         let chosen = self.chosen();
+        let held_back = self.held_back();
         let selection = match chosen {
             0 => None,
             _ => match self.choices.for_backup() {
@@ -234,7 +147,7 @@ impl BackupTab {
             },
         };
         let progress = Arc::new(Mutex::new(Progress {
-            total: if self.only.is_some() { 1 } else { chosen },
+            total: chosen,
             done: Vec::new(),
             cleaning: false,
             sending: has_unsent(Some(config)),
@@ -254,9 +167,7 @@ impl BackupTab {
         );
         let config_dir = state.env.config_dir.clone();
         let environment = state.env.environment.clone();
-        let only = self.only.take();
-        let mut back_up_anyway = std::mem::take(&mut self.back_up_anyway);
-        back_up_anyway.extend(only.clone());
+        let back_up_anyway = std::mem::take(&mut self.back_up_anyway);
         self.running = Some(Job::spawn(ctx, move || {
             let source = Arc::downgrade(&storage);
             // First, so the scan and the cleanup go by this PC's custom games and rules.
@@ -285,7 +196,7 @@ impl BackupTab {
                 None => (SaveProblems::default(), None),
             };
             let environment = environment.unwrap_or_else(Environment::detect);
-            let (reloaded, report, mut games) = to_stage(
+            let (reloaded, report, games) = to_stage(
                 choices::load(&storage),
                 pending.as_ref(),
                 &settings,
@@ -299,10 +210,9 @@ impl BackupTab {
                      {err:#}"
                 ));
             }
-            if let Some(only) = &only {
-                games.retain(|game| slug(&game.title) == *only);
-            }
-            lock(&progress).total = games.len();
+            // Counted as the button counts them: a held-back game only once its result shows.
+            let held = (games.iter()).filter(|game| held_back.contains(&slug(&game.title)));
+            lock(&progress).total = games.len() - held.count();
             let mapper = Mapper::new(&manifest, &config, &environment);
             let scope = config.secret_scope();
             let backed_up = back_up(
@@ -313,7 +223,15 @@ impl BackupTab {
                 (&config_dir, &scope),
                 &back_up_anyway,
                 |result| {
-                    lock(&progress).done.push(result);
+                    let mut progress = lock(&progress);
+                    // The list showed it unticked, so "not backed up" is no news.
+                    if !hidden(&result, &held_back) {
+                        if held_back.contains(&slug(&result.title)) {
+                            progress.total += 1;
+                        }
+                        progress.done.push(result);
+                    }
+                    drop(progress);
                     waker.request_repaint();
                 },
             );
@@ -349,6 +267,16 @@ impl BackupTab {
             })
         }));
     }
+}
+
+/// Whether the backup's `result` is left out of the results: a game of `held_back`, which the list
+/// showed waiting for a choice, unticked, that core did not back up for the same reason.
+fn hidden(result: &GameResult, held_back: &BTreeSet<String>) -> bool {
+    let waited = matches!(
+        result.outcome,
+        Outcome::Behind { .. } | Outcome::ChangedOnBoth { .. } | Outcome::UnknownBase(_)
+    );
+    waited && held_back.contains(&slug(&result.title))
 }
 
 /// Backs up `games` into `storage` by each one's state on this PC, from its newest backup read

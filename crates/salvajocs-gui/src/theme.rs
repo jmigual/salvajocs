@@ -217,6 +217,23 @@ pub fn labeled_mark(ui: &mut Ui, glyph: &'static str, color: Color32, label: &st
     response.on_hover_text(label)
 }
 
+/// A 16 px icon of [`icons`] in `color` as a button framed only under the pointer, named `name`
+/// for screen readers, that shows `hover` on hover.
+pub fn mark_button(
+    ui: &mut Ui,
+    glyph: &'static str,
+    color: Color32,
+    name: &str,
+    hover: &str,
+) -> Response {
+    let icon = Atom::paint(Vec2::splat(16.0), move |ui, args| {
+        paint_icon(ui, args.rect, glyph, color);
+    });
+    let response = ui.add(Button::new(icon).frame_when_inactive(false));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, name));
+    response.on_hover_text(hover)
+}
+
 /// Icons of [`icons`], each in its color and followed by its count, leaving out the zero counts.
 /// It is one widget that shows `label` on hover and is named by it for screen readers. The counts
 /// are in the weak text color, as icon colors only meet the contrast floor of marks.

@@ -8,6 +8,8 @@ acceptance (ADR-0030).
 **Amended:** 2026-11-25: the Back up dialog also asks about each game changed here and on
 another PC since this PC last synced, or whose base is unknown, with **Don't back up**
 preselected (ADR-0035).
+**Amended:** 2026-11-26: the dialog asks only about custom games and rules again; a game that
+differs from the newest backup is chosen in its compare window and its box (ADR-0035).
 
 ## Context
 

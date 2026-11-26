@@ -325,8 +325,9 @@ Files the restored backup does not have stay on your disk. That includes a save 
 backed up. Right after the restore, they show as new on the Backup tab, and the next Back up
 stores them together with the restored saves. If another PC backs up first, the game shows
 behind and Back up skips it. Then these files stay on this PC but are in no backup until this
-PC's saves change or you press **Back up anyway**. To remove such files at restore time, see
-[Deleting files the backup does not have](#deleting-files-the-backup-does-not-have).
+PC's saves change or you choose **Back up this PC's saves** in the game's
+[compare window](backup.md#choosing-for-a-game-that-waits). To remove such files at restore
+time, see [Deleting files the backup does not have](#deleting-files-the-backup-does-not-have).
 
 ## Undo
 
@@ -335,8 +336,8 @@ The safety backup is the undo. In the **Snapshot** list, choose the newest entry
 
 An undo is a restore like any other. This PC is then in sync with the safety backup, and the
 newest backup is a different one. So after an undo the game reads behind, with the arrow on the
-Backup tab, until this PC's saves change. Then Back up asks. If the saves the undo brings back
-are the newest backup's, the game is up to date instead.
+Backup tab, until this PC's saves change. Then it reads changed on both. If the saves the undo
+brings back are the newest backup's, the game is up to date instead.
 
 An example, with PCs A and B:
 
@@ -344,9 +345,10 @@ An example, with PCs A and B:
    backup.
 2. On A, you undo the restore: you restore the safety backup. A has its old saves again.
 3. On A, the Backup tab shows the game with the down arrow: a newer backup exists, and A has not
-   changed its saves since it last synced. Back up does not store it. Until you play or press
-   **Back up anyway** under the game, A's saves are only in the safety backup. Pressing **Back up
-   anyway** makes A's saves the newest backup. If you play on A first, Back up asks what to do.
+   changed its saves since it last synced. Its box is unticked, so Back up does not store it.
+   Until you play or tick it, A's saves are only in the safety backup. Ticking it, or **Back up
+   this PC's saves** in its compare window, makes A's saves the newest backup at the next Back up.
+   If you play on A first, the game reads changed on both and still waits for your choice.
 
 An undo has limits:
 

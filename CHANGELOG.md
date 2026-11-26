@@ -11,9 +11,10 @@ new sync rules and can make an older save the newest backup.
 
 ### Added
 
-- A game that is behind, changed on both PCs or whose last sync is unknown has a **Back up
-  anyway** button on the Backup tab. It backs up only that game, now, so this PC's saves become
-  the newest.
+- A game that is behind, changed on both PCs or whose last sync is unknown shows only its mark on
+  the Backup tab, with its box unticked, and Back up leaves it out. Click the mark to compare its
+  files with the newest backup and choose **Back up this PC's saves** or **Don't back up**.
+  Ticking its box also backs it up at the next Back up. The choice is not saved.
 - The Restore plan has a **Manifest paths** button that lists the game's save path templates and
   registry keys from the manifest or your custom game, with where each applies; right-click one to
   copy it.
@@ -51,13 +52,12 @@ new sync rules and can make an older save the newest backup.
   `sync-base.json` in the config folder; after a restore, also a list of this PC's files), and the
   Backup tab compares a game with it, not with this PC's last backup. A game this PC has not
   changed while a newer backup exists is not backed up, so older saves never become the newest; it
-  shows a down arrow, "has newer saves", instead of a check. A game changed on both PCs, or whose
-  last sync is unknown, makes Back up ask first, in the same dialog as the custom games conflicts,
-  with "Don't back up" preselected; "Back up this PC's" makes this PC's saves the newest backup. A
-  game this PC changed is backed up even when its files equal this PC's own last backup. The
-  Backup results say why a game was not backed up and what to do, with their own marks. The
-  Restore tab marks a game whose newest backup is a different one, with its PC and date. After an
-  undo the game reads behind until this PC's saves change.
+  shows a down arrow instead of a check. A game changed on both PCs, or whose last sync is
+  unknown, is not backed up either until you choose to. A game this PC changed is backed up even
+  when its files equal this PC's own last backup. The Backup results say why a game was not
+  backed up and what to do, with their own marks. The Restore tab marks a game whose newest
+  backup is a different one, with its PC and date. After an undo the game reads behind until this
+  PC's saves change.
 
 ## [0.10.0] - 2026-11-22
 

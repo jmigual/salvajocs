@@ -117,17 +117,17 @@ keys under **Registry**:
 Each game has one history in the repository, ordered by time, whichever PC made each backup. The
 newest backup is the game's saves.
 
-Back up only stores a game when this PC is the only one that changed the saves. Otherwise it skips
-the game or asks.
+Back up only stores a game by itself when this PC is the only one that changed the saves.
+Otherwise the game is up to date, or it waits for your choice.
 
 | State | What it means | What Back up does |
 | --- | --- | --- |
 | No backup yet | The repository has no backup of the game. | Backs it up. |
 | Up to date | This PC's saves are the newest backup's. | Stores nothing. |
 | This PC changed (ahead) | The newest backup is the last synced one, and this PC changed the saves since. | Backs up this PC's saves, which become the newest. |
-| Behind | A newer backup than the last synced one exists, usually from another PC, and this PC has not changed the saves since it last synced. | Stores nothing. Restore the newest backup on the [Restore tab](restore.md), or use **Back up anyway**. |
-| Changed on both | A newer backup than the last synced one exists, and this PC changed the saves too. | Asks. |
-| Last sync unknown | This PC does not know its last synced backup, and its saves differ from the newest backup. | Asks. |
+| Behind | A newer backup than the last synced one exists, usually from another PC, and this PC has not changed the saves since it last synced. | Waits for your choice. Restore the newest backup on the [Restore tab](restore.md), or [back up this PC's saves](#choosing-for-a-game-that-waits). |
+| Changed on both | A newer backup than the last synced one exists, and this PC changed the saves too. | Waits for your choice. |
+| Last sync unknown | This PC does not know its last synced backup, and its saves differ from the newest backup. | Waits for your choice. |
 
 Each PC remembers, for each game, the **last synced backup**: the backup it last backed up, last
 found to hold the same files as the newest backup, or last restored. A restore counts even when
@@ -144,24 +144,22 @@ they do not match, this PC changed them (if the newest backup is also another on
 A behind game is never backed up by itself, on purpose. Storing this PC's older saves would make
 them the newest backup, and every other PC would then be told to restore them. Behind does not
 need another PC: if you restore an older backup of this same PC, the game reads behind too, and
-its text then says "this PC": `This PC has a newer backup, from <date>… You restored an older one
-and have not changed the saves since, so no backup will be made. To go back to the newer one,
-restore it on the Restore tab. To keep these saves, use Back up anyway under the game.` If you
-then change the saves, the game reads changed on both, and the text says `Changed on this PC
-since it restored an older backup. A newer backup of this PC exists, from <date>.`
+its text then says "this PC": `Behind: this PC made a newer backup, <date>. Click to compare`.
+If you then change the saves, the game reads changed on both, and the text says `Changed on
+both: this PC changed the saves since it restored an older backup.`
 
 After you restore the newest backup, the game is up to date, unless this PC keeps files the backup
 lacks. The Backup tab then counts those files as new, and the next Back up stores them with the
 restored saves (see
 [Deleting files the backup does not have](restore.md#deleting-files-the-backup-does-not-have)).
 After an [undo](restore.md#undo), the game reads behind unless the saves it brings back are the
-newest backup's, and stays behind until this PC's saves change. Then Back up asks.
+newest backup's, and stays behind until this PC's saves change. Then it reads changed on both.
 
 A game that is changed on both, or whose last sync is unknown, needs a decision from you:
 salvajocs cannot tell which saves should win, and it will not overwrite either silently. The last
 sync is unknown when this PC has no record yet, for example after an upgrade. Changing the
 repository or its options in Settings does the same for every game, since this PC has no record
-for the new repository, and Back up then asks about each game that differs. salvajocs first
+for the new repository, and each game that differs then waits for your choice. salvajocs first
 guesses that this PC's own last backup of the game is the last synced one. The last sync stays
 unknown when this PC has no such backup, or when that backup is the newest one and the saves
 changed since.
@@ -169,31 +167,38 @@ changed since.
 Upgrade salvajocs on all your PCs at the same time. A PC that still runs an older version does
 not follow these rules and can make an older save the newest.
 
-#### Back up anyway
+#### Choosing for a game that waits
 
-A game that is behind, changed on both or has an unknown last sync has a **Back up anyway**
-button under its title. It backs up only that game, now, with no question about this game: this
-PC's saves become the newest backup, and the other PC's backup stays in the history as an older
-version. The other PC will then show as behind. Use it when this PC's saves are the ones to keep.
-Unsent custom games or rules can still ask their own question first. The button is greyed out
-while a scan, a comparison, a question or a backup is under way.
+A game that is behind, changed on both or has an unknown last sync shows only its mark, and its
+box is unticked: Back up leaves it out. It shows no counts and no file tree in the list. Back up
+asks nothing about it.
 
-#### The Back up dialog
+Click the mark to open the game's compare window. It shows one line on why the game waits, and
+the game's file tree with the same marks and ticks as the list: a file only on this PC is new, a
+file only in the newest backup is removed. Ticks you change there are saved as in the list. Then
+choose:
 
-When you click **Back up** and a selected game is changed on both or its last sync is unknown, a
-dialog asks what to do with each such game before anything is stored. For an unknown last sync
-it says: "salvajocs does not know which backup this PC is in sync with, so it cannot tell which
-PC changed the saves. This can happen after you upgrade salvajocs." Choose for each game:
+- **Back up this PC's saves**: the box is ticked, and the next Back up stores the game. This PC's
+  saves become the newest backup. The other PC's backup stays in the history as an older version.
+  The other PC will then show as behind, so choose this only when this PC's saves are the ones to
+  keep.
+- **Don't back up**: the box stays unticked, and Back up leaves the game out. Restore the newest
+  backup on the Restore tab instead; a restore first saves this PC's files as a safety backup, so
+  they are not lost.
 
-- **Back up this PC's**: this PC's saves become the newest backup. The other PC's backup stays in
-  the history as an older version. The other PC will then show as behind and be offered these
-  saves, so choose this only when this PC's saves are the ones to keep.
-- **Don't back up**: nothing is stored for the game. Restore the newest backup later; a restore
-  first saves this PC's files as a safety backup, so they are not lost. This is the choice the
-  dialog starts with.
+Ticking the box in the list does the same as **Back up this PC's saves**, and unticking it the
+same as **Don't back up**. **Deselect all** unticks waiting games too; **Select all** leaves them
+as they are. This choice is not saved: it holds for the next Back up only, and a new scan or
+another repository unticks the box again.
 
-The buttons are **Back up** and **Cancel**. **Cancel** writes nothing. A game that is not backed
-up keeps its warning, and Back up asks again next time.
+When Back up backs up at least one game, it also checks each waiting game you left unticked,
+since its saves may have changed since the scan. It stores such a game only if it no longer
+waits, and shows no result line for a game that still waits.
+
+If you untick in the window every file that the newest backup lacks, and nothing else differs,
+the files Back up would store are the newest backup's. The game is then up to date: the window
+says so and offers **Close**, and the box shows your saved choice again. The same happens after
+you restore the newest backup.
 
 ### What differs from the last backup
 
@@ -213,16 +218,19 @@ out. Hover the icons to read the full sentence, such as
 | Check mark in a circle, no number | Up to date: this PC's saves are the newest backup's, so no backup will be made. |
 | Equals sign, no number | No changes since that backup, but a backup is still made: that backup has no list of hashes (it was made by salvajocs 0.5.0 or older), or it is from the other build and one side has registry keys. |
 | Plus in a circle, no number | No backup yet: the repository has no backup of the game. |
-| Arrow pointing down, then counts | Behind: a newer backup exists, usually from another PC, and this PC has not changed the saves since it last synced. No backup will be made; restore them, or use **Back up anyway**. The counts compare this PC's saves with the newest backup: files only on this PC, files that changed, and files only in the backup. Hover it to read `A newer backup exists, from <host>, <date>…`, or `This PC has a newer backup, from <date>…` when this PC made the newest backup. |
-| Warning sign, then counts | Changed on both: a newer backup exists, and this PC changed the saves too since it last synced. Back up asks what to do. |
-| Question mark without a number, in amber, then counts | Last sync unknown: salvajocs has no record of this PC syncing this game, and its saves differ from the newest backup. Back up asks what to do. |
+| Arrow pointing down, in amber | Behind: a newer backup exists, usually from another PC, and this PC has not changed the saves since it last synced. Hover it to read `Behind: <host> made a newer backup, <date>. Click to compare`; `<host>` is "this PC" when this PC made the newest backup. |
+| Warning sign, in amber | Changed on both: a newer backup exists, and this PC changed the saves too since it last synced. |
+| Question mark without a number, in amber | Last sync unknown: salvajocs has no record of this PC syncing this game, and its saves differ from the newest backup. |
+
+The three amber marks are buttons: each game waits for your choice, and clicking the mark opens
+its compare window (see [Choosing for a game that waits](#choosing-for-a-game-that-waits)).
 
 If the backups could not be read, the game says `Could not compare: <error>` under its title.
 
 A game that is not backed up, because it is unchecked or has nothing checked, gets no icons.
 
 A game that is behind, changed on both or whose last sync is unknown counts its differences
-from the newest backup in the **Changes** sort, as in its header.
+from the newest backup in the **Changes** sort, though its header shows no counts.
 
 In the file tree, a file that differs from the backup has one of these icons after its size.
 Hover it to read `New: not in the backup`, `Changed since the backup`,
@@ -311,14 +319,13 @@ backups (see [What is stored](#what-is-stored)). It shows the result per game un
 | Result | Meaning |
 | --- | --- |
 | backed up | This PC's saves were stored as a new snapshot. |
-| backed up; this PC's saves are now the newest | You chose **Back up this PC's** in the dialog, or used **Back up anyway**, and it was stored. |
+| backed up; this PC's saves are now the newest | The game waited for your choice, you ticked it or chose **Back up this PC's saves**, and it was stored. |
 | up to date | The saves are the same as the newest backup, which is this PC's, so nothing was stored. |
 | same as the newest backup, from `<host>` | Another PC's newest backup holds the same files, for example after a launcher's cloud sync, so nothing was stored. |
-| not backed up: a newer backup exists, from `<host>`, `<date>`, and this PC has not changed its saves since it last synced. To use the newer backup, restore it on the Restore tab. To keep this PC's saves instead, use Back up anyway under the game. | The game is behind. An arrow marks the line. |
-| not backed up: this PC has a newer backup, from `<date>`, and you have not changed the saves since you restored an older one. Restore the newer one on the Restore tab or use Back up anyway under the game. | The game is behind, and this PC made the newest backup. An arrow marks the line. |
-| not backed up: both this PC and `<host>` changed the saves since this PC last synced. Nothing was overwritten. Back up asks again next time. | The game is changed on both PCs, and you chose **Don't back up**, or Back up found it so without asking. A warning sign marks the line. |
-| not backed up: changed on this PC since it restored an older backup, and a newer backup of this PC exists, from `<date>`. Nothing was overwritten. Back up asks again next time. | The same, when this PC made the newest backup. |
-| not backed up: salvajocs does not know which backup this PC is in sync with (for example after upgrading), and the saves differ from the newest backup, from `<host>`. Nothing was overwritten. Back up asks again next time. | The game's last sync is unknown, and you chose **Don't back up**, or Back up found it so without asking. A warning sign marks the line. |
+| not backed up: behind: `<host>` made a newer backup, `<date>`. | Back up found the game behind, though the list did not show it waiting, for example because its saves changed since the scan. `<host>` is "this PC" when this PC made the newest backup. An arrow marks the line. |
+| not backed up: changed on both: this PC and `<host>` changed the saves since the last sync. | The same, for a game changed on both PCs. A warning sign marks the line. |
+| not backed up: changed on both: this PC changed the saves since it restored an older backup. Its newest backup is from `<date>`. | The same, when this PC made the newest backup. |
+| not backed up: last sync unknown: this PC's saves differ from the newest backup, from `<host>`. | The same, for a game whose last sync is unknown. A warning sign marks the line. |
 | failed | The game could not be backed up. The reason follows. |
 
 Each line starts with the game's title and a colon, such as `Game: backed up`.

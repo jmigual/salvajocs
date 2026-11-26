@@ -25,7 +25,6 @@ use crate::tabs::mapping::Dialog;
 use crate::tabs::sort::{self, Line};
 use crate::tabs::space::{Polled, Space};
 use crate::theme::{self, icons};
-use crate::widgets::named_button;
 use choices::{AfterBackup, Choices, Saved};
 use preview::{
     FileAction, Listed, Preview, badges, change_count, files_ui, header_of, preview_ui, to_choose,
@@ -36,6 +35,7 @@ use unsent::{Asking, Checked, Shared, is_session};
 
 mod bar;
 pub(crate) mod choices;
+mod compare;
 mod preview;
 mod results;
 pub(crate) mod run;
@@ -167,13 +167,12 @@ pub struct BackupTab {
     /// The repository a passed check, or the answered question, was for: the backup starts once
     /// no pending file write runs.
     cleared: Option<Weak<Mutex<Storage>>>,
-    /// The slugs of the games the user chose to back up although their saves differ from the
-    /// newest backup's; for the next backup only, never saved (ADR-0035).
+    /// The slugs of the games that wait for a choice (behind, changed on both PCs or of unknown
+    /// base) that the user ticked in the list or chose to back up in their compare window; for
+    /// the next backup of the shown scan only, never saved (ADR-0035).
     back_up_anyway: BTreeSet<String>,
-    /// The slug of the one game the requested backup is for, from its **Back up anyway**; that
-    /// game is backed up whatever its state, with no question, and no other. For the next backup
-    /// only, never saved (ADR-0035).
-    only: Option<String>,
+    /// The title of the game whose compare window is open.
+    comparing: Option<String>,
     /// What the last backup saved of this PC's unsent custom games and rules.
     shared: Shared,
     /// A backup saved this PC's rules, or the question about them was answered, since
@@ -213,6 +212,8 @@ impl BackupTab {
         });
         self.mapping_ui(ui.ctx(), state);
         self.asking_ui(ui.ctx(), state);
+        // Before the details, which it opens, so they show on top of it.
+        self.compare_ui(ui.ctx(), state);
         if (self.details.as_mut()).is_some_and(|details| details.ui(ui.ctx())) {
             self.details = None;
         }
@@ -284,6 +285,9 @@ impl BackupTab {
             self.compared_in = None;
             self.previewing = None;
             self.details = None;
+            // Given against the other repository's newest backups.
+            self.back_up_anyway.clear();
+            self.comparing = None;
             self.previews = Vec::new();
             self.stats = None;
             self.space = None;
@@ -346,11 +350,8 @@ impl BackupTab {
             self.checking = None;
             // A check of a repository Settings replaced is dropped, and so is its backup.
             if is_session(&source, state) {
-                let syncs = self.sync_asks();
                 match result {
-                    Ok(Checked { games, rules })
-                        if games.is_empty() && rules.is_none() && syncs.is_empty() =>
-                    {
+                    Ok(Checked { games, rules }) if games.is_empty() && rules.is_none() => {
                         self.cleared = Some(source);
                     }
                     Ok(Checked { games, rules }) => {
@@ -358,7 +359,6 @@ impl BackupTab {
                             source,
                             games: games.into_iter().map(|conflict| (conflict, None)).collect(),
                             rules: rules.map(|stored| (stored, None)),
-                            syncs,
                         });
                     }
                     Err(err) => {
@@ -462,6 +462,9 @@ impl BackupTab {
         self.previews = Vec::new();
         self.previewing = None;
         self.details = None;
+        self.comparing = None;
+        // Given against the shown scan; a new one is compared, and chosen, again.
+        self.back_up_anyway.clear();
         self.prefixes = report
             .games
             .iter()
@@ -509,9 +512,10 @@ impl BackupTab {
     }
 
     /// How many games of the report a backup would store: those its settings leave something
-    /// of, as [`selection::apply`] decides, and those whose settings cannot be read. Counts
-    /// files from each tree's cached totals.
+    /// of, as [`selection::apply`] decides, and those whose settings cannot be read, but not the
+    /// [`BackupTab::held_back`] ones. Counts files from each tree's cached totals.
     fn chosen(&mut self) -> usize {
+        let held_back = self.held_back();
         let Some(report) = &self.report else {
             return 0;
         };
@@ -520,6 +524,7 @@ impl BackupTab {
         let previews = &self.previews;
         games
             .enumerate()
+            .filter(|&(index, _)| !held_back.contains(&self.slugs[index]))
             .map(|(index, (game, listed))| match choices.game(&game.title) {
                 Ok(settings) => {
                     let badge = badges(game, previews.get(index), &settings);
@@ -536,6 +541,26 @@ impl BackupTab {
             })
             .filter(|&chosen| chosen)
             .count()
+    }
+
+    /// The slugs of the report's games that Back up leaves out: those that wait for a choice
+    /// (behind, changed on both PCs or of unknown base) by their preview, unless in
+    /// [`BackupTab::back_up_anyway`] (ADR-0035). Works out the headers not yet drawn.
+    fn held_back(&mut self) -> BTreeSet<String> {
+        let Some(report) = &self.report else {
+            return BTreeSet::new();
+        };
+        let games = report.games.iter().zip(&mut self.listed).zip(&self.slugs);
+        games
+            .enumerate()
+            .filter_map(|(index, ((game, listed), slug))| {
+                let settings = self.choices.game(&game.title).unwrap_or_default();
+                let preview = self.previews.get(index);
+                let header =
+                    (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
+                (header.asks() && !self.back_up_anyway.contains(slug)).then(|| slug.clone())
+            })
+            .collect()
     }
 
     /// Before the first scan: what the tab is for and the scan as its one action.
@@ -640,23 +665,30 @@ impl BackupTab {
             });
         }
         self.choices.status_ui(ui, state);
-        let can_anyway = self.can_start(state, manifest_loading) && self.previewing.is_none();
         let Some(report) = &self.report else {
             return;
         };
         // By index into `report.games`, applied after drawing, like the folder to open.
         let mut changes = Vec::new();
+        // Ticks of games that wait for a choice: whether to back them up, never saved.
+        let mut consents = Vec::new();
         // The game's index and what was clicked in its tree.
         let mut clicked: Option<(usize, FileAction)> = None;
         let mut choose = None;
-        let mut anyway = None;
+        let mut compare = None;
         if let Some(select) = select {
             for (index, game) in report.games.iter().enumerate() {
-                if self
-                    .choices
-                    .game(&game.title)
-                    .is_ok_and(|s| s.skip == select)
-                {
+                let settings = self.choices.game(&game.title);
+                let shown = settings.clone().unwrap_or_default();
+                let preview = self.previews.get(index);
+                let header = (self.listed[index].header)
+                    .get_or_insert_with(|| header_of(game, preview, &shown));
+                // A waiting game's box is its consent: Select all never gives it.
+                if header.asks() {
+                    if !select {
+                        consents.push((index, false));
+                    }
+                } else if settings.is_ok_and(|settings| settings.skip == select) {
                     changes.push((index, Change::Skip(!select)));
                 }
             }
@@ -686,6 +718,9 @@ impl BackupTab {
         let (choices, listed, prefixes) = (&self.choices, &mut self.listed, &self.prefixes);
         let (previews, order, lines) = (&self.previews, &self.order, &mut self.lines);
         let (figures, space, slugs) = (&self.stats, &self.space, &self.slugs);
+        let anyway = &self.back_up_anyway;
+        // A consent writes nothing, so it does not wait for a pending write.
+        let consentable = self.choices.loaded() && self.running.is_none();
         theme::group(ui, |ui| {
             // A game's title and its summary read as one row.
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -704,17 +739,32 @@ impl BackupTab {
                 let preview = previews.get(index);
                 let header =
                     (listed.header).get_or_insert_with(|| header_of(game, preview, &settings));
-                theme::row(
+                // A game that waits for a choice is ticked only by consent, so the list shows
+                // what Back up does.
+                let asks = header.asks();
+                let comparing = theme::row(
                     ui,
                     |ui| {
-                        let mut checked = !settings.skip;
+                        let mut checked = if asks {
+                            anyway.contains(&slugs[index])
+                        } else {
+                            !settings.skip
+                        };
                         let checkbox = Checkbox::new(&mut checked, &game.title);
-                        if ui.add_enabled(enabled, checkbox).changed() {
-                            changes.push((index, Change::Skip(!checked)));
+                        let box_enabled = if asks { consentable } else { enabled };
+                        if ui.add_enabled(box_enabled, checkbox).changed() {
+                            if asks {
+                                consents.push((index, checked));
+                            } else {
+                                changes.push((index, Change::Skip(!checked)));
+                            }
                         }
                     },
-                    |ui| preview_ui(ui, header),
+                    |ui| preview_ui(ui, header, &game.title),
                 );
+                if comparing {
+                    compare = Some(index);
+                }
                 // Under the title, without the indent line: the row already groups them.
                 ui.scope(|ui| {
                     ui.visuals_mut().indent_has_left_vline = false;
@@ -754,16 +804,13 @@ impl BackupTab {
                                 }
                             });
                         }
-                        if header.offers_anyway() {
-                            let name = format!("Back up {} anyway", game.title);
-                            if named_button(ui, can_anyway, "Back up anyway", &name).clicked() {
-                                anyway = Some(index);
-                            }
+                        // Its tree is in its compare window, where its choice is made.
+                        if asks {
+                            return;
                         }
                         let tree = &mut listed.tree;
-                        let mut action = None;
-                        let change =
-                            files_ui(ui, game, tree, preview, &settings, enabled, &mut action);
+                        let (change, action) =
+                            files_ui(ui, game, tree, preview, &settings, enabled, false);
                         if let Some(change) = change {
                             changes.push((index, change));
                         }
@@ -783,38 +830,66 @@ impl BackupTab {
                 .change(ui.ctx(), state, &report.games[index].title, change);
             self.listed[index].invalidate();
         }
-        match clicked {
-            Some((_, FileAction::Open(path))) => {
-                if let Err(err) = (state.env.open_folder)(&path) {
-                    let path = path.display();
-                    state.notices.push(format!("Could not open {path}: {err}"));
-                }
-            }
-            Some((index, FileAction::Details(file))) => {
-                let game = &report.games[index];
-                let key = selection::path_key(&game.files[file]);
-                if let Some(Ok(Some(baseline))) = self.previews.get(index)
-                    && let Some(backed_up) = baseline.newest.backed_up(&key)
-                    && let Some(session) = &state.session
-                {
-                    let (ctx, storage) = (ui.ctx(), &session.storage);
-                    let local = game.files[file].real.clone();
-                    let details =
-                        Details::start(ctx, storage, slug(&game.title), key, local, backed_up);
-                    self.details = Some(details);
-                }
-            }
-            None => {}
-        }
         if let Some(index) = choose
             && let Some(entries) = to_choose(self.previews.get(index))
         {
             let title = report.games[index].title.clone();
             self.mapping = Some((title, entries.to_vec(), Dialog::new(entries.to_vec())));
         }
-        if let Some(index) = anyway {
-            let slug = self.slugs[index].clone();
-            self.request_anyway(ui.ctx(), state, slug);
+        if let Some(index) = compare {
+            self.comparing = Some(report.games[index].title.clone());
+        }
+        for (index, back_up) in consents {
+            self.consent(index, back_up);
+        }
+        if let Some((index, action)) = clicked {
+            self.file_action(ui.ctx(), state, index, action);
+        }
+    }
+
+    /// Adds the report's game at `index` to [`BackupTab::back_up_anyway`] when `back_up`, else
+    /// takes it out.
+    fn consent(&mut self, index: usize, back_up: bool) {
+        let slug = &self.slugs[index];
+        if back_up {
+            self.back_up_anyway.insert(slug.clone());
+        } else {
+            self.back_up_anyway.remove(slug);
+        }
+    }
+
+    /// Does what was clicked in the file tree of the report's game at `index`: opens a folder,
+    /// or the details of a changed file.
+    fn file_action(
+        &mut self,
+        ctx: &egui::Context,
+        state: &mut State,
+        index: usize,
+        action: FileAction,
+    ) {
+        match action {
+            FileAction::Open(path) => {
+                if let Err(err) = (state.env.open_folder)(&path) {
+                    let path = path.display();
+                    state.notices.push(format!("Could not open {path}: {err}"));
+                }
+            }
+            FileAction::Details(file) => {
+                let Some(game) = self.report.as_ref().map(|report| &report.games[index]) else {
+                    return;
+                };
+                let key = selection::path_key(&game.files[file]);
+                if let Some(Ok(Some(baseline))) = self.previews.get(index)
+                    && let Some(backed_up) = baseline.newest.backed_up(&key)
+                    && let Some(session) = &state.session
+                {
+                    let storage = &session.storage;
+                    let local = game.files[file].real.clone();
+                    let details =
+                        Details::start(ctx, storage, slug(&game.title), key, local, backed_up);
+                    self.details = Some(details);
+                }
+            }
         }
     }
 }

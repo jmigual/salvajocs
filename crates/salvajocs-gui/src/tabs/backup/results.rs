@@ -89,35 +89,23 @@ impl Outcome {
             Self::SameAsNewest(host) => {
                 format!("{title}: same as the newest backup, from {host}")
             }
-            Self::Behind {
-                date, own: true, ..
-            } => format!(
-                "{title}: not backed up: this PC has a newer backup, from {date}, and you have \
-                 not changed the saves since you restored an older one. Restore the newer one on \
-                 the Restore tab or use Back up anyway under the game."
-            ),
-            Self::Behind { host, date, .. } => format!(
-                "{title}: not backed up: a newer backup exists, from {host}, {date}, and this PC has \
-                 not changed its saves since it last synced. To use the newer backup, restore it \
-                 on the Restore tab. To keep this PC's saves instead, use Back up anyway under \
-                 the game."
+            Self::Behind { host, date, own } => format!(
+                "{title}: not backed up: behind: {} made a newer backup, {date}.",
+                host_name(host, *own)
             ),
             Self::ChangedOnBoth {
                 date, own: true, ..
             } => format!(
-                "{title}: not backed up: changed on this PC since it restored an older backup, \
-                 and a newer backup of this PC exists, from {date}. Nothing was overwritten. Back \
-                 up asks again next time."
+                "{title}: not backed up: changed on both: this PC changed the saves since it \
+                 restored an older backup. Its newest backup is from {date}."
             ),
             Self::ChangedOnBoth { host, .. } => format!(
-                "{title}: not backed up: both this PC and {host} changed the saves since this PC \
-                 last synced. Nothing was overwritten. Back up asks again next time."
+                "{title}: not backed up: changed on both: this PC and {host} changed the saves \
+                 since the last sync."
             ),
             Self::UnknownBase(host) => format!(
-                "{title}: not backed up: salvajocs does not know which backup this PC is in sync \
-                 with (for example after upgrading), and the saves differ \
-                 from the newest backup, from {host}. Nothing was overwritten. Back up asks \
-                 again next time."
+                "{title}: not backed up: last sync unknown: this PC's saves differ from the \
+                 newest backup, from {host}."
             ),
             Self::Failed(error) => format!("{title}: failed: {error}"),
         }
